@@ -1,0 +1,59 @@
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+#Project files
+output/
+uploads/
+generated_images/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+# Note: .venv/ is ignored, but we use python/.venv/ for the shared venv
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite3
+
+# FastAPI/Uvicorn
+*.pid
