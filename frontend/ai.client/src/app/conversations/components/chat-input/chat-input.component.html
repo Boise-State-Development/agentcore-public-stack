@@ -1,0 +1,111 @@
+<!-- <div class="w-full max-w-3xl mx-auto px-4"> -->
+  <div 
+    class="relative rounded-2xl shadow-xl outline -outline-offset-1 transition-all duration-200"
+    [class]="isFocused() 
+      ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-primary-500 ring-2 ring-primary-500/20 dark:ring-primary-500/30 shadow-lg' 
+      : 'bg-gray-50 dark:bg-slate-800 outline-1 outline-gray-300 dark:outline-white/10'"
+  >
+    <!-- Main Input Area -->
+    <div class="relative">
+      <label for="user-message" class="sr-only">How can I help you today?</label>
+      <textarea
+        id="user-message"
+        name="user-message"
+        rows="1"
+        [value]="userInput()"
+        (input)="onTextareaInput($event)"
+        (keydown)="onKeyDown($event)"
+        (focus)="onFocus()"
+        (blur)="onBlur()"
+        placeholder="How can I help you today?"
+        class="block w-full resize-none bg-transparent px-6 py-4 text-base text-gray-900 placeholder:text-gray-500 dark:text-gray-100 dark:placeholder:text-gray-400 focus:outline-hidden overflow-hidden"
+        style="min-height: 60px; max-height: 200px;"
+      ></textarea>
+
+      <!-- Bottom Controls Bar -->
+      <div class="flex items-center justify-between px-4 pb-3">
+        <!-- Left Controls -->
+        <div class="flex items-center gap-2">
+          <!-- Add Attachment Button -->
+          <button
+            type="button"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+            aria-label="Attach a file"
+          >
+            <input
+              type="file"
+              class="sr-only"
+              (change)="onFileSelect($event)"
+              id="file-upload"
+            />
+            <label for="file-upload" class="flex size-full cursor-pointer items-center justify-center">
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+                <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />
+              </svg>
+            </label>
+          </button>
+
+          <!-- Settings Button -->
+          <button
+            type="button"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+            aria-label="Settings"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+              <path d="M10 3.75a2 2 0 1 0-4 0 2 2 0 0 0 4 0ZM17.25 4.5a.75.75 0 0 0 0-1.5h-5.5a.75.75 0 0 0 0 1.5h5.5ZM5 3.75a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5a.75.75 0 0 1 .75.75ZM14 10a2 2 0 1 0-4 0 2 2 0 0 0 4 0Zm3.25.75a.75.75 0 0 0 0-1.5h-1.5a.75.75 0 0 0 0 1.5h1.5ZM10 9.25a.75.75 0 0 1-.75.75h-6.5a.75.75 0 0 1 0-1.5h6.5a.75.75 0 0 1 .75.75ZM10 16.25a2 2 0 1 0-4 0 2 2 0 0 0 4 0Zm7.25.75a.75.75 0 0 0 0-1.5h-5.5a.75.75 0 0 0 0 1.5h5.5ZM5 16.25a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5a.75.75 0 0 1 .75.75Z" />
+            </svg>
+          </button>
+
+          <!-- History Button -->
+          <button
+            type="button"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+            aria-label="History"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm.75-13a.75.75 0 0 0-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 0 0 0-1.5h-3.25V5Z" clip-rule="evenodd" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Right Controls -->
+        <div class="flex items-center gap-3">
+          <!-- Model Selector -->
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Sonnet 4.5</span>
+            <button
+              type="button"
+              class="flex size-6 items-center justify-center text-gray-500 dark:text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-300"
+              aria-label="Select model"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4">
+                <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Submit/Stop Button -->
+           <!-- [class]="chatState.isChatLoading()
+              ? 'flex size-10 items-center justify-center rounded-full bg-red-500 text-white shadow-sm transition-all hover:bg-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500'
+              : 'flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary-500'"
+            [attr.aria-label]="chatState.isChatLoading() ? 'Stop generation' : 'Submit message'"
+ -->
+          <button
+            type="button"
+            (click)="onSubmit()"
+                      >
+            <!-- @if (chatState.isChatLoading()) {
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8 7a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1H8Z" clip-rule="evenodd" />
+              </svg>
+            } @else {
+              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-5">
+                <path d="M3.105 2.288a.75.75 0 0 0-.826.95l1.414 4.926A1.5 1.5 0 0 0 5.135 9.25h6.115a.75.75 0 0 1 0 1.5H5.135a1.5 1.5 0 0 0-1.442 1.086l-1.414 4.926a.75.75 0 0 0 .826.95 28.897 28.897 0 0 0 15.293-7.155.75.75 0 0 0 0-1.114A28.897 28.897 0 0 0 3.105 2.288Z" />
+              </svg>
+            } -->
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+<!-- </div> -->

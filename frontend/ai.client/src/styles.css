@@ -1,3 +1,50 @@
 /* You can add global styles to this file, and also import other style files */
 
 @import "tailwindcss";
+
+@theme {
+    /* Base color definitions */
+    --color-primary-base: #0033a0;
+    --color-secondary-base: #d64309;
+    --color-tertiary-base: #0072ce;
+  
+    /* Primary color scale */
+    --color-primary-50: oklch(from var(--color-primary-base) calc(l + 0.4) c h);
+    --color-primary-100: oklch(from var(--color-primary-base) calc(l + 0.35) c h);
+    --color-primary-200: oklch(from var(--color-primary-base) calc(l + 0.3) c h);
+    --color-primary-300: oklch(from var(--color-primary-base) calc(l + 0.2) c h);
+    --color-primary-400: oklch(from var(--color-primary-base) calc(l + 0.1) c h);
+    --color-primary-500: var(--color-primary-base);
+    --color-primary-600: oklch(from var(--color-primary-base) calc(l - 0.1) c h);
+    --color-primary-700: oklch(from var(--color-primary-base) calc(l - 0.15) c h);
+    --color-primary-800: oklch(from var(--color-primary-base) calc(l - 0.2) c h);
+    --color-primary-900: oklch(from var(--color-primary-base) calc(l - 0.25) c h);
+    --color-primary-950: oklch(from var(--color-primary-base) calc(l - 0.3) c h);
+  
+    /* Secondary color scale */
+    --color-secondary-50: oklch(from var(--color-secondary-base) calc(l + 0.4) c h);
+    --color-secondary-100: oklch(from var(--color-secondary-base) calc(l + 0.35) c h);
+    --color-secondary-200: oklch(from var(--color-secondary-base) calc(l + 0.3) c h);
+    --color-secondary-300: oklch(from var(--color-secondary-base) calc(l + 0.2) c h);
+    --color-secondary-400: oklch(from var(--color-secondary-base) calc(l + 0.1) c h);
+    --color-secondary-500: var(--color-secondary-base);
+    --color-secondary-600: oklch(from var(--color-secondary-base) calc(l - 0.1) c h);
+    --color-secondary-700: oklch(from var(--color-secondary-base) calc(l - 0.15) c h);
+    --color-secondary-800: oklch(from var(--color-secondary-base) calc(l - 0.2) c h);
+    --color-secondary-900: oklch(from var(--color-secondary-base) calc(l - 0.25) c h);
+    --color-secondary-950: oklch(from var(--color-secondary-base) calc(l - 0.3) c h);
+  
+    /* Tertiary color scale */
+    --color-tertiary-50: oklch(from var(--color-tertiary-base) calc(l + 0.4) c h);
+    --color-tertiary-100: oklch(from var(--color-tertiary-base) calc(l + 0.35) c h);
+    --color-tertiary-200: oklch(from var(--color-tertiary-base) calc(l + 0.3) c h);
+    --color-tertiary-300: oklch(from var(--color-tertiary-base) calc(l + 0.2) c h);
+    --color-tertiary-400: oklch(from var(--color-tertiary-base) calc(l + 0.1) c h);
+    --color-tertiary-500: var(--color-tertiary-base);
+    --color-tertiary-600: oklch(from var(--color-tertiary-base) calc(l - 0.1) c h);
+    --color-tertiary-700: oklch(from var(--color-tertiary-base) calc(l - 0.15) c h);
+    --color-tertiary-800: oklch(from var(--color-tertiary-base) calc(l - 0.2) c h);
+    --color-tertiary-900: oklch(from var(--color-tertiary-base) calc(l - 0.25) c h);
+    --color-tertiary-950: oklch(from var(--color-tertiary-base) calc(l - 0.3) c h);
+  }
+
