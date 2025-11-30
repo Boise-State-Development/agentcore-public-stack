@@ -2,8 +2,3 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-
-.conversation-page {
-  /* Add your component-specific styles here */
-}
-

@@ -1,6 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
-import { StreamParserService } from './stream-parser.service';
+// import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { environment } from '../../../../environments/environment';
 // import { MessageMapService } from '../conversation/message-map.service';
@@ -23,7 +23,7 @@ class FatalError extends Error {
     providedIn: 'root'
 })
 export class ChatHttpService {
-    private streamParserService = inject(StreamParserService);
+    // private streamParserService = inject(StreamParserService);
     private chatStateService = inject(ChatStateService);
     // private messageMapService = inject(MessageMapService);
     // private authService = inject(AuthService);
@@ -61,11 +61,9 @@ export class ChatHttpService {
             body: JSON.stringify(requestObject),
             signal: abortController.signal,
             async onopen(response) {
-
                 if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
                     return; // everything's good
                 } else if (response.status === 403) {
-                    // Handle usage limit exceeded
                     const errorData = await response.json().catch(() => ({ message: 'Forbidden' }));
                     throw new FatalError(errorData.message || 'Access forbidden');
                 } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {

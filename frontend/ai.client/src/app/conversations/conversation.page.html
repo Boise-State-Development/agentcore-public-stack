@@ -39,7 +39,7 @@
     <!-- Footer (fixed, content scrolls underneath) -->
     <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72">
         <div class="max-w-4xl mx-auto px-4">
-            <app-chat-input></app-chat-input>
+            <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
         </div>
     </div>
   </div>
