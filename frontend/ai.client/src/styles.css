@@ -2,6 +2,15 @@
 
 @import "tailwindcss";
 
+/* Ensure body has proper background for dark mode */
+body {
+    background-color: var(--color-gray-100);
+  }
+  
+  html.dark body {
+    background-color: var(--color-gray-900);
+  }
+
 @theme {
     /* Base color definitions */
     --color-primary-base: #0033a0;

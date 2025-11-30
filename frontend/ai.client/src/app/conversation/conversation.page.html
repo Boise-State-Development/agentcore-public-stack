@@ -1,0 +1,17 @@
+
+<div class="relative min-h-full pb-20 max-w-4xl mx-auto px-4 py-6">
+    <!-- Your component content -->
+    <div>
+        <h1 class="text-2xl font-bold mb-4 bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-100">Conversation</h1>
+        <p class="text-gray-600 dark:text-gray-400">This is the conversation page.</p>
+               
+    </div>
+    <!-- Footer (fixed, content scrolls underneath) -->
+    <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72">
+        <div class="max-w-4xl mx-auto px-4">
+            <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
+        </div>
+    </div>
+  </div>
+
+

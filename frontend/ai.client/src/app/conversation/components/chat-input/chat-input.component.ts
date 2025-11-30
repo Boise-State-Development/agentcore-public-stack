@@ -1,6 +1,7 @@
 import { Component, signal, output, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-// import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ChatStateService } from '../../services/chat/chat-state.service';
+
 interface Message {
   content: string;
   timestamp: Date;
@@ -14,7 +15,7 @@ interface Message {
 })
 export class ChatInputComponent {
   // Service injection
-  // readonly chatState = inject(ChatStateService);
+  readonly chatState = inject(ChatStateService);
 
   // Signals for state management
   userInput = signal('');
@@ -27,23 +28,23 @@ export class ChatInputComponent {
   messageCancelled = output<void>();
 
   onSubmit() {
-    // if(this.chatState.isChatLoading()) {
-    //   this.cancelChatRequest();
-    // } else {
-    //   this.submitChatRequest();
-    // }
+    if(this.chatState.isChatLoading()) {
+      this.cancelChatRequest();
+    } else {
+      this.submitChatRequest();
+    }
   }
 
   submitChatRequest() {
     const content = this.userInput().trim();
     if (content) {
-      // this.chatState.setChatLoading(true);
-      // this.messageSubmitted.emit({
-      //   content,
-      //   timestamp: new Date()
-      // });
-      // this.userInput.set('');
-      // this.isExpanded.set(false);
+      this.chatState.setChatLoading(true);
+      this.messageSubmitted.emit({
+        content,
+        timestamp: new Date()
+      });
+      this.userInput.set('');
+      this.isExpanded.set(false);
     }
   }
 

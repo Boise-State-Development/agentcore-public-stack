@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+.input-wrapper {
+  transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.chat-textarea {
+  min-height: 3rem;
+  max-height: 12rem;
+  transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+}
+
+/* Auto-resize textarea */
+.chat-textarea {
+  field-sizing: content;
+}
+
+@supports not (field-sizing: content) {
+  .chat-textarea {
+    height: auto;
+  }
+}
+
+
+
+

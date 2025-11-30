@@ -27,10 +27,9 @@ export class ChatRequestService {
   
   async submitChatRequest(userInput: string): Promise<void> {
     // Ensure conversation exists and get its ID
-    const conversationId = this.ensureConversationExists();
-    
+    const sessionId = uuidv4();
     // Update URL to reflect current conversation
-    this.navigateToConversation(conversationId);
+    this.navigateToSession(sessionId);
 
     // Create and add user message
     // this.messageMapService.addUserMessage(conversationId, userInput);
@@ -39,7 +38,7 @@ export class ChatRequestService {
     // this.messageMapService.startStreaming(conversationId);
     
     // Build and send request
-    const requestObject = this.buildChatRequestObject(userInput, conversationId);
+    const requestObject = this.buildChatRequestObject(userInput, sessionId);
 
     try {
       await this.chatHttpService.sendChatRequest(requestObject);
@@ -56,30 +55,19 @@ export class ChatRequestService {
    * Ensures a conversation exists, creating one if necessary
    * @returns The conversation ID
    */
-  private ensureConversationExists(): string {
-    // const currentConversation = this.conversationService.currentConversation();
-    const id = uuidv4();
+  private ensureSessionExists(): string {
     
-    // if (!currentConversation.conversation_id) {
-    //   const newConversation: Conversation = {
-    //     ...currentConversation,
-    //     conversation_id: id,
-    //   };
-    //   this.conversationService.currentConversation.set(newConversation);
-    //   return id;
-    // }
-    
-    // return currentConversation.conversation_id;
+   
     return '';
   }
 
   /**
    * Navigates to the conversation route
-   * @param conversationId The conversation ID to navigate to
+   * @param sessionId The conversation ID to navigate to
    */
-  private navigateToConversation(conversationId: string): void {
+  private navigateToSession(sessionId: string): void {
     // Using replaceUrl to avoid polluting browser history
-    this.router.navigate(['c', conversationId], { replaceUrl: true });
+    this.router.navigate(['c', sessionId], { replaceUrl: true });
   }
 
   private createUserMessage(text: string) {
@@ -87,10 +75,11 @@ export class ChatRequestService {
     // return createMessage('user', [contentBlock]);
   }
 
-  private buildChatRequestObject(message: string, conversation_id: string) {
+  private buildChatRequestObject(message: string, session_id: string) {
     return {
       message,
-      conversation_id
+      session_id,
+      enabled_tools: ['calculator']
     };
   }
 }

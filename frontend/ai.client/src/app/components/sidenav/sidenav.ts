@@ -1,16 +1,21 @@
-import { Component } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Component, inject } from '@angular/core';
+import { RouterLink, RouterLinkActive, Router } from '@angular/router';
 @Component({
   selector: 'app-sidenav',
-  imports: [RouterLink],
+  imports: [RouterLink, RouterLinkActive,],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })
 export class Sidenav {
+  router = inject(Router);
+  constructor() {}
 
+  protected getConversationId(conversationId: string): string {
+    return conversationId;
+  }
 
-  getConversationId(conversation: any): string {
-    return ''
+  newSession() {
+    this.router.navigate(['']);
   }
 
 }

@@ -7,6 +7,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
+<script>
+  // Initialize theme before page loads to prevent flash
+  (function() {
+    const storageKey = 'theme-preference';
+    const stored = localStorage.getItem(storageKey);
+    const preference = (stored === 'light' || stored === 'dark' || stored === 'system') ? stored : 'system';
+    
+    let theme = 'light';
+    if (preference === 'system') {
+      theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } else {
+      theme = preference;
+    }
+    
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    }
+  })();
+</script>
 <body>
   <app-root></app-root>
 </body>

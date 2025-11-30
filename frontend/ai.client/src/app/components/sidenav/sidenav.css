@@ -2,3 +2,61 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+.sidenav {
+  width: 16rem; /* w-64 */
+  transition: width 0.3s ease-in-out;
+}
+
+.sidenav.collapsed {
+  width: 4rem; /* w-16 */
+}
+
+/* Custom transitions for sidenav elements */
+.sidenav-header {
+  transition: padding 0.3s ease-in-out;
+}
+
+.brand-container {
+  transition: gap 0.3s ease-in-out;
+}
+
+.brand-name {
+  transition: opacity 0.2s ease-in-out, width 0.3s ease-in-out;
+  overflow: hidden;
+}
+
+.nav-list {
+  transition: padding 0.3s ease-in-out;
+}
+
+.nav-link {
+  transition: padding 0.3s ease-in-out;
+}
+
+/* Active state for router link */
+nav a.active {
+  color: var(--color-secondary-500);
+}
+
+.dark nav a.active {
+  color: white;
+}
+
+/* Mobile responsiveness - positioning handled by template classes */
+
+/* Smooth scrollbar styling */
+.sidenav-nav::-webkit-scrollbar {
+  width: var(--spacing(2));
+}
+
+.sidenav-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidenav-nav::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+}
+
+.sidenav-nav::-webkit-scrollbar-thumb:hover {
+  /* Hover state handled by template */
+}
