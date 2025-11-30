@@ -279,6 +279,136 @@ npm test
 ng test --watch=false
 ```
 
+#### Tailwind CSS Best Practices
+
+This project uses **Tailwind CSS v4.1+** for styling. Follow these critical guidelines:
+
+**Core Principles:**
+- **Always use Tailwind CSS v4.1+** utilities
+- **Never use `@apply`** - Use CSS variables, the `--spacing()` function, or framework components instead
+- **Always use predefined scale values** - Avoid arbitrary values like `ml-[16px]`, use `ml-4` instead
+- **Always use `min-h-dvh`** instead of `min-h-screen` (Safari mobile bug fix)
+
+**Removed/Renamed Utilities (v4):**
+
+| ❌ Never Use (v3) | ✅ Always Use (v4) |
+|-------------------|-------------------|
+| `bg-opacity-*` | `bg-black/50` (opacity modifier) |
+| `text-opacity-*` | `text-black/50` |
+| `flex-shrink-*` | `shrink-*` |
+| `flex-grow-*` | `grow-*` |
+| `overflow-ellipsis` | `text-ellipsis` |
+| `bg-gradient-*` | `bg-linear-*` |
+| `shadow-sm` | `shadow-xs` |
+| `shadow` | `shadow-sm` |
+| `rounded-sm` | `rounded-xs` |
+| `rounded` | `rounded-sm` |
+| `outline-none` | `outline-hidden` |
+| `ring` | `ring-3` |
+
+**Layout & Spacing:**
+
+```html
+<!-- ✅ ALWAYS use gap for flex/grid spacing -->
+<div class="flex gap-4">
+  <div>Item 1</div>
+  <div>Item 2</div>
+</div>
+
+<!-- ❌ NEVER use space-x/space-y in flex/grid -->
+<div class="flex space-x-4">...</div>
+
+<!-- ✅ Use size-* for equal width/height -->
+<div class="size-8">Icon</div>
+
+<!-- ❌ Don't use separate w-* and h-* when equal -->
+<div class="w-8 h-8">Icon</div>
+```
+
+**Typography:**
+
+```html
+<!-- ✅ ALWAYS use line height modifiers with text size -->
+<p class="text-base/7">Text with line height</p>
+<h1 class="text-2xl/9">Heading</h1>
+
+<!-- ❌ NEVER use separate leading-* classes -->
+<p class="text-base leading-7">Wrong pattern</p>
+```
+
+**Colors & Opacity:**
+
+```html
+<!-- ✅ Use opacity modifier syntax -->
+<div class="bg-red-500/60 text-white/90">Content</div>
+
+<!-- ❌ Don't use old opacity utilities -->
+<div class="bg-red-500 bg-opacity-60 text-white text-opacity-90">Wrong</div>
+```
+
+**Gradients:**
+
+```html
+<!-- ✅ Use bg-linear-* (v4) -->
+<div class="bg-linear-to-br from-violet-500 to-fuchsia-500"></div>
+
+<!-- ❌ Don't use bg-gradient-* (deprecated) -->
+<div class="bg-gradient-to-br from-violet-500 to-fuchsia-500"></div>
+```
+
+**Responsive Design:**
+
+```html
+<!-- ✅ Only specify breakpoint when value changes -->
+<div class="px-4 lg:px-8">Content</div>
+
+<!-- ❌ Don't repeat unchanged values across breakpoints -->
+<div class="px-4 md:px-4 lg:px-4">Content</div>
+```
+
+**Dark Mode:**
+
+```html
+<!-- ✅ Light mode first, then dark mode -->
+<div class="bg-white text-black dark:bg-black dark:text-white">
+  <button class="hover:bg-gray-100 dark:hover:bg-gray-800">Click</button>
+</div>
+```
+
+**New v4 Features:**
+
+```html
+<!-- Container Queries -->
+<article class="@container">
+  <div class="flex flex-col @md:flex-row @lg:gap-8">
+    <img class="w-full @md:w-48" />
+  </div>
+</article>
+
+<!-- Text Shadows (v4.1) -->
+<h1 class="text-shadow-lg">Large shadow</h1>
+
+<!-- Masking (v4.1) -->
+<div class="mask-t-from-50%">Top fade</div>
+<div class="mask-linear-from-white mask-linear-to-black/60">Gradient mask</div>
+```
+
+**CSS Variables & Theme Extension:**
+
+```css
+/* Access theme values */
+.custom-element {
+  background: var(--color-red-500);
+  border-radius: var(--radius-lg);
+  margin-top: calc(100vh - --spacing(16));
+}
+
+/* Extend theme */
+@theme {
+  --color-mint-500: oklch(0.72 0.11 178);
+}
+```
+
 ## Running the Project
 
 ### Local Development
