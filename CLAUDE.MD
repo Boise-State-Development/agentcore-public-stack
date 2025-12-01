@@ -5,7 +5,7 @@
 This is a production-ready multi-agent conversational AI system built with AWS Bedrock AgentCore and Strands Agents. The application combines agent orchestration with MCP-based tool integration, multimodal I/O, financial analysis tools, and deep research capabilities.
 
 **Tech Stack:**
-- **Frontend**: Angular v21, TypeScript, Tailwind CSS
+- **Frontend**: Angular v21, TypeScript, Tailwind v4.1 CSS
 - **Backend**: Python 3.13+, FastAPI
 - **Agent Framework**: Strands Agents (AWS Bedrock)
 - **Cloud Services**: AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser)

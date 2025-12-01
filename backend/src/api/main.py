@@ -69,7 +69,7 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            "https://localhost:4200",  # Frontend dev server
+            "http://localhost:4200",  # Frontend dev server
         ],
         allow_credentials=True,
         allow_methods=["*"],
