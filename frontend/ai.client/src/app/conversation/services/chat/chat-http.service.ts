@@ -51,7 +51,7 @@ export class ChatHttpService {
         // }
 
 
-        return fetchEventSource(`${environment.apiUrl}/chat/stream`, {
+        return fetchEventSource(`${environment.chatApiUrl}/chat/stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
