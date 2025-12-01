@@ -1,18 +1,33 @@
-<div class="flex grow flex-col gap-y-5 border-r border-gray-200 bg-gray-100 px-6 pb-4 dark:border-white/10 dark:bg-black/10">
-    <div class="flex h-16 shrink-0 items-center">
+<div class="flex h-full flex-col border-r border-gray-200 bg-gray-100 dark:border-white/10 dark:bg-black/10">
+    <div class="flex h-16 shrink-0 items-center px-6">
         <img src="img/logo-light.png" alt="Boise State University Logo" class="h-15 w-auto dark:hidden" />
         <img src="img/logo-dark.png" alt="Boise State University Logo" class="h-15 w-auto not-dark:hidden" />
     </div>
-    
-    <button 
-        (click)="newSession()" 
-        type="button" 
-        class="shrink-0 rounded-full bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-primary-500 dark:shadow-none dark:hover:bg-primary-400 dark:focus-visible:outline-primary-500">
-        New Chat
-    </button>
-    
-    <!-- Wrapper with min-h-0 to allow flex child to shrink and enable scrolling -->
-    <div class="min-h-0 grow">
-        <app-conversation-list class="flex h-full flex-col overflow-y-auto"></app-conversation-list>
+
+    <div class="shrink-0 px-6 pb-5">
+        <button (click)="newSession()" type="button" class="rounded-full bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-primary-500 dark:shadow-none dark:hover:bg-primary-400 dark:focus-visible:outline-primary-00">New Chat</button>
     </div>
+
+    <nav class="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-4">
+        <ul role="list" class="flex flex-1 flex-col gap-y-7">
+                <li>
+                    <a
+                      [routerLink]="['/c', getConversationId('abc-123-uuid')]"
+                      routerLinkActive="active"
+                      class="group flex gap-x-3 rounded-md px-2 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                    >
+                      <div class="flex min-w-0 flex-1 flex-col gap-y-1">
+                        <div class="flex items-center justify-between gap-x-2">
+                          <span class="truncate">Untitled Conversation</span>
+                          <!-- @if (conversation.updated_at) {
+                            <span class="text-xs/5 text-gray-400 dark:text-gray-500">
+                              {{ formatTime(conversation.updated_at) }}
+                            </span>
+                          } -->
+                        </div>
+                      </div>
+                    </a>
+                  </li>
+        </ul>
+    </nav>
 </div>
