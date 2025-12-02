@@ -16,6 +16,11 @@ export interface TokenRefreshResponse {
   scope: string;
 }
 
+export interface LoginResponse {
+  authorization_url: string;
+  state: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -24,6 +29,7 @@ export class AuthService {
   private readonly tokenKey = 'access_token';
   private readonly refreshTokenKey = 'refresh_token';
   private readonly tokenExpiryKey = 'token_expiry';
+  private readonly stateKey = 'auth_state';
 
   /**
    * Get the current access token from localStorage.
@@ -88,7 +94,7 @@ export class AuthService {
 
       const response = await firstValueFrom(
         this.http.post<TokenRefreshResponse>(
-          `${environment.chatApiUrl}/auth/refresh`,
+          `${environment.appApiUrl}/auth/refresh`,
           request
         )
       );
@@ -122,6 +128,13 @@ export class AuthService {
     // Calculate and store token expiry timestamp
     const expiryTime = Date.now() + response.expires_in * 1000;
     localStorage.setItem(this.tokenExpiryKey, expiryTime.toString());
+
+    // Dispatch custom event to notify UserService of token change in same tab
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('token-stored', {
+        detail: { token: response.access_token }
+      }));
+    }
   }
 
   /**
@@ -131,6 +144,11 @@ export class AuthService {
     localStorage.removeItem(this.tokenKey);
     localStorage.removeItem(this.refreshTokenKey);
     localStorage.removeItem(this.tokenExpiryKey);
+
+    // Dispatch custom event to notify UserService of token removal in same tab
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('token-cleared'));
+    }
   }
 
   /**
@@ -140,6 +158,68 @@ export class AuthService {
   getAuthorizationHeader(): string | null {
     const token = this.getAccessToken();
     return token ? `Bearer ${token}` : null;
+  }
+
+  /**
+   * Initiates the OIDC login flow by calling the backend login endpoint
+   * and redirecting the user to Entra ID for authentication.
+   * 
+   * Stores the state token in sessionStorage for CSRF protection.
+   * The state token will be validated when the authorization code is exchanged.
+   * 
+   * @param redirectUri Optional redirect URI override
+   * @param prompt Optional prompt parameter (defaults to "select_account")
+   * @throws Error if login initiation fails
+   */
+  async login(redirectUri?: string, prompt: string = 'select_account'): Promise<void> {
+    try {
+      // Build query parameters
+      const params = new URLSearchParams();
+      if (redirectUri) {
+        params.set('redirect_uri', redirectUri);
+      }
+      params.set('prompt', prompt);
+
+      const queryString = params.toString();
+      const url = `${environment.appApiUrl}/auth/login${queryString ? `?${queryString}` : ''}`;
+
+      const response = await firstValueFrom(
+        this.http.get<LoginResponse>(url)
+      );
+
+      if (!response || !response.authorization_url || !response.state) {
+        throw new Error('Invalid login response');
+      }
+
+      // Store state token in sessionStorage for CSRF protection
+      sessionStorage.setItem(this.stateKey, response.state);
+
+      // Redirect to authorization URL
+      window.location.href = response.authorization_url;
+    } catch (error) {
+      // Clear any stored state on error
+      sessionStorage.removeItem(this.stateKey);
+      
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Failed to initiate login');
+    }
+  }
+
+  /**
+   * Get the stored state token from sessionStorage.
+   * @returns The state token or null if not found
+   */
+  getStoredState(): string | null {
+    return sessionStorage.getItem(this.stateKey);
+  }
+
+  /**
+   * Clear the stored state token from sessionStorage.
+   */
+  clearStoredState(): void {
+    sessionStorage.removeItem(this.stateKey);
   }
 
   /**

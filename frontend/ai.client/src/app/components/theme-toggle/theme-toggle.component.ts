@@ -1,7 +1,6 @@
 import { Component, inject, signal, ChangeDetectionStrategy, effect, ElementRef } from '@angular/core';
-import { ThemeService, ThemePreference } from '../../services/theme.service';
 import { DOCUMENT } from '@angular/common';
-
+import { ThemeService, ThemePreference } from './theme.service';
 @Component({
   selector: 'app-theme-toggle',
   templateUrl: './theme-toggle.component.html',

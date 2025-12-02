@@ -13,3 +13,4 @@ class User:
     roles: List[str]
     picture: Optional[str] = None
 
+

@@ -1,4 +1,5 @@
 export const environment = {
     production: false,
-    chatApiUrl: 'http://localhost:8000'
+    appApiUrl: 'http://localhost:8000',
+    inferenceApiUrl: 'http://localhost:8001'
 };
