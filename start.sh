@@ -139,8 +139,9 @@ echo ""
 # Start App API (port 8000)
 echo "Starting App API on port 8000..."
 cd "$PROJECT_ROOT/backend/src/apis/app_api"
-env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) "$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/app_api.log" 2>&1 &
+"$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/app_api.log" 2>&1 &
 APP_API_PID=$!
+echo "App API started with PID: $APP_API_PID"
 
 # Wait a moment before starting next service
 sleep 2
@@ -148,14 +149,49 @@ sleep 2
 # Start Inference API (port 8001)
 echo "Starting Inference API on port 8001..."
 cd "$PROJECT_ROOT/backend/src/apis/inference_api"
-env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) "$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/inference_api.log" 2>&1 &
+"$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/inference_api.log" 2>&1 &
 INFERENCE_API_PID=$!
+echo "Inference API started with PID: $INFERENCE_API_PID"
 
 # Wait for both APIs to start
+echo ""
+echo "Waiting for APIs to initialize..."
 sleep 3
 
-echo "App API is running on port: 8000"
-echo "Inference API is running on port: 8001"
+# Verify APIs are actually running
+APP_API_RUNNING=false
+INFERENCE_API_RUNNING=false
+
+if ps -p $APP_API_PID > /dev/null 2>&1; then
+    echo "✅ App API process is running (PID: $APP_API_PID)"
+    APP_API_RUNNING=true
+else
+    echo "❌ App API failed to start - check app_api.log for errors"
+fi
+
+if ps -p $INFERENCE_API_PID > /dev/null 2>&1; then
+    echo "✅ Inference API process is running (PID: $INFERENCE_API_PID)"
+    INFERENCE_API_RUNNING=true
+else
+    echo "❌ Inference API failed to start - check inference_api.log for errors"
+fi
+
+# Additional check: verify ports are listening
+echo ""
+echo "Checking if ports are listening..."
+sleep 2
+
+if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo "✅ Port 8000 is listening"
+else
+    echo "⚠️  Port 8000 not yet listening (App API may still be starting)"
+fi
+
+if lsof -Pi :8001 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo "✅ Port 8001 is listening"
+else
+    echo "⚠️  Port 8001 not yet listening (Inference API may still be starting)"
+fi
 
 # Update environment variables for frontend
 # Note: Configure which API the frontend should use
