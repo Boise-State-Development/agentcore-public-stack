@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-stack"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
+readme = "README.md"
+license = {text = "MIT"}
+
+# Core dependencies shared across all APIs
+dependencies = [
+    # FastAPI and web framework
+    "fastapi==0.116.1",
+    "uvicorn[standard]==0.35.0",
+
+    # AWS and cloud services
+    "boto3>=1.40.1",
+
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "httpx>=0.24.0",
+
+    # Authentication (for shared auth module)
+    "pyjwt[crypto]>=2.8.0",
+]
+
+[project.optional-dependencies]
+# AgentCore-specific dependencies (for inference_api)
+agentcore = [
+    "strands-agents==1.14.0",
+    "strands-agents-tools==0.2.3",
+    "ddgs>=9.0.0",
+    "aws-opentelemetry-distro>=0.10.1",
+    "bedrock-agentcore",
+    "nova-act==2.3.18.0",
+]
+
+# Development dependencies
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=22.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+# All dependencies (convenience)
+all = [
+    "agentcore-stack[agentcore,dev]",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["agentcore*", "apis*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false

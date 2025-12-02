@@ -22,9 +22,10 @@ fi
 
 echo "✅ Prerequisites check passed"
 
-# Install AgentCore dependencies
+# Install backend dependencies
 echo "📦 Installing backend dependencies..."
-cd backend/src
+cd backend
+
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv venv
@@ -36,23 +37,14 @@ source venv/bin/activate
 echo "Upgrading pip..."
 ./venv/bin/python -m pip install --upgrade pip
 
-echo "Installing app_api requirements..."
-./venv/bin/python -m pip install -r apis/app_api/requirements.txt
-
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to install app_api dependencies"
-    deactivate
-    exit 1
-fi
-
-echo "Installing inference_api requirements..."
-./venv/bin/python -m pip install -r apis/inference_api/requirements.txt
+echo "Installing agentcore-stack package with all dependencies..."
+./venv/bin/python -m pip install -e ".[agentcore,dev]"
 
 if [ $? -eq 0 ]; then
     echo "✅ Backend dependencies installed successfully"
     deactivate
 else
-    echo "❌ Failed to install inference_api dependencies"
+    echo "❌ Failed to install backend dependencies"
     deactivate
     exit 1
 fi
@@ -79,5 +71,6 @@ echo "To start the application:"
 echo "  ./start.sh"
 echo ""
 echo "Or start components separately:"
-echo "  Backend: cd backend/src && source venv/bin/activate && cd api && python main.py"
-echo "  Frontend:  cd frontend/ai.client && npm run start"
+echo "  App API:       cd backend && source venv/bin/activate && cd src/apis/app_api && python main.py"
+echo "  Inference API: cd backend && source venv/bin/activate && cd src/apis/inference_api && python main.py"
+echo "  Frontend:      cd frontend/ai.client && npm run start"
