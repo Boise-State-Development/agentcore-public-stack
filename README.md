@@ -1,4 +1,20 @@
-# AgentCore Public Stack
+```bash
+# 1. Clone repository
+git clone https://github.com/Boise-State-Development/agentcore-public-stack.git
+cd agentcore-public-stack
+
+# 2. Setup dependencies
+./setup.sh
+
+# 3. Configure AWS credentials
+cd ../backend/src
+cp .env.example .env
+# Edit .env with your AWS credentials and region
+
+# 4. Start all services
+./start.sh
+```
+<!-- # AgentCore Public Stack
 
 Production-ready multi-agent conversational AI system built with Bedrock AgentCore and Strands Agents.
 Supports RAG workflows, MCP-based tool integration, multimodal input/output, financial analysis tools,
@@ -474,4 +490,4 @@ sample-strands-agent-chatbot/
 
 ## License
 
-MIT License - see LICENSE file for details. -->
+MIT License - see LICENSE file for details. --> -->
