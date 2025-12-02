@@ -13,13 +13,20 @@ fi
 cleanup() {
     echo ""
     echo "Shutting down services..."
-    if [ ! -z "$AGENTCORE_PID" ]; then
-        kill $AGENTCORE_PID 2>/dev/null
+    if [ ! -z "$APP_API_PID" ]; then
+        echo "Stopping App API..."
+        kill $APP_API_PID 2>/dev/null
         sleep 1
-        # Force kill if still running
-        kill -9 $AGENTCORE_PID 2>/dev/null || true
+        kill -9 $APP_API_PID 2>/dev/null || true
+    fi
+    if [ ! -z "$INFERENCE_API_PID" ]; then
+        echo "Stopping Inference API..."
+        kill $INFERENCE_API_PID 2>/dev/null
+        sleep 1
+        kill -9 $INFERENCE_API_PID 2>/dev/null || true
     fi
     if [ ! -z "$FRONTEND_PID" ]; then
+        echo "Stopping Frontend..."
         kill $FRONTEND_PID 2>/dev/null
         sleep 1
         kill -9 $FRONTEND_PID 2>/dev/null || true
@@ -28,9 +35,12 @@ cleanup() {
     lsof -ti:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti:8001 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti:4200 2>/dev/null | xargs kill -9 2>/dev/null || true
-    # Clean up log file
-    if [ -f "agentcore.log" ]; then
-        rm agentcore.log
+    # Clean up log files
+    if [ -f "app_api.log" ]; then
+        rm app_api.log
+    fi
+    if [ -f "inference_api.log" ]; then
+        rm inference_api.log
     fi
     exit 0
 }
@@ -65,6 +75,13 @@ echo "Ports cleared successfully"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_ENV_FILE="$PROJECT_ROOT/backend/src/.env"
 
+# Check if backend venv exists
+if [ ! -d "backend/venv" ]; then
+    echo "ERROR: Backend virtual environment not found. Please run setup first:"
+    echo "  ./setup.sh"
+    exit 1
+fi
+
 cd backend
 source venv/bin/activate
 
@@ -80,22 +97,29 @@ else
     echo "Setting up local development defaults..."
 fi
 
-# Start App API (port 8000) - comment out if you only want inference_api
-# cd src/apis/app_api
-# env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) ../../../venv/bin/python main.py > "$PROJECT_ROOT/agentcore.log" 2>&1 &
-# AGENTCORE_PID=$!
+# Start App API (port 8000)
+echo "Starting App API on port 8000..."
+cd "$PROJECT_ROOT/backend/src/apis/app_api"
+env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) "$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/app_api.log" 2>&1 &
+APP_API_PID=$!
 
-# Start Inference API (port 8001) - default
-cd src/apis/inference_api
-env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) ../../../venv/bin/python main.py > "$PROJECT_ROOT/agentcore.log" 2>&1 &
-AGENTCORE_PID=$!
+# Wait a moment before starting next service
+sleep 2
 
-# Wait for AgentCore to start
+# Start Inference API (port 8001)
+echo "Starting Inference API on port 8001..."
+cd "$PROJECT_ROOT/backend/src/apis/inference_api"
+env $(grep -v '^#' "$MASTER_ENV_FILE" 2>/dev/null | xargs) "$PROJECT_ROOT/backend/venv/bin/python" main.py > "$PROJECT_ROOT/inference_api.log" 2>&1 &
+INFERENCE_API_PID=$!
+
+# Wait for both APIs to start
 sleep 3
 
-echo "AgentCore Inference API is running on port: 8001"
+echo "App API is running on port: 8000"
+echo "Inference API is running on port: 8001"
 
 # Update environment variables for frontend
+# Note: Configure which API the frontend should use
 export API_URL="http://localhost:8001"
 
 echo "Starting frontend server (local mode)..."
@@ -106,15 +130,24 @@ NODE_NO_WARNINGS=1 npm run start &
 FRONTEND_PID=$!
 
 echo ""
-echo "Services started successfully!"
+echo "============================================"
+echo "All services started successfully!"
+echo "============================================"
 echo ""
-echo "Frontend: http://localhost:4200"
-echo "Inference API: http://localhost:8001"
-echo "API Docs: http://localhost:8001/docs"
+echo "Frontend:       http://localhost:4200"
+echo "App API:        http://localhost:8000"
+echo "  - API Docs:   http://localhost:8000/docs"
+echo "Inference API:  http://localhost:8001"
+echo "  - API Docs:   http://localhost:8001/docs"
 echo ""
-echo "Frontend is configured to use API at: http://localhost:8001"
+echo "Frontend is configured to use: $API_URL"
+echo ""
+echo "Logs:"
+echo "  App API:       tail -f app_api.log"
+echo "  Inference API: tail -f inference_api.log"
 echo ""
 echo "Press Ctrl+C to stop all services"
+echo "============================================"
 
 # Wait for background processes
 wait
