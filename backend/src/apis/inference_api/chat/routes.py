@@ -6,7 +6,7 @@ Implements AgentCore Runtime standard endpoints:
 - GET /ping (required)
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import logging
@@ -15,6 +15,8 @@ import json
 
 from .models import InvocationRequest, ChatRequest, ChatEvent
 from .service import get_agent
+from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +34,20 @@ async def ping():
 
 
 @router.post("/invocations")
-async def invocations(request: InvocationRequest):
+async def invocations(
+    request: InvocationRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     AgentCore Runtime standard invocation endpoint (required)
 
     Supports user-specific tool filtering and SSE streaming.
     Creates/caches agent instance per session + tool configuration.
+    Uses the authenticated user's ID from the JWT token.
     """
     input_data = request
-    logger.info(f"Invocation request - Session: {input_data.session_id}, User: {input_data.user_id}")
+    user_id = current_user.user_id
+    logger.info(f"Invocation request - Session: {input_data.session_id}, User: {user_id}")
     logger.info(f"Message: {input_data.message[:50]}...")
 
     if input_data.enabled_tools:
@@ -56,7 +63,7 @@ async def invocations(request: InvocationRequest):
         # AgentCore Memory tracks preferences across sessions per user_id
         agent = get_agent(
             session_id=input_data.session_id,
-            user_id=input_data.user_id,
+            user_id=user_id,
             enabled_tools=input_data.enabled_tools,
             model_id=input_data.model_id,
             temperature=input_data.temperature,
@@ -92,17 +99,23 @@ async def invocations(request: InvocationRequest):
 # ============================================================
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     Legacy chat stream endpoint (for backward compatibility)
     Uses default tools (all available) if enabled_tools not specified
+    Uses the authenticated user's ID from the JWT token.
     """
-    logger.info(f"Legacy chat request - Session: {request.session_id}, Message: {request.message[:50]}...")
+    user_id = current_user.user_id
+    logger.info(f"Legacy chat request - Session: {request.session_id}, User: {user_id}, Message: {request.message[:50]}...")
 
     try:
         # Get agent instance (with or without tool filtering)
         agent = get_agent(
             session_id=request.session_id,
+            user_id=user_id,
             enabled_tools=request.enabled_tools  # May be None (use all tools)
         )
 
@@ -195,14 +208,19 @@ async def chat_stream(request: ChatRequest):
 
 
 @router.post("/multimodal")
-async def chat_multimodal(request: ChatRequest):
+async def chat_multimodal(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     Stream chat response with multimodal input (files)
 
     For now, just echoes the message and mentions files.
     Will be replaced with actual Strands Agent execution.
+    Uses the authenticated user's ID from the JWT token.
     """
-    logger.info(f"Multimodal chat request - Session: {request.session_id}")
+    user_id = current_user.user_id
+    logger.info(f"Multimodal chat request - Session: {request.session_id}, User: {user_id}")
     logger.info(f"Message: {request.message[:50]}...")
     if request.files:
         logger.info(f"Files: {len(request.files)} uploaded")

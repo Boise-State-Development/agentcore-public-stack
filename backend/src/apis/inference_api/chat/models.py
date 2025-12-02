@@ -16,7 +16,6 @@ class FileContent(BaseModel):
 
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint"""
-    user_id: str
     session_id: str
     message: str
     model_id: Optional[str] = None
