@@ -37,6 +37,29 @@ source venv/bin/activate
 pip install -e ".[agentcore,dev]"
 ```
 
+## AWS Configuration
+
+This project requires AWS credentials for Bedrock and other AWS services.
+
+**Quick Setup:**
+```bash
+# Configure AWS CLI profile
+aws configure --profile my-profile
+
+# Set in .env file
+echo "AWS_PROFILE=my-profile" >> src/.env
+
+# Or use environment variable
+export AWS_PROFILE=my-profile
+```
+
+📖 **See [AWS_PROFILE_GUIDE.md](../AWS_PROFILE_GUIDE.md) for detailed configuration options including:**
+- Multiple AWS accounts/profiles
+- AWS SSO (IAM Identity Center)
+- Environment variable fallback
+- CI/CD configuration
+- Troubleshooting
+
 ## Project Structure
 
 ```

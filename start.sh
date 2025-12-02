@@ -97,6 +97,45 @@ else
     echo "Setting up local development defaults..."
 fi
 
+# Configure AWS profile
+echo ""
+echo "🔍 Configuring AWS credentials..."
+if command -v aws &> /dev/null; then
+    # Priority: 1. Environment variable, 2. .env file, 3. default
+    PROFILE_TO_USE="${AWS_PROFILE:-default}"
+
+    if [ "$PROFILE_TO_USE" != "default" ]; then
+        echo "Using AWS profile: $PROFILE_TO_USE"
+        if aws configure list --profile "$PROFILE_TO_USE" &> /dev/null; then
+            echo "✅ AWS profile '$PROFILE_TO_USE' is valid"
+            export AWS_PROFILE="$PROFILE_TO_USE"
+        else
+            echo "⚠️  AWS profile '$PROFILE_TO_USE' not found"
+            echo "   Falling back to default AWS credentials"
+            unset AWS_PROFILE
+        fi
+    else
+        echo "Using default AWS credentials"
+        unset AWS_PROFILE
+    fi
+
+    # Verify credentials are available
+    if aws sts get-caller-identity &> /dev/null 2>&1; then
+        CALLER_IDENTITY=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)
+        if [ ! -z "$CALLER_IDENTITY" ]; then
+            echo "✅ AWS credentials valid (Account: $CALLER_IDENTITY)"
+        else
+            echo "✅ AWS credentials configured"
+        fi
+    else
+        echo "⚠️  Could not verify AWS credentials"
+        echo "   Some features may not work. Run 'aws configure' to set up."
+    fi
+else
+    echo "⚠️  AWS CLI not installed - using credentials from environment"
+fi
+echo ""
+
 # Start App API (port 8000)
 echo "Starting App API on port 8000..."
 cd "$PROJECT_ROOT/backend/src/apis/app_api"

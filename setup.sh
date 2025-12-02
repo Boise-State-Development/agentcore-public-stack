@@ -22,6 +22,45 @@ fi
 
 echo "✅ Prerequisites check passed"
 
+# Check for AWS CLI and profile configuration
+echo ""
+echo "🔍 Checking AWS configuration..."
+if command -v aws &> /dev/null; then
+    echo "✅ AWS CLI found"
+
+    # Check if .env file exists to read AWS_PROFILE
+    if [ -f "backend/src/.env" ]; then
+        AWS_PROFILE_FROM_ENV=$(grep '^AWS_PROFILE=' backend/src/.env | cut -d '=' -f2 | tr -d ' ')
+    fi
+
+    # Use AWS_PROFILE from environment, .env file, or default
+    PROFILE_TO_USE="${AWS_PROFILE:-${AWS_PROFILE_FROM_ENV:-default}}"
+
+    if [ "$PROFILE_TO_USE" != "default" ]; then
+        echo "Using AWS profile: $PROFILE_TO_USE"
+        if aws configure list --profile "$PROFILE_TO_USE" &> /dev/null; then
+            echo "✅ AWS profile '$PROFILE_TO_USE' is configured"
+            export AWS_PROFILE="$PROFILE_TO_USE"
+        else
+            echo "⚠️  AWS profile '$PROFILE_TO_USE' not found, will use default credentials"
+            unset AWS_PROFILE
+        fi
+    else
+        echo "Using default AWS credentials"
+        # Check if any AWS credentials are configured
+        if aws configure list &> /dev/null 2>&1; then
+            echo "✅ AWS credentials configured"
+        else
+            echo "⚠️  No AWS credentials found - some features may not work"
+            echo "   Run 'aws configure' to set up credentials"
+        fi
+    fi
+else
+    echo "⚠️  AWS CLI not found - some features may require AWS credentials"
+    echo "   Install from: https://aws.amazon.com/cli/"
+fi
+
+echo ""
 # Install backend dependencies
 echo "📦 Installing backend dependencies..."
 cd backend
