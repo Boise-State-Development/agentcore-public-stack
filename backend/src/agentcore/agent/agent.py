@@ -15,7 +15,7 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.session.file_session_manager import FileSessionManager
 from strands.tools.executors import SequentialToolExecutor
-from api.utils.event_processor import StreamEventProcessor
+from agentcore.utils.event_processor import StreamEventProcessor
 from agentcore.agent.hooks import StopHook, ConversationCachingHook
 
 logger = logging.getLogger(__name__)

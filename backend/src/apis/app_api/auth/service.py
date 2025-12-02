@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import HTTPException, status
 
-from .state_store import StateStore, create_state_store
+from apis.shared.auth.state_store import StateStore, create_state_store
 
 logger = logging.getLogger(__name__)
 

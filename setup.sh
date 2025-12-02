@@ -36,14 +36,23 @@ source venv/bin/activate
 echo "Upgrading pip..."
 ./venv/bin/python -m pip install --upgrade pip
 
-echo "Installing requirements..."
-./venv/bin/python -m pip install -r requirements.txt
+echo "Installing app_api requirements..."
+./venv/bin/python -m pip install -r apis/app_api/requirements.txt
+
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to install app_api dependencies"
+    deactivate
+    exit 1
+fi
+
+echo "Installing inference_api requirements..."
+./venv/bin/python -m pip install -r apis/inference_api/requirements.txt
 
 if [ $? -eq 0 ]; then
     echo "✅ Backend dependencies installed successfully"
     deactivate
 else
-    echo "❌ Failed to install backend dependencies"
+    echo "❌ Failed to install inference_api dependencies"
     deactivate
     exit 1
 fi

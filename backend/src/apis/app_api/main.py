@@ -11,8 +11,9 @@ Handles:
 import sys
 from pathlib import Path
 
-# Add src directory to Python path (parent of api/)
-src_path = Path(__file__).parent.parent
+# Add src directory to Python path (parent of apis/)
+# This allows imports like: from apis.shared.auth import ...
+src_path = Path(__file__).parent.parent.parent
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
@@ -20,8 +21,8 @@ if str(src_path) not in sys.path:
 from dotenv import load_dotenv
 import os
 
-# Load .env file from backend/src directory (parent of api/)
-env_path = Path(__file__).parent.parent / '.env'
+# Load .env file from backend/src directory (parent of apis/)
+env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 from fastapi import FastAPI
@@ -85,15 +86,10 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
 
 # Import routers
 from health.health import router as health_router
-from chat.routes import router as chat_router
 from auth.routes import router as auth_router
 # Include routers
 app.include_router(health_router)
-app.include_router(chat_router)
 app.include_router(auth_router)
-# app.include_router(gateway_tools.router)
-# app.include_router(tools.router)
-# app.include_router(browser_live_view.router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
