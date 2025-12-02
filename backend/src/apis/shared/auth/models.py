@@ -8,7 +8,7 @@ from typing import List, Optional
 class User:
     """Authenticated user model."""
     email: str
-    empl_id: str
+    user_id: str
     name: str
     roles: List[str]
     picture: Optional[str] = None

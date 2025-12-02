@@ -145,12 +145,12 @@ class EntraIDJWTValidator:
             name = payload.get('name') or (
                 f"{payload.get('given_name', '')} {payload.get('family_name', '')}"
             ).strip()
-            empl_id = payload.get('http://schemas.boisestate.edu/claims/employeenumber')
+            user_id = payload.get('http://schemas.boisestate.edu/claims/employeenumber')
             roles = payload.get('roles', [])
             picture = payload.get('picture')
             
             # Validate emplId is a 9-digit number
-            if not empl_id or not empl_id.isdigit() or len(empl_id) != 9:
+            if not user_id or not user_id.isdigit() or len(user_id) != 9:
                 logger.warning(f"Invalid emplId for user: {email}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -169,7 +169,7 @@ class EntraIDJWTValidator:
             return User(
                 email=email.lower() if email else "",
                 name=name,
-                empl_id=empl_id,
+                user_id=user_id,
                 roles=roles,
                 picture=picture
             )
@@ -233,10 +233,23 @@ class EntraIDJWTValidator:
 # Global validator instance
 _validator: Optional[EntraIDJWTValidator] = None
 
+# Check if authentication is enabled (defaults to true for security)
+ENABLE_AUTHENTICATION = os.environ.get('ENABLE_AUTHENTICATION', 'true').lower() == 'true'
 
-def get_validator() -> EntraIDJWTValidator:
-    """Get or create the global validator instance."""
+
+def get_validator() -> Optional[EntraIDJWTValidator]:
+    """
+    Get or create the global validator instance.
+    
+    Returns None if authentication is disabled via ENABLE_AUTHENTICATION=false.
+    This allows the validator to skip initialization when Entra ID env vars are missing.
+    """
     global _validator
+    
+    # If authentication is disabled, don't initialize validator
+    if not ENABLE_AUTHENTICATION:
+        return None
+    
     if _validator is None:
         _validator = EntraIDJWTValidator()
     return _validator

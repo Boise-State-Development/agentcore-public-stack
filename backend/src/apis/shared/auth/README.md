@@ -37,6 +37,44 @@ async def protected_route(user: User = Depends(get_current_user)):
 - `InMemoryStateStore`: In-memory state store (for local development)
 - `DynamoDBStateStore`: DynamoDB-based state store (for production)
 
+## Configuration
+
+### Environment Variables
+
+#### ENABLE_AUTHENTICATION
+
+Controls whether authentication is required for API endpoints. When set to `false`, the `get_current_user()` dependency will bypass authentication and return an anonymous user object.
+
+- **Default**: `true` (authentication enabled)
+- **Values**: `true` or `false` (case-insensitive)
+- **Usage**: Set `ENABLE_AUTHENTICATION=false` in your `.env` file or environment
+
+**⚠️ Security Warning**: This feature should **ONLY** be used in development and testing environments. Never disable authentication in production.
+
+**Example:**
+```bash
+# .env file
+ENABLE_AUTHENTICATION=false
+```
+
+When authentication is disabled:
+- Requests without Authorization headers will succeed
+- An anonymous user object is returned with:
+  - `email`: "anonymous@local.dev"
+  - `user_id`: "anonymous"
+  - `name`: "Anonymous User"
+  - `roles`: []
+  - `picture`: None
+- The JWT validator is not initialized, so Entra ID environment variables are not required
+
+#### Entra ID Configuration (when authentication enabled)
+
+When `ENABLE_AUTHENTICATION=true` (default), the following environment variables are required:
+- `ENTRA_TENANT_ID`: Azure AD tenant ID
+- `ENTRA_CLIENT_ID`: Azure AD application client ID
+- `ENTRA_CLIENT_SECRET`: Azure AD application client secret (for app_api)
+- `ENTRA_REDIRECT_URI`: OAuth redirect URI (for app_api)
+
 ## Dependencies
 
 The shared auth module requires:
