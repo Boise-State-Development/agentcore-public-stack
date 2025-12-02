@@ -66,10 +66,23 @@ export class AuthService {
   }
 
   /**
+   * Check if authentication is enabled.
+   * @returns True if authentication is enabled, false otherwise
+   */
+  isAuthenticationEnabled(): boolean {
+    return environment.enableAuthentication;
+  }
+
+  /**
    * Check if user is authenticated (has a valid token).
-   * @returns True if user has a token that is not expired
+   * @returns True if user has a token that is not expired, or if authentication is disabled
    */
   isAuthenticated(): boolean {
+    // If authentication is disabled, always return true
+    if (!environment.enableAuthentication) {
+      return true;
+    }
+    
     const token = this.getAccessToken();
     if (!token) {
       return false;
@@ -244,6 +257,11 @@ export class AuthService {
    * ```
    */
   async ensureAuthenticated(): Promise<void> {
+    // If authentication is disabled, skip all checks
+    if (!environment.enableAuthentication) {
+      return;
+    }
+
     // Check if user is authenticated
     if (this.isAuthenticated()) {
       return; // User is authenticated, proceed

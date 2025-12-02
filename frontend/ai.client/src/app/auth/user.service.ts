@@ -1,6 +1,7 @@
 import { inject, Injectable, signal } from '@angular/core';
 import { AuthService } from './auth.service';
 import { User, JWTPayload } from './user.model';
+import { environment } from '../../environments/environment';
 
 /**
  * Service for managing current user information decoded from JWT tokens.
@@ -17,8 +18,20 @@ export class UserService {
    */
   readonly currentUser = signal<User | null>(null);
 
+  /**
+   * Anonymous user object used when authentication is disabled.
+   * Matches the backend anonymous user structure.
+   */
+  private readonly anonymousUser: User = {
+    email: 'anonymous@local.dev',
+    empl_id: 'anonymous',
+    name: 'Anonymous User',
+    roles: [],
+    picture: undefined
+  };
+
   constructor() {
-    // Initialize user from current token
+    // Initialize user from current token or set anonymous user if auth disabled
     this.refreshUser();
 
     if (typeof window !== 'undefined') {
@@ -161,6 +174,12 @@ export class UserService {
    * Useful when token has been updated externally.
    */
   refreshUser(): void {
+    // If authentication is disabled, set anonymous user
+    if (!environment.enableAuthentication) {
+      this.currentUser.set(this.anonymousUser);
+      return;
+    }
+
     const token = this.authService.getAccessToken();
     if (token) {
       this.updateUserFromToken(token);

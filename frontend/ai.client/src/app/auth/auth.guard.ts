@@ -1,6 +1,7 @@
 import { inject } from '@angular/core';
 import { Router, CanActivateFn } from '@angular/router';
 import { AuthService } from './auth.service';
+import { environment } from '../../environments/environment';
 
 /**
  * Route guard that protects routes requiring authentication.
@@ -12,6 +13,11 @@ import { AuthService } from './auth.service';
  * @returns True if user is authenticated, false otherwise (triggers redirect)
  */
 export const authGuard: CanActivateFn = async (route, state) => {
+  // If authentication is disabled, allow access to all routes
+  if (!environment.enableAuthentication) {
+    return true;
+  }
+
   const authService = inject(AuthService);
   const router = inject(Router);
 
