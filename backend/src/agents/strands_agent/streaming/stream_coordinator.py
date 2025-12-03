@@ -84,15 +84,18 @@ class StreamCoordinator:
             event: Processed event from stream_processor {"type": str, "data": dict}
 
         Returns:
-            str: SSE formatted event string
+            str: SSE formatted event string with event type and data
         """
         try:
-            return f"data: {json.dumps(event)}\n\n"
+            event_type = event.get("type", "message")
+            event_data = event.get("data", {})
+
+            # Format as SSE with explicit event type
+            return f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
         except (TypeError, ValueError) as e:
             # Fallback for non-serializable objects (should never happen with new processor)
             logger.error(f"Failed to serialize event: {e}")
-            error_event = {"type": "error", "data": {"error": f"Serialization error: {str(e)}"}}
-            return f"data: {json.dumps(error_event)}\n\n"
+            return f"event: error\ndata: {json.dumps({'error': f'Serialization error: {str(e)}'})}\n\n"
 
     def _log_prompt_info(self, prompt: Union[str, List[Dict[str, Any]]]) -> None:
         """
@@ -142,8 +145,4 @@ class StreamCoordinator:
         Returns:
             str: SSE formatted error event
         """
-        error_event = {
-            "type": "error",
-            "data": {"error": error_message}
-        }
-        return f"data: {json.dumps(error_event)}\n\n"
+        return f"event: error\ndata: {json.dumps({'error': error_message})}\n\n"
