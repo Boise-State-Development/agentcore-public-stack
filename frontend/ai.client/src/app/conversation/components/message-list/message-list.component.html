@@ -1,0 +1,24 @@
+<div class="space-y-6">
+  <!-- Debug: Show JSON -->
+  <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
+    <summary class="cursor-pointer text-sm font-semibold">Debug: View Messages JSON</summary>
+    <pre class="mt-2 overflow-x-auto text-xs">{{ messages() | json }}</pre>
+  </details>
+
+  @for (message of messages(); track message.id) {
+    @if (message.role === 'user') {
+      <app-user-message [message]="message"></app-user-message>
+    } @else {
+        <div class="max-w-[80%] rounded-2xl bg-gray-100 px-4 py-3 text-sm/6 text-gray-900 dark:bg-gray-800 dark:text-gray-100">
+            <app-assistant-message [message]="message"></app-assistant-message>
+        </div>
+    }
+  }
+
+  @if (messages().length === 0) {
+    <div class="py-12 text-center text-gray-500 dark:text-gray-400">
+      <p class="text-lg">No messages yet</p>
+      <p class="text-sm">Start a conversation to see messages here</p>
+    </div>
+  }
+</div>

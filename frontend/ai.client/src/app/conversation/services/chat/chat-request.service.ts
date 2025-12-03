@@ -3,9 +3,9 @@ import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
 import { ChatHttpService } from './chat-http.service';
+import { MessageMapService } from '../conversation/message-map.service';
 // import { ConversationService, Conversation } from '../conversation/conversation.service';
 // import { createMessage, createTextContent } from '../models';
-// import { MessageMapService } from '../conversation/message-map.service';
 
 export interface ContentFile {
   fileName: string;
@@ -21,7 +21,7 @@ export class ChatRequestService {
   // private conversationService = inject(ConversationService);
   private chatHttpService = inject(ChatHttpService);
   private chatStateService = inject(ChatStateService);
-  // private messageMapService = inject(MessageMapService);
+  private messageMapService = inject(MessageMapService);
   private router = inject(Router);
   // TODO: Inject proper logging service
   
@@ -32,10 +32,10 @@ export class ChatRequestService {
     this.navigateToSession(sessionId);
 
     // Create and add user message
-    // this.messageMapService.addUserMessage(conversationId, userInput);
+    this.messageMapService.addUserMessage(sessionId, userInput);
     
     // Start streaming for this conversation
-    // this.messageMapService.startStreaming(conversationId);
+    this.messageMapService.startStreaming(sessionId);
     
     // Build and send request
     const requestObject = this.buildChatRequestObject(userInput, sessionId);
@@ -44,9 +44,9 @@ export class ChatRequestService {
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
       // TODO: Replace with proper logging service
-      // logger.error('Chat request failed', { error, conversationId });
+      // logger.error('Chat request failed', { error, conversationId: sessionId });
       this.chatStateService.setChatLoading(false);
-      // this.messageMapService.endStreaming();
+      this.messageMapService.endStreaming();
       throw error; // Re-throw to allow caller to handle
     }
   }

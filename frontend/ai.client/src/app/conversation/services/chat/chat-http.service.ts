@@ -2,9 +2,9 @@ import { inject, Injectable } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
+import { MessageMapService } from '../conversation/message-map.service';
+import { AuthService } from '../../../auth/auth.service';
 import { environment } from '../../../../environments/environment';
-// import { MessageMapService } from '../conversation/message-map.service';
-// import { AuthService } from '../../../auth/auth.service';
 
 class RetriableError extends Error {
     constructor(message?: string) {
@@ -25,8 +25,8 @@ class FatalError extends Error {
 export class ChatHttpService {
     private streamParserService = inject(StreamParserService);
     private chatStateService = inject(ChatStateService);
-    // private messageMapService = inject(MessageMapService);
-    // private authService = inject(AuthService);
+    private messageMapService = inject(MessageMapService);
+    private authService = inject(AuthService);
 
     async sendChatRequest(requestObject: any): Promise<void> {
         const abortController = this.chatStateService.getAbortController();
@@ -37,7 +37,7 @@ export class ChatHttpService {
         //     throw new FatalError('No authentication token available. Please login again.');
         // }
 
-        // Check if token needs refresh
+        // // Check if token needs refresh
         // if (this.authService.isTokenExpired()) {
         //     try {
         //         await this.authService.refreshAccessToken();
@@ -50,6 +50,7 @@ export class ChatHttpService {
         //     }
         // }
 
+        // console.log('token', token);
 
         return fetchEventSource(`${environment.inferenceApiUrl}/chat/stream`, {
             method: 'POST',
@@ -61,9 +62,11 @@ export class ChatHttpService {
             body: JSON.stringify(requestObject),
             signal: abortController.signal,
             async onopen(response) {
+
                 if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
                     return; // everything's good
                 } else if (response.status === 403) {
+                    // Handle usage limit exceeded
                     const errorData = await response.json().catch(() => ({ message: 'Forbidden' }));
                     throw new FatalError(errorData.message || 'Access forbidden');
                 } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
@@ -103,11 +106,11 @@ export class ChatHttpService {
                 this.streamParserService.parseEventSourceMessage(msg.event, parsedData);
             },
             onclose: () => {
-                // this.messageMapService.endStreaming();
+                this.messageMapService.endStreaming();
                 this.chatStateService.setChatLoading(false);
             },
             onerror: (err) => {
-                // this.messageMapService.endStreaming();
+                this.messageMapService.endStreaming();
                 this.chatStateService.setChatLoading(false);
                 
                 // Display error message to user
@@ -131,6 +134,9 @@ export class ChatHttpService {
         // Cleanup request-conversation mapping when cancelled
         this.chatStateService.resetState();
       }
+
+
+
 
     private addErrorMessage(errorMessage: string): void {
         console.error(errorMessage);
