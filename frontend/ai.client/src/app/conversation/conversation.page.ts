@@ -9,17 +9,17 @@ import { ChatRequestService } from './services/chat/chat-request.service';
   styleUrl: './conversation.page.css'
 })
 export class ConversationPage {
-    private chatRequestService = inject(ChatRequestService);
+  private chatRequestService = inject(ChatRequestService);
 
-    onMessageSubmitted(message: { content: string, timestamp: Date }) {
-        this.chatRequestService.submitChatRequest(message.content).catch((error) => {
-          console.error('Error sending chat request:', error);
-        });
-      }
-    
-      onFileAttached(file: File) {
-        console.log('File attached:', file);
-        // Handle file attachment logic here
-      }
+  onMessageSubmitted(message: { content: string, timestamp: Date }) {
+    this.chatRequestService.submitChatRequest(message.content).catch((error) => {
+      console.error('Error sending chat request:', error);
+    });
+  }
+
+  onFileAttached(file: File) {
+    console.log('File attached:', file);
+    // Handle file attachment logic here
+  }
 }
 

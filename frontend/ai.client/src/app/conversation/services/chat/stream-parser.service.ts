@@ -1,5 +1,5 @@
 // // services/stream-parser.service.ts
-// import { Injectable, signal, computed } from '@angular/core';
+import { Injectable, signal, computed } from '@angular/core';
 // import { 
 //   Message, 
 //   ContentBlock, 
@@ -41,28 +41,28 @@
 // /**
 //  * Tool progress state for UI feedback
 //  */
-// export interface ToolProgress {
-//   visible: boolean;
-//   message?: string;
-//   toolName?: string;
-//   toolUseId?: string;
-//   startTime?: number;
-// }
+export interface ToolProgress {
+  visible: boolean;
+  message?: string;
+  toolName?: string;
+  toolUseId?: string;
+  startTime?: number;
+}
 
 // /**
 //  * Stream state tracking
 //  */
-// enum StreamState {
-//   Idle = 'idle',
-//   Streaming = 'streaming',
-//   Completed = 'completed',
-//   Error = 'error'
-// }
+enum StreamState {
+  Idle = 'idle',
+  Streaming = 'streaming',
+  Completed = 'completed',
+  Error = 'error'
+}
 
-// @Injectable({
-//   providedIn: 'root'
-// })
-// export class StreamParserService {
+@Injectable({
+  providedIn: 'root'
+})
+export class StreamParserService {
   
 //   // =========================================================================
 //   // State Signals
@@ -75,16 +75,16 @@
 //   private completedMessages = signal<Message[]>([]);
   
 //   /** Tool progress indicator state */
-//   private toolProgressSignal = signal<ToolProgress>({ visible: false });
-//   public toolProgress = this.toolProgressSignal.asReadonly();
+  private toolProgressSignal = signal<ToolProgress>({ visible: false });
+  public toolProgress = this.toolProgressSignal.asReadonly();
   
 //   /** Error state */
-//   private errorSignal = signal<string | null>(null);
-//   public error = this.errorSignal.asReadonly();
+  private errorSignal = signal<string | null>(null);
+  public error = this.errorSignal.asReadonly();
   
 //   /** Stream completion state */
-//   private isStreamCompleteSignal = signal<boolean>(false);
-//   public isStreamComplete = this.isStreamCompleteSignal.asReadonly();
+  private isStreamCompleteSignal = signal<boolean>(false);
+  public isStreamComplete = this.isStreamCompleteSignal.asReadonly();
   
 //   // =========================================================================
 //   // Computed Signals - Reactive Derived State
@@ -188,25 +188,15 @@
 //   /**
 //    * Parse a pre-parsed EventSourceMessage (from fetch-event-source).
 //    */
-//   parseEventSourceMessage(event: string, data: unknown): void {
-//     // Validate inputs
-//     if (!event || typeof event !== 'string') {
-//       this.setError('parseEventSourceMessage: event must be a non-empty string');
-//       return;
-//     }
-    
-//     if (data === undefined || data === null) {
-//       // Some events may have null/undefined data (like 'done')
-//       if (event === 'done') {
-//         this.handleEvent(event, data);
-//         return;
-//       }
-//       this.setError(`parseEventSourceMessage: data cannot be null/undefined for event '${event}'`);
-//       return;
-//     }
-    
-//     this.handleEvent(event, data);
-//   }
+  parseEventSourceMessage(event: string, data: unknown): void {
+    // Validate inputs
+    if (!data || typeof data !== 'object') {
+      this.setError('parseEventSourceMessage: data must be an object');
+      return;
+    }
+    console.log('parseEventSourceMessage', data);
+    this.handleEvent(data);
+  }
   
 //   /**
 //    * Reset all state for a new conversation/stream.
@@ -454,72 +444,72 @@
 //   /** Current stream state */
 //   private streamState: StreamState = StreamState.Idle;
   
-//   // =========================================================================
-//   // Event Routing
-//   // =========================================================================
+  // =========================================================================
+  // Event Routing
+  // =========================================================================
   
-//   private handleEvent(eventType: string, data: unknown): void {
-//     console.log('[StreamParser] Event:', eventType, data);
+  private handleEvent(data: any): void {
+    console.log('[StreamParser] Event:', data.type, data);
     
-//     // Validate event type
-//     if (!eventType || typeof eventType !== 'string') {
-//       this.setError('Invalid event type: must be a non-empty string');
-//       return;
-//     }
-    
-//     // Check if we should process this event (prevents race conditions)
-//     // Allow message_start and error events even if stream appears complete
-//     const isStartOrErrorEvent = eventType === 'message_start' || eventType === 'error';
-//     if (!isStartOrErrorEvent && !this.shouldProcessEvent()) {
-//       console.log(`[StreamParser] Ignoring ${eventType} event - stream ${this.currentStreamId} is ${this.streamState}`);
-//       return;
-//     }
-    
-//     try {
-//       switch (eventType) {
-//         case 'message_start':
-//           this.handleMessageStart(data);
-//           break;
+    try {
+      switch (data.type) {
+        case 'init':
+          this.handleMessageInit(data);
+          break;
           
-//         case 'content_block_start':
-//           this.handleContentBlockStart(data);
-//           break;
+        case 'thinking':
+          this.handleThinking(data);
+          break;
           
-//         case 'content_block_delta':
-//           this.handleContentBlockDelta(data);
-//           break;
+        case 'response':
+          this.handleResponse(data);
+          break;
+        case 'tool_use':
+          this.handleToolUse(data);
+          break;
+
+        case 'complete':
+          this.handleComplete(data);
+          break;
+
+        case 'error':
+          this.handleError(data);
+          break;
           
-//         case 'content_block_stop':
-//           this.handleContentBlockStop(data);
-//           break;
-          
-//         case 'tool_use':
-//           this.handleToolUseProgress(data);
-//           break;
-          
-//         case 'message_stop':
-//           this.handleMessageStop(data);
-//           break;
-          
-//         case 'done':
-//           this.handleDone();
-//           break;
-          
-//         case 'error':
-//           this.handleError(data);
-//           break;
-          
-//         default:
-//           // Ignore unknown events (ping, etc.)
-//           console.log('[StreamParser] Unknown event type:', eventType);
-//           break;
-//       }
-//     } catch (error) {
-//       const errorMessage = error instanceof Error ? error.message : 'Unknown error processing event';
-//       this.setError(`Error processing ${eventType} event: ${errorMessage}`);
-//     }
-//   }
+        default:
+          // Ignore unknown events (ping, etc.)
+          console.log('[StreamParser] Unknown event type:', data);
+          break;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error processing event';
+      this.setError(`Error processing ${data.type} event: ${errorMessage}`);
+    }
+  }
+
+  private handleMessageInit(data: any): void {
+    console.log('[StreamParser] handleMessageInit:', data);
+  }
+
+  private handleThinking(data: any): void {
+    console.log('[StreamParser] handleThinking:', data);
+  }
+
+  private handleResponse(data: any): void {
+    console.log('[StreamParser] handleResponse:', data);
+  }
+
+  private handleToolUse(data: any): void {
+    console.log('[StreamParser] handleToolUse:', data);
+  }
   
+  private handleComplete(data: any): void {
+    console.log('[StreamParser] handleComplete:', data);
+  }
+
+  private handleError(data: any): void {
+    console.log('[StreamParser] handleError:', data);
+  }
 //   // =========================================================================
 //   // Error Handling Helpers
 //   // =========================================================================
@@ -527,12 +517,12 @@
 //   /**
 //    * Set error state and mark stream as complete.
 //    */
-//   private setError(message: string): void {
-//     this.errorSignal.set(message);
-//     this.isStreamCompleteSignal.set(true);
-//     this.toolProgressSignal.set({ visible: false });
-//     this.streamState = StreamState.Error;
-//   }
+  private setError(message: string): void {
+    this.errorSignal.set(message);
+    this.isStreamCompleteSignal.set(true);
+    this.toolProgressSignal.set({ visible: false });
+    // this.streamState = StreamState.Error;
+  }
   
 //   /**
 //    * Clear error state.
@@ -959,4 +949,4 @@
     
 //     this.currentMessageBuilder.set(null);
 //   }
-// }
+}

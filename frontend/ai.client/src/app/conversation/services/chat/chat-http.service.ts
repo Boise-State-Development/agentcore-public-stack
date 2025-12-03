@@ -1,6 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
-// import { StreamParserService } from './stream-parser.service';
+import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { environment } from '../../../../environments/environment';
 // import { MessageMapService } from '../conversation/message-map.service';
@@ -23,7 +23,7 @@ class FatalError extends Error {
     providedIn: 'root'
 })
 export class ChatHttpService {
-    // private streamParserService = inject(StreamParserService);
+    private streamParserService = inject(StreamParserService);
     private chatStateService = inject(ChatStateService);
     // private messageMapService = inject(MessageMapService);
     // private authService = inject(AuthService);
@@ -100,8 +100,7 @@ export class ChatHttpService {
                         parsedData = msg.data;
                     }
                 }
-                console.log('parsedData', parsedData);
-                // this.streamParserService.parseEventSourceMessage(msg.event, parsedData);
+                this.streamParserService.parseEventSourceMessage(msg.event, parsedData);
             },
             onclose: () => {
                 // this.messageMapService.endStreaming();
@@ -132,9 +131,6 @@ export class ChatHttpService {
         // Cleanup request-conversation mapping when cancelled
         this.chatStateService.resetState();
       }
-
-
-
 
     private addErrorMessage(errorMessage: string): void {
         console.error(errorMessage);
