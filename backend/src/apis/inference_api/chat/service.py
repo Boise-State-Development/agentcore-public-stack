@@ -6,7 +6,9 @@ Contains business logic for chat operations, including agent creation and manage
 import logging
 from typing import Optional, List
 
-from agentcore.agent.agent import ChatbotAgent
+# from agentcore.agent.agent import ChatbotAgent
+from agents.strands_agent.strands_agent import StrandsAgent
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ def get_agent(
     temperature: Optional[float] = None,
     system_prompt: Optional[str] = None,
     caching_enabled: Optional[bool] = None
-) -> ChatbotAgent:
+) -> StrandsAgent:
     """
     Create agent instance with current configuration for session
 
@@ -32,7 +34,7 @@ def get_agent(
     logger.info(f"  Tools: {enabled_tools or 'all'}")
 
     # Create agent with AgentCore Memory - messages and preferences automatically loaded/saved
-    agent = ChatbotAgent(
+    agent = StrandsAgent(
         session_id=session_id,
         user_id=user_id,
         enabled_tools=enabled_tools,

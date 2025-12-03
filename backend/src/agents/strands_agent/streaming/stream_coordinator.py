@@ -5,7 +5,8 @@ import logging
 import json
 import os
 from typing import AsyncGenerator, Optional, Any, Union, List, Dict
-from agentcore.utils.event_processor import StreamEventProcessor
+
+from .event_processor import StreamEventProcessor
 
 logger = logging.getLogger(__name__)
 
