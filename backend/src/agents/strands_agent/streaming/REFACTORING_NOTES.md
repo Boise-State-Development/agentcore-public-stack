@@ -176,30 +176,72 @@ assert events[1]["type"] == "complete"
 assert events[2]["type"] == "done"
 ```
 
-## Known Issues / Future Work
+## Completed Refactoring Tasks
 
-### 1. **Tool Result Processing**
+### 1. **Tool Result Processing** ✅ COMPLETED (2025-12-02)
 
-The old `event_formatter.py` has extensive tool result processing logic:
-- Extract images from tool results
-- Save base64 files to disk
-- Process JSON content
-- Clean text for display
+Created a separate `ToolResultProcessor` class for handling tool result post-processing:
 
-**Recommendation**: Create a separate `ToolResultProcessor` class that the router calls AFTER stream processing. This should not be in the stream processor (side effects, file I/O, coupling to config).
+**File:** `tool_result_processor.py`
 
-### 2. **Event Formatter Dependency**
+**Features:**
+- Image extraction from various formats (MCP, JSON responses, base64)
+- Base64 file saving to disk (Python MCP tools)
+- JSON content processing and cleaning
+- Text cleaning for display (removing large base64 data)
+- Stateless, side-effect based processing (called by router layer)
 
-The old `event_formatter.py` depends on `get_global_stream_processor()` to access the `tool_use_registry`. Since we removed the global processor, this needs refactoring:
+**Usage:**
+```python
+from agents.strands_agent.streaming import ToolResultProcessor
 
-**Options**:
-- Move tool result processing to a separate service
-- Pass tool metadata through the event data itself
-- Store tool metadata in session manager
+# Process tool result (typically called by event formatter or router)
+text, images = ToolResultProcessor.process_tool_result(
+    tool_result={"content": [{"text": "Result"}]},
+    session_id="abc123",
+    tool_name="run_python_code"
+)
+```
 
-### 3. **Backward Compatibility**
+**Benefits:**
+- Separation of concerns: Stream processing vs. file I/O
+- No coupling to global state or registries
+- Explicit dependencies (session_id, tool_name passed as parameters)
+- Easy to test and maintain
 
-The old `event_processor.py` still exists for any code that imports it directly. Once all references are updated, it can be deleted.
+### 2. **Event Formatter Cleanup** ✅ COMPLETED (2025-12-02)
+
+Refactored `event_formatter.py` to delegate tool result processing:
+
+**Changes:**
+- Removed `_extract_all_content()` - moved to `ToolResultProcessor`
+- Removed `_extract_basic_content()` - moved to `ToolResultProcessor`
+- Removed `_process_json_content()` - moved to `ToolResultProcessor`
+- Removed `_extract_images_from_json_response()` - moved to `ToolResultProcessor`
+- Removed `_clean_result_text_for_display()` - moved to `ToolResultProcessor`
+- Removed `_process_base64_downloads()` - moved to `ToolResultProcessor`
+- Removed `_handle_python_mcp_base64()` - moved to `ToolResultProcessor`
+- Removed `_handle_tool_storage()` - moved to `ToolResultProcessor`
+- Removed `_get_tool_info()` - no longer needed (no global registry dependency)
+
+**New Signature:**
+```python
+@staticmethod
+def create_tool_result_event(
+    tool_result: Dict[str, Any],
+    session_id: str = None,
+    tool_name: str = None
+) -> str:
+    # Delegates to ToolResultProcessor
+    result_text, result_images = ToolResultProcessor.process_tool_result(...)
+    return StreamEventFormatter._build_tool_result_event(...)
+```
+
+### 3. **Deprecated File Cleanup** ✅ COMPLETED (2025-12-02)
+
+Deleted the deprecated `event_processor.py` file from `agents/strands_agent/streaming/`.
+
+**Note:** The `agentcore/utils/event_processor.py` file still exists and is used by `agentcore/agent/agent.py`. This is a separate implementation and should remain until the agentcore agent is fully migrated to the new architecture.
 
 ## Benefits of New Implementation
 
