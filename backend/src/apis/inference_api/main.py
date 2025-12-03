@@ -51,14 +51,14 @@ async def lifespan(app: FastAPI):
     yield  # Application is running
 
     # Shutdown
-    logger.info("=== Agent Core Service Shutting Down ===")
+    logger.info("=== Inference API Shutting Down ===")
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan
 app = FastAPI(
-    title="Agent Core Public Stack - API",
+    title="Agent Core Public Stack - Inference API",
     version="2.0.0",
-    description="Agent execution and tool orchestration service",
+    description="Handles agent execution, tool orchestration, and SSE response streaming",
     lifespan=lifespan
 )
 
