@@ -1,1 +1,24 @@
+name: Test Workflow
 
+on:
+  workflow_dispatch:
+
+jobs:
+  test-job:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Print Hello World
+        run: echo "Hello World"
+      
+      # - name: Configure AWS Credentials
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
+      #     aws-region: us-west-2
+      
+      # - name: List CloudFormation Stacks
+      #   run: aws cloudformation list-stacks --region us-west-2
