@@ -41,21 +41,34 @@ You are building a 5-stack AWS CDK architecture with a platform-agnostic CI/CD s
 ## Workflow
 You are responsible for the integrity of `THE_PLAN.md`. If you complete a task, you MUST check the box immediately.
 
+**Phase Start Protocol**:
+1. At the beginning of each new phase, create `CLAUDES_LESSONS_PHASE<N>.md` in the `devops-project/` folder.
+2. Initialize the document with sections for:
+   - Technical Discoveries
+   - Gotchas and Workarounds
+   - Process Improvements
+   - Open Questions
+3. Update this document throughout the phase as you encounter issues, make decisions, or discover patterns.
+4. At phase completion, finalize the lessons learned document before the `[HUMAN]` checkpoint.
+
 **Task Completion Protocol**:
 1. Read the task requirements carefully.
 2. Implement the solution (write code, create files, etc.).
 3. Verify the implementation works as expected.
 4. Mark the task as complete in `THE_PLAN.md` by changing `- [ ]` to `- [x]`.
-5. Move to the next task.
+5. If you encountered any issues or made important decisions, update the current phase's lessons learned document.
+6. Move to the next task.
 
 **Do NOT**:
 - Skip tasks or complete them out of order.
 - Mark multiple tasks as complete in a single update.
 - Mark a task as complete before verifying it works.
 - Create placeholder or incomplete implementations.
+- Wait until the end of the phase to document lessons - update as you go.
 
 **Quality Standards**:
 - All code must follow TypeScript/Python best practices.
 - All shell scripts must be executable and include proper error handling.
 - All configuration must be externalized (no hardcoded values).
 - All GitHub Actions workflows must only call shell scripts (no inline logic).
+- Lessons learned documents must be kept up-to-date throughout the phase.
