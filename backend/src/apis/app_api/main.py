@@ -78,9 +78,11 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
 # Import routers
 from health.health import router as health_router
 from auth.routes import router as auth_router
+from messages.routes import router as messages_router
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(messages_router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
