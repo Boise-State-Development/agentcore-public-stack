@@ -110,11 +110,10 @@ jobs:
     name: Deploy CDK Infrastructure
     runs-on: ubuntu-latest
     needs: build-and-test
-    # Temporarily disabled for PR testing
-    # if: |
-    #   github.event_name == 'push' && 
-    #   (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
-    #   github.event.inputs.skip_deploy != 'true'
+    if: |
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      github.event.inputs.skip_deploy != 'true'
     
     # Use OIDC for secure AWS authentication
     permissions:
@@ -166,12 +165,11 @@ jobs:
   deploy-assets:
     name: Deploy Frontend Assets
     runs-on: ubuntu-latest
-    needs: deploy-infrastructure
-    # Temporarily disabled for PR testing
-    # if: |
-    #   github.event_name == 'push' && 
-    #   (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
-    #   github.event.inputs.skip_deploy != 'true'
+    needs: [build-and-test, deploy-infrastructure]
+    if: |
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      github.event.inputs.skip_deploy != 'true'
     
     # Use OIDC for secure AWS authentication
     permissions:
