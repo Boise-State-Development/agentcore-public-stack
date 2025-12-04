@@ -85,8 +85,12 @@ log_info "Deploying FrontendStack..."
 # Optional: Use --require-approval never for CI/CD
 REQUIRE_APPROVAL="${CDK_REQUIRE_APPROVAL:-never}"
 
+# Deploy with explicit context to ensure correct region/account
 cdk deploy FrontendStack \
     --require-approval ${REQUIRE_APPROVAL} \
+    --context projectPrefix=${CDK_PROJECT_PREFIX} \
+    --context awsAccount=${CDK_AWS_ACCOUNT} \
+    --context awsRegion=${CDK_AWS_REGION} \
     --verbose
 
 # Check deployment exit code
@@ -107,7 +111,7 @@ if [ ${DEPLOY_EXIT_CODE} -eq 0 ]; then
     # Retrieve key outputs from CloudFormation
     log_info "Key resources deployed:"
     aws cloudformation describe-stacks \
-        --stack-name FrontendStack \
+        --stack-name ${CDK_PROJECT_PREFIX}-FrontendStack \
         --region ${CDK_AWS_REGION} \
         --query 'Stacks[0].Outputs[?OutputKey==`WebsiteUrl` || OutputKey==`DistributionId` || OutputKey==`FrontendBucketName`].[OutputKey,OutputValue]' \
         --output table || log_warn "Could not retrieve stack outputs"
