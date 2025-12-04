@@ -55,6 +55,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Script: Environment Loader**: Create `scripts/common/load-env.sh` to export configuration as environment variables.
 - [ ] **Script: Dependency Installer**: Create `scripts/common/install-deps.sh` to install Node.js, AWS CDK CLI, Python, pip, Docker.
 
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 0 verified and approved to proceed to Phase 1
+
 ### Phase 1: Frontend Stack (Static Site)
 **Goal**: S3 + CloudFront + Route53 (Optional)
 
@@ -83,6 +86,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Add CDK Deploy Step**: Call `scripts/stack-frontend/deploy-cdk.sh`.
 - [ ] **Add Asset Deploy Step**: Call `scripts/stack-frontend/deploy-assets.sh`.
 - [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 1 verified and approved to proceed to Phase 2
 
 ### Phase 2: App API Stack (Core Backend)
 **Goal**: VPC + ALB + Fargate + RDS/DynamoDB
@@ -126,6 +132,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Add Deploy Step**: Call `scripts/stack-app-api/deploy.sh`.
 - [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
 
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 2 verified and approved to proceed to Phase 3
+
 ### Phase 3: Inference API Stack (AI Workloads)
 **Goal**: Dedicated Fargate Tasks sharing Stack 2's Network
 
@@ -156,6 +165,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Add Deploy Step**: Call `scripts/stack-inference-api/deploy.sh`.
 - [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
 
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 3 verified and approved to proceed to Phase 4
+
 ### Phase 4: Agent Core Stack (Managed Services)
 **Goal**: Serverless/Managed infrastructure for agents
 
@@ -183,6 +195,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Add Deploy Step**: Call `scripts/stack-agent-core/deploy.sh`.
 - [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
 
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 4 verified and approved to proceed to Phase 5
+
 ### Phase 5: Gateway & MCP Stack
 **Goal**: API Gateway / Entry point
 
@@ -205,6 +220,9 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [ ] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
 - [ ] **Add Deploy Step**: Call `scripts/stack-gateway/deploy.sh`.
 - [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+
+**🔒 HUMAN APPROVAL REQUIRED**
+- [ ] [HUMAN] Phase 5 verified and approved to proceed to Phase 6
 
 ### Phase 6: Local Orchestration
 **Goal**: Interactive deployment script for local development
