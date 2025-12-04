@@ -1,0 +1,205 @@
+name: Frontend Stack CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'frontend/**'
+      - 'infrastructure/lib/frontend-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'infrastructure/bin/infrastructure.ts'
+      - 'scripts/stack-frontend/**'
+      - 'scripts/common/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'frontend/**'
+      - 'infrastructure/lib/frontend-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'infrastructure/bin/infrastructure.ts'
+      - 'scripts/stack-frontend/**'
+      - 'scripts/common/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+      skip_deploy:
+        description: 'Skip deployment'
+        required: false
+        default: 'false'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+
+# Ensure only one deployment runs at a time
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Build and Test Frontend
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/ai.client/package-lock.json
+      
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+      
+      - name: Install frontend dependencies
+        run: |
+          bash scripts/stack-frontend/install.sh
+      
+      - name: Build frontend
+        run: |
+          bash scripts/stack-frontend/build.sh
+        env:
+          BUILD_CONFIG: production
+      
+      - name: Run frontend tests
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: |
+          bash scripts/stack-frontend/test.sh
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/ai.client/dist/
+          retention-days: 7
+      
+      - name: Upload test results
+        if: ${{ github.event.inputs.skip_tests != 'true' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: frontend/ai.client/coverage/
+          retention-days: 7
+
+  deploy-infrastructure:
+    name: Deploy CDK Infrastructure
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: |
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    # Use OIDC for secure AWS authentication
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-CDK
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+      
+      - name: Deploy CDK infrastructure
+        run: |
+          bash scripts/stack-frontend/deploy-cdk.sh
+        env:
+          CDK_REQUIRE_APPROVAL: never
+      
+      - name: Save CDK outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-cdk-outputs
+          path: infrastructure/frontend-outputs.json
+          retention-days: 30
+
+  deploy-assets:
+    name: Deploy Frontend Assets
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    if: |
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    # Use OIDC for secure AWS authentication
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-Assets
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/ai.client/dist/
+      
+      - name: Deploy assets to S3 and invalidate CloudFront
+        run: |
+          bash scripts/stack-frontend/deploy-assets.sh
+        env:
+          WAIT_FOR_INVALIDATION: false
+      
+      - name: Summary
+        run: |
+          echo "## Frontend Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The frontend has been successfully deployed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** CloudFront cache invalidation is in progress. Changes may take 5-15 minutes to propagate globally." >> $GITHUB_STEP_SUMMARY
