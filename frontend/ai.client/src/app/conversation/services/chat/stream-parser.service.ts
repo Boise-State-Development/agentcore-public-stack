@@ -4,7 +4,7 @@ import {
   Message, 
   ContentBlock, 
   TextContentBlock, 
-  ToolUseContentBlock,
+  ToolUseContentBlock, 
   MessageStartEvent,
   ContentBlockStartEvent,
   ContentBlockDeltaEvent,
@@ -12,6 +12,7 @@ import {
   MessageStopEvent,
   ToolUseEvent
 } from '../models/message.model';
+import { MetadataEvent } from '../models/content-types';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -85,6 +86,10 @@ export class StreamParserService {
   /** Stream completion state */
   private isStreamCompleteSignal = signal<boolean>(false);
   public isStreamComplete = this.isStreamCompleteSignal.asReadonly();
+  
+  /** Metadata (usage, metrics) from the stream */
+  private metadataSignal = signal<MetadataEvent | null>(null);
+  public metadata = this.metadataSignal.asReadonly();
   
   // =========================================================================
   // Computed Signals - Reactive Derived State
@@ -228,6 +233,7 @@ export class StreamParserService {
     this.toolProgressSignal.set({ visible: false });
     this.errorSignal.set(null);
     this.isStreamCompleteSignal.set(false);
+    this.metadataSignal.set(null);
     this.currentEventType = '';
     
     console.log(`[StreamParser] Reset stream: ${oldStreamId} -> ${this.currentStreamId}`);
@@ -507,6 +513,10 @@ export class StreamParserService {
           
         case 'error':
           this.handleError(data);
+          break;
+          
+        case 'metadata':
+          this.handleMetadata(data);
           break;
           
         default:
@@ -869,6 +879,29 @@ export class StreamParserService {
     }
     
     this.setError(`Stream error: ${errorMessage}`);
+  }
+  
+  private handleMetadata(data: unknown): void {
+    if (!data || typeof data !== 'object') {
+      console.warn('[StreamParser] Invalid metadata event data:', data);
+      return;
+    }
+    
+    const metadataData = data as MetadataEvent;
+    
+    // Validate that at least usage or metrics is present
+    if (!metadataData.usage && !metadataData.metrics) {
+      console.warn('[StreamParser] Metadata event missing both usage and metrics:', metadataData);
+      return;
+    }
+    
+    // Update metadata signal
+    this.metadataSignal.set(metadataData);
+    
+    console.log('[StreamParser] Metadata received:', {
+      usage: metadataData.usage,
+      metrics: metadataData.metrics
+    });
   }
   
   // =========================================================================

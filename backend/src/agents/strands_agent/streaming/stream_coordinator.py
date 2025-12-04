@@ -54,12 +54,64 @@ class StreamCoordinator:
 
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
+            
+            # Track if we've seen metadata to avoid duplicate extraction
+            metadata_seen = False
 
             # Process through new stream processor and format as SSE
             async for event in process_agent_stream(agent_stream):
                 # Format as SSE event
                 sse_event = self._format_sse_event(event)
+                
+                # Log metadata events for debugging
+                if event.get("type") == "metadata":
+                    logger.info(f"📡 Sending metadata event via SSE: {event.get('data')}")
+                    metadata_seen = True
+                
                 yield sse_event
+
+            # If we didn't get metadata from the stream, try to get it from the agent's last result
+            # This is a fallback for cases where Strands doesn't emit result in the stream
+            if not metadata_seen:
+                try:
+                    # Try to get metrics from agent's last result if available
+                    if hasattr(agent, 'last_result') and agent.last_result:
+                        result = agent.last_result
+                        if hasattr(result, 'metrics'):
+                            metrics = result.metrics
+                            metadata_data = {}
+                            
+                            # Extract usage
+                            if hasattr(metrics, 'accumulated_usage'):
+                                usage = metrics.accumulated_usage
+                                if usage:
+                                    metadata_data["usage"] = {
+                                        "inputTokens": getattr(usage, 'inputTokens', getattr(usage, 'input_tokens', 0)),
+                                        "outputTokens": getattr(usage, 'outputTokens', getattr(usage, 'output_tokens', 0)),
+                                        "totalTokens": getattr(usage, 'totalTokens', getattr(usage, 'total_tokens', 0)),
+                                    }
+                                    # Add cache tokens if available
+                                    cache_read = getattr(usage, 'cacheReadInputTokens', getattr(usage, 'cache_read_input_tokens', None))
+                                    cache_write = getattr(usage, 'cacheWriteInputTokens', getattr(usage, 'cache_write_input_tokens', None))
+                                    if cache_read:
+                                        metadata_data["usage"]["cacheReadInputTokens"] = cache_read
+                                    if cache_write:
+                                        metadata_data["usage"]["cacheWriteInputTokens"] = cache_write
+                            
+                            # Extract metrics
+                            if hasattr(metrics, 'accumulated_metrics'):
+                                accumulated_metrics = metrics.accumulated_metrics
+                                if accumulated_metrics:
+                                    metadata_data["metrics"] = {
+                                        "latencyMs": getattr(accumulated_metrics, 'latencyMs', getattr(accumulated_metrics, 'latency_ms', 0))
+                                    }
+                            
+                            if metadata_data:
+                                logger.info("Extracted metadata from agent.last_result fallback")
+                                metadata_event = {"type": "metadata", "data": metadata_data}
+                                yield self._format_sse_event(metadata_event)
+                except Exception as e:
+                    logger.debug(f"Could not extract metadata from agent fallback: {e}")
 
             # Flush buffered messages (turn-based session manager)
             self._flush_session(session_manager)

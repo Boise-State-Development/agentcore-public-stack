@@ -227,16 +227,19 @@ export interface Usage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
 }
 
 export interface Metrics {
   latencyMs: number;
+  timeToFirstByteMs?: number;
 }
 
 export interface MetadataEvent {
   metrics?: Metrics;
   trace?: any;
-  usage: Usage;
+  usage?: Usage;
 }
 
 export interface ExceptionEvent {

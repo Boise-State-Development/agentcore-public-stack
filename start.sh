@@ -200,6 +200,9 @@ export API_URL="http://localhost:8001"
 echo "Starting frontend server (local mode)..."
 cd "$PROJECT_ROOT/frontend/ai.client"
 
+# Disable Angular analytics to prevent interactive prompts
+npx ng analytics off --skip-nx-cache 2>/dev/null || true
+
 unset PORT
 NODE_NO_WARNINGS=1 npm run start &
 FRONTEND_PID=$!
