@@ -52,25 +52,17 @@ if [ ! -f "node_modules/.bin/ng" ]; then
     exit 1
 fi
 
-# Check if karma.conf.js exists
-if [ ! -f "karma.conf.js" ]; then
-    log_warn "karma.conf.js not found. Tests may not be configured."
-fi
-
 # Run tests in headless mode (no watch, single run)
 # This is appropriate for CI/CD environments
-log_info "Running: ng test --no-watch --browsers=ChromeHeadless"
+log_info "Running: ng test --no-watch"
 
 # Set environment variable for CI
 export CI=true
 
-# Run tests with coverage
-# Using --no-watch to run once and exit
-# Using --browsers=ChromeHeadless for CI/CD compatibility
-# Note: Code coverage is configured in angular.json, not as a CLI flag in Angular 17+
-./node_modules/.bin/ng test \
-    --no-watch \
-    --browsers=ChromeHeadless
+# Run tests
+# Angular 17+ uses Vitest which handles headless mode automatically in CI environments
+# The CI=true environment variable triggers headless behavior
+./node_modules/.bin/ng test --no-watch
 
 # Check test exit code
 TEST_EXIT_CODE=$?
