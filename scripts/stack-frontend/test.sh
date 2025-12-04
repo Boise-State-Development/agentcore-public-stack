@@ -59,21 +59,18 @@ fi
 
 # Run tests in headless mode (no watch, single run)
 # This is appropriate for CI/CD environments
-log_info "Running: ng test --watch=false --browsers=ChromeHeadless --code-coverage"
+log_info "Running: ng test --no-watch --browsers=ChromeHeadless"
 
 # Set environment variable for CI
 export CI=true
 
 # Run tests with coverage
-# Using --watch=false to run once and exit
+# Using --no-watch to run once and exit
 # Using --browsers=ChromeHeadless for CI/CD compatibility
-# Using --code-coverage to generate coverage reports
+# Note: Code coverage is configured in angular.json, not as a CLI flag in Angular 17+
 ./node_modules/.bin/ng test \
-    --watch=false \
-    --browsers=ChromeHeadless \
-    --code-coverage \
-    --no-progress \
-    --source-map=false
+    --no-watch \
+    --browsers=ChromeHeadless
 
 # Check test exit code
 TEST_EXIT_CODE=$?
