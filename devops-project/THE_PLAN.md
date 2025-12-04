@@ -62,30 +62,30 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 **Goal**: S3 + CloudFront + Route53 (Optional)
 
 #### CDK Infrastructure
-- [ ] **Create FrontendStack File**: Create `infrastructure/lib/frontend-stack.ts`.
-- [ ] **Define S3 Bucket**: Configure S3 bucket with website hosting, block public access settings, and configurable bucket name using `${projectPrefix}-frontend-${awsAccount}`.
-- [ ] **Define CloudFront Distribution**: Create CloudFront distribution with OAC (Origin Access Control), custom error responses, and configurable price class.
-- [ ] **Add CloudFront Outputs**: Export CloudFront Distribution ID and Domain Name as CloudFormation Outputs.
-- [ ] **Store Parameters in SSM**: Write Distribution ID and Website URL to SSM Parameter Store (`/${projectPrefix}/frontend/distribution-id` and `/${projectPrefix}/frontend/url`).
-- [ ] **Optional Route53 Integration**: If domain name is configured, create Route53 A record aliasing to CloudFront.
+- [x] **Create FrontendStack File**: Create `infrastructure/lib/frontend-stack.ts`.
+- [x] **Define S3 Bucket**: Configure S3 bucket with website hosting, block public access settings, and configurable bucket name using `${projectPrefix}-frontend-${awsAccount}`.
+- [x] **Define CloudFront Distribution**: Create CloudFront distribution with OAC (Origin Access Control), custom error responses, and configurable price class.
+- [x] **Add CloudFront Outputs**: Export CloudFront Distribution ID and Domain Name as CloudFormation Outputs.
+- [x] **Store Parameters in SSM**: Write Distribution ID and Website URL to SSM Parameter Store (`/${projectPrefix}/frontend/distribution-id` and `/${projectPrefix}/frontend/url`).
+- [x] **Optional Route53 Integration**: If domain name is configured, create Route53 A record aliasing to CloudFront.
 
 #### Build & Deploy Scripts
-- [ ] **Create Scripts Directory**: Set up `scripts/stack-frontend/`.
-- [ ] **Script: Install Dependencies**: Create `scripts/stack-frontend/install.sh` to run `npm ci` in `frontend/ai.client`.
-- [ ] **Script: Build Frontend**: Create `scripts/stack-frontend/build.sh` to run `ng build --configuration production`.
-- [ ] **Script: Test Frontend**: Create `scripts/stack-frontend/test.sh` to run `ng test --watch=false`.
-- [ ] **Script: Deploy CDK**: Create `scripts/stack-frontend/deploy-cdk.sh` to run `cdk deploy FrontendStack`.
-- [ ] **Script: Deploy Assets**: Create `scripts/stack-frontend/deploy-assets.sh` to sync `dist/` to S3 and invalidate CloudFront cache.
+- [x] **Create Scripts Directory**: Set up `scripts/stack-frontend/`.
+- [x] **Script: Install Dependencies**: Create `scripts/stack-frontend/install.sh` to run `npm ci` in `frontend/ai.client`.
+- [x] **Script: Build Frontend**: Create `scripts/stack-frontend/build.sh` to run `ng build --configuration production`.
+- [x] **Script: Test Frontend**: Create `scripts/stack-frontend/test.sh` to run `ng test --watch=false`.
+- [x] **Script: Deploy CDK**: Create `scripts/stack-frontend/deploy-cdk.sh` to run `cdk deploy FrontendStack`.
+- [x] **Script: Deploy Assets**: Create `scripts/stack-frontend/deploy-assets.sh` to sync `dist/` to S3 and invalidate CloudFront cache.
 
 #### CI/CD Pipeline
-- [ ] **Create Workflow File**: Create `.github/workflows/frontend.yml`.
-- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on `frontend/**` changes.
-- [ ] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
-- [ ] **Add Build Step**: Call `scripts/stack-frontend/install.sh` then `scripts/stack-frontend/build.sh`.
-- [ ] **Add Test Step**: Call `scripts/stack-frontend/test.sh`.
-- [ ] **Add CDK Deploy Step**: Call `scripts/stack-frontend/deploy-cdk.sh`.
-- [ ] **Add Asset Deploy Step**: Call `scripts/stack-frontend/deploy-assets.sh`.
-- [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+- [x] **Create Workflow File**: Create `.github/workflows/frontend.yml`.
+- [x] **Configure Path Triggers**: Set `paths` filter to trigger on `frontend/**` changes.
+- [x] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
+- [x] **Add Build Step**: Call `scripts/stack-frontend/install.sh` then `scripts/stack-frontend/build.sh`.
+- [x] **Add Test Step**: Call `scripts/stack-frontend/test.sh`.
+- [x] **Add CDK Deploy Step**: Call `scripts/stack-frontend/deploy-cdk.sh`.
+- [x] **Add Asset Deploy Step**: Call `scripts/stack-frontend/deploy-assets.sh`.
+- [x] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
 
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 1 verified and approved to proceed to Phase 2

@@ -1,0 +1,118 @@
+#!/bin/bash
+# Frontend CDK deployment script - Deploy CloudFront and S3 infrastructure
+# This script deploys the FrontendStack using AWS CDK
+
+set -euo pipefail
+
+# Get the repository root directory
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CDK_DIR="${REPO_ROOT}/infrastructure"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+# Load environment variables
+log_info "Loading environment configuration..."
+if [ -f "${REPO_ROOT}/scripts/common/load-env.sh" ]; then
+    # shellcheck source=../common/load-env.sh
+    source "${REPO_ROOT}/scripts/common/load-env.sh"
+else
+    log_error "Environment loader not found: ${REPO_ROOT}/scripts/common/load-env.sh"
+    exit 1
+fi
+
+# Check if CDK directory exists
+if [ ! -d "${CDK_DIR}" ]; then
+    log_error "CDK directory not found: ${CDK_DIR}"
+    exit 1
+fi
+
+# Check if CDK is installed
+if ! command -v cdk &> /dev/null; then
+    log_error "AWS CDK is not installed. Please install it first."
+    log_error "Run: scripts/common/install-deps.sh"
+    exit 1
+fi
+
+log_info "Deploying Frontend Stack..."
+log_info "CDK directory: ${CDK_DIR}"
+log_info "Project prefix: ${CDK_PROJECT_PREFIX}"
+log_info "AWS Region: ${CDK_AWS_REGION}"
+log_info "AWS Account: ${CDK_AWS_ACCOUNT}"
+
+# Change to CDK directory
+cd "${CDK_DIR}"
+
+# Check if node_modules exists
+if [ ! -d "node_modules" ]; then
+    log_warn "node_modules not found in CDK directory. Installing dependencies..."
+    npm install
+fi
+
+# Display CDK version
+log_info "CDK version: $(cdk --version)"
+
+# Bootstrap CDK if needed (idempotent operation)
+log_info "Ensuring CDK is bootstrapped in ${CDK_AWS_REGION}..."
+cdk bootstrap aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION} \
+    --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess \
+    --toolkit-stack-name ${CDK_PROJECT_PREFIX}-CDKToolkit \
+    --qualifier ${CDK_PROJECT_PREFIX:0:10} || log_warn "Bootstrap may have already been completed"
+
+# Synthesize the CloudFormation template
+log_info "Synthesizing CloudFormation template..."
+cdk synth FrontendStack
+
+# Deploy the stack
+log_info "Deploying FrontendStack..."
+
+# Optional: Use --require-approval never for CI/CD
+REQUIRE_APPROVAL="${CDK_REQUIRE_APPROVAL:-never}"
+
+cdk deploy FrontendStack \
+    --require-approval ${REQUIRE_APPROVAL} \
+    --verbose
+
+# Check deployment exit code
+DEPLOY_EXIT_CODE=$?
+
+if [ ${DEPLOY_EXIT_CODE} -eq 0 ]; then
+    log_info "FrontendStack deployed successfully!"
+    
+    # Display stack outputs
+    log_info "Retrieving stack outputs..."
+    cdk deploy FrontendStack --outputs-file "${CDK_DIR}/frontend-outputs.json" || true
+    
+    if [ -f "${CDK_DIR}/frontend-outputs.json" ]; then
+        log_info "Stack outputs saved to: frontend-outputs.json"
+        cat "${CDK_DIR}/frontend-outputs.json"
+    fi
+    
+    # Retrieve key outputs from CloudFormation
+    log_info "Key resources deployed:"
+    aws cloudformation describe-stacks \
+        --stack-name FrontendStack \
+        --region ${CDK_AWS_REGION} \
+        --query 'Stacks[0].Outputs[?OutputKey==`WebsiteUrl` || OutputKey==`DistributionId` || OutputKey==`FrontendBucketName`].[OutputKey,OutputValue]' \
+        --output table || log_warn "Could not retrieve stack outputs"
+    
+else
+    log_error "FrontendStack deployment failed with exit code: ${DEPLOY_EXIT_CODE}"
+    exit ${DEPLOY_EXIT_CODE}
+fi

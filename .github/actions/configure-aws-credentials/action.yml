@@ -1,0 +1,38 @@
+name: 'Configure AWS Credentials'
+description: 'Configure AWS credentials using OIDC or access keys with automatic fallback'
+inputs:
+  aws-region:
+    description: 'AWS Region'
+    required: true
+  role-session-name:
+    description: 'Role session name for OIDC authentication'
+    required: false
+    default: 'GitHubActions'
+  aws-role-arn:
+    description: 'AWS Role ARN for OIDC (from secrets)'
+    required: false
+  aws-access-key-id:
+    description: 'AWS Access Key ID (fallback for non-OIDC)'
+    required: false
+  aws-secret-access-key:
+    description: 'AWS Secret Access Key (fallback for non-OIDC)'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials (OIDC)
+      if: ${{ inputs.aws-role-arn != '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: ${{ inputs.role-session-name }}
+    
+    - name: Configure AWS credentials (Access Keys)
+      if: ${{ inputs.aws-role-arn == '' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
