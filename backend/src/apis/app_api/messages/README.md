@@ -27,11 +27,7 @@ Retrieve all messages for a specific session and user.
       "content": [
         {
           "type": "text",
-          "text": "message content",
-          "toolUse": null,
-          "toolResult": null,
-          "image": null,
-          "document": null
+          "text": "message content"
         }
       ],
       "timestamp": "2025-12-03T12:00:00Z"
@@ -40,6 +36,8 @@ Retrieve all messages for a specific session and user.
   "total_count": 10
 }
 ```
+
+**Note:** Null values are excluded from the response. Only relevant fields for each content type are included.
 
 **Status Codes:**
 - `200 OK`: Messages retrieved successfully
@@ -93,11 +91,7 @@ curl -X GET "http://localhost:8000/messages/your-session-id" \
       "content": [
         {
           "type": "text",
-          "text": "Hello, how are you?",
-          "toolUse": null,
-          "toolResult": null,
-          "image": null,
-          "document": null
+          "text": "Hello, how are you?"
         }
       ],
       "timestamp": "2025-12-03T12:00:00Z"
@@ -107,11 +101,7 @@ curl -X GET "http://localhost:8000/messages/your-session-id" \
       "content": [
         {
           "type": "text",
-          "text": "I'm doing well, thank you for asking!",
-          "toolUse": null,
-          "toolResult": null,
-          "image": null,
-          "document": null
+          "text": "I'm doing well, thank you for asking!"
         }
       ],
       "timestamp": "2025-12-03T12:00:05Z"

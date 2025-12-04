@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/messages", tags=["messages"])
 
 
-@router.get("/{session_id}", response_model=GetMessagesResponse)
+@router.get("/{session_id}", response_model=GetMessagesResponse, response_model_exclude_none=True)
 async def get_session_messages(
     session_id: str,
     current_user: User = Depends(get_current_user)
