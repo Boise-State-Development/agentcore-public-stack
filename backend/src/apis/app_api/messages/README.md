@@ -133,9 +133,10 @@ The service automatically selects the appropriate storage backend:
    - Supports user preferences and facts across sessions
 
 2. **Local File Storage (Development)**: When `MEMORY_ID` is not set
-   - Uses FileSessionManager with local JSON files
-   - Stored in `backend/sessions/` directory
-   - Each session has a separate JSON file
+   - Uses FileSessionManager with local directory structure
+   - Stored in `backend/src/sessions/` directory
+   - Structure: `sessions/session_{session_id}/agents/agent_default/messages/message_N.json`
+   - Each message is stored in a separate numbered JSON file
 
 ### User Authentication
 

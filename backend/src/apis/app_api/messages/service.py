@@ -169,6 +169,9 @@ async def get_messages_from_local(
     """
     Retrieve messages from local file storage
 
+    FileSessionManager uses directory structure:
+    sessions/session_{session_id}/agents/agent_default/messages/message_N.json
+
     Args:
         session_id: Session identifier
         user_id: User identifier (for consistency, not used in file lookup)
@@ -178,36 +181,51 @@ async def get_messages_from_local(
     """
     # Determine sessions directory (same as session_factory.py)
     sessions_dir = Path(__file__).parent.parent.parent.parent / "sessions"
-    session_file = sessions_dir / f"{session_id}.json"
+    session_dir = sessions_dir / f"session_{session_id}"
+    messages_dir = session_dir / "agents" / "agent_default" / "messages"
 
-    logger.info(f"Retrieving messages from local file - Session: {session_id}, File: {session_file}")
+    logger.info(f"Retrieving messages from local file - Session: {session_id}, Dir: {messages_dir}")
 
     messages = []
 
-    if session_file.exists():
+    if messages_dir.exists() and messages_dir.is_dir():
         try:
-            with open(session_file, 'r') as f:
-                data = json.load(f)
+            # Get all message files sorted by message_id
+            message_files = sorted(
+                messages_dir.glob("message_*.json"),
+                key=lambda p: int(p.stem.split("_")[1])  # Extract number from message_N.json
+            )
 
-            # FileSessionManager stores messages as a list
-            messages_raw = data.get("messages", [])
+            logger.info(f"Found {len(message_files)} message files")
 
-            # Convert to our Message model
-            for msg in messages_raw:
+            # Read each message file
+            for message_file in message_files:
                 try:
+                    with open(message_file, 'r') as f:
+                        data = json.load(f)
+
+                    # Extract the message object
+                    msg = data.get("message", {})
+
+                    # Add timestamp if available
+                    if "created_at" in data:
+                        msg["timestamp"] = data["created_at"]
+
+                    # Convert to our Message model
                     messages.append(_convert_message(msg))
+
                 except Exception as e:
-                    logger.error(f"Error converting message: {e}")
+                    logger.error(f"Error reading message file {message_file}: {e}")
                     continue
 
-            logger.info(f"Retrieved {len(messages)} messages from local file")
+            logger.info(f"Retrieved {len(messages)} messages from local file storage")
 
         except Exception as e:
-            logger.error(f"Error reading session file: {e}")
+            logger.error(f"Error reading session directory: {e}")
             raise
 
     else:
-        logger.info(f"Session file does not exist yet: {session_file}")
+        logger.info(f"Session messages directory does not exist yet: {messages_dir}")
 
     return GetMessagesResponse(
         session_id=session_id,
