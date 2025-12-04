@@ -5,7 +5,7 @@ Reduces API calls by 75% (4 calls → 1 call per turn).
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 
@@ -98,10 +98,15 @@ class TurnBasedSessionManager:
             "content": merged_content
         }
 
-    def _flush_turn(self):
-        """Flush pending messages as a single merged message to AgentCore Memory"""
+    def _flush_turn(self) -> Optional[int]:
+        """
+        Flush pending messages as a single merged message to AgentCore Memory
+
+        Returns:
+            Message ID of the flushed message, or None if nothing was flushed
+        """
         if not self.pending_messages:
-            return
+            return None
 
         merged_message = self._merge_turn_messages()
         if merged_message:
@@ -127,8 +132,41 @@ class TurnBasedSessionManager:
                 session_message
             )
 
-        # Clear buffer
+            # Get message ID from session manager
+            # For AgentCore Memory, we need to count messages to get the ID
+            message_id = self._get_latest_message_id()
+
+            # Clear buffer
+            self.pending_messages = []
+
+            return message_id
+
+        # Clear buffer even if no message was created
         self.pending_messages = []
+        return None
+
+    def _get_latest_message_id(self) -> Optional[int]:
+        """
+        Get the ID of the most recently stored message
+
+        For AgentCore Memory, we count the total messages in the session.
+        For local file storage, this is handled differently.
+
+        Returns:
+            Message ID (1-indexed) or None if unavailable
+        """
+        try:
+            # Get all messages from the session
+            messages = self.base_manager.list_messages(
+                self.base_manager.config.session_id,
+                "default"  # agent_id
+            )
+            if messages:
+                return len(messages)
+        except Exception as e:
+            logger.error(f"Failed to get latest message ID: {e}")
+
+        return None
 
     def add_message(self, message: Dict[str, Any]):
         """
@@ -152,9 +190,14 @@ class TurnBasedSessionManager:
             logger.info(f"⏰ Batch size ({self.batch_size}) reached, flushing buffer")
             self._flush_turn()
 
-    def flush(self):
-        """Force flush any pending messages (e.g., at end of stream)"""
-        self._flush_turn()
+    def flush(self) -> Optional[int]:
+        """
+        Force flush any pending messages (e.g., at end of stream)
+
+        Returns:
+            Message ID of the flushed message, or None if nothing was flushed
+        """
+        return self._flush_turn()
 
     def append_message(self, message, agent, **kwargs):
         """

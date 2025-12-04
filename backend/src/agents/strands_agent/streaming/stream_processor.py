@@ -38,6 +38,7 @@ ADDITIONAL ENHANCEMENTS:
 """
 
 import logging
+import time
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, TypedDict
@@ -1031,9 +1032,17 @@ async def process_agent_stream(
        f. Reasoning events (model thinking)
        g. Citation events (source references) - ENHANCED with inline citations
     3. Yield processed events one by one
-    4. Send final "done" event when stream completes
-    5. Handle errors gracefully
-    6. Ensure proper generator cleanup on cancellation
+    4. Accumulate metadata for final summary
+    5. Yield "metadata_summary" event before "done"
+    6. Send final "done" event when stream completes
+    7. Handle errors gracefully
+    8. Ensure proper generator cleanup on cancellation
+
+    METADATA ACCUMULATION:
+    =====================
+    The processor accumulates metadata (token usage, metrics) during streaming
+    and yields a final "metadata_summary" event before "done". This allows
+    the caller to store metadata without adding side effects to the processor.
 
     DUAL-LAYER ARCHITECTURE FOR TOOLS:
     - Content blocks provide structural foundation (contentBlockIndex, basic tool info)
@@ -1057,6 +1066,7 @@ async def process_agent_stream(
     - Reasoning: reasoning, reasoningText, reasoning_signature, redactedContent, reasoningContent
     - Citations: citation, citationsContent, citation_start, citation_end (ENHANCED)
     - Metadata: usage, metrics, metadata (token usage with cache tracking, performance metrics)
+    - Summary: metadata_summary (final accumulated metadata before done)
 
     ENHANCEMENTS (v2):
     ==================
@@ -1067,6 +1077,12 @@ async def process_agent_stream(
     - Tool message/progress indicator support
     - Integration metadata support for external tools
     - Cache token metrics for prompt caching cost analysis
+
+    ENHANCEMENTS (v3):
+    ==================
+    - Metadata accumulation during streaming (in-memory)
+    - metadata_summary event with complete token usage and timing
+    - First token time tracking for latency calculation
 
     Args:
         agent_stream: Async generator yielding raw events from Strands Agents
@@ -1114,6 +1130,13 @@ async def process_agent_stream(
         assert events[2]["data"]["citation_uuid"] == "abc-123"
         ```
     """
+    # Accumulate metadata during streaming (in-memory only, no side effects)
+    accumulated_metadata: Dict[str, Any] = {
+        "usage": {},
+        "metrics": {}
+    }
+    first_token_time: Optional[float] = None
+
     try:
         # Track if we've seen result to know when it's safe to break on complete
         result_seen = False
@@ -1208,7 +1231,12 @@ async def process_agent_stream(
             # STEP 4: Process content block events
             # These track the lifecycle of content blocks (text and tool uses) in the model's response
             # Provides structured tracking with contentBlockIndex, messageStart/Stop, etc.
+            # ALSO track first token time for latency calculation
             for processed_event in _handle_content_block_events(event):
+                # Track first token time for latency calculation
+                if first_token_time is None:
+                    if processed_event.get("type") == "content_block_delta" and processed_event.get("data", {}).get("type") == "text":
+                        first_token_time = time.time()
                 yield processed_event
 
             # STEP 5: Process tool events (ENHANCED with display_content)
@@ -1229,7 +1257,30 @@ async def process_agent_stream(
             for processed_event in _handle_citation_events(event):
                 yield processed_event
 
-        # STEP 8: Send final done event
+            # STEP 7: Process metadata events (ENHANCED with cache tokens)
+            # These contain token usage (including cache metrics) and performance data
+            # Important for cost tracking and monitoring
+            # ALSO accumulate metadata for final summary
+            for processed_event in _handle_metadata_events(event):
+                # Accumulate metadata for summary
+                if processed_event.get("type") == "metadata":
+                    event_data = processed_event.get("data", {})
+                    if "usage" in event_data:
+                        accumulated_metadata["usage"].update(event_data["usage"])
+                    if "metrics" in event_data:
+                        accumulated_metadata["metrics"].update(event_data["metrics"])
+                # Yield the metadata event
+                yield processed_event
+
+        # STEP 8: Yield metadata summary before done event
+        # This provides all accumulated metadata in one place for storage
+        if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics"):
+            # Add first_token_time if we tracked it (caller will calculate latency)
+            if first_token_time is not None:
+                accumulated_metadata["first_token_time"] = first_token_time
+            yield _create_event("metadata_summary", accumulated_metadata)
+
+        # STEP 9: Send final done event
         # This signals to the client that the stream has completed successfully
         # It's sent after all events have been processed
         yield _create_event("done", {})

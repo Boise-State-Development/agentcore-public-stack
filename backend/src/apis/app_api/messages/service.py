@@ -69,8 +69,17 @@ def _convert_content_block(content_item: Any) -> MessageContent:
         return MessageContent(type="text", text=str(content_item))
 
 
-def _convert_message(msg: Any) -> Message:
-    """Convert a session message to Message model"""
+def _convert_message(msg: Any, metadata: Any = None) -> Message:
+    """
+    Convert a session message to Message model
+
+    Args:
+        msg: Message data (dict or SessionMessage object)
+        metadata: Optional metadata (MessageMetadata dict or object)
+
+    Returns:
+        Message with embedded metadata
+    """
     # Extract role and content
     if isinstance(msg, dict):
         role = msg.get("role", "assistant")
@@ -90,10 +99,23 @@ def _convert_message(msg: Any) -> Message:
         # Handle simple string content
         content_blocks = [MessageContent(type="text", text=content)]
 
+    # Convert metadata if present
+    from .models import MessageMetadata
+    message_metadata = None
+    if metadata:
+        if isinstance(metadata, dict):
+            try:
+                message_metadata = MessageMetadata(**metadata)
+            except Exception as e:
+                logger.error(f"Failed to parse message metadata: {e}")
+        elif isinstance(metadata, MessageMetadata):
+            message_metadata = metadata
+
     return Message(
         role=role,
         content=content_blocks,
-        timestamp=str(timestamp) if timestamp else None
+        timestamp=str(timestamp) if timestamp else None,
+        metadata=message_metadata
     )
 
 
@@ -211,8 +233,11 @@ async def get_messages_from_local(
                     if "created_at" in data:
                         msg["timestamp"] = data["created_at"]
 
-                    # Convert to our Message model
-                    messages.append(_convert_message(msg))
+                    # Extract metadata if available
+                    metadata = data.get("metadata")
+
+                    # Convert to our Message model with metadata
+                    messages.append(_convert_message(msg, metadata=metadata))
 
                 except Exception as e:
                     logger.error(f"Error reading message file {message_file}: {e}")

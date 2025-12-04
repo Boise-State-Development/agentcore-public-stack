@@ -57,12 +57,19 @@ class LocalSessionBuffer:
             logger.info(f"⏰ Batch size ({self.batch_size}) reached, flushing buffer")
             self.flush()
 
-    def flush(self):
-        """Force flush pending messages to FileSessionManager"""
+    def flush(self) -> Optional[int]:
+        """
+        Force flush pending messages to FileSessionManager
+
+        Returns:
+            Message ID of the last flushed message, or None if nothing was flushed
+        """
         if not self.pending_messages:
-            return
+            return None
 
         logger.info(f"💾 Flushing {len(self.pending_messages)} messages to FileSessionManager")
+
+        last_message_id = None
 
         # Write each pending message to base manager
         for message_dict in self.pending_messages:
@@ -84,9 +91,45 @@ class LocalSessionBuffer:
             except Exception as e:
                 logger.error(f"Failed to write message to FileSessionManager: {e}")
 
+        # Get the latest message ID after flushing
+        last_message_id = self._get_latest_message_id()
+
         # Clear buffer
         self.pending_messages = []
-        logger.debug(f"✅ Buffer flushed")
+        logger.debug(f"✅ Buffer flushed (last message ID: {last_message_id})")
+
+        return last_message_id
+
+    def _get_latest_message_id(self) -> Optional[int]:
+        """
+        Get the ID of the most recently stored message in local file storage
+
+        Returns:
+            Message ID (1-indexed) or None if unavailable
+        """
+        try:
+            from pathlib import Path
+            from apis.app_api.storage.paths import get_messages_dir
+
+            # Get messages directory
+            messages_dir = get_messages_dir(self.session_id)
+
+            if messages_dir.exists():
+                # Get all message files sorted by number
+                message_files = sorted(
+                    messages_dir.glob("message_*.json"),
+                    key=lambda p: int(p.stem.split("_")[1]) if p.stem.split("_")[1].isdigit() else 0
+                )
+                if message_files:
+                    # Get the highest message number
+                    latest_file = message_files[-1]
+                    message_num = int(latest_file.stem.split("_")[1])
+                    return message_num
+
+        except Exception as e:
+            logger.error(f"Failed to get latest message ID: {e}")
+
+        return None
 
     # Delegate all other methods to base manager
     def __getattr__(self, name):
