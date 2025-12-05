@@ -152,7 +152,7 @@ export class AppApiStack extends cdk.Stack {
         },
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
         removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain data on stack deletion
-        pointInTimeRecoverySpecification: dynamodb.PointInTimeRecoverySpecification.ENABLED,
+        pointInTimeRecovery: true, // TODO: Upgrade to pointInTimeRecoverySpecification when CDK version supports it
         encryption: dynamodb.TableEncryption.AWS_MANAGED,
       });
 
@@ -334,7 +334,7 @@ export class AppApiStack extends cdk.Stack {
     this.ecsCluster = new ecs.Cluster(this, 'AppApiCluster', {
       vpc: this.vpc,
       clusterName: getResourceName(config, 'app-api-cluster'),
-      containerInsightsV2: ecs.ContainerInsightsV2.ENABLED,
+      containerInsights: true, // TODO: Upgrade to containerInsightsV2 when CDK version supports it
     });
 
     // ============================================================
