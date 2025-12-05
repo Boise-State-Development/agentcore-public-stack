@@ -131,11 +131,14 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // ============================================================
-    // Database Layer
+    // Database Layer (Optional - controlled by config.appApi.databaseType)
     // ============================================================
     let databaseConnectionInfo: string | undefined;
 
-    if (config.appApi.databaseType === 'dynamodb') {
+    if (config.appApi.databaseType === 'none') {
+      // No database configured - skip database creation
+      // Set databaseType to 'dynamodb' or 'rds' in config when database is needed
+    } else if (config.appApi.databaseType === 'dynamodb') {
       // DynamoDB Table
       const table = new dynamodb.Table(this, 'AppApiTable', {
         tableName: getResourceName(config, 'app-api-table'),

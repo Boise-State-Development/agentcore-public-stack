@@ -28,7 +28,7 @@ export interface AppApiConfig {
   memory: number;
   desiredCount: number;
   maxCapacity: number;
-  databaseType: 'dynamodb' | 'rds';
+  databaseType: 'dynamodb' | 'rds' | 'none';
   enableRds: boolean;
   rdsInstanceClass?: string;
   rdsEngine?: string;
@@ -99,7 +99,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       memory: 1024,
       desiredCount: 2,
       maxCapacity: 10,
-      databaseType: 'dynamodb',
+      databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
       enableRds: false,
     },
     inferenceApi: scope.node.tryGetContext('inferenceApi') || {
