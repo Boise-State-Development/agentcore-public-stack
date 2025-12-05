@@ -27,8 +27,7 @@ log_success() {
 main() {
     log_info "Building App API Docker image..."
     
-    # Load configuration
-    load_configuration
+    # Configuration already loaded by sourcing load-env.sh
     
     # Set image name and tag
     IMAGE_NAME="${CDK_PROJECT_PREFIX}-app-api"

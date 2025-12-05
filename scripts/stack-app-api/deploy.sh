@@ -89,8 +89,7 @@ update_ecs_service() {
 main() {
     log_info "Deploying App API Stack..."
     
-    # Load configuration
-    load_configuration
+    # Configuration already loaded by sourcing load-env.sh
     
     # Validate required environment variables
     if [ -z "${CDK_AWS_ACCOUNT}" ]; then
