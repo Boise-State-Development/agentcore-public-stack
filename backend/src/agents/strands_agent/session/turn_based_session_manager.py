@@ -75,7 +75,7 @@ class TurnBasedSessionManager:
         Merge all messages in the current turn into a single message.
 
         Returns:
-            Merged message with all content blocks combined
+            Merged message with all content blocks combined, preserving message_id from first message
         """
         if not self.pending_messages:
             return None
@@ -87,16 +87,24 @@ class TurnBasedSessionManager:
         # Merge all content blocks
         merged_content = []
         merged_role = self.pending_messages[0].get("role", "assistant")
+        # Preserve message_id from first message (the UUID sent to client in message_start event)
+        merged_message_id = self.pending_messages[0].get("message_id")
 
         for msg in self.pending_messages:
             content = msg.get("content", [])
             if isinstance(content, list):
                 merged_content.extend(content)
 
-        return {
+        merged_message = {
             "role": merged_role,
             "content": merged_content
         }
+        
+        # Include message_id if it exists
+        if merged_message_id:
+            merged_message["message_id"] = merged_message_id
+
+        return merged_message
 
     def _flush_turn(self) -> Optional[int]:
         """
@@ -112,6 +120,9 @@ class TurnBasedSessionManager:
         if merged_message:
             # Write merged message to AgentCore Memory
             logger.info(f"💾 Flushing turn: {len(self.pending_messages)} messages → 1 merged event")
+
+            # Extract UUID from merged message before persisting
+            uuid_from_merged = merged_message.get("message_id")
 
             # Call base manager's create_message directly to persist
             # We need to convert to SessionMessage format first
@@ -134,12 +145,18 @@ class TurnBasedSessionManager:
 
             # Get message ID from session manager
             # For AgentCore Memory, we need to count messages to get the ID
-            message_id = self._get_latest_message_id()
+            sequential_message_id = self._get_latest_message_id()
+
+            # Store UUID-to-sequential-ID mapping if UUID exists
+            # This preserves the UUID sent to the client in message_start events
+            if uuid_from_merged and sequential_message_id:
+                self._store_uuid_mapping(uuid_from_merged, sequential_message_id)
+                logger.info(f"🔗 Stored UUID mapping: {uuid_from_merged} → {sequential_message_id}")
 
             # Clear buffer
             self.pending_messages = []
 
-            return message_id
+            return sequential_message_id
 
         # Clear buffer even if no message was created
         self.pending_messages = []
@@ -167,6 +184,63 @@ class TurnBasedSessionManager:
             logger.error(f"Failed to get latest message ID: {e}")
 
         return None
+
+    def _store_uuid_mapping(self, uuid: str, sequential_id: int) -> None:
+        """
+        Store UUID-to-sequential-ID mapping for AgentCore Memory messages.
+
+        Since AgentCore Memory uses sequential IDs but we send UUIDs to clients,
+        we need to maintain a mapping to preserve the contract that client-facing
+        IDs match stored message IDs.
+
+        Args:
+            uuid: UUID sent to client in message_start event
+            sequential_id: Sequential ID returned by AgentCore Memory
+        """
+        try:
+            import os
+            import json
+            from pathlib import Path
+
+            # For cloud storage (AgentCore Memory), we could store in DynamoDB
+            # For now, store in a local mapping file as a fallback
+            # This mapping can be used when retrieving messages to map sequential IDs back to UUIDs
+            conversations_table = os.environ.get('CONVERSATIONS_TABLE_NAME')
+            session_id = self.base_manager.config.session_id
+
+            if conversations_table:
+                # Cloud: Store in DynamoDB (future implementation)
+                # For now, log the mapping - it can be stored in message metadata
+                logger.debug(f"Cloud storage: UUID {uuid} maps to sequential ID {sequential_id}")
+                # TODO: Store UUID mapping in DynamoDB conversations table
+            else:
+                # Local: Store in a mapping file
+                from apis.app_api.storage.paths import get_session_dir
+                session_dir = get_session_dir(session_id)
+                mapping_file = session_dir / "uuid_mappings.json"
+
+                # Read existing mappings
+                mappings = {}
+                if mapping_file.exists():
+                    try:
+                        with open(mapping_file, 'r') as f:
+                            mappings = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Failed to read UUID mappings: {e}")
+
+                # Add new mapping
+                mappings[str(sequential_id)] = uuid
+
+                # Write back
+                mapping_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(mapping_file, 'w') as f:
+                    json.dump(mappings, f, indent=2)
+
+                logger.debug(f"💾 Stored UUID mapping locally: {uuid} → {sequential_id}")
+
+        except Exception as e:
+            # Don't fail the flush if UUID mapping storage fails
+            logger.warning(f"Failed to store UUID mapping: {e}")
 
     def add_message(self, message: Dict[str, Any]):
         """

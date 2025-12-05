@@ -67,9 +67,11 @@ class StreamCoordinator:
         from agents.strands_agent.session.message_id_injector import MessageIdInjector
         wrapped_manager = MessageIdInjector(session_manager, session_id)
 
-        # Replace agent's session manager with wrapper
-        original_manager = agent.session_manager
-        agent.session_manager = wrapped_manager
+        # The agent was created with the original session manager.
+        # We need to temporarily replace it with our wrapped manager
+        # so that when append_message is called, it goes through our injector.
+        original_session_manager = agent._session_manager
+        agent._session_manager = wrapped_manager
 
         try:
             # Log prompt information
@@ -97,11 +99,16 @@ class StreamCoordinator:
 
                 # Inject message_id at message_start
                 if event.get("type") == "message_start":
+                    logger.info(f"🔍 Found message_start event, event before injection: {event}")
                     message_id = wrapped_manager.peek_next_message_id()
-                    event_data = event.get("data", {})
+                    logger.info(f"🔮 Generated message_id: {message_id}")
+                    # Get existing data or create new dict
+                    event_data = dict(event.get("data", {}))
                     event_data["id"] = message_id
+                    # Update the event with new data
                     event["data"] = event_data
-                    logger.info(f"📝 Sending message_start with ID: {message_id}")
+                    logger.info(f"📝 Event after injection: {event}")
+                    logger.info(f"✅ Injected message_id into message_start: {message_id}")
 
                 # Format as SSE event and yield
                 sse_event = self._format_sse_event(event)
@@ -147,7 +154,7 @@ class StreamCoordinator:
 
         finally:
             # Restore original session manager
-            agent.session_manager = original_manager
+            agent._session_manager = original_session_manager
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """

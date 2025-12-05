@@ -48,12 +48,17 @@ class MessageIdInjector:
         This is called when we see a message_start event to get the ID before
         append_message is called by the Strands framework.
 
+        IMPORTANT: Always generates a fresh UUID. The cached ID is consumed
+        when append_message is called. If peek is called multiple times before
+        append_message (shouldn't happen), we generate a new ID each time.
+
         Returns:
-            str: UUID for the next message (cached if already generated)
+            str: UUID for the next message
         """
-        if not self.next_message_id:
-            self.next_message_id = str(uuid.uuid4())
-            logger.debug(f"🔮 Pre-generated next message ID: {self.next_message_id}")
+        # Always generate a fresh ID for each peek
+        # The ID will be cached for append_message to use
+        self.next_message_id = str(uuid.uuid4())
+        logger.debug(f"🔮 Generated message ID for upcoming message: {self.next_message_id}")
         return self.next_message_id
 
     def get_current_message_id(self) -> Optional[str]:
