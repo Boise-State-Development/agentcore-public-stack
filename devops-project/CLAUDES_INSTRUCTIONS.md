@@ -43,32 +43,43 @@ You are responsible for the integrity of `THE_PLAN.md`. If you complete a task, 
 
 **Phase Start Protocol**:
 1. At the beginning of each new phase, create `CLAUDES_LESSONS_PHASE<N>.md` in the `devops-project/` folder.
-2. Initialize the document with sections for:
+2. Initialize the document with empty sections:
    - Technical Discoveries
    - Gotchas and Workarounds
    - Process Improvements
    - Open Questions
-3. Update this document throughout the phase as you encounter issues, make decisions, or discover patterns.
-4. At phase completion, finalize the lessons learned document before the `[HUMAN]` checkpoint.
+   - Notes for Future Phases
+3. **IMPORTANT**: Leave sections empty with placeholder text like "_This section will be filled in as we test..._"
+4. **DO NOT pre-fill** with assumptions about what might go wrong or summaries of what you built.
+5. Update this document **ONLY when the human encounters real issues during testing** and you work together to solve them.
+6. This is a **living document** that grows through actual experience, not theoretical planning.
 
 **Task Completion Protocol**:
 1. Read the task requirements carefully.
 2. Implement the solution (write code, create files, etc.).
 3. Verify the implementation works as expected.
 4. Mark the task as complete in `THE_PLAN.md` by changing `- [ ]` to `- [x]`.
-5. If you encountered any issues or made important decisions, update the current phase's lessons learned document.
-6. Move to the next task.
+5. Move to the next task.
+
+**Lessons Learned Protocol**:
+- **DO NOT** update lessons learned during implementation.
+- Update lessons learned **ONLY** when:
+  - Human tests your implementation and encounters issues
+  - You troubleshoot together and discover solutions
+  - You find gotchas that weren't obvious during development
+  - You identify process improvements based on real experience
 
 **Do NOT**:
 - Skip tasks or complete them out of order.
 - Mark multiple tasks as complete in a single update.
 - Mark a task as complete before verifying it works.
 - Create placeholder or incomplete implementations.
-- Wait until the end of the phase to document lessons - update as you go.
+- Pre-fill lessons learned documents with assumptions or summaries.
+- Update lessons learned without human involvement during testing.
 
 **Quality Standards**:
 - All code must follow TypeScript/Python best practices.
 - All shell scripts must be executable and include proper error handling.
 - All configuration must be externalized (no hardcoded values).
 - All GitHub Actions workflows must only call shell scripts (no inline logic).
-- Lessons learned documents must be kept up-to-date throughout the phase.
+- Lessons learned documents must be empty templates until testing begins.

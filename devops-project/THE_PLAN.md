@@ -94,43 +94,43 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 **Goal**: VPC + ALB + Fargate + RDS/DynamoDB
 
 #### CDK Infrastructure - Networking
-- [ ] **Create AppApiStack File**: Create `infrastructure/lib/app-api-stack.ts`.
-- [ ] **Define VPC**: Create VPC with configurable CIDR, public/private subnets across 2+ AZs, NAT Gateways.
-- [ ] **Export VPC to SSM**: Store VPC ID in `/${projectPrefix}/network/vpc-id`.
-- [ ] **Export Subnets to SSM**: Store private subnet IDs in `/${projectPrefix}/network/private-subnet-ids`.
-- [ ] **Export Public Subnets to SSM**: Store public subnet IDs in `/${projectPrefix}/network/public-subnet-ids`.
+- [x] **Create AppApiStack File**: Create `infrastructure/lib/app-api-stack.ts`.
+- [x] **Define VPC**: Create VPC with configurable CIDR, public/private subnets across 2+ AZs, NAT Gateways.
+- [x] **Export VPC to SSM**: Store VPC ID in `/${projectPrefix}/network/vpc-id`.
+- [x] **Export Subnets to SSM**: Store private subnet IDs in `/${projectPrefix}/network/private-subnet-ids`.
+- [x] **Export Public Subnets to SSM**: Store public subnet IDs in `/${projectPrefix}/network/public-subnet-ids`.
 
 #### CDK Infrastructure - Data Layer
-- [ ] **Define Security Groups**: Create security groups for ALB, ECS tasks, and RDS/DynamoDB access.
-- [ ] **Define Database**: Create RDS Aurora Serverless v2 OR DynamoDB table based on configuration flag.
-- [ ] **Export Database Connection Info**: Store connection string/endpoint in Secrets Manager and reference ARN in SSM.
+- [x] **Define Security Groups**: Create security groups for ALB, ECS tasks, and RDS/DynamoDB access.
+- [x] **Define Database**: Create RDS Aurora Serverless v2 OR DynamoDB table based on configuration flag.
+- [x] **Export Database Connection Info**: Store connection string/endpoint in Secrets Manager and reference ARN in SSM.
 
 #### CDK Infrastructure - Compute & Load Balancing
-- [ ] **Define Application Load Balancer**: Create ALB in public subnets with security group.
-- [ ] **Export ALB ARN to SSM**: Store ALB ARN in `/${projectPrefix}/network/alb-arn`.
-- [ ] **Export ALB Listener ARN**: Store listener ARN in `/${projectPrefix}/network/alb-listener-arn`.
-- [ ] **Define ECS Cluster**: Create Fargate cluster with configurable name.
-- [ ] **Define ECR Repository**: Create ECR repository for App API Docker images.
-- [ ] **Define Task Definition**: Create Fargate task definition with configurable CPU/memory, environment variables from config.
-- [ ] **Define ECS Service**: Create Fargate service with auto-scaling, health checks, and ALB target group integration.
-- [ ] **Add CloudFormation Outputs**: Export cluster name, service name, and task definition ARN.
+- [x] **Define Application Load Balancer**: Create ALB in public subnets with security group.
+- [x] **Export ALB ARN to SSM**: Store ALB ARN in `/${projectPrefix}/network/alb-arn`.
+- [x] **Export ALB Listener ARN**: Store listener ARN in `/${projectPrefix}/network/alb-listener-arn`.
+- [x] **Define ECS Cluster**: Create Fargate cluster with configurable name.
+- [x] **Define ECR Repository**: Create ECR repository for App API Docker images.
+- [x] **Define Task Definition**: Create Fargate task definition with configurable CPU/memory, environment variables from config.
+- [x] **Define ECS Service**: Create Fargate service with auto-scaling, health checks, and ALB target group integration.
+- [x] **Add CloudFormation Outputs**: Export cluster name, service name, and task definition ARN.
 
 #### Build & Deploy Scripts
-- [ ] **Create Scripts Directory**: Set up `scripts/stack-app-api/`.
-- [ ] **Script: Install Dependencies**: Create `scripts/stack-app-api/install.sh` to install Python dependencies via Poetry/pip.
-- [ ] **Script: Build Docker Image**: Create `scripts/stack-app-api/build.sh` to build and tag Docker image.
-- [ ] **Script: Run Tests**: Create `scripts/stack-app-api/test.sh` to run pytest.
-- [ ] **Script: Deploy Infrastructure**: Create `scripts/stack-app-api/deploy.sh` to deploy CDK stack and push Docker image to ECR.
+- [x] **Create Scripts Directory**: Set up `scripts/stack-app-api/`.
+- [x] **Script: Install Dependencies**: Create `scripts/stack-app-api/install.sh` to install Python dependencies via Poetry/pip.
+- [x] **Script: Build Docker Image**: Create `scripts/stack-app-api/build.sh` to build and tag Docker image.
+- [x] **Script: Run Tests**: Create `scripts/stack-app-api/test.sh` to run pytest.
+- [x] **Script: Deploy Infrastructure**: Create `scripts/stack-app-api/deploy.sh` to deploy CDK stack and push Docker image to ECR.
 
 #### CI/CD Pipeline
-- [ ] **Create Workflow File**: Create `.github/workflows/app-api.yml`.
-- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on `backend/src/apis/app_api/**` changes.
-- [ ] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
-- [ ] **Add Install Step**: Call `scripts/stack-app-api/install.sh`.
-- [ ] **Add Build Step**: Call `scripts/stack-app-api/build.sh`.
-- [ ] **Add Test Step**: Call `scripts/stack-app-api/test.sh`.
-- [ ] **Add Deploy Step**: Call `scripts/stack-app-api/deploy.sh`.
-- [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+- [x] **Create Workflow File**: Create `.github/workflows/app-api.yml`.
+- [x] **Configure Path Triggers**: Set `paths` filter to trigger on `backend/src/apis/app_api/**` changes.
+- [x] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
+- [x] **Add Install Step**: Call `scripts/stack-app-api/install.sh`.
+- [x] **Add Build Step**: Call `scripts/stack-app-api/build.sh`.
+- [x] **Add Test Step**: Call `scripts/stack-app-api/test.sh`.
+- [x] **Add Deploy Step**: Call `scripts/stack-app-api/deploy.sh`.
+- [x] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
 
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 2 verified and approved to proceed to Phase 3

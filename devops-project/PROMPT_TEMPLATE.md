@@ -28,8 +28,9 @@ You are implementing a 5-stack AWS CDK application with platform-agnostic CI/CD 
 
 ## Critical Rules
 - Follow ALL constraints in `CLAUDES_INSTRUCTIONS.md`
-- Apply lessons learned from `CLAUDES_LESSONS_PHASE*.md` documents
-- **Create and maintain** a `CLAUDES_LESSONS_PHASE<N>.md` document throughout each phase
+- **Apply lessons learned** from previous phases' `CLAUDES_LESSONS_PHASE*.md` documents to avoid repeating mistakes
+- **Create empty template** `CLAUDES_LESSONS_PHASE<N>.md` at phase start (do NOT pre-fill)
+- **Update lessons learned ONLY** during testing/troubleshooting with human
 - Complete tasks sequentially - do not skip ahead
 - Do not batch task completions - mark each task complete immediately after finishing it
 - Verify your work before marking tasks complete
@@ -50,11 +51,23 @@ You are implementing a 5-stack AWS CDK application with platform-agnostic CI/CD 
 
 ## Phase Workflow
 When starting a new phase:
-1. Create `CLAUDES_LESSONS_PHASE<N>.md` with sections for discoveries, gotchas, and improvements
+1. Create `CLAUDES_LESSONS_PHASE<N>.md` with **empty sections** (placeholder text only)
 2. Work through tasks in `THE_PLAN.md` sequentially
-3. Update the lessons learned document as you encounter issues or make decisions
-4. At the `[HUMAN]` checkpoint, ensure the lessons learned document is complete
+3. **DO NOT pre-fill lessons learned** - leave empty until testing phase
+4. At the `[HUMAN]` checkpoint, lessons learned should still be mostly empty
 5. Summarize completed work and files created
 6. Wait for human approval before proceeding to next phase
+
+## Lessons Learned Usage
+**When to Update Lessons Learned**:
+- Human tests your implementation → encounters issue → you troubleshoot together → document the issue and solution
+- Real deployment problems arise → you fix them together → capture the gotcha
+- Performance/cost/security issues discovered → document the improvement
+
+**When NOT to Update**:
+- During initial implementation (just build it)
+- Before human testing begins
+- Based on assumptions about what might go wrong
+- As a summary of what you built
 
 Begin by reading `THE_PLAN.md` and starting with the first pending task. Work until you reach the first `[HUMAN]` checkpoint, then stop and wait for human approval before continuing.

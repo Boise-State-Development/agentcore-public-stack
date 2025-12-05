@@ -1,0 +1,181 @@
+name: App API - Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'backend/src/apis/app_api/**'
+      - 'backend/pyproject.toml'
+      - 'backend/Dockerfile.app-api'
+      - 'infrastructure/lib/app-api-stack.ts'
+      - 'scripts/stack-app-api/**'
+      - '.github/workflows/app-api.yml'
+  pull_request:
+    paths:
+      - 'backend/src/apis/app_api/**'
+      - 'backend/pyproject.toml'
+      - 'backend/Dockerfile.app-api'
+      - 'infrastructure/lib/app-api-stack.ts'
+      - 'scripts/stack-app-api/**'
+      - '.github/workflows/app-api.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX || 'agentcore' }}
+
+jobs:
+  build-and-test:
+    name: Build and Test App API
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          chmod +x scripts/stack-app-api/install.sh
+          scripts/stack-app-api/install.sh
+      
+      - name: Run tests
+        run: |
+          chmod +x scripts/stack-app-api/test.sh
+          scripts/stack-app-api/test.sh
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image
+        run: |
+          chmod +x scripts/stack-app-api/build.sh
+          scripts/stack-app-api/build.sh
+      
+      - name: Test Docker image
+        run: |
+          IMAGE_NAME="${CDK_PROJECT_PREFIX}-app-api:latest"
+          echo "Testing Docker image: ${IMAGE_NAME}"
+          
+          # Start container in background
+          CONTAINER_ID=$(docker run -d -p 8000:8000 "${IMAGE_NAME}")
+          echo "Container ID: ${CONTAINER_ID}"
+          
+          # Wait for container to be healthy
+          echo "Waiting for container to be healthy..."
+          for i in {1..30}; do
+            if docker ps | grep -q "${CONTAINER_ID}"; then
+              sleep 2
+              if curl -f http://localhost:8000/health 2>/dev/null; then
+                echo "✓ Container is healthy"
+                docker stop "${CONTAINER_ID}"
+                exit 0
+              fi
+            else
+              echo "Container exited unexpectedly"
+              docker logs "${CONTAINER_ID}"
+              exit 1
+            fi
+          done
+          
+          echo "Container health check timed out"
+          docker logs "${CONTAINER_ID}"
+          docker stop "${CONTAINER_ID}"
+          exit 1
+
+  deploy:
+    name: Deploy App API Stack
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install CDK dependencies
+        run: |
+          cd infrastructure
+          npm ci
+      
+      - name: Install common dependencies
+        run: |
+          chmod +x scripts/common/install-deps.sh
+          scripts/common/install-deps.sh
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Deploy App API Stack
+        env:
+          CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
+          CDK_AWS_REGION: ${{ env.AWS_REGION }}
+          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
+          CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR || '10.0.0.0/16' }}
+        run: |
+          chmod +x scripts/stack-app-api/deploy.sh
+          scripts/stack-app-api/deploy.sh
+      
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-api-deployment-outputs
+          path: |
+            cdk-outputs-app-api.json
+          retention-days: 30
+      
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## App API Deployment Successful ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${AWS_REGION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${CDK_PROJECT_PREFIX}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack**: AppApiStack" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f cdk-outputs-app-api.json ]; then
+            echo "### Stack Outputs" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat cdk-outputs-app-api.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
