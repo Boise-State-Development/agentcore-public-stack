@@ -1,0 +1,40 @@
+<nav class="flex h-full flex-col">
+    @if (isLoading()) {
+        <div class="flex items-center justify-center py-8">
+            <span class="text-sm text-gray-500 dark:text-gray-400">Loading sessions...</span>
+        </div>
+    } @else if (error()) {
+        <div class="flex items-center justify-center py-8">
+            <span class="text-sm text-red-500 dark:text-red-400">Failed to load sessions</span>
+        </div>
+    } @else {
+        @if (sessions() && sessions()!.length > 0) {
+            <ul role="list" class="flex flex-col gap-y-1">
+                @for (session of sessions()!; track session.sessionId) {
+                    <li>
+                        <a
+                            [routerLink]="['/s', getSessionId(session.sessionId)]"
+                            routerLinkActive="bg-gray-150 text-secondary-500 dark:bg-white/5 dark:text-white"
+                            class="group flex gap-x-3 rounded-md px-2 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                        >
+                            <div class="flex min-w-0 flex-1 flex-col gap-y-1">
+                                <div class="flex items-center justify-between gap-x-2">
+                                    <span class="truncate">{{ getSessionTitle(session) }}</span>
+                                    @if (session.lastMessageAt) {
+                                        <span class="text-xs/5 text-gray-400 dark:text-gray-500">
+                                            {{ formatTime(session.lastMessageAt) }}
+                                        </span>
+                                    }
+                                </div>
+                            </div>
+                        </a>
+                    </li>
+                }
+            </ul>
+        } @else {
+            <div class="flex items-center justify-center py-8">
+                <span class="text-sm text-gray-500 dark:text-gray-400">No sessions yet</span>
+            </div>
+        }
+    }
+</nav>

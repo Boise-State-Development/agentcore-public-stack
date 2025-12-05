@@ -1,0 +1,150 @@
+<!-- Gradient border wrapper -->
+<!-- [class.gradient-border-loading]="toolUse().status === 'loading'"
+[class.gradient-border-success]="toolUse().status === 'success'"
+[class.gradient-border-error]="toolUse().status === 'error'" -->
+<div class="gradient-border rounded-xl">
+
+  <div class="card-content rounded-xl bg-neutral-50 dark:bg-neutral-800">
+    <div class="px-4 py-3">
+      <!-- Header row -->
+      <div class="flex items-center gap-3">
+        <!-- Status icon -->
+        <div class="size-1 flex items-center justify-center shrink-0">
+          <!-- @switch (toolUse().status) {
+            @case ('loading') {
+              <svg
+                class="size-4 text-primary spinner"
+                fill="none"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <circle
+                  class="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  stroke-width="3"
+                />
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
+            }
+            @case ('success') {
+              <svg
+                class="size-4 text-emerald-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2.5"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            }
+            @case ('error') {
+              <svg
+                class="size-4 text-red-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2.5"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            }
+          } -->
+        </div>
+
+        <!-- Tool name and mode -->
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-medium text-neutral-800 dark:text-white">
+              {{ toolName() }}
+            </span>
+            <!-- @if (toolUse().mode) {
+              <span class="mode-badge">
+                {{ toolUse().mode }}
+              </span>
+            } -->
+            <!-- @if (toolUse().status === 'loading') {
+              <span class="text-xs text-primary">
+                {{ statusText() }}
+              </span>
+            } -->
+          </div>
+        </div>
+
+        <!-- Status indicator (loading dots or status text) -->
+        <!-- @if (toolUse().status === 'loading') {
+          <div class="flex items-center gap-1">
+            <div class="size-1.5 rounded-full bg-primary pulse-loading"></div>
+            <div class="size-1.5 rounded-full bg-primary pulse-loading"></div>
+            <div class="size-1.5 rounded-full bg-primary pulse-loading"></div>
+          </div>
+        } @else {
+          <span
+            class="text-xs font-medium"
+            [class.text-emerald-600]="toolUse().status === 'success'"
+            [class.dark:text-emerald-400]="toolUse().status === 'success'"
+            [class.text-red-600]="toolUse().status === 'error'"
+            [class.dark:text-red-400]="toolUse().status === 'error'"
+          >
+            { statusText() }}
+          </span>
+        } -->
+      </div>
+
+      <!-- Collapsible input section -->
+      <div class="mt-2">
+        <button
+          type="button"
+          class="input-toggle flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+          [attr.aria-expanded]="isExpanded()"
+          (click)="toggleExpanded()"
+        >
+          <svg
+            class="chevron size-3.5"
+            [class.open]="isExpanded()"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
+          <span>Input</span>
+          <code class="font-mono text-neutral-400 dark:text-neutral-500">
+            {{ inputKeysPreview() }}
+          </code>
+        </button>
+
+        <!-- Collapsible content -->
+        <div class="collapsible-content" [class.open]="isExpanded()">
+          <div>
+            <pre
+              class="mt-2 p-3 bg-neutral-200/70 dark:bg-neutral-700 rounded-lg font-mono text-xs overflow-x-auto"
+            ><code [innerHTML]="formattedJson() | jsonSyntaxHighlight"></code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

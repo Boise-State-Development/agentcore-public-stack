@@ -2,42 +2,46 @@
 
 Provides endpoints to retrieve conversation history with JWT authentication.
 
-## Endpoint
+## Endpoints
 
-### GET /messages/{session_id}
+### GET /sessions/{session_id}/messages (Recommended)
 
-Retrieve all messages for a specific session and user.
+Retrieve messages for a specific session with pagination support.
 
 **Authentication Required:** Yes (JWT Bearer token)
 
 **Path Parameters:**
 - `session_id` (string, required): Session identifier
 
+**Query Parameters:**
+- `limit` (integer, optional): Maximum number of messages to return (1-1000, default: no limit)
+- `next_token` (string, optional): Pagination token for retrieving the next page of results
+
 **Headers:**
 - `Authorization: Bearer <jwt_token>` (required): JWT authentication token
 
-**Response:** `GetMessagesResponse`
+**Response:** `MessagesListResponse`
 ```json
 {
-  "session_id": "string",
-  "user_id": "string",
   "messages": [
     {
-      "role": "user|assistant",
+      "messageId": "uuid",
+      "sessionId": "uuid",
+      "sequenceNumber": 0,
+      "role": "user|assistant|system",
       "content": [
         {
           "type": "text",
           "text": "message content"
         }
       ],
-      "timestamp": "2025-12-03T12:00:00Z"
+      "createdAt": "2025-12-03T12:00:00Z",
+      "metadata": {}
     }
   ],
-  "total_count": 10
+  "nextToken": "base64-encoded-token-or-null"
 }
 ```
-
-**Note:** Null values are excluded from the response. Only relevant fields for each content type are included.
 
 **Status Codes:**
 - `200 OK`: Messages retrieved successfully
@@ -45,6 +49,17 @@ Retrieve all messages for a specific session and user.
 - `403 Forbidden`: User doesn't have required roles
 - `404 Not Found`: Session not found
 - `500 Internal Server Error`: Server error
+
+**Example Usage:**
+```bash
+# Get first 20 messages
+curl -X GET "http://localhost:8000/sessions/{session_id}/messages?limit=20" \
+  -H "Authorization: Bearer $JWT_TOKEN"
+
+# Get next page using pagination token
+curl -X GET "http://localhost:8000/sessions/{session_id}/messages?limit=20&next_token={next_token}" \
+  -H "Authorization: Bearer $JWT_TOKEN"
+```
 
 ## Testing
 
@@ -56,8 +71,13 @@ If you have a valid JWT token:
 # Set your JWT token
 export JWT_TOKEN="your_jwt_token_here"
 
-# Get messages for a session
-curl -X GET "http://localhost:8000/messages/your-session-id" \
+# Get messages for a session with pagination
+curl -X GET "http://localhost:8000/sessions/your-session-id/messages?limit=20" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -H "Content-Type: application/json"
+
+# Get next page using pagination token
+curl -X GET "http://localhost:8000/sessions/your-session-id/messages?limit=20&next_token={next_token}" \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json"
 ```
@@ -75,40 +95,8 @@ Then test without authentication:
 
 ```bash
 # Get messages for a session (no auth required)
-curl -X GET "http://localhost:8000/messages/your-session-id" \
+curl -X GET "http://localhost:8000/sessions/your-session-id/messages?limit=20" \
   -H "Content-Type: application/json"
-```
-
-### Example Response
-
-```json
-{
-  "session_id": "test-session-123",
-  "user_id": "123456789",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "Hello, how are you?"
-        }
-      ],
-      "timestamp": "2025-12-03T12:00:00Z"
-    },
-    {
-      "role": "assistant",
-      "content": [
-        {
-          "type": "text",
-          "text": "I'm doing well, thank you for asking!"
-        }
-      ],
-      "timestamp": "2025-12-03T12:00:05Z"
-    }
-  ],
-  "total_count": 2
-}
 ```
 
 ## Architecture

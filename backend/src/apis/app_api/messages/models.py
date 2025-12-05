@@ -1,6 +1,6 @@
 """Messages API models"""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -93,11 +93,20 @@ class Message(BaseModel):
     metadata: Optional[MessageMetadata] = Field(None, description="Message metadata (latency, tokens, etc.)")
 
 
-class GetMessagesResponse(BaseModel):
-    """Response for get messages endpoint"""
+class MessageResponse(BaseModel):
+    """Response model for a single message (matches frontend expectations)"""
     model_config = ConfigDict(populate_by_name=True)
 
-    session_id: str = Field(..., description="Session identifier")
-    user_id: str = Field(..., description="User identifier")
-    messages: List[Message] = Field(..., description="List of messages in the session")
-    total_count: int = Field(..., description="Total number of messages")
+    id: str = Field(..., description="Unique identifier for the message")
+    role: Literal['user', 'assistant', 'system'] = Field(..., description="Role of the message sender")
+    content: List[MessageContent] = Field(..., description="List of content blocks in the message")
+    created_at: str = Field(..., alias="createdAt", description="ISO timestamp when the message was created")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata associated with the message")
+
+
+class MessagesListResponse(BaseModel):
+    """Response for listing messages with pagination support"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    messages: List[MessageResponse] = Field(..., description="List of messages in the session")
+    next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")

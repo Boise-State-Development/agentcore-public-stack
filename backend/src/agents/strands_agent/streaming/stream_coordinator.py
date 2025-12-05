@@ -87,6 +87,16 @@ class StreamCoordinator:
                     # Don't yield this event to the client
                     continue
 
+                # Check for message_id when message_stop event occurs
+                if event.get("type") == "message_stop":
+                    message_id = self._get_latest_message_id(session_manager)
+                    if message_id is not None:
+                        # Add message_id to the event data
+                        event_data = event.get("data", {})
+                        event_data["message_id"] = str(message_id)
+                        event["data"] = event_data
+                        logger.debug(f"📝 Added message_id {message_id} to message_stop event")
+
                 # Format as SSE event and yield
                 sse_event = self._format_sse_event(event)
                 
@@ -103,7 +113,7 @@ class StreamCoordinator:
             # Flush buffered messages (turn-based session manager)
             # This returns the message ID of the flushed message
             message_id = self._flush_session(session_manager)
-
+            logger.info(f"💾 FLUSHEDMessage ID: {message_id}")
             # Store metadata after flush completes
             if message_id and (accumulated_metadata.get("usage") or first_token_time):
                 await self._store_metadata(
@@ -178,6 +188,62 @@ class StreamCoordinator:
             return message_id
         return None
 
+    def _get_latest_message_id(self, session_manager: Any) -> Optional[int]:
+        """
+        Get the latest message ID from session manager without flushing
+
+        This checks if messages have been flushed (e.g., during streaming when batch_size
+        is reached) and returns the latest message ID if available.
+
+        Args:
+            session_manager: Session manager instance
+
+        Returns:
+            Latest message ID if available, or None
+        """
+        # Check if session manager has a method to get latest message ID without flushing
+        if hasattr(session_manager, '_get_latest_message_id'):
+            try:
+                return session_manager._get_latest_message_id()
+            except Exception as e:
+                logger.debug(f"Failed to get latest message ID: {e}")
+        
+        # For LocalSessionBuffer, check if base_manager has the method
+        if hasattr(session_manager, 'base_manager'):
+            base_manager = session_manager.base_manager
+            if hasattr(base_manager, '_get_latest_message_id'):
+                try:
+                    return base_manager._get_latest_message_id()
+                except Exception as e:
+                    logger.debug(f"Failed to get latest message ID from base_manager: {e}")
+        
+        # Fallback: Try to get message count from session manager
+        # This works for both TurnBasedSessionManager and LocalSessionBuffer
+        if hasattr(session_manager, 'base_manager'):
+            try:
+                from apis.app_api.storage.paths import get_messages_dir
+                from pathlib import Path
+                
+                # Get session_id from config
+                if hasattr(session_manager.base_manager, 'config'):
+                    session_id = session_manager.base_manager.config.session_id
+                    messages_dir = get_messages_dir(session_id)
+                    
+                    if messages_dir.exists():
+                        # Get all message files sorted by number
+                        message_files = sorted(
+                            messages_dir.glob("message_*.json"),
+                            key=lambda p: int(p.stem.split("_")[1]) if p.stem.split("_")[1].isdigit() else 0
+                        )
+                        if message_files:
+                            latest_file = message_files[-1]
+                            message_num = int(latest_file.stem.split("_")[1])
+                            return message_num
+            except Exception as e:
+                logger.debug(f"Failed to get message ID from file system: {e}")
+        
+        return None
+
     def _emergency_flush(self, session_manager: Any) -> None:
         """
         Emergency flush on error to prevent data loss
@@ -234,7 +300,7 @@ class StreamCoordinator:
                 MessageMetadata, TokenUsage, LatencyMetrics,
                 ModelInfo, Attribution
             )
-            from apis.app_api.metadata.service import store_message_metadata
+            from apis.app_api.sessions.services.metadata import store_message_metadata
 
             # Build TokenUsage if we have usage data
             token_usage = None
@@ -299,14 +365,17 @@ class StreamCoordinator:
             # Log but don't raise - metadata storage failures shouldn't break streaming
             logger.error(f"Failed to store metadata: {e}")
 
-        # TODO: Future - store conversation-level metadata
-        # This would update lastMessageAt, messageCount, etc.
-        # await update_conversation_metadata(
-        #     session_id=session_id,
-        #     user_id=user_id,
-        #     last_message_at=datetime.now(timezone.utc).isoformat(),
-        #     increment_message_count=True
-        # )
+        # Update session-level metadata after message metadata
+        try:
+            await self._update_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                message_id=message_id,
+                agent=agent
+            )
+        except Exception as e:
+            # Log but don't raise - metadata storage failures shouldn't break streaming
+            logger.error(f"Failed to update session metadata: {e}")
 
     def _extract_model_name(self, model_id: str) -> str:
         """
@@ -354,3 +423,91 @@ class StreamCoordinator:
                 if part.startswith("v") and ":" in part:
                     return part.split(":")[0]
         return None
+
+    async def _update_session_metadata(
+        self,
+        session_id: str,
+        user_id: str,
+        message_id: int,
+        agent: Any = None
+    ) -> None:
+        """
+        Update session-level metadata after each message
+
+        This updates conversation-level tracking after each message:
+        - lastMessageAt: Timestamp of this message
+        - messageCount: Incremented by 1
+        - preferences: Model/temperature from agent config
+        - Auto-creates session metadata on first message
+
+        Args:
+            session_id: Session identifier
+            user_id: User identifier
+            message_id: Message ID that was just flushed
+            agent: Agent instance for extracting model preferences
+        """
+        try:
+            from apis.app_api.sessions.models import SessionMetadata, SessionPreferences
+            from apis.app_api.sessions.services.metadata import store_session_metadata, get_session_metadata
+
+            # Get existing metadata or create new
+            existing = await get_session_metadata(session_id, user_id)
+
+            now = datetime.now(timezone.utc).isoformat()
+
+            if not existing:
+                # First message - create session metadata
+                preferences = None
+                if agent and hasattr(agent, 'model_config'):
+                    preferences = SessionPreferences(
+                        last_model=agent.model_config.model_id,
+                        last_temperature=getattr(agent.model_config, 'temperature', None)
+                    )
+
+                metadata = SessionMetadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title="New Conversation",  # Will be updated by frontend
+                    status="active",
+                    created_at=now,
+                    last_message_at=now,
+                    message_count=1,
+                    starred=False,
+                    tags=[],
+                    preferences=preferences
+                )
+            else:
+                # Update existing - only update what changed
+                preferences = existing.preferences
+                if agent and hasattr(agent, 'model_config'):
+                    # Update preferences if model/temperature changed
+                    prefs_dict = preferences.model_dump(by_alias=False) if preferences else {}
+                    prefs_dict['last_model'] = agent.model_config.model_id
+                    prefs_dict['last_temperature'] = getattr(agent.model_config, 'temperature', None)
+                    preferences = SessionPreferences(**prefs_dict)
+
+                metadata = SessionMetadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title=existing.title,
+                    status=existing.status,
+                    created_at=existing.created_at,
+                    last_message_at=now,
+                    message_count=existing.message_count + 1,
+                    starred=existing.starred,
+                    tags=existing.tags,
+                    preferences=preferences
+                )
+
+            # Store updated metadata (uses deep merge in storage layer)
+            await store_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                session_metadata=metadata
+            )
+
+            logger.info(f"✅ Updated session metadata (msg count: {metadata.message_count}, last message: {now})")
+
+        except Exception as e:
+            logger.error(f"Failed to update session metadata: {e}")
+            # Don't raise - metadata failures shouldn't break streaming

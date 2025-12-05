@@ -1,16 +1,16 @@
 import { Routes } from '@angular/router';
-import { ConversationPage } from './conversation/conversation.page';
+import { ConversationPage } from './session/session.page';
 import { authGuard } from './auth/auth.guard';
 
 export const routes: Routes = [
     {
         path: '',
-        loadComponent: () => import('./conversation/conversation.page').then(m => m.ConversationPage),
+        loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
     },
     {
-        path: 'c/:conversationId',
-        loadComponent: () => import('./conversation/conversation.page').then(m => m.ConversationPage),
+        path: 's/:sessionId',
+        loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
     },
     {
