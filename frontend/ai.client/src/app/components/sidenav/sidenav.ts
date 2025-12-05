@@ -1,9 +1,9 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, Router } from '@angular/router';
-import { ConversationList } from './components/conversation-list/conversation-list';
+import { SessionList } from './components/session-list/session-list';
 @Component({
   selector: 'app-sidenav',
-  imports: [RouterLink, ConversationList],
+  imports: [RouterLink, SessionList],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })
@@ -11,12 +11,7 @@ export class Sidenav {
   router = inject(Router);
   constructor() {}
 
-getConversationId(conversationId: string): string {
-  return conversationId;
-}
-
   newSession() {
     this.router.navigate(['']);
   }
-
 }

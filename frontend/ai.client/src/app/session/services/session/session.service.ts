@@ -3,7 +3,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { AuthService } from '../../../auth/auth.service';
-import { SessionMetadata } from '../models/session-metadata.model';
+import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 
 /**
  * Query parameters for listing sessions.
@@ -105,6 +105,13 @@ export class SessionService {
   private sessionsParams = signal<ListSessionsParams>({});
 
   /**
+   * Signal for the session ID used by the session metadata resource.
+   * Update this signal to trigger a refetch with new session ID.
+   * Set to null to disable the resource.
+   */
+  private sessionMetadataId = signal<string | null>(null);
+
+  /**
    * Reactive resource for fetching sessions.
    * 
    * This resource automatically refetches when `sessionsParams` signal changes
@@ -164,6 +171,62 @@ export class SessionService {
    */
   resetSessionsParams(): void {
     this.sessionsParams.set({});
+  }
+
+  /**
+   * Reactive resource for fetching session metadata.
+   * 
+   * This resource automatically refetches when `sessionMetadataId` signal changes.
+   * Set the session ID using `setSessionMetadataId()` to fetch metadata for a specific session.
+   * Set to null to disable the resource.
+   * 
+   * The resource ensures the user is authenticated before making the HTTP request.
+   * 
+   * @example
+   * ```typescript
+   * // Fetch metadata for a session
+   * sessionService.setSessionMetadataId('session-id-123');
+   * 
+   * // Access data
+   * const metadata = sessionService.sessionMetadataResource.value();
+   * 
+   * // Check loading state
+   * const isLoading = sessionService.sessionMetadataResource.isPending();
+   * 
+   * // Manually refetch
+   * sessionService.sessionMetadataResource.refetch();
+   * 
+   * // Disable resource
+   * sessionService.setSessionMetadataId(null);
+   * ```
+   */
+  readonly sessionMetadataResource = resource({
+    loader: async () => {
+      // Reading this signal inside the loader makes the resource reactive to its changes
+      // Angular's resource API automatically tracks signal dependencies
+      const sessionId = this.sessionMetadataId();
+      
+      // If no session ID, return null
+      if (!sessionId) {
+        return null;
+      }
+
+      // Ensure user is authenticated before making the request
+      await this.authService.ensureAuthenticated();
+
+      return this.getSessionMetadata(sessionId);
+    }
+  });
+
+  /**
+   * Sets the session ID for the metadata resource.
+   * This will automatically trigger a refetch of the resource.
+   * Set to null to disable the resource.
+   * 
+   * @param sessionId - Session ID to fetch metadata for, or null to disable
+   */
+  setSessionMetadataId(sessionId: string | null): void {
+    this.sessionMetadataId.set(sessionId);
   }
 
   /**
@@ -249,6 +312,152 @@ export class SessionService {
     } catch (error) {
       throw error;
     }
+  }
+
+  /**
+   * Fetches metadata for a specific session from the Python API.
+   * 
+   * @param sessionId - UUID of the session
+   * @returns Promise resolving to SessionMetadata object
+   * @throws Error if the API request fails
+   * 
+   * @example
+   * ```typescript
+   * const metadata = await sessionService.getSessionMetadata(
+   *   '8e70ae89-93af-4db7-ba60-f13ea201f4cd'
+   * );
+   * ```
+   */
+  async getSessionMetadata(sessionId: string): Promise<SessionMetadata> {
+    // Ensure user is authenticated before making the request
+    await this.authService.ensureAuthenticated();
+
+    try {
+      const response = await firstValueFrom(
+        this.http.get<SessionMetadata>(
+          `${environment.appApiUrl}/sessions/${sessionId}/metadata`
+        )
+      );
+
+      return response;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Updates session metadata.
+   * Performs a deep merge - only updates fields that are provided.
+   * 
+   * @param sessionId - UUID of the session
+   * @param updates - Partial metadata updates
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   * 
+   * @example
+   * ```typescript
+   * const updated = await sessionService.updateSessionMetadata(
+   *   '8e70ae89-93af-4db7-ba60-f13ea201f4cd',
+   *   { title: 'New Title', starred: true }
+   * );
+   * ```
+   */
+  async updateSessionMetadata(
+    sessionId: string,
+    updates: UpdateSessionMetadataRequest
+  ): Promise<SessionMetadata> {
+    // Ensure user is authenticated before making the request
+    await this.authService.ensureAuthenticated();
+
+    try {
+      const response = await firstValueFrom(
+        this.http.put<SessionMetadata>(
+          `${environment.appApiUrl}/sessions/${sessionId}/metadata`,
+          updates
+        )
+      );
+
+      // If this is the current session, update the currentSession signal
+      if (this.currentSession().sessionId === sessionId) {
+        this.currentSession.update(current => ({ ...current, ...response }));
+      }
+
+      return response;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Updates the title of a session.
+   * 
+   * @param sessionId - UUID of the session
+   * @param title - New title for the session
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   */
+  async updateSessionTitle(sessionId: string, title: string): Promise<SessionMetadata> {
+    return this.updateSessionMetadata(sessionId, { title });
+  }
+
+  /**
+   * Toggles the starred status of a session.
+   * 
+   * @param sessionId - UUID of the session
+   * @param starred - Starred status
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   */
+  async toggleStarred(sessionId: string, starred: boolean): Promise<SessionMetadata> {
+    return this.updateSessionMetadata(sessionId, { starred });
+  }
+
+  /**
+   * Updates the tags for a session.
+   * 
+   * @param sessionId - UUID of the session
+   * @param tags - Array of tags
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   */
+  async updateSessionTags(sessionId: string, tags: string[]): Promise<SessionMetadata> {
+    return this.updateSessionMetadata(sessionId, { tags });
+  }
+
+  /**
+   * Updates the status of a session.
+   * 
+   * @param sessionId - UUID of the session
+   * @param status - Session status ('active' | 'archived' | 'deleted')
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   */
+  async updateSessionStatus(
+    sessionId: string,
+    status: 'active' | 'archived' | 'deleted'
+  ): Promise<SessionMetadata> {
+    return this.updateSessionMetadata(sessionId, { status });
+  }
+
+  /**
+   * Updates session preferences.
+   * 
+   * @param sessionId - UUID of the session
+   * @param preferences - Session preferences to update
+   * @returns Promise resolving to updated SessionMetadata object
+   * @throws Error if the API request fails
+   */
+  async updateSessionPreferences(
+    sessionId: string,
+    preferences: {
+      lastModel?: string;
+      lastTemperature?: number;
+      enabledTools?: string[];
+      selectedPromptId?: string;
+      customPromptText?: string;
+    }
+  ): Promise<SessionMetadata> {
+    return this.updateSessionMetadata(sessionId, preferences);
   }
 }
 
