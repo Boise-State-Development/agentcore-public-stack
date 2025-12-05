@@ -103,7 +103,7 @@ class StreamCoordinator:
             # Flush buffered messages (turn-based session manager)
             # This returns the message ID of the flushed message
             message_id = self._flush_session(session_manager)
-
+            logger.info(f"💾 FLUSHEDMessage ID: {message_id}")
             # Store metadata after flush completes
             if message_id and (accumulated_metadata.get("usage") or first_token_time):
                 await self._store_metadata(

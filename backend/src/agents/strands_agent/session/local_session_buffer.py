@@ -64,39 +64,42 @@ class LocalSessionBuffer:
         Returns:
             Message ID of the last flushed message, or None if nothing was flushed
         """
-        if not self.pending_messages:
-            return None
+        # Flush pending messages if any exist
+        if self.pending_messages:
+            logger.info(f"💾 Flushing {len(self.pending_messages)} messages to FileSessionManager")
 
-        logger.info(f"💾 Flushing {len(self.pending_messages)} messages to FileSessionManager")
+            # Write each pending message to base manager
+            for message_dict in self.pending_messages:
+                # Convert dict back to Message-like object
+                from strands.types.session import SessionMessage
+                from strands.types.content import Message
 
-        last_message_id = None
+                strands_message: Message = {
+                    "role": message_dict["role"],
+                    "content": message_dict["content"]
+                }
 
-        # Write each pending message to base manager
-        for message_dict in self.pending_messages:
-            # Convert dict back to Message-like object
-            from strands.types.session import SessionMessage
-            from strands.types.content import Message
+                # Create SessionMessage and pass to base manager
+                session_message = SessionMessage.from_message(strands_message, 0)
 
-            strands_message: Message = {
-                "role": message_dict["role"],
-                "content": message_dict["content"]
-            }
+                try:
+                    # FileSessionManager's append_message signature
+                    self.base_manager.append_message(session_message, agent=None)
+                except Exception as e:
+                    logger.error(f"Failed to write message to FileSessionManager: {e}")
 
-            # Create SessionMessage and pass to base manager
-            session_message = SessionMessage.from_message(strands_message, 0)
+            # Clear buffer after writing
+            self.pending_messages = []
 
-            try:
-                # FileSessionManager's append_message signature
-                self.base_manager.append_message(session_message, agent=None)
-            except Exception as e:
-                logger.error(f"Failed to write message to FileSessionManager: {e}")
-
-        # Get the latest message ID after flushing
+        # Always try to get the latest message ID from disk
+        # This handles the case where messages were already flushed during streaming
+        # (e.g., when batch_size was reached)
         last_message_id = self._get_latest_message_id()
-
-        # Clear buffer
-        self.pending_messages = []
-        logger.debug(f"✅ Buffer flushed (last message ID: {last_message_id})")
+        
+        if last_message_id:
+            logger.debug(f"✅ Flush complete (latest message ID: {last_message_id})")
+        else:
+            logger.debug(f"✅ Flush complete (no messages found)")
 
         return last_message_id
 

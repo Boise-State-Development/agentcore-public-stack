@@ -15,7 +15,7 @@ from typing import Optional
 from pathlib import Path
 
 from ..messages.models import MessageMetadata, SessionMetadata
-from ..storage.paths import get_message_path, get_session_metadata_path
+from ..storage.paths import get_message_path, get_session_metadata_path, get_sessions_root
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +445,144 @@ async def _get_session_metadata_cloud(
     except Exception as e:
         logger.error(f"Failed to retrieve session metadata from DynamoDB: {e}")
         return None
+
+
+async def list_user_sessions(user_id: str) -> list[SessionMetadata]:
+    """
+    List all sessions for a user
+
+    Args:
+        user_id: User identifier
+
+    Returns:
+        List of SessionMetadata objects for the user, sorted by last_message_at descending
+    """
+    conversations_table = os.environ.get('CONVERSATIONS_TABLE_NAME')
+
+    if conversations_table:
+        return await _list_user_sessions_cloud(
+            user_id=user_id,
+            table_name=conversations_table
+        )
+    else:
+        return await _list_user_sessions_local(user_id=user_id)
+
+
+async def _list_user_sessions_local(user_id: str) -> list[SessionMetadata]:
+    """
+    List all sessions for a user from local file storage
+
+    Args:
+        user_id: User identifier
+
+    Returns:
+        List of SessionMetadata objects for the user, sorted by last_message_at descending
+    """
+    sessions_root = get_sessions_root()
+
+    if not sessions_root.exists():
+        logger.info(f"Sessions directory does not exist: {sessions_root}")
+        return []
+
+    sessions = []
+
+    try:
+        # Iterate through all session directories
+        for session_dir in sessions_root.iterdir():
+            if not session_dir.is_dir() or not session_dir.name.startswith('session_'):
+                continue
+
+            # Extract session_id from directory name (session_<id>)
+            session_id = session_dir.name.replace('session_', '', 1)
+
+            # Read session metadata file
+            session_file = get_session_metadata_path(session_id)
+            if not session_file.exists():
+                continue
+
+            try:
+                with open(session_file, 'r') as f:
+                    data = json.load(f)
+
+                # Filter by user_id
+                if data.get('userId') != user_id:
+                    continue
+
+                # Parse and add to list
+                metadata = SessionMetadata.model_validate(data)
+                sessions.append(metadata)
+
+            except Exception as e:
+                logger.warning(f"Failed to read session metadata from {session_file}: {e}")
+                continue
+
+        # Sort by last_message_at descending (most recent first)
+        sessions.sort(key=lambda x: x.last_message_at, reverse=True)
+
+        logger.info(f"Found {len(sessions)} sessions for user {user_id}")
+        return sessions
+
+    except Exception as e:
+        logger.error(f"Failed to list user sessions from local storage: {e}")
+        return []
+
+
+async def _list_user_sessions_cloud(
+    user_id: str,
+    table_name: str
+) -> list[SessionMetadata]:
+    """
+    List all sessions for a user from DynamoDB
+
+    Args:
+        user_id: User identifier
+        table_name: DynamoDB table name
+
+    Returns:
+        List of SessionMetadata objects for the user, sorted by last_message_at descending
+
+    TODO: Implement based on your DynamoDB schema
+
+    Recommended schema:
+        PK: USER#{user_id}
+        SK: SESSION#{created_at_iso}#{session_id}
+
+    Query example:
+        - Query with PK = USER#{user_id}
+        - FilterExpression: begins_with(SK, 'SESSION#')
+        - ScanIndexForward=False for newest first
+    """
+    try:
+        # TODO: Implement DynamoDB query
+        # Example pseudocode:
+        # import boto3
+        # from boto3.dynamodb.conditions import Key
+        # dynamodb = boto3.resource('dynamodb')
+        # table = dynamodb.Table(table_name)
+        #
+        # response = table.query(
+        #     KeyConditionExpression=Key('PK').eq(f'USER#{user_id}'),
+        #     FilterExpression=begins_with('SK', 'SESSION#'),
+        #     ScanIndexForward=False  # Newest first
+        # )
+        #
+        # sessions = []
+        # for item in response['Items']:
+        #     try:
+        #         metadata = SessionMetadata.model_validate(item)
+        #         sessions.append(metadata)
+        #     except Exception as e:
+        #         logger.warning(f"Failed to parse session item: {e}")
+        #         continue
+        #
+        # return sessions
+
+        logger.info(f"Would list user sessions from DynamoDB table {table_name}")
+        return []
+
+    except Exception as e:
+        logger.error(f"Failed to list user sessions from DynamoDB: {e}")
+        return []
 
 
 def _deep_merge(base: dict, updates: dict) -> dict:

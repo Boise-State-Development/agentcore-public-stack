@@ -4,19 +4,63 @@ Provides endpoints for managing session metadata.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Optional
+from typing import Optional, List
 import logging
 from datetime import datetime
-
 from .models import UpdateSessionMetadataRequest, SessionMetadataResponse
-from ..messages.models import SessionMetadata, SessionPreferences
-from ..metadata.service import store_session_metadata, get_session_metadata
+from apis.app_api.messages.models import SessionMetadata, SessionPreferences
+from apis.app_api.metadata.service import store_session_metadata, get_session_metadata, list_user_sessions
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+@router.get("", response_model=List[SessionMetadataResponse], response_model_exclude_none=True)
+async def list_user_sessions_endpoint(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List all sessions for the authenticated user.
+
+    Requires JWT authentication. Returns only sessions belonging to the authenticated user,
+    sorted by last_message_at descending (most recent first).
+
+    Args:
+        current_user: Authenticated user from JWT token (injected by dependency)
+
+    Returns:
+        List of SessionMetadataResponse objects
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 500 if server error
+    """
+    user_id = current_user.user_id
+
+    logger.info(f"GET /sessions - User: {user_id}")
+
+    try:
+        # Retrieve all sessions for the user
+        sessions = await list_user_sessions(user_id=user_id)
+
+        # Convert to response models
+        return [
+            SessionMetadataResponse.model_validate(
+                session.model_dump(by_alias=True)
+            )
+            for session in sessions
+        ]
+
+    except Exception as e:
+        logger.error(f"Error listing user sessions: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list user sessions: {str(e)}"
+        )
 
 
 @router.get("/{session_id}/metadata", response_model=SessionMetadataResponse, response_model_exclude_none=True)
