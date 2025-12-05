@@ -1,6 +1,6 @@
 """Messages API models"""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -101,3 +101,30 @@ class GetMessagesResponse(BaseModel):
     user_id: str = Field(..., description="User identifier")
     messages: List[Message] = Field(..., description="List of messages in the session")
     total_count: int = Field(..., description="Total number of messages")
+
+
+class SessionPreferences(BaseModel):
+    """User preferences for a session"""
+    model_config = ConfigDict(populate_by_name=True, extra='allow')
+
+    last_model: Optional[str] = Field(None, alias="lastModel", description="Last model used in this session")
+    last_temperature: Optional[float] = Field(None, alias="lastTemperature", description="Last temperature setting used")
+    enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools", description="List of enabled tool names")
+    selected_prompt_id: Optional[str] = Field(None, alias="selectedPromptId", description="ID of selected prompt template")
+    custom_prompt_text: Optional[str] = Field(None, alias="customPromptText", description="Custom prompt text if used")
+
+
+class SessionMetadata(BaseModel):
+    """Complete session metadata"""
+    model_config = ConfigDict(populate_by_name=True, extra='allow')
+
+    session_id: str = Field(..., alias="sessionId", description="Session identifier")
+    user_id: str = Field(..., alias="userId", description="User identifier")
+    title: str = Field(..., description="Session title (usually from first message)")
+    status: Literal['active', 'archived', 'deleted'] = Field(..., description="Session status")
+    created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of session creation")
+    last_message_at: str = Field(..., alias="lastMessageAt", description="ISO 8601 timestamp of last message")
+    message_count: int = Field(..., alias="messageCount", description="Total number of messages in session")
+    starred: Optional[bool] = Field(False, description="Whether session is starred/favorited")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Custom tags for organization")
+    preferences: Optional[SessionPreferences] = Field(None, description="User preferences for this session")

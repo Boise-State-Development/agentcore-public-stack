@@ -299,14 +299,17 @@ class StreamCoordinator:
             # Log but don't raise - metadata storage failures shouldn't break streaming
             logger.error(f"Failed to store metadata: {e}")
 
-        # TODO: Future - store conversation-level metadata
-        # This would update lastMessageAt, messageCount, etc.
-        # await update_conversation_metadata(
-        #     session_id=session_id,
-        #     user_id=user_id,
-        #     last_message_at=datetime.now(timezone.utc).isoformat(),
-        #     increment_message_count=True
-        # )
+        # Update session-level metadata after message metadata
+        try:
+            await self._update_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                message_id=message_id,
+                agent=agent
+            )
+        except Exception as e:
+            # Log but don't raise - metadata storage failures shouldn't break streaming
+            logger.error(f"Failed to update session metadata: {e}")
 
     def _extract_model_name(self, model_id: str) -> str:
         """
@@ -354,3 +357,91 @@ class StreamCoordinator:
                 if part.startswith("v") and ":" in part:
                     return part.split(":")[0]
         return None
+
+    async def _update_session_metadata(
+        self,
+        session_id: str,
+        user_id: str,
+        message_id: int,
+        agent: Any = None
+    ) -> None:
+        """
+        Update session-level metadata after each message
+
+        This updates conversation-level tracking after each message:
+        - lastMessageAt: Timestamp of this message
+        - messageCount: Incremented by 1
+        - preferences: Model/temperature from agent config
+        - Auto-creates session metadata on first message
+
+        Args:
+            session_id: Session identifier
+            user_id: User identifier
+            message_id: Message ID that was just flushed
+            agent: Agent instance for extracting model preferences
+        """
+        try:
+            from apis.app_api.messages.models import SessionMetadata, SessionPreferences
+            from apis.app_api.metadata.service import store_session_metadata, get_session_metadata
+
+            # Get existing metadata or create new
+            existing = await get_session_metadata(session_id, user_id)
+
+            now = datetime.now(timezone.utc).isoformat()
+
+            if not existing:
+                # First message - create session metadata
+                preferences = None
+                if agent and hasattr(agent, 'model_config'):
+                    preferences = SessionPreferences(
+                        last_model=agent.model_config.model_id,
+                        last_temperature=getattr(agent.model_config, 'temperature', None)
+                    )
+
+                metadata = SessionMetadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title="New Conversation",  # Will be updated by frontend
+                    status="active",
+                    created_at=now,
+                    last_message_at=now,
+                    message_count=1,
+                    starred=False,
+                    tags=[],
+                    preferences=preferences
+                )
+            else:
+                # Update existing - only update what changed
+                preferences = existing.preferences
+                if agent and hasattr(agent, 'model_config'):
+                    # Update preferences if model/temperature changed
+                    prefs_dict = preferences.model_dump(by_alias=False) if preferences else {}
+                    prefs_dict['last_model'] = agent.model_config.model_id
+                    prefs_dict['last_temperature'] = getattr(agent.model_config, 'temperature', None)
+                    preferences = SessionPreferences(**prefs_dict)
+
+                metadata = SessionMetadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title=existing.title,
+                    status=existing.status,
+                    created_at=existing.created_at,
+                    last_message_at=now,
+                    message_count=existing.message_count + 1,
+                    starred=existing.starred,
+                    tags=existing.tags,
+                    preferences=preferences
+                )
+
+            # Store updated metadata (uses deep merge in storage layer)
+            await store_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                session_metadata=metadata
+            )
+
+            logger.info(f"✅ Updated session metadata (msg count: {metadata.message_count}, last message: {now})")
+
+        except Exception as e:
+            logger.error(f"Failed to update session metadata: {e}")
+            # Don't raise - metadata failures shouldn't break streaming
