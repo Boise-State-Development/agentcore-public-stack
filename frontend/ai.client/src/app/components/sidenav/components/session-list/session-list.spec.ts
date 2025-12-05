@@ -1,5 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { SessionList } from './session-list';
 import { SessionService } from '../../../../session/services/session/session.service';
 
@@ -12,6 +14,8 @@ describe('SessionList', () => {
       imports: [SessionList],
       providers: [
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         SessionService
       ],
     })

@@ -1,0 +1,214 @@
+import * as cdk from 'aws-cdk-lib';
+
+export interface AppConfig {
+  projectPrefix: string;
+  awsAccount: string;
+  awsRegion: string;
+  vpcCidr: string;
+  domainName?: string;
+  enableRoute53: boolean;
+  certificateArn?: string;
+  frontend: FrontendConfig;
+  appApi: AppApiConfig;
+  inferenceApi: InferenceApiConfig;
+  agentCore: AgentCoreConfig;
+  gateway: GatewayConfig;
+  tags: { [key: string]: string };
+}
+
+export interface FrontendConfig {
+  enabled: boolean;
+  bucketName?: string;
+  cloudFrontPriceClass: string;
+}
+
+export interface AppApiConfig {
+  enabled: boolean;
+  cpu: number;
+  memory: number;
+  desiredCount: number;
+  maxCapacity: number;
+  databaseType: 'dynamodb' | 'rds' | 'none';
+  enableRds: boolean;
+  rdsInstanceClass?: string;
+  rdsEngine?: string;
+  rdsDatabaseName?: string;
+}
+
+export interface InferenceApiConfig {
+  enabled: boolean;
+  cpu: number;
+  memory: number;
+  desiredCount: number;
+  maxCapacity: number;
+  enableGpu: boolean;
+}
+
+export interface AgentCoreConfig {
+  enabled: boolean;
+  lambdaMemory: number;
+  lambdaTimeout: number;
+  enableStepFunctions: boolean;
+}
+
+export interface GatewayConfig {
+  enabled: boolean;
+  apiType: 'REST' | 'HTTP';
+  throttleRateLimit: number;
+  throttleBurstLimit: number;
+  enableWaf: boolean;
+}
+
+/**
+ * Load and validate configuration from CDK context
+ * @param scope The CDK construct scope
+ * @returns Validated AppConfig object
+ */
+export function loadConfig(scope: cdk.App): AppConfig {
+  // Load configuration from context
+  const projectPrefix = getRequiredContext(scope, 'projectPrefix');
+  const awsRegion = getRequiredContext(scope, 'awsRegion');
+  
+  // AWS Account can come from context or environment variable
+  const awsAccount = scope.node.tryGetContext('awsAccount') || 
+                     process.env.CDK_DEFAULT_ACCOUNT ||
+                     process.env.AWS_ACCOUNT_ID;
+  
+  if (!awsAccount) {
+    throw new Error(
+      'AWS Account ID is required. Set it in cdk.context.json or via CDK_DEFAULT_ACCOUNT/AWS_ACCOUNT_ID environment variable.'
+    );
+  }
+
+  const config: AppConfig = {
+    projectPrefix,
+    awsAccount,
+    awsRegion,
+    vpcCidr: scope.node.tryGetContext('vpcCidr') || '10.0.0.0/16',
+    domainName: scope.node.tryGetContext('domainName'),
+    enableRoute53: scope.node.tryGetContext('enableRoute53') || false,
+    certificateArn: scope.node.tryGetContext('certificateArn'),
+    frontend: {
+      enabled: (scope.node.tryGetContext('frontend')?.enabled ?? true),
+      bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
+      cloudFrontPriceClass: scope.node.tryGetContext('frontend')?.cloudFrontPriceClass || 'PriceClass_100',
+    },
+    appApi: scope.node.tryGetContext('appApi') || {
+      enabled: true,
+      cpu: 512,
+      memory: 1024,
+      desiredCount: 2,
+      maxCapacity: 10,
+      databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
+      enableRds: false,
+    },
+    inferenceApi: scope.node.tryGetContext('inferenceApi') || {
+      enabled: true,
+      cpu: 1024,
+      memory: 2048,
+      desiredCount: 1,
+      maxCapacity: 5,
+      enableGpu: false,
+    },
+    agentCore: scope.node.tryGetContext('agentCore') || {
+      enabled: true,
+      lambdaMemory: 512,
+      lambdaTimeout: 300,
+      enableStepFunctions: true,
+    },
+    gateway: scope.node.tryGetContext('gateway') || {
+      enabled: true,
+      apiType: 'HTTP',
+      throttleRateLimit: 10000,
+      throttleBurstLimit: 5000,
+      enableWaf: false,
+    },
+    tags: scope.node.tryGetContext('tags') || {
+      Environment: 'dev',
+      Project: 'AgentCore',
+      ManagedBy: 'CDK',
+    },
+  };
+
+  // Validate configuration
+  validateConfig(config);
+
+  return config;
+}
+
+/**
+ * Get required context value or throw error
+ */
+function getRequiredContext(scope: cdk.App, key: string): string {
+  const value = scope.node.tryGetContext(key);
+  if (!value) {
+    throw new Error(
+      `Required context value '${key}' is missing. Please set it in cdk.context.json.`
+    );
+  }
+  return value;
+}
+
+/**
+ * Validate configuration values
+ */
+function validateConfig(config: AppConfig): void {
+  // Validate project prefix
+  if (!/^[a-z][a-z0-9-]{1,20}$/.test(config.projectPrefix)) {
+    throw new Error(
+      'projectPrefix must start with a lowercase letter, contain only lowercase letters, numbers, and hyphens, and be 2-21 characters long.'
+    );
+  }
+
+  // Validate AWS Region
+  const validRegions = [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'eu-west-1', 'eu-west-2', 'eu-central-1',
+    'ap-northeast-1', 'ap-southeast-1', 'ap-southeast-2',
+  ];
+  if (!validRegions.includes(config.awsRegion)) {
+    console.warn(`Warning: ${config.awsRegion} is not in the common regions list. Proceeding anyway.`);
+  }
+
+  // Validate VPC CIDR
+  const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+  if (!cidrPattern.test(config.vpcCidr)) {
+    throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+  }
+
+  // Validate Route53 domain if enabled
+  if (config.enableRoute53 && !config.domainName) {
+    throw new Error('domainName is required when enableRoute53 is true.');
+  }
+
+  // Validate certificate ARN if domain is configured
+  if (config.domainName && !config.certificateArn) {
+    console.warn('Warning: domainName is set but certificateArn is not provided. HTTPS will not be configured.');
+  }
+}
+
+/**
+ * Get the stack environment from configuration
+ */
+export function getStackEnv(config: AppConfig): cdk.Environment {
+  return {
+    account: config.awsAccount,
+    region: config.awsRegion,
+  };
+}
+
+/**
+ * Generate a standardized resource name
+ */
+export function getResourceName(config: AppConfig, ...parts: string[]): string {
+  return [config.projectPrefix, ...parts].join('-');
+}
+
+/**
+ * Apply standard tags to a stack
+ */
+export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
+  Object.entries(config.tags).forEach(([key, value]) => {
+    cdk.Tags.of(stack).add(key, value);
+  });
+}

@@ -76,9 +76,9 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
     )
 
 # Import routers
-from health.health import router as health_router
-from auth.routes import router as auth_router
-from sessions.routes import router as sessions_router
+from .health import router as health_router
+from .auth.routes import router as auth_router
+from .sessions.routes import router as sessions_router
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
