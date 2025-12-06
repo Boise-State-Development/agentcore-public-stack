@@ -74,14 +74,8 @@ class StreamCoordinator:
         agent._session_manager = wrapped_manager
 
         try:
-            # Log prompt information
-            self._log_prompt_info(prompt)
-
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
-
-            # Track if we've seen metadata to avoid duplicate extraction
-            metadata_seen = False
 
             # Process through new stream processor and format as SSE
             async for event in process_agent_stream(agent_stream):
@@ -99,25 +93,15 @@ class StreamCoordinator:
 
                 # Inject message_id at message_start
                 if event.get("type") == "message_start":
-                    logger.info(f"🔍 Found message_start event, event before injection: {event}")
                     message_id = wrapped_manager.peek_next_message_id()
-                    logger.info(f"🔮 Generated message_id: {message_id}")
                     # Get existing data or create new dict
                     event_data = dict(event.get("data", {}))
                     event_data["id"] = message_id
                     # Update the event with new data
                     event["data"] = event_data
-                    logger.info(f"📝 Event after injection: {event}")
-                    logger.info(f"✅ Injected message_id into message_start: {message_id}")
 
                 # Format as SSE event and yield
                 sse_event = self._format_sse_event(event)
-                
-                # Log metadata events for debugging
-                if event.get("type") == "metadata":
-                    logger.info(f"📡 Sending metadata event via SSE: {event.get('data')}")
-                    metadata_seen = True
-                
                 yield sse_event
 
             # Calculate end-to-end latency
@@ -126,7 +110,6 @@ class StreamCoordinator:
             # Flush buffered messages (turn-based session manager)
             # This returns the message ID of the flushed message
             message_id = self._flush_session(wrapped_manager)
-            logger.info(f"💾 Flushed messages - Message ID: {message_id}")
             # Store metadata after flush completes
             if message_id and (accumulated_metadata.get("usage") or first_token_time):
                 await self._store_metadata(
@@ -177,18 +160,6 @@ class StreamCoordinator:
             logger.error(f"Failed to serialize event: {e}")
             return f"event: error\ndata: {json.dumps({'error': f'Serialization error: {str(e)}'})}\n\n"
 
-    def _log_prompt_info(self, prompt: Union[str, List[Dict[str, Any]]]) -> None:
-        """
-        Log prompt information for debugging
-
-        Args:
-            prompt: Prompt (string or content blocks)
-        """
-        if isinstance(prompt, list):
-            logger.info(f"Prompt is list with {len(prompt)} content blocks")
-        else:
-            logger.info(f"Prompt is string: {prompt[:100] if len(prompt) > 100 else prompt}")
-
     def _flush_session(self, session_manager: Any) -> Optional[int]:
         """
         Flush session manager if it supports buffering
@@ -201,7 +172,6 @@ class StreamCoordinator:
         """
         if hasattr(session_manager, 'flush'):
             message_id = session_manager.flush()
-            logger.debug(f"💾 Session flushed after streaming complete (message ID: {message_id})")
             return message_id
         return None
 
@@ -222,8 +192,8 @@ class StreamCoordinator:
         if hasattr(session_manager, '_get_latest_message_id'):
             try:
                 return session_manager._get_latest_message_id()
-            except Exception as e:
-                logger.debug(f"Failed to get latest message ID: {e}")
+            except Exception:
+                pass
         
         # For LocalSessionBuffer, check if base_manager has the method
         if hasattr(session_manager, 'base_manager'):
@@ -231,8 +201,8 @@ class StreamCoordinator:
             if hasattr(base_manager, '_get_latest_message_id'):
                 try:
                     return base_manager._get_latest_message_id()
-                except Exception as e:
-                    logger.debug(f"Failed to get latest message ID from base_manager: {e}")
+                except Exception:
+                    pass
         
         # Fallback: Try to get message count from session manager
         # This works for both TurnBasedSessionManager and LocalSessionBuffer
@@ -256,8 +226,8 @@ class StreamCoordinator:
                             latest_file = message_files[-1]
                             message_num = int(latest_file.stem.split("_")[1])
                             return message_num
-            except Exception as e:
-                logger.debug(f"Failed to get message ID from file system: {e}")
+            except Exception:
+                pass
         
         return None
 
@@ -270,9 +240,7 @@ class StreamCoordinator:
         """
         if hasattr(session_manager, 'flush'):
             try:
-                pending_count = len(getattr(session_manager, 'pending_messages', []))
                 session_manager.flush()
-                logger.warning(f"🚨 Emergency flush on error - saved {pending_count} buffered messages")
             except Exception as flush_error:
                 logger.error(f"Failed to emergency flush: {flush_error}")
 
@@ -375,8 +343,6 @@ class StreamCoordinator:
                     message_id=message_id,
                     message_metadata=message_metadata
                 )
-
-                logger.info(f"✅ Stored metadata for message {message_id} (model: {model_info.model_name if model_info else 'unknown'})")
 
         except Exception as e:
             # Log but don't raise - metadata storage failures shouldn't break streaming
@@ -522,8 +488,6 @@ class StreamCoordinator:
                 user_id=user_id,
                 session_metadata=metadata
             )
-
-            logger.info(f"✅ Updated session metadata (msg count: {metadata.message_count}, last message: {now})")
 
         except Exception as e:
             logger.error(f"Failed to update session metadata: {e}")
