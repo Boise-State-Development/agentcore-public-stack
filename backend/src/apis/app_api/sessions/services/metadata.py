@@ -214,8 +214,11 @@ async def _store_session_metadata_local(
     """
     Store session metadata in local file storage
 
-    Strategy: Store in session.json at the session root directory.
+    Strategy: Store in session-metadata.json at the session root directory.
     Performs a deep merge to preserve existing fields.
+    
+    Note: Uses separate file from session.json (used by Strands library)
+    to avoid conflicts when running in local mode.
 
     File structure:
     {

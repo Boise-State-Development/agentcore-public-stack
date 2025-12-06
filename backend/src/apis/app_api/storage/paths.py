@@ -88,11 +88,14 @@ def get_session_metadata_path(session_id: str) -> Path:
         Path: Full path to the session metadata file
 
     Example:
-        sessions/session_abc123/session.json
+        sessions/session_abc123/session-metadata.json
 
     Note:
         This file contains conversation-level metadata like:
         - title, status, createdAt, lastMessageAt
         - messageCount, preferences, tags
+        
+        Stored separately from session.json (used by Strands library)
+        to avoid conflicts when running in local mode.
     """
-    return get_session_dir(session_id) / "session.json"
+    return get_session_dir(session_id) / "session-metadata.json"
