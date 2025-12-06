@@ -799,11 +799,10 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
     model invocations or periodically during streaming.
 
     EVENT TYPES:
-    - usage: Token usage information (inputTokens, outputTokens, totalTokens)
+    - usage: Token usage information (inputTokens, outputTokens, totalTokens, cacheReadInputTokens, cacheWriteInputTokens)
     - metrics: Performance metrics (latencyMs, timeToFirstByteMs)
     - metadata: Combined metadata object containing both usage and metrics
     - result.metrics: AgentResult metrics (accumulated_usage, accumulated_metrics)
-    ])
     - event.modelMetadataEvent: Nested metadata event from model stream
     - modelMetadataEvent: Direct event type from Strands streaming
 
@@ -829,7 +828,17 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
     events = []
 
     def _extract_usage_data(usage_obj: Any) -> Dict[str, Any]:
-        """Extract and normalize usage data from various formats."""
+        """Extract and normalize usage data from various formats.
+
+        Extracts:
+        - inputTokens/input_tokens: Number of input tokens
+        - outputTokens/output_tokens: Number of output tokens
+        - totalTokens/total_tokens: Total number of tokens
+        - cacheReadInputTokens/cache_read_input_tokens: Tokens read from cache (optional)
+        - cacheWriteInputTokens/cache_write_input_tokens: Tokens written to cache (optional)
+
+        Handles both camelCase (Bedrock API) and snake_case (Python SDK) formats.
+        """
         if not usage_obj:
             return {}
         
@@ -842,12 +851,20 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
             }
             
             # Add cache token fields if present
-            cache_read = usage_obj.get("cacheReadInputTokens") or usage_obj.get("cache_read_input_tokens", 0)
-            cache_write = usage_obj.get("cacheWriteInputTokens") or usage_obj.get("cache_write_input_tokens", 0)
-            
-            if cache_read > 0:
+            # Handle both camelCase and snake_case variants
+            # Use 'is not None' check to distinguish between absent field and 0 value
+            cache_read = usage_obj.get("cacheReadInputTokens")
+            if cache_read is None:
+                cache_read = usage_obj.get("cache_read_input_tokens")
+
+            cache_write = usage_obj.get("cacheWriteInputTokens")
+            if cache_write is None:
+                cache_write = usage_obj.get("cache_write_input_tokens")
+
+            # Include cache fields if they exist (even if 0)
+            if cache_read is not None:
                 usage_data["cacheReadInputTokens"] = cache_read
-            if cache_write > 0:
+            if cache_write is not None:
                 usage_data["cacheWriteInputTokens"] = cache_write
             
             return usage_data
