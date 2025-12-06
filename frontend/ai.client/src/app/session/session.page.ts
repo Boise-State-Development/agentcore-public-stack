@@ -27,11 +27,18 @@ export class ConversationPage implements OnDestroy {
 
   constructor() {
     // Subscribe to route parameter changes
-    this.routeSubscription = this.route.paramMap.subscribe(params => {
+    this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
       this.sessionId.set(id);
       if (id) {
         this.messages = this.messageMapService.getMessagesForSession(id);
+
+        // Load messages from API for deep linking support
+        try {
+          await this.messageMapService.loadMessagesForSession(id);
+        } catch (error) {
+          console.error('Failed to load messages for session:', id, error);
+        }
       }
     });
   }
