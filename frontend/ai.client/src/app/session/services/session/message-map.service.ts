@@ -36,8 +36,14 @@ export class MessageMapService {
    */
   startStreaming(sessionId: string): void {
     this.activeStreamSessionId.set(sessionId);
-    this.streamParser.reset();
-    
+
+    // Get current message count for this session to enable predictable ID generation
+    const currentMessages = this.messageMap()[sessionId]?.() ?? [];
+    const messageCount = currentMessages.length;
+
+    // Reset stream parser with session context for predictable message IDs
+    this.streamParser.reset(sessionId, messageCount);
+
     // Ensure the session exists in the map
     if (!this.messageMap()[sessionId]) {
       this.messageMap.update(map => ({
@@ -84,26 +90,34 @@ export class MessageMapService {
   
   /**
    * Add a user message to a session (before streaming begins).
+   * Generates a predictable message ID based on session ID and message count.
    */
   addUserMessage(sessionId: string, content: string): Message {
+    // Get current message count for this session to compute ID
+    const currentMessages = this.messageMap()[sessionId]?.() ?? [];
+    const messageIndex = currentMessages.length;
+
+    // Compute predictable message ID: msg-{sessionId}-{index}
+    const messageId = `msg-${sessionId}-${messageIndex}`;
+
     const message: Message = {
-      id: crypto.randomUUID(),
+      id: messageId,
       role: 'user',
       content: [{ type: 'text', text: content }]
     };
-    
+
     this.messageMap.update(map => {
       const updated = { ...map };
-      
+
       if (!updated[sessionId]) {
         updated[sessionId] = signal([message]);
       } else {
         updated[sessionId].update(msgs => [...msgs, message]);
       }
-      
+
       return updated;
     });
-    
+
     return message;
   }
   

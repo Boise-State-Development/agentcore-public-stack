@@ -87,8 +87,6 @@ class TurnBasedSessionManager:
         # Merge all content blocks
         merged_content = []
         merged_role = self.pending_messages[0].get("role", "assistant")
-        # Preserve message_id from first message (the UUID sent to client in message_start event)
-        merged_message_id = self.pending_messages[0].get("message_id")
 
         for msg in self.pending_messages:
             content = msg.get("content", [])
@@ -99,10 +97,6 @@ class TurnBasedSessionManager:
             "role": merged_role,
             "content": merged_content
         }
-        
-        # Include message_id if it exists
-        if merged_message_id:
-            merged_message["message_id"] = merged_message_id
 
         return merged_message
 
@@ -111,7 +105,7 @@ class TurnBasedSessionManager:
         Flush pending messages as a single merged message to AgentCore Memory
 
         Returns:
-            Message ID of the flushed message, or None if nothing was flushed
+            Sequence number (0-based) of the flushed message, or None if nothing was flushed
         """
         if not self.pending_messages:
             return None
@@ -120,9 +114,6 @@ class TurnBasedSessionManager:
         if merged_message:
             # Write merged message to AgentCore Memory
             logger.info(f"💾 Flushing turn: {len(self.pending_messages)} messages → 1 merged event")
-
-            # Extract UUID from merged message before persisting
-            uuid_from_merged = merged_message.get("message_id")
 
             # Call base manager's create_message directly to persist
             # We need to convert to SessionMessage format first
@@ -143,34 +134,27 @@ class TurnBasedSessionManager:
                 session_message
             )
 
-            # Get message ID from session manager
-            # For AgentCore Memory, we need to count messages to get the ID
-            sequential_message_id = self._get_latest_message_id()
-
-            # Store UUID-to-sequential-ID mapping if UUID exists
-            # This preserves the UUID sent to the client in message_start events
-            if uuid_from_merged and sequential_message_id:
-                self._store_uuid_mapping(uuid_from_merged, sequential_message_id)
-                logger.info(f"🔗 Stored UUID mapping: {uuid_from_merged} → {sequential_message_id}")
+            # Get sequence number (0-based) from message count
+            sequence_number = self._get_latest_message_sequence()
 
             # Clear buffer
             self.pending_messages = []
 
-            return sequential_message_id
+            return sequence_number
 
         # Clear buffer even if no message was created
         self.pending_messages = []
         return None
 
-    def _get_latest_message_id(self) -> Optional[int]:
+    def _get_latest_message_sequence(self) -> Optional[int]:
         """
-        Get the ID of the most recently stored message
+        Get the sequence number of the most recently stored message
 
-        For AgentCore Memory, we count the total messages in the session.
-        For local file storage, this is handled differently.
+        For AgentCore Memory, we count the total messages in the session
+        and return 0-based index (count - 1).
 
         Returns:
-            Message ID (1-indexed) or None if unavailable
+            Sequence number (0-based) or None if unavailable
         """
         try:
             # Get all messages from the session
@@ -179,68 +163,12 @@ class TurnBasedSessionManager:
                 "default"  # agent_id
             )
             if messages:
-                return len(messages)
+                # Return 0-based sequence: count - 1
+                return len(messages) - 1
         except Exception as e:
-            logger.error(f"Failed to get latest message ID: {e}")
+            logger.error(f"Failed to get latest message sequence: {e}")
 
         return None
-
-    def _store_uuid_mapping(self, uuid: str, sequential_id: int) -> None:
-        """
-        Store UUID-to-sequential-ID mapping for AgentCore Memory messages.
-
-        Since AgentCore Memory uses sequential IDs but we send UUIDs to clients,
-        we need to maintain a mapping to preserve the contract that client-facing
-        IDs match stored message IDs.
-
-        Args:
-            uuid: UUID sent to client in message_start event
-            sequential_id: Sequential ID returned by AgentCore Memory
-        """
-        try:
-            import os
-            import json
-            from pathlib import Path
-
-            # For cloud storage (AgentCore Memory), we could store in DynamoDB
-            # For now, store in a local mapping file as a fallback
-            # This mapping can be used when retrieving messages to map sequential IDs back to UUIDs
-            conversations_table = os.environ.get('CONVERSATIONS_TABLE_NAME')
-            session_id = self.base_manager.config.session_id
-
-            if conversations_table:
-                # Cloud: Store in DynamoDB (future implementation)
-                # For now, log the mapping - it can be stored in message metadata
-                logger.debug(f"Cloud storage: UUID {uuid} maps to sequential ID {sequential_id}")
-                # TODO: Store UUID mapping in DynamoDB conversations table
-            else:
-                # Local: Store in a mapping file
-                from apis.app_api.storage.paths import get_session_dir
-                session_dir = get_session_dir(session_id)
-                mapping_file = session_dir / "uuid_mappings.json"
-
-                # Read existing mappings
-                mappings = {}
-                if mapping_file.exists():
-                    try:
-                        with open(mapping_file, 'r') as f:
-                            mappings = json.load(f)
-                    except Exception as e:
-                        logger.warning(f"Failed to read UUID mappings: {e}")
-
-                # Add new mapping
-                mappings[str(sequential_id)] = uuid
-
-                # Write back
-                mapping_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(mapping_file, 'w') as f:
-                    json.dump(mappings, f, indent=2)
-
-                logger.debug(f"💾 Stored UUID mapping locally: {uuid} → {sequential_id}")
-
-        except Exception as e:
-            # Don't fail the flush if UUID mapping storage fails
-            logger.warning(f"Failed to store UUID mapping: {e}")
 
     def add_message(self, message: Dict[str, Any]):
         """
@@ -273,7 +201,7 @@ class TurnBasedSessionManager:
         """
         return self._flush_turn()
 
-    def append_message(self, message, agent, message_id: Optional[str] = None, **kwargs):
+    def append_message(self, message, agent, **kwargs):
         """
         Override append_message to buffer messages instead of immediately persisting.
 
@@ -283,7 +211,6 @@ class TurnBasedSessionManager:
         Args:
             message: Message from Strands framework
             agent: Agent instance (not used in buffering)
-            message_id: Optional UUID injected by MessageIdInjector wrapper
             **kwargs: Additional arguments
         """
         # If cancelled, don't accept new messages
@@ -293,15 +220,9 @@ class TurnBasedSessionManager:
 
         from strands.types.session import SessionMessage
 
-        # Use provided ID or generate new one (fallback)
-        if not message_id:
-            import uuid
-            message_id = str(uuid.uuid4())
-            logger.warning(f"⚠️ No message_id provided, generated fallback: {message_id}")
-
         # Convert Message to dict format for buffering
+        # No need for message_id here - it will be computed from session_id + sequence when loading
         message_dict = {
-            "message_id": message_id,  # Include UUID
             "role": message.get("role"),
             "content": message.get("content", [])
         }
@@ -309,7 +230,7 @@ class TurnBasedSessionManager:
         # Add to buffer and check if we should flush
         self.add_message(message_dict)
 
-        logger.debug(f"🔄 Intercepted append_message {message_id} (role={message_dict['role']}, buffered={len(self.pending_messages)})")
+        logger.debug(f"🔄 Intercepted append_message (role={message_dict['role']}, buffered={len(self.pending_messages)})")
 
     # Delegate all other methods to base manager
     def __getattr__(self, name):

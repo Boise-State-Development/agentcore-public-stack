@@ -77,32 +77,42 @@ enum StreamState {
 })
 export class StreamParserService {
   private chatStateService = inject(ChatStateService);
-  
+
   // =========================================================================
   // State Signals
   // =========================================================================
-  
+
   /** The current message being streamed */
   private currentMessageBuilder = signal<MessageBuilder | null>(null);
-  
+
   /** Completed messages in the current turn (for multi-turn tool use) */
   private completedMessages = signal<Message[]>([]);
-  
+
   /** Tool progress indicator state */
   private toolProgressSignal = signal<ToolProgress>({ visible: false });
   public toolProgress = this.toolProgressSignal.asReadonly();
-  
+
   /** Error state */
   private errorSignal = signal<string | null>(null);
   public error = this.errorSignal.asReadonly();
-  
+
   /** Stream completion state */
   private isStreamCompleteSignal = signal<boolean>(false);
   public isStreamComplete = this.isStreamCompleteSignal.asReadonly();
-  
+
   /** Metadata (usage, metrics) from the stream */
   private metadataSignal = signal<MetadataEvent | null>(null);
   public metadata = this.metadataSignal.asReadonly();
+
+  // =========================================================================
+  // Message ID Computation State
+  // =========================================================================
+
+  /** Session ID for computing message IDs */
+  private sessionId: string | null = null;
+
+  /** Starting message count for ID computation */
+  private startingMessageCount: number = 0;
   
   // =========================================================================
   // Computed Signals - Reactive Derived State
@@ -229,17 +239,24 @@ export class StreamParserService {
   /**
    * Reset all state for a new conversation/stream.
    * Generates a new stream ID to prevent race conditions.
-   * 
+   *
    * IMPORTANT: Call this before starting a new stream to prevent
    * events from previous streams from interfering.
+   *
+   * @param sessionId - Session ID for computing predictable message IDs
+   * @param startingMessageCount - Current message count in the session (for ID computation)
    */
-  reset(): void {
+  reset(sessionId?: string, startingMessageCount?: number): void {
     // Generate new stream ID to prevent events from old streams
     // This invalidates any in-flight events from previous streams
     const oldStreamId = this.currentStreamId;
     this.currentStreamId = uuidv4();
     this.streamState = StreamState.Idle;
-    
+
+    // Store session ID and message count for predictable ID generation
+    this.sessionId = sessionId || null;
+    this.startingMessageCount = startingMessageCount || 0;
+
     // Clear all state
     this.currentMessageBuilder.set(null);
     this.completedMessages.set([]);
@@ -248,8 +265,8 @@ export class StreamParserService {
     this.isStreamCompleteSignal.set(false);
     this.metadataSignal.set(null);
     this.currentEventType = '';
-    
-    console.log(`[StreamParser] Reset stream: ${oldStreamId} -> ${this.currentStreamId}`);
+
+    console.log(`[StreamParser] Reset stream: ${oldStreamId} -> ${this.currentStreamId} (session: ${sessionId}, messageCount: ${startingMessageCount})`);
   }
   
   /**
@@ -603,16 +620,22 @@ export class StreamParserService {
     // Clear stopReason in ChatStateService
     this.chatStateService.setStopReason(null);
 
-    // Create new message builder with server-provided ID
+    // Compute predictable message ID: msg-{sessionId}-{index}
+    // The index is: startingMessageCount + number of completed messages in this stream
+    const completedCount = this.completedMessages().length;
+    const messageIndex = this.startingMessageCount + completedCount;
+    const computedId = this.sessionId ? `msg-${this.sessionId}-${messageIndex}` : uuidv4();
+
+    // Create new message builder with computed ID
     const builder: MessageBuilder = {
-      id: eventData.id || uuidv4(),  // Use server ID if provided, fallback to UUID
+      id: computedId,
       role: eventData.role,
       contentBlocks: new Map(),
       created_at: new Date().toISOString(),
       isComplete: false
     };
 
-    console.log('[StreamParser] Created message builder with server ID:', builder.id);
+    console.log('[StreamParser] Created message builder with computed ID:', builder.id);
     this.currentMessageBuilder.set(builder);
   }
   

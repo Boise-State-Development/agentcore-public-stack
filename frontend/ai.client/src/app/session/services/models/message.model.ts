@@ -123,8 +123,8 @@ export type ContentBlockType = 'text' | 'tool_use' | 'tool_result' | 'toolUse' |
 // ============================================================================
 
 export interface MessageStartEvent {
-  id?: string;  // Server-provided message ID (UUID)
   role: 'user' | 'assistant';
+  // Note: Message ID is no longer sent by server, computed client-side as msg-{sessionId}-{index}
 }
 
 export interface ContentBlockStartEvent {

@@ -33,14 +33,13 @@ class LocalSessionBuffer:
 
         logger.info(f"✅ LocalSessionBuffer initialized (batch_size={batch_size})")
 
-    def append_message(self, message, agent, message_id: Optional[str] = None, **kwargs):
+    def append_message(self, message, agent, **kwargs):
         """
         Override append_message to buffer messages and check cancelled flag.
 
         Args:
             message: Message from Strands framework
             agent: Agent instance (not used in buffering)
-            message_id: Optional UUID injected by MessageIdInjector wrapper
             **kwargs: Additional arguments
         """
         # If cancelled, don't accept new messages
@@ -48,22 +47,15 @@ class LocalSessionBuffer:
             logger.warning(f"🚫 Session cancelled, ignoring message (role={message.get('role')})")
             return
 
-        # Use provided ID or generate new one (fallback)
-        if not message_id:
-            import uuid
-            message_id = str(uuid.uuid4())
-            logger.warning(f"⚠️ No message_id provided, generated fallback: {message_id}")
-
         # Convert Message to dict format for buffering
         message_dict = {
-            "message_id": message_id,  # Include UUID
             "role": message.get("role"),
             "content": message.get("content", [])
         }
 
         # Add to buffer
         self.pending_messages.append(message_dict)
-        logger.debug(f"📝 Buffered message {message_id} (role={message_dict['role']}, total={len(self.pending_messages)})")
+        logger.debug(f"📝 Buffered message (role={message_dict['role']}, total={len(self.pending_messages)})")
 
         # Periodic flush to prevent data loss
         if len(self.pending_messages) >= self.batch_size:
@@ -75,13 +67,13 @@ class LocalSessionBuffer:
         Force flush pending messages to FileSessionManager
 
         Returns:
-            Message ID of the last flushed message, or None if nothing was flushed
+            Sequence number (0-based) of the last flushed message, or None if nothing was flushed
         """
         # Flush pending messages if any exist
         if self.pending_messages:
             logger.info(f"💾 Flushing {len(self.pending_messages)} messages to FileSessionManager")
 
-            # Get current sequence number for file naming
+            # Get current sequence number for file naming (0-based)
             sequence_num = self._get_next_sequence_number()
 
             # Write each pending message to base manager
@@ -89,8 +81,6 @@ class LocalSessionBuffer:
                 # Convert dict back to Message-like object
                 from strands.types.session import SessionMessage
                 from strands.types.content import Message
-
-                message_id = message_dict.get("message_id")  # UUID
 
                 strands_message: Message = {
                     "role": message_dict["role"],
@@ -101,16 +91,15 @@ class LocalSessionBuffer:
                 session_message = SessionMessage.from_message(strands_message, 0)
 
                 try:
-                    # Store with sequence number for filename and UUID as message_id
+                    # Store with 0-based sequence number for filename
                     current_seq = sequence_num + idx
-                    self._write_message_with_id(
+                    self._write_message_to_disk(
                         session_message,
-                        message_id=message_id,
                         sequence=current_seq
                     )
-                    logger.debug(f"💾 Wrote message {message_id} to message_{current_seq}.json")
+                    logger.debug(f"💾 Wrote message to message_{current_seq}.json")
                 except Exception as e:
-                    logger.error(f"Failed to write message {message_id} to FileSessionManager: {e}")
+                    logger.error(f"Failed to write message to FileSessionManager: {e}")
 
             # Clear buffer after writing
             self.pending_messages = []
@@ -120,8 +109,8 @@ class LocalSessionBuffer:
         # (e.g., when batch_size was reached)
         last_message_id = self._get_latest_message_id()
 
-        if last_message_id:
-            logger.debug(f"✅ Flush complete (latest message ID: {last_message_id})")
+        if last_message_id is not None:
+            logger.debug(f"✅ Flush complete (latest message sequence: {last_message_id})")
         else:
             logger.debug(f"✅ Flush complete (no messages found)")
 
@@ -129,10 +118,10 @@ class LocalSessionBuffer:
 
     def _get_latest_message_id(self) -> Optional[int]:
         """
-        Get the ID of the most recently stored message in local file storage
+        Get the sequence number of the most recently stored message in local file storage
 
         Returns:
-            Message ID (1-indexed) or None if unavailable
+            Sequence number (0-based) or None if unavailable
         """
         try:
             from pathlib import Path
@@ -148,13 +137,13 @@ class LocalSessionBuffer:
                     key=lambda p: int(p.stem.split("_")[1]) if p.stem.split("_")[1].isdigit() else 0
                 )
                 if message_files:
-                    # Get the highest message number
+                    # Get the highest message number (0-based sequence)
                     latest_file = message_files[-1]
                     message_num = int(latest_file.stem.split("_")[1])
                     return message_num
 
         except Exception as e:
-            logger.error(f"Failed to get latest message ID: {e}")
+            logger.error(f"Failed to get latest message sequence: {e}")
 
         return None
 
@@ -163,7 +152,7 @@ class LocalSessionBuffer:
         Get the next sequence number for file naming
 
         Returns:
-            int: Next sequence number (1 for first message, increments from there)
+            int: Next sequence number (0-based: 0 for first message, increments from there)
         """
         try:
             from apis.app_api.storage.paths import get_messages_dir
@@ -180,19 +169,18 @@ class LocalSessionBuffer:
                     last_seq = int(latest_file.stem.split("_")[1])
                     return last_seq + 1
 
-            return 1  # First message
+            return 0  # First message (0-based)
         except Exception as e:
             logger.error(f"Failed to get next sequence number: {e}")
-            return 1
+            return 0
 
-    def _write_message_with_id(self, session_message, message_id: str, sequence: int):
+    def _write_message_to_disk(self, session_message, sequence: int):
         """
-        Write message to disk with UUID and sequence number
+        Write message to disk with sequence number
 
         Args:
             session_message: SessionMessage object from Strands
-            message_id: UUID for the message (for API/client)
-            sequence: Sequence number for file naming (for storage)
+            sequence: 0-based sequence number for file naming and ID computation
         """
         from apis.app_api.storage.paths import get_message_path
         import json
@@ -201,10 +189,10 @@ class LocalSessionBuffer:
         message_path = get_message_path(self.session_id, sequence)
         message_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Store both UUID and sequence
+        # Store message with sequence number and timestamp
+        # Message ID is computed from session_id and sequence: msg-{sessionId}-{sequence}
         message_data = {
-            "message_id": message_id,      # UUID for API
-            "sequence": sequence,           # For file ordering
+            "sequence": sequence,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "message": {
                 "role": session_message.role,

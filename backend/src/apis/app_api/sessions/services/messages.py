@@ -78,27 +78,27 @@ def _convert_message_to_response(
 ) -> MessageResponse:
     """
     Convert a Message model to MessageResponse model for API response
-    
+
     Args:
         msg: Message model
-        session_id: Session identifier (used for generating ID if needed)
-        sequence_number: Sequence number of the message (used for generating ID if needed)
-        message_id: Optional message ID (if not provided, generates one)
-    
+        session_id: Session identifier
+        sequence_number: 0-based sequence number of the message
+        message_id: Optional message ID (deprecated, computed from session_id and sequence)
+
     Returns:
-        MessageResponse model
+        MessageResponse model with predictable ID format: msg-{sessionId}-{index}
     """
-    # Generate message_id if not provided (use sequence number as fallback)
-    if not message_id:
-        message_id = f"{session_id}-{sequence_number}"
-    
+    # Always compute message_id from session_id and sequence_number (0-based)
+    # Format: msg-{sessionId}-{index}
+    computed_id = f"msg-{session_id}-{sequence_number}"
+
     # Convert metadata to dict if it's a MessageMetadata object
     metadata_dict = None
     if msg.metadata:
         metadata_dict = msg.metadata.model_dump(exclude_none=True, by_alias=True)
-    
+
     return MessageResponse(
-        id=message_id,
+        id=computed_id,
         role=msg.role,
         content=msg.content,
         created_at=msg.timestamp or "",
@@ -256,6 +256,10 @@ async def get_messages_from_cloud(
                     logger.error(f"Error converting message: {e}")
                     continue
 
+        # Sort messages by timestamp to ensure consistent ordering
+        # This allows us to use array index as the message sequence number
+        messages.sort(key=lambda msg: msg.timestamp or "")
+
         logger.info(f"Retrieved {len(messages)} messages from AgentCore Memory")
 
         # Apply pagination
@@ -340,14 +344,9 @@ async def get_messages_from_local(
                     # Extract metadata if available
                     metadata = data.get("metadata")
 
-                    # Extract message_id if available and convert to string
-                    message_id_raw = data.get("message_id")
-                    message_id = str(message_id_raw) if message_id_raw is not None else None
-
                     # Convert to our Message model with metadata
                     message_obj = _convert_message(msg, metadata=metadata)
-                    # Store message_id with the message for later use
-                    messages.append((message_obj, message_id))
+                    messages.append(message_obj)
 
                 except Exception as e:
                     logger.error(f"Error reading message file {message_file}: {e}")
@@ -362,13 +361,9 @@ async def get_messages_from_local(
     else:
         logger.info(f"Session messages directory does not exist yet: {messages_dir}")
 
-    # Extract Message objects and message_ids separately, keeping index for mapping
-    message_objects = [msg for msg, _ in messages]
-    message_ids = [msg_id for _, msg_id in messages]
-    
     # Apply pagination
-    paginated_messages, next_page_token = _apply_pagination(message_objects, limit, next_token)
-    
+    paginated_messages, next_page_token = _apply_pagination(messages, limit, next_token)
+
     # Convert to MessageResponse format
     # Calculate starting index/sequence from next_token
     start_index = 0
@@ -378,14 +373,12 @@ async def get_messages_from_local(
             start_index = int(decoded)
         except Exception:
             start_index = 0
-    
+
     message_responses = []
     for idx, msg_obj in enumerate(paginated_messages):
         seq_num = start_index + idx
-        # Get message_id from the original list using the index
-        original_idx = start_index + idx
-        msg_id = message_ids[original_idx] if original_idx < len(message_ids) else None
-        message_responses.append(_convert_message_to_response(msg_obj, session_id, seq_num, msg_id))
+        # Message ID is computed from session_id and sequence number (0-based)
+        message_responses.append(_convert_message_to_response(msg_obj, session_id, seq_num))
 
     return MessagesListResponse(
         messages=message_responses,
