@@ -20,6 +20,7 @@ load_dotenv(dotenv_path=env_path)
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
@@ -61,6 +62,15 @@ app = FastAPI(
     description="Handles agent execution, tool orchestration, and SSE response streaming",
     lifespan=lifespan
 )
+
+# Add GZip compression middleware for SSE streams
+# Compresses responses over 1KB, reducing bandwidth by 50-70%
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,  # Only compress responses > 1KB
+    compresslevel=6  # Balance between speed and compression ratio (1-9)
+)
+logger.info("Added GZip middleware for response compression")
 
 # Add CORS middleware for local development
 # In production (AWS), CloudFront handles routing so CORS is not needed

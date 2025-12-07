@@ -29,7 +29,8 @@ class TurnBasedSessionManager:
         self,
         agentcore_memory_config: AgentCoreMemoryConfig,
         region_name: str = "us-west-2",
-        batch_size: int = 5  # Flush every N messages to prevent data loss
+        batch_size: int = 5,  # Flush every N messages to prevent data loss
+        max_buffer_size: int = 20  # Maximum buffer size before forced flush
     ):
         self.base_manager = AgentCoreMemorySessionManager(
             agentcore_memory_config=agentcore_memory_config,
@@ -40,9 +41,13 @@ class TurnBasedSessionManager:
         self.pending_messages: List[Dict[str, Any]] = []
         self.last_message_role: Optional[str] = None
         self.batch_size = batch_size
+        self.max_buffer_size = max_buffer_size
         self.cancelled = False  # Flag to stop accepting new messages
 
-        logger.info(f"✅ TurnBasedSessionManager initialized (buffering enabled, batch_size={batch_size})")
+        logger.info(
+            f"✅ TurnBasedSessionManager initialized "
+            f"(buffering enabled, batch_size={batch_size}, max_buffer_size={max_buffer_size})"
+        )
 
     def _should_flush_turn(self, message: Dict[str, Any]) -> bool:
         """
@@ -173,9 +178,18 @@ class TurnBasedSessionManager:
     def add_message(self, message: Dict[str, Any]):
         """
         Add a message to the turn buffer.
-        Automatically flushes when turn is complete or batch size is reached.
+        Automatically flushes when turn is complete, batch size is reached,
+        or max buffer size is exceeded.
         """
         role = message.get("role", "")
+
+        # Safety check: enforce max buffer size to prevent unbounded growth
+        if len(self.pending_messages) >= self.max_buffer_size:
+            logger.warning(
+                f"⚠️ Max buffer size ({self.max_buffer_size}) reached! "
+                f"Force flushing to prevent memory issues"
+            )
+            self._flush_turn()
 
         # Check if we should flush previous turn
         if self._should_flush_turn(message):

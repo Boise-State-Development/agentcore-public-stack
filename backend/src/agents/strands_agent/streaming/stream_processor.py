@@ -1177,7 +1177,16 @@ async def process_agent_stream(
             # IMPORTANT: Process metadata BEFORE checking completion to ensure
             # metadata is extracted even if complete=True is in the same event.
             # Metadata is critical for cost tracking and should always be sent.
+            # ALSO accumulate metadata for final summary
             for processed_event in _handle_metadata_events(event):
+                # Accumulate metadata for summary
+                if processed_event.get("type") == "metadata":
+                    event_data = processed_event.get("data", {})
+                    if "usage" in event_data:
+                        accumulated_metadata["usage"].update(event_data["usage"])
+                    if "metrics" in event_data:
+                        accumulated_metadata["metrics"].update(event_data["metrics"])
+                # Yield the metadata event
                 yield processed_event
 
             # STEP 2: Process completion/error events (may break the loop)
@@ -1187,7 +1196,7 @@ async def process_agent_stream(
             completion_events, should_break = _handle_completion_events(event)
             for processed_event in completion_events:
                 yield processed_event
-            
+
             # If we should break, check one more time for metadata
             # IMPORTANT: Don't break immediately if we haven't seen result yet
             # The result event (which contains metrics) might come after complete
@@ -1195,8 +1204,16 @@ async def process_agent_stream(
                 # Check one more time for metadata in case result came with complete
                 metadata_events_after_complete = _handle_metadata_events(event)
                 for processed_event in metadata_events_after_complete:
+                    # Accumulate metadata for summary
+                    if processed_event.get("type") == "metadata":
+                        event_data = processed_event.get("data", {})
+                        if "usage" in event_data:
+                            accumulated_metadata["usage"].update(event_data["usage"])
+                        if "metrics" in event_data:
+                            accumulated_metadata["metrics"].update(event_data["metrics"])
+                    # Yield the metadata event
                     yield processed_event
-                
+
                 # If we've seen result, it's safe to break
                 # Otherwise, continue to next iteration to catch result event
                 if result_seen:
@@ -1241,21 +1258,6 @@ async def process_agent_stream(
             # These contain source references from models that support citations
             # Now includes citation_start and citation_end for inline citations
             for processed_event in _handle_citation_events(event):
-                yield processed_event
-
-            # STEP 7: Process metadata events (ENHANCED with cache tokens)
-            # These contain token usage (including cache metrics) and performance data
-            # Important for cost tracking and monitoring
-            # ALSO accumulate metadata for final summary
-            for processed_event in _handle_metadata_events(event):
-                # Accumulate metadata for summary
-                if processed_event.get("type") == "metadata":
-                    event_data = processed_event.get("data", {})
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
-                # Yield the metadata event
                 yield processed_event
 
         # STEP 8: Yield metadata summary before done event
