@@ -58,3 +58,13 @@ class SessionInfo(BaseModel):
     message_count: int
     created_at: str
     updated_at: str
+
+class GenerateTitleRequest(BaseModel):
+    """Request to generate a conversation title"""
+    session_id: str
+    input: str  # Truncated user message (up to ~500 tokens)
+
+class GenerateTitleResponse(BaseModel):
+    """Response with generated conversation title"""
+    title: str
+    session_id: str
