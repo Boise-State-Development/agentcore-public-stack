@@ -7,10 +7,11 @@ import { MessageMapService } from './services/session/message-map.service';
 import { Message } from './services/models/message.model';
 import { ChatInputComponent } from './components/chat-input/chat-input.component';
 import { SessionService } from './services/session/session.service';
+import { JsonPipe } from '@angular/common';
 
 @Component({
   selector: 'app-session-page',
-  imports: [ChatInputComponent, MessageListComponent],
+  imports: [ChatInputComponent, MessageListComponent, JsonPipe],
   templateUrl: './session.page.html',
   styleUrl: './session.page.css',
 })

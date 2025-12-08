@@ -495,7 +495,7 @@ class StreamCoordinator:
         This updates conversation-level tracking after each message:
         - lastMessageAt: Timestamp of this message
         - messageCount: Incremented by 1
-        - preferences: Model/temperature from agent config
+        - preferences: Model/temperature/tools/system_prompt_hash from agent config
         - Auto-creates session metadata on first message
 
         Args:
@@ -507,6 +507,7 @@ class StreamCoordinator:
         try:
             from apis.app_api.sessions.models import SessionMetadata, SessionPreferences
             from apis.app_api.sessions.services.metadata import store_session_metadata, get_session_metadata
+            import hashlib
 
             # Get existing metadata or create new
             existing = await get_session_metadata(session_id, user_id)
@@ -517,9 +518,23 @@ class StreamCoordinator:
                 # First message - create session metadata
                 preferences = None
                 if agent and hasattr(agent, 'model_config'):
+                    # Generate system prompt hash for tracking exact prompt version
+                    # This hash represents the FINAL rendered system prompt (after date injection, etc.)
+                    system_prompt_hash = None
+                    if hasattr(agent, 'system_prompt') and agent.system_prompt:
+                        system_prompt_hash = hashlib.md5(
+                            agent.system_prompt.encode()
+                        ).hexdigest()[:16]  # 16 char hash for uniqueness
+                        logger.debug(f"Generated system_prompt_hash: {system_prompt_hash}")
+
+                    # Extract enabled tools from agent
+                    enabled_tools = getattr(agent, 'enabled_tools', None)
+
                     preferences = SessionPreferences(
                         last_model=agent.model_config.model_id,
-                        last_temperature=getattr(agent.model_config, 'temperature', None)
+                        last_temperature=getattr(agent.model_config, 'temperature', None),
+                        enabled_tools=enabled_tools,
+                        system_prompt_hash=system_prompt_hash
                     )
 
                 metadata = SessionMetadata(
@@ -538,10 +553,25 @@ class StreamCoordinator:
                 # Update existing - only update what changed
                 preferences = existing.preferences
                 if agent and hasattr(agent, 'model_config'):
-                    # Update preferences if model/temperature changed
+                    # Update preferences if model/temperature/tools/system_prompt changed
                     prefs_dict = preferences.model_dump(by_alias=False) if preferences else {}
                     prefs_dict['last_model'] = agent.model_config.model_id
                     prefs_dict['last_temperature'] = getattr(agent.model_config, 'temperature', None)
+
+                    # Update enabled_tools from agent
+                    prefs_dict['enabled_tools'] = getattr(agent, 'enabled_tools', None)
+
+                    # Update system_prompt_hash if system prompt changed
+                    # This allows tracking when the prompt was modified during a conversation
+                    if hasattr(agent, 'system_prompt') and agent.system_prompt:
+                        new_hash = hashlib.md5(
+                            agent.system_prompt.encode()
+                        ).hexdigest()[:16]
+                        # Only update if hash changed (prompt was modified)
+                        if prefs_dict.get('system_prompt_hash') != new_hash:
+                            logger.info(f"System prompt changed - updating hash from {prefs_dict.get('system_prompt_hash')} to {new_hash}")
+                            prefs_dict['system_prompt_hash'] = new_hash
+
                     preferences = SessionPreferences(**prefs_dict)
 
                 metadata = SessionMetadata(

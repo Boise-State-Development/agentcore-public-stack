@@ -1,5 +1,10 @@
 
 <div class="relative min-h-full pb-20 max-w-4xl mx-auto px-4 py-6">
+    <!-- Debug: Show JSON -->
+    <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
+        <summary class="cursor-pointer text-sm font-semibold">Debug: View Session JSON</summary>
+        <pre class="mt-2 overflow-x-auto text-xs">{{ sessionConversation() | json }}</pre>
+    </details>
     <!-- Your component content -->
     <div>
         <app-message-list [messages]="messages()" />               
