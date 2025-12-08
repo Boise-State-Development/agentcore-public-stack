@@ -130,156 +130,156 @@ export class AppApiStack extends cdk.Stack {
       'Allow traffic from ALB to ECS tasks'
     );
 
-    // ============================================================
-    // Database Layer (Optional - controlled by config.appApi.databaseType)
-    // ============================================================
-    let databaseConnectionInfo: string | undefined;
+    // // ============================================================
+    // // Database Layer (Optional - controlled by config.appApi.databaseType)
+    // // ============================================================
+    // let databaseConnectionInfo: string | undefined;
 
-    if (config.appApi.databaseType === 'none') {
-      // No database configured - skip database creation
-      // Set databaseType to 'dynamodb' or 'rds' in config when database is needed
-    } else if (config.appApi.databaseType === 'dynamodb') {
-      // DynamoDB Table
-      const table = new dynamodb.Table(this, 'AppApiTable', {
-        tableName: getResourceName(config, 'app-api-table'),
-        partitionKey: {
-          name: 'PK',
-          type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-          name: 'SK',
-          type: dynamodb.AttributeType.STRING,
-        },
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain data on stack deletion
-        pointInTimeRecovery: true, // TODO: Upgrade to pointInTimeRecoverySpecification when CDK version supports it
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      });
+    // if (config.appApi.databaseType === 'none') {
+    //   // No database configured - skip database creation
+    //   // Set databaseType to 'dynamodb' or 'rds' in config when database is needed
+    // } else if (config.appApi.databaseType === 'dynamodb') {
+    //   // DynamoDB Table
+    //   const table = new dynamodb.Table(this, 'AppApiTable', {
+    //     tableName: getResourceName(config, 'app-api-table'),
+    //     partitionKey: {
+    //       name: 'PK',
+    //       type: dynamodb.AttributeType.STRING,
+    //     },
+    //     sortKey: {
+    //       name: 'SK',
+    //       type: dynamodb.AttributeType.STRING,
+    //     },
+    //     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    //     removalPolicy: cdk.RemovalPolicy.RETAIN, // Retain data on stack deletion
+    //     pointInTimeRecovery: true, // TODO: Upgrade to pointInTimeRecoverySpecification when CDK version supports it
+    //     encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    //   });
 
-      // Add GSI for common query patterns
-      table.addGlobalSecondaryIndex({
-        indexName: 'GSI1',
-        partitionKey: {
-          name: 'GSI1PK',
-          type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-          name: 'GSI1SK',
-          type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-      });
+    //   // Add GSI for common query patterns
+    //   table.addGlobalSecondaryIndex({
+    //     indexName: 'GSI1',
+    //     partitionKey: {
+    //       name: 'GSI1PK',
+    //       type: dynamodb.AttributeType.STRING,
+    //     },
+    //     sortKey: {
+    //       name: 'GSI1SK',
+    //       type: dynamodb.AttributeType.STRING,
+    //     },
+    //     projectionType: dynamodb.ProjectionType.ALL,
+    //   });
 
-      // Store table name in SSM
-      new ssm.StringParameter(this, 'DynamoDbTableNameParameter', {
-        parameterName: `/${config.projectPrefix}/database/table-name`,
-        stringValue: table.tableName,
-        description: 'DynamoDB table name for App API',
-        tier: ssm.ParameterTier.STANDARD,
-      });
+    //   // Store table name in SSM
+    //   new ssm.StringParameter(this, 'DynamoDbTableNameParameter', {
+    //     parameterName: `/${config.projectPrefix}/database/table-name`,
+    //     stringValue: table.tableName,
+    //     description: 'DynamoDB table name for App API',
+    //     tier: ssm.ParameterTier.STANDARD,
+    //   });
 
-      // Store table ARN in SSM
-      new ssm.StringParameter(this, 'DynamoDbTableArnParameter', {
-        parameterName: `/${config.projectPrefix}/database/table-arn`,
-        stringValue: table.tableArn,
-        description: 'DynamoDB table ARN for App API',
-        tier: ssm.ParameterTier.STANDARD,
-      });
+    //   // Store table ARN in SSM
+    //   new ssm.StringParameter(this, 'DynamoDbTableArnParameter', {
+    //     parameterName: `/${config.projectPrefix}/database/table-arn`,
+    //     stringValue: table.tableArn,
+    //     description: 'DynamoDB table ARN for App API',
+    //     tier: ssm.ParameterTier.STANDARD,
+    //   });
 
-      databaseConnectionInfo = table.tableName;
+    //   databaseConnectionInfo = table.tableName;
 
-      // Output
-      new cdk.CfnOutput(this, 'DynamoDbTableName', {
-        value: table.tableName,
-        description: 'DynamoDB table name',
-        exportName: `${config.projectPrefix}-DynamoDbTableName`,
-      });
+    //   // Output
+    //   new cdk.CfnOutput(this, 'DynamoDbTableName', {
+    //     value: table.tableName,
+    //     description: 'DynamoDB table name',
+    //     exportName: `${config.projectPrefix}-DynamoDbTableName`,
+    //   });
 
-    } else if (config.appApi.enableRds) {
-      // RDS Aurora Serverless v2
-      const dbSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
-        vpc: this.vpc,
-        securityGroupName: getResourceName(config, 'db-sg'),
-        description: 'Security group for RDS database',
-        allowAllOutbound: false,
-      });
+    // } else if (config.appApi.enableRds) {
+    //   // RDS Aurora Serverless v2
+    //   const dbSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
+    //     vpc: this.vpc,
+    //     securityGroupName: getResourceName(config, 'db-sg'),
+    //     description: 'Security group for RDS database',
+    //     allowAllOutbound: false,
+    //   });
 
-      dbSecurityGroup.addIngressRule(
-        ecsSecurityGroup,
-        ec2.Port.tcp(5432), // PostgreSQL port (adjust for MySQL if needed)
-        'Allow traffic from ECS tasks to RDS'
-      );
+    //   dbSecurityGroup.addIngressRule(
+    //     ecsSecurityGroup,
+    //     ec2.Port.tcp(5432), // PostgreSQL port (adjust for MySQL if needed)
+    //     'Allow traffic from ECS tasks to RDS'
+    //   );
 
-      // Create database credentials in Secrets Manager
-      const dbCredentials = new secretsmanager.Secret(this, 'DatabaseCredentials', {
-        secretName: getResourceName(config, 'db-credentials'),
-        description: 'Database credentials for App API RDS instance',
-        generateSecretString: {
-          secretStringTemplate: JSON.stringify({ username: 'appadmin' }),
-          generateStringKey: 'password',
-          excludePunctuation: true,
-          includeSpace: false,
-          passwordLength: 32,
-        },
-      });
+    //   // Create database credentials in Secrets Manager
+    //   const dbCredentials = new secretsmanager.Secret(this, 'DatabaseCredentials', {
+    //     secretName: getResourceName(config, 'db-credentials'),
+    //     description: 'Database credentials for App API RDS instance',
+    //     generateSecretString: {
+    //       secretStringTemplate: JSON.stringify({ username: 'appadmin' }),
+    //       generateStringKey: 'password',
+    //       excludePunctuation: true,
+    //       includeSpace: false,
+    //       passwordLength: 32,
+    //     },
+    //   });
 
-      // RDS Aurora Serverless v2 Cluster
-      const dbCluster = new rds.DatabaseCluster(this, 'DatabaseCluster', {
-        clusterIdentifier: getResourceName(config, 'app-api-db'),
-        engine: rds.DatabaseClusterEngine.auroraPostgres({
-          version: rds.AuroraPostgresEngineVersion.VER_15_3,
-        }),
-        credentials: rds.Credentials.fromSecret(dbCredentials),
-        defaultDatabaseName: config.appApi.rdsDatabaseName || 'appapi',
-        vpc: this.vpc,
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-        },
-        securityGroups: [dbSecurityGroup],
-        serverlessV2MinCapacity: 0.5,
-        serverlessV2MaxCapacity: 2,
-        writer: rds.ClusterInstance.serverlessV2('writer'),
-        readers: [
-          rds.ClusterInstance.serverlessV2('reader', { scaleWithWriter: true }),
-        ],
-        backup: {
-          retention: cdk.Duration.days(7),
-          preferredWindow: '03:00-04:00',
-        },
-        cloudwatchLogsExports: ['postgresql'],
-        removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
-      });
+    //   // RDS Aurora Serverless v2 Cluster
+    //   const dbCluster = new rds.DatabaseCluster(this, 'DatabaseCluster', {
+    //     clusterIdentifier: getResourceName(config, 'app-api-db'),
+    //     engine: rds.DatabaseClusterEngine.auroraPostgres({
+    //       version: rds.AuroraPostgresEngineVersion.VER_15_3,
+    //     }),
+    //     credentials: rds.Credentials.fromSecret(dbCredentials),
+    //     defaultDatabaseName: config.appApi.rdsDatabaseName || 'appapi',
+    //     vpc: this.vpc,
+    //     vpcSubnets: {
+    //       subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+    //     },
+    //     securityGroups: [dbSecurityGroup],
+    //     serverlessV2MinCapacity: 0.5,
+    //     serverlessV2MaxCapacity: 2,
+    //     writer: rds.ClusterInstance.serverlessV2('writer'),
+    //     readers: [
+    //       rds.ClusterInstance.serverlessV2('reader', { scaleWithWriter: true }),
+    //     ],
+    //     backup: {
+    //       retention: cdk.Duration.days(7),
+    //       preferredWindow: '03:00-04:00',
+    //     },
+    //     cloudwatchLogsExports: ['postgresql'],
+    //     removalPolicy: cdk.RemovalPolicy.SNAPSHOT,
+    //   });
 
-      // Store database connection info in SSM (reference to secret)
-      new ssm.StringParameter(this, 'DatabaseSecretArnParameter', {
-        parameterName: `/${config.projectPrefix}/database/secret-arn`,
-        stringValue: dbCredentials.secretArn,
-        description: 'ARN of the Secrets Manager secret containing database credentials',
-        tier: ssm.ParameterTier.STANDARD,
-      });
+    //   // Store database connection info in SSM (reference to secret)
+    //   new ssm.StringParameter(this, 'DatabaseSecretArnParameter', {
+    //     parameterName: `/${config.projectPrefix}/database/secret-arn`,
+    //     stringValue: dbCredentials.secretArn,
+    //     description: 'ARN of the Secrets Manager secret containing database credentials',
+    //     tier: ssm.ParameterTier.STANDARD,
+    //   });
 
-      new ssm.StringParameter(this, 'DatabaseEndpointParameter', {
-        parameterName: `/${config.projectPrefix}/database/endpoint`,
-        stringValue: dbCluster.clusterEndpoint.hostname,
-        description: 'RDS cluster endpoint hostname',
-        tier: ssm.ParameterTier.STANDARD,
-      });
+    //   new ssm.StringParameter(this, 'DatabaseEndpointParameter', {
+    //     parameterName: `/${config.projectPrefix}/database/endpoint`,
+    //     stringValue: dbCluster.clusterEndpoint.hostname,
+    //     description: 'RDS cluster endpoint hostname',
+    //     tier: ssm.ParameterTier.STANDARD,
+    //   });
 
-      databaseConnectionInfo = dbCluster.clusterEndpoint.hostname;
+    //   databaseConnectionInfo = dbCluster.clusterEndpoint.hostname;
 
-      // Outputs
-      new cdk.CfnOutput(this, 'DatabaseSecretArn', {
-        value: dbCredentials.secretArn,
-        description: 'ARN of database credentials secret',
-        exportName: `${config.projectPrefix}-DatabaseSecretArn`,
-      });
+    //   // Outputs
+    //   new cdk.CfnOutput(this, 'DatabaseSecretArn', {
+    //     value: dbCredentials.secretArn,
+    //     description: 'ARN of database credentials secret',
+    //     exportName: `${config.projectPrefix}-DatabaseSecretArn`,
+    //   });
 
-      new cdk.CfnOutput(this, 'DatabaseEndpoint', {
-        value: dbCluster.clusterEndpoint.hostname,
-        description: 'RDS cluster endpoint',
-        exportName: `${config.projectPrefix}-DatabaseEndpoint`,
-      });
-    }
+    //   new cdk.CfnOutput(this, 'DatabaseEndpoint', {
+    //     value: dbCluster.clusterEndpoint.hostname,
+    //     description: 'RDS cluster endpoint',
+    //     exportName: `${config.projectPrefix}-DatabaseEndpoint`,
+    //   });
+    // }
 
     // ============================================================
     // Application Load Balancer
@@ -388,8 +388,8 @@ export class AppApiStack extends cdk.Stack {
       environment: {
         AWS_REGION: config.awsRegion,
         PROJECT_PREFIX: config.projectPrefix,
-        DATABASE_TYPE: config.appApi.databaseType,
-        ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
+        // DATABASE_TYPE: config.appApi.databaseType,
+        // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
       portMappings: [
         {
