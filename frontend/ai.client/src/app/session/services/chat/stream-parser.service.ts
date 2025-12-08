@@ -1049,25 +1049,58 @@ export class StreamParserService {
   /**
    * Update the last completed message with metadata if it doesn't have it yet.
    * This handles the case where metadata arrives after a message is finalized.
+   * Also updates if new metadata has more complete information (e.g., TTFT).
    */
   private updateLastCompletedMessageWithMetadata(): void {
     const completed = this.completedMessages();
     if (completed.length === 0) return;
     
     const lastMessage = completed[completed.length - 1];
-    // Only update if the message doesn't already have metadata
+    const newMetadata = this.getMetadataForMessage();
+    if (!newMetadata) return;
+    
+    // Always update if message doesn't have metadata
     if (!lastMessage.metadata) {
-      const metadata = this.getMetadataForMessage();
-      if (metadata) {
-        this.completedMessages.update(messages => {
-          const updated = [...messages];
-          updated[updated.length - 1] = {
-            ...updated[updated.length - 1],
-            metadata
-          };
-          return updated;
-        });
-      }
+      this.completedMessages.update(messages => {
+        const updated = [...messages];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          metadata: newMetadata
+        };
+        return updated;
+      });
+      return;
+    }
+    
+    // Update if new metadata has TTFT but existing doesn't (final metadata with calculated TTFT)
+    const existingMetadata = lastMessage.metadata as Record<string, unknown>;
+    const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const existingTTFT = existingLatency?.timeToFirstToken;
+    
+    const newLatency = newMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const newTTFT = newLatency?.timeToFirstToken;
+    
+    if (!existingTTFT && newTTFT) {
+      // Merge new metadata with existing (prefer new values)
+      this.completedMessages.update(messages => {
+        const updated = [...messages];
+        const existingLatencyObj = existingMetadata['latency'] as Record<string, unknown> | undefined;
+        const newLatencyObj = newMetadata['latency'] as Record<string, unknown> | undefined;
+        
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          metadata: {
+            ...existingMetadata,
+            ...newMetadata,
+            // Merge latency object to preserve both values
+            latency: {
+              ...(existingLatencyObj || {}),
+              ...(newLatencyObj || {})
+            }
+          }
+        };
+        return updated;
+      });
     }
   }
   

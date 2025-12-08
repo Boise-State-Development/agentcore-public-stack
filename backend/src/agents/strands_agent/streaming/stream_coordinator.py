@@ -70,7 +70,7 @@ class StreamCoordinator:
 
             # Process through new stream processor and format as SSE
             async for event in process_agent_stream(agent_stream):
-                # Collect metadata_summary event (don't send to client)
+                # Collect metadata_summary event (don't send to client as-is)
                 if event.get("type") == "metadata_summary":
                     event_data = event.get("data", {})
                     if "usage" in event_data:
@@ -79,14 +79,49 @@ class StreamCoordinator:
                         accumulated_metadata["metrics"].update(event_data["metrics"])
                     if "first_token_time" in event_data:
                         first_token_time = event_data["first_token_time"]
-                    # Don't yield this event to the client
+                    # Don't yield this event to the client (will send final metadata before done)
                     continue
+                
+                # Check if this is the "done" event - send final metadata before it
+                if event.get("type") == "done":
+                    # Calculate end-to-end latency
+                    stream_end_time = time.time()
+                    
+                    # Calculate time to first token for client display
+                    time_to_first_token_ms = None
+                    if first_token_time:
+                        time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
+                    elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
+                        time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
+                    
+                    # Send final metadata event to client with calculated TTFT
+                    # This ensures the client receives the final metadata with accurate TTFT calculation
+                    if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics") or time_to_first_token_ms:
+                        final_metadata = {
+                            "usage": accumulated_metadata.get("usage", {}),
+                            "metrics": {}
+                        }
+                        
+                        # Include provider metrics if available
+                        if accumulated_metadata.get("metrics"):
+                            final_metadata["metrics"].update(accumulated_metadata["metrics"])
+                        
+                        # Add calculated time to first token (overrides provider value if we calculated it)
+                        if time_to_first_token_ms is not None:
+                            final_metadata["metrics"]["timeToFirstByteMs"] = time_to_first_token_ms
+                        
+                        # Add end-to-end latency to metrics for consistency
+                        final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
+                        
+                        # Send final metadata event to client (before done event)
+                        final_metadata_event = {"type": "metadata", "data": final_metadata}
+                        yield self._format_sse_event(final_metadata_event)
 
-                # Format as SSE event and yield
+                # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
                 yield sse_event
 
-            # Calculate end-to-end latency
+            # Calculate end-to-end latency (fallback if done event wasn't received)
             stream_end_time = time.time()
 
             # Flush buffered messages (turn-based session manager)
@@ -334,10 +369,29 @@ class StreamCoordinator:
 
             # Build LatencyMetrics if we have timing data
             latency_metrics = None
+            time_to_first_token_ms = None
+            
+            # Try to calculate time to first token using first_token_time from processor
             if first_token_time:
+                time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
+                logger.debug(f"Calculated time_to_first_token from processor: {time_to_first_token_ms}ms")
+            # Fallback: Use timeToFirstByteMs from provider metrics if available
+            elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
+                time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
+                logger.debug(f"Using provider timeToFirstByteMs as fallback: {time_to_first_token_ms}ms")
+            
+            # Create latency metrics if we have time to first token (required field)
+            # We always have end-to-end latency (stream_end_time - stream_start_time)
+            if time_to_first_token_ms is not None:
                 latency_metrics = LatencyMetrics(
-                    time_to_first_token=int((first_token_time - stream_start_time) * 1000),
+                    time_to_first_token=time_to_first_token_ms,
                     end_to_end_latency=int((stream_end_time - stream_start_time) * 1000)
+                )
+            else:
+                # Log if we couldn't determine time to first token
+                logger.warning(
+                    "Could not determine time_to_first_token - "
+                    "no first_token_time from processor and no timeToFirstByteMs in metrics"
                 )
 
             # Extract ModelInfo from agent (for cost tracking foundation)

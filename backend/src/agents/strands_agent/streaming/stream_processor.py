@@ -1178,6 +1178,8 @@ async def process_agent_stream(
             # metadata is extracted even if complete=True is in the same event.
             # Metadata is critical for cost tracking and should always be sent.
             # ALSO accumulate metadata for final summary
+            # NOTE: timeToFirstByteMs from provider will be stored in metrics
+            # and the coordinator can use it as a fallback if first_token_time is not set
             for processed_event in _handle_metadata_events(event):
                 # Accumulate metadata for summary
                 if processed_event.get("type") == "metadata":
@@ -1237,9 +1239,17 @@ async def process_agent_stream(
             # ALSO track first token time for latency calculation
             for processed_event in _handle_content_block_events(event):
                 # Track first token time for latency calculation
+                # Track ANY content block delta (text OR tool use) as first token
+                # Reasoning events are tracked separately in STEP 6
                 if first_token_time is None:
-                    if processed_event.get("type") == "content_block_delta" and processed_event.get("data", {}).get("type") == "text":
-                        first_token_time = time.time()
+                    event_type = processed_event.get("type")
+                    if event_type == "content_block_delta":
+                        event_data = processed_event.get("data", {})
+                        # Track first token for both text and tool use deltas
+                        # Tool use deltas indicate the model is generating tool calls
+                        if event_data.get("type") in ("text", "tool_use"):
+                            first_token_time = time.time()
+                            logger.debug(f"First token detected (content_block_delta, type={event_data.get('type')})")
                 yield processed_event
 
             # STEP 5: Process tool events (ENHANCED with display_content)
@@ -1251,7 +1261,18 @@ async def process_agent_stream(
             # STEP 6: Process reasoning events
             # These show the model's internal thought process (if supported)
             # Not all models support reasoning
+            # ALSO track first token time if reasoning comes before text (some models emit reasoning first)
             for processed_event in _handle_reasoning_events(event):
+                # Track first token time for reasoning events
+                # Reasoning text is the first output from reasoning-capable models
+                if first_token_time is None:
+                    event_type = processed_event.get("type")
+                    if event_type == "reasoning":
+                        event_data = processed_event.get("data", {})
+                        # If there's reasoningText, this is the first token
+                        if "reasoningText" in event_data or "reasoning" in event_data:
+                            first_token_time = time.time()
+                            logger.debug("First token detected (reasoning event)")
                 yield processed_event
 
             # STEP 7: Process citation events (ENHANCED with inline citations)
@@ -1264,8 +1285,14 @@ async def process_agent_stream(
         # This provides all accumulated metadata in one place for storage
         if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics"):
             # Add first_token_time if we tracked it (caller will calculate latency)
+            # NOTE: If first_token_time is None, the coordinator can use timeToFirstByteMs
+            # from the metrics as a fallback (it's already in accumulated_metadata["metrics"])
             if first_token_time is not None:
                 accumulated_metadata["first_token_time"] = first_token_time
+            else:
+                # Log if we couldn't detect first token time
+                # This helps diagnose cases where no text/reasoning/tool deltas were detected
+                logger.debug("first_token_time not detected - coordinator can use timeToFirstByteMs from metrics as fallback")
             yield _create_event("metadata_summary", accumulated_metadata)
 
         # STEP 9: Send final done event
