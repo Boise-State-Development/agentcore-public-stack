@@ -39,9 +39,6 @@ class AgentFactory:
         bedrock_config = model_config.to_bedrock_config()
         model = BedrockModel(**bedrock_config)
 
-        if model_config.caching_enabled:
-            logger.info("✅ System prompt caching enabled (cache_prompt=default)")
-
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
         # This prevents "Failed to start and initialize Playwright" errors with NovaAct
@@ -53,8 +50,5 @@ class AgentFactory:
             session_manager=session_manager,
             hooks=hooks if hooks else None
         )
-
-        logger.info(f"✅ Agent created with {len(tools)} tools")
-        logger.info(f"✅ Session Manager: {type(session_manager).__name__}")
 
         return agent

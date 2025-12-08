@@ -7,10 +7,11 @@ import { MessageMapService } from './services/session/message-map.service';
 import { Message } from './services/models/message.model';
 import { ChatInputComponent } from './components/chat-input/chat-input.component';
 import { SessionService } from './services/session/session.service';
+import { JsonPipe } from '@angular/common';
 
 @Component({
   selector: 'app-session-page',
-  imports: [ChatInputComponent, MessageListComponent],
+  imports: [ChatInputComponent, MessageListComponent, JsonPipe],
   templateUrl: './session.page.html',
   styleUrl: './session.page.css',
 })
@@ -27,11 +28,18 @@ export class ConversationPage implements OnDestroy {
 
   constructor() {
     // Subscribe to route parameter changes
-    this.routeSubscription = this.route.paramMap.subscribe(params => {
+    this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
       this.sessionId.set(id);
       if (id) {
         this.messages = this.messageMapService.getMessagesForSession(id);
+
+        // Load messages from API for deep linking support
+        try {
+          await this.messageMapService.loadMessagesForSession(id);
+        } catch (error) {
+          console.error('Failed to load messages for session:', id, error);
+        }
       }
     });
   }

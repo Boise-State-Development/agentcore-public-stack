@@ -55,7 +55,7 @@ async def fetch_url_content(
     url: str,
     include_html: bool = False,
     max_length: int = 50000
-) -> str:
+) -> dict:
     """
     Fetch and extract text content from a web page URL.
     Useful for retrieving job descriptions, articles, documentation, or any web content.
@@ -66,7 +66,7 @@ async def fetch_url_content(
         max_length: Maximum character length of extracted text (default: 50000)
 
     Returns:
-        JSON string with extracted text content, title, and metadata
+        Tool result with extracted text content, title, and metadata
 
     Examples:
         # Fetch job posting
@@ -83,11 +83,16 @@ async def fetch_url_content(
 
         # Validate URL
         if not url.startswith(('http://', 'https://')):
-            return json.dumps({
-                "success": False,
-                "error": "URL must start with http:// or https://",
-                "url": url
-            })
+            return {
+                "content": [{
+                    "json": {
+                        "success": False,
+                        "error": "URL must start with http:// or https://",
+                        "url": url
+                    }
+                }],
+                "status": "error"
+            }
 
         # Fetch URL with timeout
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -132,31 +137,49 @@ async def fetch_url_content(
 
             logger.info(f"Successfully fetched content from: {url} ({len(text_content)} chars)")
 
-            return json.dumps(result, indent=2)
+            return {
+                "content": [{"json": result}],
+                "status": "success"
+            }
 
     except httpx.HTTPStatusError as e:
         error_msg = f"HTTP error {e.response.status_code}: {e.response.reason_phrase}"
         logger.error(f"HTTP error fetching {url}: {error_msg}")
-        return json.dumps({
-            "success": False,
-            "error": error_msg,
-            "url": url,
-            "status_code": e.response.status_code
-        })
+        return {
+            "content": [{
+                "json": {
+                    "success": False,
+                    "error": error_msg,
+                    "url": url,
+                    "status_code": e.response.status_code
+                }
+            }],
+            "status": "error"
+        }
 
     except httpx.TimeoutException:
         error_msg = "Request timed out (30 seconds)"
         logger.error(f"Timeout fetching {url}")
-        return json.dumps({
-            "success": False,
-            "error": error_msg,
-            "url": url
-        })
+        return {
+            "content": [{
+                "json": {
+                    "success": False,
+                    "error": error_msg,
+                    "url": url
+                }
+            }],
+            "status": "error"
+        }
 
     except Exception as e:
         logger.error(f"Error fetching URL {url}: {e}")
-        return json.dumps({
-            "success": False,
-            "error": str(e),
-            "url": url
-        })
+        return {
+            "content": [{
+                "json": {
+                    "success": False,
+                    "error": str(e),
+                    "url": url
+                }
+            }],
+            "status": "error"
+        }

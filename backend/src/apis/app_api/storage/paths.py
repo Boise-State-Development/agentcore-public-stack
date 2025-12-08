@@ -88,11 +88,48 @@ def get_session_metadata_path(session_id: str) -> Path:
         Path: Full path to the session metadata file
 
     Example:
-        sessions/session_abc123/session.json
+        sessions/session_abc123/session-metadata.json
 
     Note:
         This file contains conversation-level metadata like:
         - title, status, createdAt, lastMessageAt
         - messageCount, preferences, tags
+
+        Stored separately from session.json (used by Strands library)
+        to avoid conflicts when running in local mode.
     """
-    return get_session_dir(session_id) / "session.json"
+    return get_session_dir(session_id) / "session-metadata.json"
+
+
+def get_message_metadata_path(session_id: str) -> Path:
+    """
+    Get the file path for message metadata index
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Path: Full path to the message metadata index file
+
+    Example:
+        sessions/session_abc123/message-metadata.json
+
+    Note:
+        This file contains metadata for all messages in a session:
+        - Token usage (input, output, cache)
+        - Latency metrics (TTFT, end-to-end)
+        - Model information
+        - Attribution data
+
+        Stored separately from message files to better simulate
+        the cloud architecture where metadata is in a separate
+        DynamoDB table.
+
+        File structure:
+        {
+          "0": { "latency": {...}, "tokenUsage": {...}, ... },
+          "1": { "latency": {...}, "tokenUsage": {...}, ... },
+          ...
+        }
+    """
+    return get_session_dir(session_id) / "message-metadata.json"

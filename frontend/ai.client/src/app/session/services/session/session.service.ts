@@ -1,4 +1,4 @@
-import { inject, Injectable, signal, WritableSignal, resource } from '@angular/core';
+import { inject, Injectable, signal, WritableSignal, resource, computed } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../../environments/environment';
@@ -80,6 +80,12 @@ export class SessionService {
   private sessionsParams = signal<ListSessionsParams>({});
 
   /**
+   * Signal to hold the local sessions cache.
+   * This allows us to optimistically update the UI without refetching from the API.
+   */
+  private localSessionsCache = signal<SessionMetadata[]>([]);
+
+  /**
    * Signal for the session ID used by the session metadata resource.
    * Update this signal to trigger a refetch with new session ID.
    * Set to null to disable the resource.
@@ -128,14 +134,42 @@ export class SessionService {
    */
   readonly sessionsResource = resource({
     loader: async () => {
+      // Read params signal to make resource reactive to pagination changes
+      const params = this.sessionsParams();
+
+      console.log('[SessionService] Resource loader called');
+
       // Ensure user is authenticated before making the request
       await this.authService.ensureAuthenticated();
 
-      // Reading this signal inside the loader makes the resource reactive to its changes
-      // Angular's resource API automatically tracks signal dependencies
-      const params = this.sessionsParams();
+      // Fetch sessions from API (without merging cache here)
       return this.getSessions(params);
     }
+  });
+
+  /**
+   * Computed signal that merges API sessions with local cache.
+   * This automatically updates whenever either the resource data or local cache changes.
+   */
+  readonly mergedSessionsResource = computed(() => {
+    const apiResponse = this.sessionsResource.value();
+    const localCache = this.localSessionsCache();
+
+    if (!apiResponse) {
+      // Resource hasn't loaded yet, return cached sessions only
+      return {
+        sessions: localCache,
+        next_token: null
+      };
+    }
+
+    // Merge local cache with API data
+    const mergedSessions = this.mergeSessions(localCache, apiResponse.sessions);
+
+    return {
+      ...apiResponse,
+      sessions: mergedSessions
+    };
   });
 
   /**
@@ -447,6 +481,78 @@ export class SessionService {
     }
   ): Promise<SessionMetadata> {
     return this.updateSessionMetadata(sessionId, preferences);
+  }
+
+  /**
+   * Adds a new session to the local cache optimistically.
+   * This allows the UI to update immediately without waiting for an API refetch.
+   * The session will appear at the top of the list until the next API refresh.
+   *
+   * @param sessionId - The session ID
+   * @param userId - The user ID
+   * @param title - Optional title for the session (defaults to empty string)
+   *
+   * @example
+   * ```typescript
+   * // When creating a new session
+   * sessionService.addSessionToCache('new-session-id', 'user-123');
+   * ```
+   */
+  addSessionToCache(sessionId: string, userId: string, title: string = ''): void {
+    const newSession: SessionMetadata = {
+      sessionId,
+      userId,
+      title,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      lastMessageAt: new Date().toISOString(),
+      messageCount: 0
+    };
+
+    console.log('[SessionService] Adding session to cache:', sessionId);
+    console.log('[SessionService] Cache before update:', this.localSessionsCache());
+
+    // Add to local cache (will be merged with API data on next load)
+    this.localSessionsCache.update(sessions => {
+      const updated = [newSession, ...sessions];
+      console.log('[SessionService] Local cache updated. Count:', updated.length);
+      return updated;
+    });
+
+    console.log('[SessionService] Cache after update:', this.localSessionsCache());
+  }
+
+  /**
+   * Merges local cache sessions with API sessions.
+   * Local cache sessions take precedence and appear first.
+   * Deduplicates by sessionId (local cache wins).
+   *
+   * @param localSessions - Sessions from local cache (optimistic updates)
+   * @param apiSessions - Sessions from API
+   * @returns Merged and deduplicated session list
+   */
+  private mergeSessions(localSessions: SessionMetadata[], apiSessions: SessionMetadata[]): SessionMetadata[] {
+    // If no local sessions, just return API sessions
+    if (localSessions.length === 0) {
+      return apiSessions;
+    }
+
+    // Create a Set of local session IDs for deduplication
+    const localSessionIds = new Set(localSessions.map(s => s.sessionId));
+
+    // Filter out API sessions that are already in local cache
+    const uniqueApiSessions = apiSessions.filter(s => !localSessionIds.has(s.sessionId));
+
+    // Return local sessions first (most recent), then unique API sessions
+    return [...localSessions, ...uniqueApiSessions];
+  }
+
+  /**
+   * Clears the local session cache.
+   * Useful when you want to force a full refresh from the API.
+   */
+  clearSessionCache(): void {
+    this.localSessionsCache.set([]);
   }
 }
 

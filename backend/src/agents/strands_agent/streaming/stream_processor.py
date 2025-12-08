@@ -216,6 +216,34 @@ def _handle_lifecycle_events(event: RawEvent) -> List[ProcessedEvent]:
             # (e.g., when it's nested in a result object, not a standalone message event)
             if not any(key in event for key in ["result"]):
                 events.append(_create_event("message", {"message": message}))
+                
+                # Extract toolResult from message content blocks and create tool_result events
+                # toolResult is located in message.content blocks
+                if "content" in message and isinstance(message["content"], list):
+                    for content_item in message["content"]:
+                        # Check for toolResult (both camelCase and snake_case)
+                        tool_result = None
+                        if isinstance(content_item, dict):
+                            tool_result = content_item.get("toolResult") or content_item.get("tool_result")
+                        
+                        if tool_result:
+                            # Create a tool_result event with the full wrapped message structure
+                            # The message sent to the client should be the full wrapped tool_result
+                            # with {"role": "user", etc...}
+                            wrapped_message = {
+                                "role": message.get("role"),
+                                "content": [content_item]  # Single content block with toolResult
+                            }
+                            # Include other message fields if present
+                            if "id" in message:
+                                wrapped_message["id"] = message["id"]
+                            if "model" in message:
+                                wrapped_message["model"] = message["model"]
+                            
+                            events.append(_create_event("tool_result", {
+                                "message": wrapped_message,
+                                "tool_result": tool_result
+                            }))
 
     # event: Raw event from the model stream
     # This is a pass-through for low-level model events
@@ -771,11 +799,10 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
     model invocations or periodically during streaming.
 
     EVENT TYPES:
-    - usage: Token usage information (inputTokens, outputTokens, totalTokens)
+    - usage: Token usage information (inputTokens, outputTokens, totalTokens, cacheReadInputTokens, cacheWriteInputTokens)
     - metrics: Performance metrics (latencyMs, timeToFirstByteMs)
     - metadata: Combined metadata object containing both usage and metrics
     - result.metrics: AgentResult metrics (accumulated_usage, accumulated_metrics)
-    ])
     - event.modelMetadataEvent: Nested metadata event from model stream
     - modelMetadataEvent: Direct event type from Strands streaming
 
@@ -801,7 +828,17 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
     events = []
 
     def _extract_usage_data(usage_obj: Any) -> Dict[str, Any]:
-        """Extract and normalize usage data from various formats."""
+        """Extract and normalize usage data from various formats.
+
+        Extracts:
+        - inputTokens/input_tokens: Number of input tokens
+        - outputTokens/output_tokens: Number of output tokens
+        - totalTokens/total_tokens: Total number of tokens
+        - cacheReadInputTokens/cache_read_input_tokens: Tokens read from cache (optional)
+        - cacheWriteInputTokens/cache_write_input_tokens: Tokens written to cache (optional)
+
+        Handles both camelCase (Bedrock API) and snake_case (Python SDK) formats.
+        """
         if not usage_obj:
             return {}
         
@@ -814,12 +851,20 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
             }
             
             # Add cache token fields if present
-            cache_read = usage_obj.get("cacheReadInputTokens") or usage_obj.get("cache_read_input_tokens", 0)
-            cache_write = usage_obj.get("cacheWriteInputTokens") or usage_obj.get("cache_write_input_tokens", 0)
-            
-            if cache_read > 0:
+            # Handle both camelCase and snake_case variants
+            # Use 'is not None' check to distinguish between absent field and 0 value
+            cache_read = usage_obj.get("cacheReadInputTokens")
+            if cache_read is None:
+                cache_read = usage_obj.get("cache_read_input_tokens")
+
+            cache_write = usage_obj.get("cacheWriteInputTokens")
+            if cache_write is None:
+                cache_write = usage_obj.get("cache_write_input_tokens")
+
+            # Include cache fields if they exist (even if 0)
+            if cache_read is not None:
                 usage_data["cacheReadInputTokens"] = cache_read
-            if cache_write > 0:
+            if cache_write is not None:
                 usage_data["cacheWriteInputTokens"] = cache_write
             
             return usage_data
@@ -884,64 +929,42 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
     # This is where Strands Python SDK stores metrics
     if "result" in event:
         result = event["result"]
-        logger.info(f"📊 Processing result for metadata, type: {type(result)}")
         
         # Handle both dict (serialized) and object (AgentResult) formats
         if isinstance(result, dict):
             result_metrics = result.get("metrics", {})
-            logger.info(f"✅ Result is dict, metrics keys: {list(result_metrics.keys()) if result_metrics else 'None'}")
         else:
             # If result is an object, try to get metrics attribute
             result_metrics = getattr(result, "metrics", None)
-            logger.info(f"✅ Result is object, has metrics: {result_metrics is not None}, type: {type(result_metrics) if result_metrics else 'None'}")
             if result_metrics:
                 # Convert to dict if it has to_dict or similar
                 if hasattr(result_metrics, "to_dict"):
                     result_metrics = result_metrics.to_dict()
-                    logger.info(f"✅ Converted metrics via to_dict(), keys: {list(result_metrics.keys())}")
                 elif hasattr(result_metrics, "__dict__"):
                     result_metrics = result_metrics.__dict__
-                    logger.info(f"✅ Converted metrics via __dict__, keys: {list(result_metrics.keys())}")
                 else:
                     result_metrics = {}
-                    logger.warning("⚠️ Could not convert metrics to dict")
 
         if result_metrics:
             metadata_data = {}
             
             # Extract accumulated_usage from metrics
             accumulated_usage = result_metrics.get("accumulated_usage") or result_metrics.get("accumulatedUsage")
-            logger.info(f"📊 Accumulated usage found: {accumulated_usage is not None}")
             if accumulated_usage:
                 usage_data = _extract_usage_data(accumulated_usage)
                 if usage_data:
                     metadata_data["usage"] = usage_data
-                    logger.info(f"✅ Extracted usage data: {usage_data}")
-                else:
-                    logger.warning(f"⚠️ Failed to extract usage data from: {accumulated_usage}")
-            else:
-                logger.info("ℹ️ No accumulated_usage found in result_metrics")
             
             # Extract accumulated_metrics from metrics
             accumulated_metrics = result_metrics.get("accumulated_metrics") or result_metrics.get("accumulatedMetrics")
-            logger.info(f"📊 Accumulated metrics found: {accumulated_metrics is not None}")
             if accumulated_metrics:
                 metrics_data = _extract_metrics_data(accumulated_metrics)
                 if metrics_data:
                     metadata_data["metrics"] = metrics_data
-                    logger.info(f"✅ Extracted metrics data: {metrics_data}")
-                else:
-                    logger.warning(f"⚠️ Failed to extract metrics data from: {accumulated_metrics}")
-            else:
-                logger.info("ℹ️ No accumulated_metrics found in result_metrics")
             
             if metadata_data:
-                logger.info(f"🎉 Emitting metadata event with data: {metadata_data}")
                 metadata_event = _create_event("metadata", metadata_data)
-                logger.info(f"✅ Created metadata event: type={metadata_event.get('type')}, data keys={list(metadata_event.get('data', {}).keys())}")
                 events.append(metadata_event)
-            else:
-                logger.warning(f"⚠️ No metadata data extracted from result metrics. result_metrics keys: {list(result_metrics.keys())}")
 
     # Check for metadata in nested event structure (like content blocks)
     # Some models emit metadata events nested in the event.event structure
@@ -1097,7 +1120,7 @@ async def process_agent_stream(
         agent_stream = agent.stream_async(message)
         async for event in process_agent_stream(agent_stream):
             # event format: {"type": "content_block_delta", "data": {"text": "..."}}
-            print(event["type"], event["data"])
+            pass
         ```
 
     Testing:
@@ -1154,41 +1177,18 @@ async def process_agent_stream(
             # IMPORTANT: Process metadata BEFORE checking completion to ensure
             # metadata is extracted even if complete=True is in the same event.
             # Metadata is critical for cost tracking and should always be sent.
-            
-            # Log event keys to understand what we're receiving
-            # Use INFO level to ensure visibility - log ALL events to see what's coming through
-            event_keys = list(event.keys())
-            
-            # Always log events that might contain metadata
-            if any(key in event_keys for key in ['result', 'metadata', 'usage', 'metrics', 'complete']):
-                logger.info(f"🔍 METADATA CHECK - Event keys: {event_keys}")
-                logger.info(f"   - has result: {'result' in event}")
-                logger.info(f"   - has metadata: {'metadata' in event}")
-                logger.info(f"   - has usage: {'usage' in event}")
-                logger.info(f"   - has metrics: {'metrics' in event}")
-                logger.info(f"   - has complete: {'complete' in event}")
-                
-                if "result" in event:
-                    result = event["result"]
-                    logger.info(f"📊 Found result in event, type: {type(result)}")
-                    if hasattr(result, "metrics"):
-                        logger.info(f"✅ Result has metrics attribute: {type(result.metrics)}")
-                        try:
-                            metrics_dict = result.metrics.__dict__ if hasattr(result.metrics, '__dict__') else {}
-                            logger.info(f"📈 Metrics keys: {list(metrics_dict.keys())}")
-                        except Exception as e:
-                            logger.info(f"⚠️ Could not get metrics dict: {e}")
-                    elif isinstance(result, dict) and "metrics" in result:
-                        logger.info(f"✅ Result dict has metrics: {list(result.get('metrics', {}).keys())}")
-            else:
-                # Log a sample of other events (but not all to avoid spam)
-                # Only log occasionally to see what other event types exist
-                if 'event' in event_keys or 'complete' in event_keys:
-                    logger.debug(f"📋 Other event keys: {event_keys}")
-            
+            # ALSO accumulate metadata for final summary
+            # NOTE: timeToFirstByteMs from provider will be stored in metrics
+            # and the coordinator can use it as a fallback if first_token_time is not set
             for processed_event in _handle_metadata_events(event):
+                # Accumulate metadata for summary
                 if processed_event.get("type") == "metadata":
-                    logger.info(f"📤 Yielding metadata event to stream: {processed_event}")
+                    event_data = processed_event.get("data", {})
+                    if "usage" in event_data:
+                        accumulated_metadata["usage"].update(event_data["usage"])
+                    if "metrics" in event_data:
+                        accumulated_metadata["metrics"].update(event_data["metrics"])
+                # Yield the metadata event
                 yield processed_event
 
             # STEP 2: Process completion/error events (may break the loop)
@@ -1198,7 +1198,7 @@ async def process_agent_stream(
             completion_events, should_break = _handle_completion_events(event)
             for processed_event in completion_events:
                 yield processed_event
-            
+
             # If we should break, check one more time for metadata
             # IMPORTANT: Don't break immediately if we haven't seen result yet
             # The result event (which contains metrics) might come after complete
@@ -1206,16 +1206,21 @@ async def process_agent_stream(
                 # Check one more time for metadata in case result came with complete
                 metadata_events_after_complete = _handle_metadata_events(event)
                 for processed_event in metadata_events_after_complete:
+                    # Accumulate metadata for summary
+                    if processed_event.get("type") == "metadata":
+                        event_data = processed_event.get("data", {})
+                        if "usage" in event_data:
+                            accumulated_metadata["usage"].update(event_data["usage"])
+                        if "metrics" in event_data:
+                            accumulated_metadata["metrics"].update(event_data["metrics"])
+                    # Yield the metadata event
                     yield processed_event
-                
+
                 # If we've seen result, it's safe to break
                 # Otherwise, continue to next iteration to catch result event
                 if result_seen:
-                    logger.info("✅ Breaking after complete - result already seen")
                     break
-                else:
-                    logger.info("⏳ Complete=True but result not seen yet - continuing to catch result event")
-                    # Don't break yet - continue to catch result event in next iteration
+                # Don't break yet - continue to catch result event in next iteration
 
             # STEP 3: Process lifecycle events
             # NOTE: We process lifecycle events to capture the 'result' event which contains metrics
@@ -1234,9 +1239,17 @@ async def process_agent_stream(
             # ALSO track first token time for latency calculation
             for processed_event in _handle_content_block_events(event):
                 # Track first token time for latency calculation
+                # Track ANY content block delta (text OR tool use) as first token
+                # Reasoning events are tracked separately in STEP 6
                 if first_token_time is None:
-                    if processed_event.get("type") == "content_block_delta" and processed_event.get("data", {}).get("type") == "text":
-                        first_token_time = time.time()
+                    event_type = processed_event.get("type")
+                    if event_type == "content_block_delta":
+                        event_data = processed_event.get("data", {})
+                        # Track first token for both text and tool use deltas
+                        # Tool use deltas indicate the model is generating tool calls
+                        if event_data.get("type") in ("text", "tool_use"):
+                            first_token_time = time.time()
+                            logger.debug(f"First token detected (content_block_delta, type={event_data.get('type')})")
                 yield processed_event
 
             # STEP 5: Process tool events (ENHANCED with display_content)
@@ -1248,7 +1261,18 @@ async def process_agent_stream(
             # STEP 6: Process reasoning events
             # These show the model's internal thought process (if supported)
             # Not all models support reasoning
+            # ALSO track first token time if reasoning comes before text (some models emit reasoning first)
             for processed_event in _handle_reasoning_events(event):
+                # Track first token time for reasoning events
+                # Reasoning text is the first output from reasoning-capable models
+                if first_token_time is None:
+                    event_type = processed_event.get("type")
+                    if event_type == "reasoning":
+                        event_data = processed_event.get("data", {})
+                        # If there's reasoningText, this is the first token
+                        if "reasoningText" in event_data or "reasoning" in event_data:
+                            first_token_time = time.time()
+                            logger.debug("First token detected (reasoning event)")
                 yield processed_event
 
             # STEP 7: Process citation events (ENHANCED with inline citations)
@@ -1257,27 +1281,18 @@ async def process_agent_stream(
             for processed_event in _handle_citation_events(event):
                 yield processed_event
 
-            # STEP 7: Process metadata events (ENHANCED with cache tokens)
-            # These contain token usage (including cache metrics) and performance data
-            # Important for cost tracking and monitoring
-            # ALSO accumulate metadata for final summary
-            for processed_event in _handle_metadata_events(event):
-                # Accumulate metadata for summary
-                if processed_event.get("type") == "metadata":
-                    event_data = processed_event.get("data", {})
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
-                # Yield the metadata event
-                yield processed_event
-
         # STEP 8: Yield metadata summary before done event
         # This provides all accumulated metadata in one place for storage
         if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics"):
             # Add first_token_time if we tracked it (caller will calculate latency)
+            # NOTE: If first_token_time is None, the coordinator can use timeToFirstByteMs
+            # from the metrics as a fallback (it's already in accumulated_metadata["metrics"])
             if first_token_time is not None:
                 accumulated_metadata["first_token_time"] = first_token_time
+            else:
+                # Log if we couldn't detect first token time
+                # This helps diagnose cases where no text/reasoning/tool deltas were detected
+                logger.debug("first_token_time not detected - coordinator can use timeToFirstByteMs from metrics as fallback")
             yield _create_event("metadata_summary", accumulated_metadata)
 
         # STEP 9: Send final done event

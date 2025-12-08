@@ -1,9 +1,9 @@
 import { Component, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, Router } from '@angular/router';
+import { Router } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 @Component({
   selector: 'app-sidenav',
-  imports: [RouterLink, SessionList],
+  imports: [SessionList],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })

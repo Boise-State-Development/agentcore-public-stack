@@ -29,7 +29,8 @@ class TurnBasedSessionManager:
         self,
         agentcore_memory_config: AgentCoreMemoryConfig,
         region_name: str = "us-west-2",
-        batch_size: int = 5  # Flush every N messages to prevent data loss
+        batch_size: int = 5,  # Flush every N messages to prevent data loss
+        max_buffer_size: int = 20  # Maximum buffer size before forced flush
     ):
         self.base_manager = AgentCoreMemorySessionManager(
             agentcore_memory_config=agentcore_memory_config,
@@ -40,9 +41,13 @@ class TurnBasedSessionManager:
         self.pending_messages: List[Dict[str, Any]] = []
         self.last_message_role: Optional[str] = None
         self.batch_size = batch_size
+        self.max_buffer_size = max_buffer_size
         self.cancelled = False  # Flag to stop accepting new messages
 
-        logger.info(f"✅ TurnBasedSessionManager initialized (buffering enabled, batch_size={batch_size})")
+        logger.info(
+            f"✅ TurnBasedSessionManager initialized "
+            f"(buffering enabled, batch_size={batch_size}, max_buffer_size={max_buffer_size})"
+        )
 
     def _should_flush_turn(self, message: Dict[str, Any]) -> bool:
         """
@@ -75,7 +80,7 @@ class TurnBasedSessionManager:
         Merge all messages in the current turn into a single message.
 
         Returns:
-            Merged message with all content blocks combined
+            Merged message with all content blocks combined, preserving message_id from first message
         """
         if not self.pending_messages:
             return None
@@ -93,17 +98,19 @@ class TurnBasedSessionManager:
             if isinstance(content, list):
                 merged_content.extend(content)
 
-        return {
+        merged_message = {
             "role": merged_role,
             "content": merged_content
         }
+
+        return merged_message
 
     def _flush_turn(self) -> Optional[int]:
         """
         Flush pending messages as a single merged message to AgentCore Memory
 
         Returns:
-            Message ID of the flushed message, or None if nothing was flushed
+            Sequence number (0-based) of the flushed message, or None if nothing was flushed
         """
         if not self.pending_messages:
             return None
@@ -132,28 +139,27 @@ class TurnBasedSessionManager:
                 session_message
             )
 
-            # Get message ID from session manager
-            # For AgentCore Memory, we need to count messages to get the ID
-            message_id = self._get_latest_message_id()
+            # Get sequence number (0-based) from message count
+            sequence_number = self._get_latest_message_sequence()
 
             # Clear buffer
             self.pending_messages = []
 
-            return message_id
+            return sequence_number
 
         # Clear buffer even if no message was created
         self.pending_messages = []
         return None
 
-    def _get_latest_message_id(self) -> Optional[int]:
+    def _get_latest_message_sequence(self) -> Optional[int]:
         """
-        Get the ID of the most recently stored message
+        Get the sequence number of the most recently stored message
 
-        For AgentCore Memory, we count the total messages in the session.
-        For local file storage, this is handled differently.
+        For AgentCore Memory, we count the total messages in the session
+        and return 0-based index (count - 1).
 
         Returns:
-            Message ID (1-indexed) or None if unavailable
+            Sequence number (0-based) or None if unavailable
         """
         try:
             # Get all messages from the session
@@ -162,18 +168,28 @@ class TurnBasedSessionManager:
                 "default"  # agent_id
             )
             if messages:
-                return len(messages)
+                # Return 0-based sequence: count - 1
+                return len(messages) - 1
         except Exception as e:
-            logger.error(f"Failed to get latest message ID: {e}")
+            logger.error(f"Failed to get latest message sequence: {e}")
 
         return None
 
     def add_message(self, message: Dict[str, Any]):
         """
         Add a message to the turn buffer.
-        Automatically flushes when turn is complete or batch size is reached.
+        Automatically flushes when turn is complete, batch size is reached,
+        or max buffer size is exceeded.
         """
         role = message.get("role", "")
+
+        # Safety check: enforce max buffer size to prevent unbounded growth
+        if len(self.pending_messages) >= self.max_buffer_size:
+            logger.warning(
+                f"⚠️ Max buffer size ({self.max_buffer_size}) reached! "
+                f"Force flushing to prevent memory issues"
+            )
+            self._flush_turn()
 
         # Check if we should flush previous turn
         if self._should_flush_turn(message):
@@ -205,6 +221,11 @@ class TurnBasedSessionManager:
 
         This is the key method that Strands framework calls to persist messages.
         We intercept it to implement turn-based buffering.
+
+        Args:
+            message: Message from Strands framework
+            agent: Agent instance (not used in buffering)
+            **kwargs: Additional arguments
         """
         # If cancelled, don't accept new messages
         if self.cancelled:
@@ -214,6 +235,7 @@ class TurnBasedSessionManager:
         from strands.types.session import SessionMessage
 
         # Convert Message to dict format for buffering
+        # No need for message_id here - it will be computed from session_id + sequence when loading
         message_dict = {
             "role": message.get("role"),
             "content": message.get("content", [])

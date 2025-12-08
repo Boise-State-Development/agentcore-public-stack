@@ -17,7 +17,7 @@ from pathlib import Path
 
 from apis.app_api.messages.models import MessageMetadata
 from apis.app_api.sessions.models import SessionMetadata
-from apis.app_api.storage.paths import get_message_path, get_session_metadata_path, get_sessions_root
+from apis.app_api.storage.paths import get_message_path, get_session_metadata_path, get_sessions_root, get_message_metadata_path
 
 logger = logging.getLogger(__name__)
 
@@ -70,48 +70,44 @@ async def _store_message_metadata_local(
     """
     Store message metadata in local file storage
 
-    Strategy: Embed metadata in the existing message JSON file
-    This avoids the need for separate metadata files.
+    Strategy: Store metadata in a separate message-metadata.json file
+    to better simulate the cloud architecture where metadata is stored
+    in a separate DynamoDB table.
 
-    File structure before:
+    File structure (message-metadata.json):
     {
-      "message": { "role": "assistant", "content": [...] },
-      "created_at": "2025-01-15T10:30:00Z"
-    }
-
-    File structure after:
-    {
-      "message": { "role": "assistant", "content": [...] },
-      "created_at": "2025-01-15T10:30:00Z",
-      "metadata": { "latency": {...}, "tokenUsage": {...} }
+      "0": { "latency": {...}, "tokenUsage": {...}, "modelInfo": {...}, "attribution": {...} },
+      "1": { "latency": {...}, "tokenUsage": {...}, "modelInfo": {...}, "attribution": {...} },
+      ...
     }
 
     Args:
         session_id: Session identifier
-        message_id: Message number
+        message_id: Message number (0-based sequence)
         message_metadata: MessageMetadata to store
     """
-    message_file = get_message_path(session_id, message_id)
+    metadata_file = get_message_metadata_path(session_id)
 
-    # Check if message file exists
-    if not message_file.exists():
-        logger.warning(f"Message file does not exist yet: {message_file}")
-        logger.warning(f"Metadata will be lost. This may indicate flush timing issue.")
-        return
+    # Ensure parent directory exists
+    metadata_file.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Read existing message file
-        with open(message_file, 'r') as f:
-            message_data = json.load(f)
+        # Read existing metadata index if it exists
+        metadata_index = {}
+        if metadata_file.exists():
+            with open(metadata_file, 'r') as f:
+                metadata_index = json.load(f)
 
-        # Add metadata to the file
-        message_data["metadata"] = message_metadata.model_dump(by_alias=True, exclude_none=True)
+        # Add or update metadata for this message
+        # Use string key for JSON compatibility
+        message_key = str(message_id)
+        metadata_index[message_key] = message_metadata.model_dump(by_alias=True, exclude_none=True)
 
-        # Write back to file
-        with open(message_file, 'w') as f:
-            json.dump(message_data, f, indent=2)
+        # Write back to file atomically
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata_index, f, indent=2)
 
-        logger.info(f"💾 Stored message metadata in {message_file}")
+        logger.info(f"💾 Stored message metadata for message {message_id} in {metadata_file}")
 
     except Exception as e:
         logger.error(f"Failed to store message metadata in local file: {e}")
@@ -214,8 +210,11 @@ async def _store_session_metadata_local(
     """
     Store session metadata in local file storage
 
-    Strategy: Store in session.json at the session root directory.
+    Strategy: Store in session-metadata.json at the session root directory.
     Performs a deep merge to preserve existing fields.
+    
+    Note: Uses separate file from session.json (used by Strands library)
+    to avoid conflicts when running in local mode.
 
     File structure:
     {

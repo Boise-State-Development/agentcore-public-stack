@@ -9,8 +9,13 @@
     @if (message.role === 'user') {
       <app-user-message [message]="message"></app-user-message>
     } @else {
-        <div class="max-w-[80%] rounded-2xl bg-gray-100 px-4 py-3 text-sm/6 text-gray-900 dark:bg-gray-800 dark:text-gray-100">
-            <app-assistant-message [message]="message"></app-assistant-message>
+        <div class="group relative max-w-[80%]" role="group" aria-label="Assistant message with metadata">
+            <div class="rounded-2xl bg-gray-100 px-4 py-3 text-sm/6 text-gray-900 dark:bg-gray-800 dark:text-gray-100">
+                <app-assistant-message [message]="message"></app-assistant-message>
+            </div>
+            <div class="invisible opacity-0 transition-opacity duration-200 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100" aria-live="polite" aria-atomic="true">
+                <app-message-metadata-badges [metadata]="message.metadata"></app-message-metadata-badges>
+            </div>
         </div>
     }
   }

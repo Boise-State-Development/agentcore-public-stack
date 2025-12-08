@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+# Stream timeout configuration (in seconds)
+# Prevents hanging streams and resource exhaustion
+STREAM_TIMEOUT_SECONDS = 600  # 10 minutes
+
 
 # ============================================================
 # AgentCore Runtime Standard Endpoints (REQUIRED)
@@ -72,6 +76,7 @@ async def invocations(
         )
 
         # Stream response from agent as SSE (with optional files)
+        # Note: Compression is handled by GZipMiddleware if configured in main.py
         return StreamingResponse(
             agent.stream_async(
                 input_data.message,
@@ -121,21 +126,32 @@ async def chat_stream(
 
         # Wrap stream to ensure flush on disconnect and prevent further processing
         async def stream_with_cleanup():
-            client_disconnected = False
             stream_iterator = agent.stream_async(request.message, session_id=request.session_id)
 
             try:
-                async for event in stream_iterator:
-                    if client_disconnected:
-                        # Client already disconnected, don't yield more events
-                        break
-                    yield event
+                # Add timeout to prevent hanging streams
+                async with asyncio.timeout(STREAM_TIMEOUT_SECONDS):
+                    async for event in stream_iterator:
+                        yield event
+
+            except asyncio.TimeoutError:
+                # Stream exceeded timeout - send error and cleanup
+                logger.error(
+                    f"⏱️ Stream timeout ({STREAM_TIMEOUT_SECONDS}s) for session {request.session_id}"
+                )
+
+                # Send timeout error event to client
+                error_data = {
+                    "type": "error",
+                    "message": f"Stream timeout - request exceeded {STREAM_TIMEOUT_SECONDS // 60} minutes"
+                }
+                yield f"data: {json.dumps(error_data)}\n\n"
+
             except asyncio.CancelledError:
                 # Client disconnected (e.g., stop button clicked)
-                client_disconnected = True
                 logger.warning(f"⚠️ Client disconnected during streaming for session {request.session_id}")
 
-                # Mark session manager as cancelled to prevent further message buffering
+                # Mark session manager as cancelled to prevent further tool execution
                 if hasattr(agent.session_manager, 'cancelled'):
                     agent.session_manager.cancelled = True
                     logger.info(f"🚫 Session manager marked as cancelled - will ignore further messages")
@@ -149,34 +165,33 @@ async def chat_stream(
                     agent.session_manager.pending_messages.append(stop_message)
                     logger.info(f"📝 Added stop message to pending buffer")
 
-                # Flush buffered messages including stop message
-                if hasattr(agent.session_manager, 'flush'):
-                    try:
-                        agent.session_manager.flush()
-                        logger.info(f"💾 Flushed buffered messages with stop message after client disconnect")
-                    except Exception as flush_error:
-                        logger.error(f"Failed to flush on disconnect: {flush_error}")
-
-                raise  # Re-raise to properly close the connection
-            except Exception as e:
-                logger.error(f"Error during streaming: {e}")
-                # Flush on error as well
-                if hasattr(agent.session_manager, 'flush'):
-                    try:
-                        agent.session_manager.flush()
-                        logger.info(f"💾 Flushed buffered messages after error")
-                    except Exception as flush_error:
-                        logger.error(f"Failed to flush on error: {flush_error}")
+                # Re-raise to properly close the connection
                 raise
+
+            except Exception as e:
+                # Log unexpected errors
+                logger.error(f"Error during streaming for session {request.session_id}: {e}")
+                raise
+
             finally:
-                # Cleanup: close the stream iterator if possible
+                # Cleanup: Flush buffered messages and close stream iterator
+                # This runs on both success and error paths
+                if hasattr(agent.session_manager, 'flush'):
+                    try:
+                        agent.session_manager.flush()
+                        logger.info(f"💾 Flushed buffered messages for session {request.session_id}")
+                    except Exception as flush_error:
+                        logger.error(f"Failed to flush session {request.session_id}: {flush_error}")
+
+                # Close the stream iterator if possible
                 if hasattr(stream_iterator, 'aclose'):
                     try:
                         await stream_iterator.aclose()
-                    except Exception:
-                        pass
+                    except Exception as close_error:
+                        logger.debug(f"Failed to close stream iterator: {close_error}")
 
         # Stream response from agent
+        # Note: Compression is handled by GZipMiddleware if configured in main.py
         return StreamingResponse(
             stream_with_cleanup(),
             media_type="text/event-stream",

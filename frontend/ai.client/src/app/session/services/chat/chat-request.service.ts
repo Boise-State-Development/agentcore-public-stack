@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
 import { ChatHttpService } from './chat-http.service';
 import { MessageMapService } from '../session/message-map.service';
+import { SessionService } from '../session/session.service';
+import { UserService } from '../../../auth/user.service';
 // import { ConversationService, Conversation } from '../conversation/conversation.service';
 // import { createMessage, createTextContent } from '../models';
 
@@ -22,14 +24,32 @@ export class ChatRequestService {
   private chatHttpService = inject(ChatHttpService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
+  private sessionService = inject(SessionService);
+  private userService = inject(UserService);
   private router = inject(Router);
   // TODO: Inject proper logging service
   
   async submitChatRequest(userInput: string, sessionId: string | null): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
+    const isNewSession = !sessionId;
     sessionId = sessionId || uuidv4();
+
+    console.log('[ChatRequestService] submitChatRequest - isNewSession:', isNewSession, 'sessionId:', sessionId);
+
     this.navigateToSession(sessionId);
+
+    // If this is a new session, add it to the session cache optimistically
+    if (isNewSession) {
+      // Get the current user from UserService
+      const user = this.userService.getUser();
+      const userId = user?.empl_id || 'anonymous';
+
+      console.log('[ChatRequestService] Adding new session to cache. userId:', userId);
+
+      // Add the new session to the cache so it appears in the sidenav immediately
+      this.sessionService.addSessionToCache(sessionId, userId);
+    }
 
     // Create and add user message
     this.messageMapService.addUserMessage(sessionId, userInput);
@@ -64,7 +84,7 @@ export class ChatRequestService {
     return {
       message,
       session_id,
-      enabled_tools: ['calculator']
+      enabled_tools: ['calculator', 'fetch_url_content']
     };
   }
 }

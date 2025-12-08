@@ -14,16 +14,21 @@ export class SessionList {
   private sessionService = inject(SessionService);
 
   /**
-   * Reactive resource for fetching sessions.
-   * Automatically refetches when sessionsParams change.
+   * Reactive resource for fetching sessions (base API data).
    */
   readonly sessionsResource = this.sessionService.sessionsResource;
 
   /**
-   * Computed signal for sessions array extracted from the paginated response.
+   * Merged sessions resource that combines API data with local cache.
+   * This computed signal automatically updates when either changes.
+   */
+  readonly mergedSessionsResource = this.sessionService.mergedSessionsResource;
+
+  /**
+   * Computed signal for sessions array extracted from the merged response.
    */
   readonly sessions = computed(() => {
-    const response = this.sessionsResource.value();
+    const response = this.mergedSessionsResource();
     return response?.sessions;
   });
 
@@ -31,7 +36,7 @@ export class SessionList {
    * Computed signal for pagination token.
    */
   readonly nextToken = computed(() => {
-    const response = this.sessionsResource.value();
+    const response = this.mergedSessionsResource();
     return response?.next_token ?? null;
   });
 

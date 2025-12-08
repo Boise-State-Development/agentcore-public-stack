@@ -132,9 +132,6 @@ class StrandsAgent:
                 hooks=hooks
             )
 
-            # Log session information
-            self._log_session_info()
-
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
@@ -151,25 +148,13 @@ class StrandsAgent:
         # Add stop hook for session cancellation (always enabled)
         stop_hook = StopHook(self.session_manager)
         hooks.append(stop_hook)
-        logger.info("✅ Stop hook enabled (BeforeToolCallEvent)")
 
         # Add conversation caching hook if enabled
         if self.model_config.caching_enabled:
             conversation_hook = ConversationCachingHook(enabled=True)
             hooks.append(conversation_hook)
-            logger.info("✅ Conversation caching hook enabled")
 
         return hooks
-
-    def _log_session_info(self) -> None:
-        """Log session configuration information"""
-        if SessionFactory.is_cloud_mode():
-            logger.info(f"   • Session: {self.session_id}, User: {self.user_id}")
-            logger.info(f"   • Short-term memory: Conversation history (90 days retention)")
-            logger.info(f"   • Long-term memory: User preferences and facts across sessions")
-        else:
-            logger.info(f"   • Session: {self.session_id}")
-            logger.info(f"   • File-based persistence: {getattr(self.session_manager, 'storage_dir', 'N/A')}")
 
     async def stream_async(
         self,
@@ -191,16 +176,8 @@ class StrandsAgent:
         if not self.agent:
             self._create_agent()
 
-        logger.info(f"Streaming message: {message[:50]}...")
-        if files:
-            logger.info(f"Processing {len(files)} file(s)")
-
         # Build prompt (handles multimodal content)
         prompt = self.multimodal_builder.build_prompt(message, files)
-
-        # Log prompt summary
-        content_summary = self.multimodal_builder.get_content_type_summary(prompt)
-        logger.info(f"Prompt content: {content_summary}")
 
         # Stream using coordinator
         async for event in self.stream_coordinator.stream_response(

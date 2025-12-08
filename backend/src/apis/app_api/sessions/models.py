@@ -14,6 +14,15 @@ class SessionPreferences(BaseModel):
     selected_prompt_id: Optional[str] = Field(None, alias="selectedPromptId", description="ID of selected prompt template")
     custom_prompt_text: Optional[str] = Field(None, alias="customPromptText", description="Custom prompt text if used")
 
+    # System prompt hash for tracking exact prompt version sent to the model
+    # This is a hash of the FINAL rendered system prompt (after date injection, variable substitution, etc.)
+    # Use cases:
+    # - Track which exact prompt was used for each session
+    # - Correlate prompt changes with model performance/cost metrics
+    # - Detect when two sessions used identical prompts even if they selected different templates
+    # - Enable prompt A/B testing and version tracking
+    system_prompt_hash: Optional[str] = Field(None, alias="systemPromptHash", description="MD5 hash of final rendered system prompt")
+
 
 class SessionMetadata(BaseModel):
     """Complete session metadata"""
@@ -44,6 +53,7 @@ class UpdateSessionMetadataRequest(BaseModel):
     enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools", description="Enabled tools list")
     selected_prompt_id: Optional[str] = Field(None, alias="selectedPromptId", description="Selected prompt ID")
     custom_prompt_text: Optional[str] = Field(None, alias="customPromptText", description="Custom prompt text")
+    system_prompt_hash: Optional[str] = Field(None, alias="systemPromptHash", description="MD5 hash of final rendered system prompt")
 
 
 class SessionMetadataResponse(BaseModel):
