@@ -137,7 +137,10 @@ jobs:
         run: |
           cd infrastructure
           npm ci
-
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
       - name: Deploy App API Stack
         env:
           CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
@@ -158,34 +161,7 @@ jobs:
         run: |
           chmod +x scripts/stack-app-api/tag-latest.sh
           scripts/stack-app-api/tag-latest.sh
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install CDK dependencies
-        run: |
-          cd infrastructure
-          npm ci
-      
-      - name: Install common dependencies
-        run: |
-          chmod +x scripts/common/install-deps.sh
-          scripts/common/install-deps.sh
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Deploy App API Stack
-        env:
-          CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
-          CDK_AWS_REGION: ${{ env.AWS_REGION }}
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
-          CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR || '10.0.0.0/16' }}
-        run: |
-          chmod +x scripts/stack-app-api/deploy.sh
-          scripts/stack-app-api/deploy.sh
-      
+     
       - name: Upload deployment outputs
         uses: actions/upload-artifact@v4
         if: always()
