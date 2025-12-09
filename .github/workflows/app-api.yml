@@ -86,14 +86,10 @@ jobs:
           bash scripts/stack-app-api/test.sh
       
       - name: Build Docker image
-        env:
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
         run: |
           bash scripts/stack-app-api/build.sh
       
       - name: Test Docker image
-        env:
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
         run: |
           bash scripts/stack-app-api/test-docker.sh          
       
@@ -107,10 +103,6 @@ jobs:
       
       - name: Push to ECR
         id: push-ecr
-        env:
-          CDK_AWS_ACCOUNT: ${{ env.CDK_AWS_ACCOUNT }}
-          CDK_AWS_REGION: ${{ env.CDK_AWS_REGION }}
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
         run: |
           bash scripts/stack-app-api/push-to-ecr.sh
           echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -147,19 +139,12 @@ jobs:
       
       - name: Deploy App API Stack
         env:
-          CDK_AWS_ACCOUNT: ${{ env.CDK_AWS_ACCOUNT }}
-          CDK_AWS_REGION: ${{ env.CDK_AWS_REGION }}
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
-          CDK_VPC_CIDR: ${{ env.CDK_VPC_CIDR }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
           bash scripts/stack-app-api/deploy.sh
       
       - name: Tag image as latest
         env:
-          CDK_AWS_ACCOUNT: ${{ env.CDK_AWS_ACCOUNT }}
-          CDK_AWS_REGION: ${{ env.CDK_AWS_REGION }}
-          CDK_PROJECT_PREFIX: ${{ env.CDK_PROJECT_PREFIX }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
           bash scripts/stack-app-api/tag-latest.sh
