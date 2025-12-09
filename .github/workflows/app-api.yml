@@ -103,6 +103,7 @@ jobs:
         run: |
           chmod +x scripts/stack-app-api/push-to-ecr.sh
           scripts/stack-app-api/push-to-ecr.sh
+          echo "IMAGE_TAG=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
   deploy:
     name: Deploy App API Stack
