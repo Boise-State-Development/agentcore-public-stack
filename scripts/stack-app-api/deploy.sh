@@ -83,8 +83,12 @@ main() {
     
     # Deploy CDK stack
     log_info "Deploying AppApiStack with CDK..."
+    
+    # Use CDK_REQUIRE_APPROVAL env var with fallback to never
+    REQUIRE_APPROVAL="${CDK_REQUIRE_APPROVAL:-never}"
+    
     npx cdk deploy AppApiStack \
-        --require-approval never \
+        --require-approval ${REQUIRE_APPROVAL} \
         --context projectPrefix="${CDK_PROJECT_PREFIX}" \
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context awsRegion="${CDK_AWS_REGION}" \

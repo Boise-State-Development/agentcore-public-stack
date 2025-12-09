@@ -97,6 +97,7 @@ jobs:
         uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-AppApi-ECR
           aws-role-arn: ${{ env.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
@@ -120,6 +121,9 @@ jobs:
       id-token: write
       contents: read
     
+    env:
+      IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -136,16 +140,12 @@ jobs:
       - name: Install system dependencies
         run: |
           bash scripts/common/install-deps.sh
-      
+          
       - name: Deploy App API Stack
-        env:
-          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
           bash scripts/stack-app-api/deploy.sh
       
       - name: Tag image as latest
-        env:
-          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
           bash scripts/stack-app-api/tag-latest.sh
      
@@ -157,12 +157,10 @@ jobs:
           path: |
             cdk-outputs-app-api.json
           retention-days: 30
-      
+            
       - name: Deployment summary
         if: success()
-        env:
-          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
-        run: |
+        run: | 
           echo "## App API Deployment Successful ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY

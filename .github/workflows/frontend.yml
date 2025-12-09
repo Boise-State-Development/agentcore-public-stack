@@ -75,9 +75,7 @@ jobs:
         run: |
           bash scripts/stack-frontend/install.sh
       
-      - name: Build frontend
-        env:
-          BUILD_CONFIG: ${{ env.BUILD_CONFIG }}
+      - name: Build frontend        
         run: |
           bash scripts/stack-frontend/build.sh
       
@@ -133,8 +131,6 @@ jobs:
           bash scripts/common/install-deps.sh
       
       - name: Deploy CDK infrastructure
-        env:
-          CDK_REQUIRE_APPROVAL: ${{ env.CDK_REQUIRE_APPROVAL }}
         run: |
           bash scripts/stack-frontend/deploy-cdk.sh
       
@@ -178,8 +174,6 @@ jobs:
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
       
       - name: Deploy assets to S3 and invalidate CloudFront
-        env:
-          WAIT_FOR_INVALIDATION: ${{ env.WAIT_FOR_INVALIDATION }}
         run: |
           bash scripts/stack-frontend/deploy-assets.sh
       
