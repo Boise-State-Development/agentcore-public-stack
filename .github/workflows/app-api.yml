@@ -119,11 +119,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}     
+      
       - name: Install common dependencies
         run: |
           chmod +x scripts/common/install-deps.sh
           scripts/common/install-deps.sh
       
+      - name: Install CDK dependencies
+        run: |
+          cd infrastructure
+          npm ci
+
       - name: Deploy App API Stack
         env:
           CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
