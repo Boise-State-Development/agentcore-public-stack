@@ -122,12 +122,6 @@ if [ -n "${CDK_AWS_ACCOUNT}" ]; then
 else
     log_warn "  AWS Account:    Not set (skipped validation)"
 fi
-
-log_info "  AWS Region:     ${CDK_AWS_REGION}"
-log_info "  VPC CIDR:       ${CDK_VPC_CIDR}"
-
-if [ -n "${CDK_DOMAIN_NAME}" ]; then
-    log_info "  Domain Name:    ${CDK_DOMAIN_NAME}"
 fi
 
 # Check AWS credentials (skip if validation is disabled)
