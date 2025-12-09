@@ -548,6 +548,30 @@ export class SessionService {
   }
 
   /**
+   * Updates the title of a session in the local cache.
+   * This allows the UI to update immediately without waiting for an API refetch.
+   *
+   * @param sessionId - The session ID to update
+   * @param title - The new title for the session
+   *
+   * @example
+   * ```typescript
+   * // Update session title in cache
+   * sessionService.updateSessionTitleInCache('session-id-123', 'New Title');
+   * ```
+   */
+  updateSessionTitleInCache(sessionId: string, title: string): void {
+    this.localSessionsCache.update(sessions => {
+      return sessions.map(session => 
+        session.sessionId === sessionId 
+          ? { ...session, title }
+          : session
+      );
+    });
+  }
+
+
+  /**
    * Clears the local session cache.
    * Useful when you want to force a full refresh from the API.
    */

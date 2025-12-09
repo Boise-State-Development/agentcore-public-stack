@@ -5,6 +5,9 @@ import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { AuthService } from '../../../auth/auth.service';
 import { environment } from '../../../../environments/environment';
+import { firstValueFrom } from 'rxjs';
+import { HttpClient } from '@angular/common/http';
+import { SessionService } from '../session/session.service';
 
 class RetriableError extends Error {
     constructor(message?: string) {
@@ -19,6 +22,17 @@ class FatalError extends Error {
     }
 }
 
+interface GenerateTitleRequest {
+    session_id: string;
+    input: string;
+}
+
+interface GenerateTitleResponse {
+    title: string;
+    session_id: string;
+}
+
+
 @Injectable({
     providedIn: 'root'
 })
@@ -27,32 +41,16 @@ export class ChatHttpService {
     private chatStateService = inject(ChatStateService);
     private messageMapService = inject(MessageMapService);
     private authService = inject(AuthService);
+    private http = inject(HttpClient);
+    private sessionService = inject(SessionService);
+
 
     async sendChatRequest(requestObject: any): Promise<void> {
         const abortController = this.chatStateService.getAbortController();
 
-        // Get token from AuthService, refresh if expired
-        // let token = this.authService.getAccessToken();
-        // if (!token) {
-        //     throw new FatalError('No authentication token available. Please login again.');
-        // }
+        const bearerToken = await this.getBearerTokenForStreamingResponse();
 
-        // // Check if token needs refresh
-        // if (this.authService.isTokenExpired()) {
-        //     try {
-        //         await this.authService.refreshAccessToken();
-        //         token = this.authService.getAccessToken();
-        //         if (!token) {
-        //             throw new FatalError('Failed to refresh authentication token. Please login again.');
-        //         }
-        //     } catch (error) {
-        //         throw new FatalError('Failed to refresh authentication token. Please login again.');
-        //     }
-        // }
-
-        // console.log('token', token);
-
-        return fetchEventSource(`${environment.inferenceApiUrl}/chat/stream`, {
+        return fetchEventSource(`${environment.inferenceApiUrl}/chat/invocations`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -108,6 +106,16 @@ export class ChatHttpService {
             onclose: () => {
                 this.messageMapService.endStreaming();
                 this.chatStateService.setChatLoading(false);
+                // Generate title for the new session (fire and forget - don't block on this)
+                this.generateTitle(requestObject.session_id, requestObject.message)
+                .then(response => {
+                    // Update the session title in the local cache
+                    this.sessionService.updateSessionTitleInCache(requestObject.session_id, response.title);
+                })
+                .catch(error => {
+                    // Log error but don't block the user experience
+                    console.error('Failed to generate session title:', error);
+                });
             },
             onerror: (err) => {
                 this.messageMapService.endStreaming();
@@ -135,10 +143,59 @@ export class ChatHttpService {
         this.chatStateService.resetState();
       }
 
+    /**
+     * Generates a title for a session based on the user's input.
+     * 
+     * @param sessionId - The session ID
+     * @param userInput - The user's input message
+     * @returns Promise resolving to GenerateTitleResponse with the generated title
+     * @throws Error if the API request fails
+     */
+    async generateTitle(sessionId: string, userInput: string): Promise<GenerateTitleResponse> {
+        const requestBody: GenerateTitleRequest = {
+            session_id: sessionId,
+            input: userInput
+        };
 
+        try {
+            const response = await firstValueFrom(
+                this.http.post<GenerateTitleResponse>(
+                    `${environment.inferenceApiUrl}/chat/generate-title`,
+                    requestBody
+                )
+            );
+            return response;
+        } catch (error) {
+            console.error('Failed to generate title:', error);
+            throw error;
+        }
+    }
 
 
     private addErrorMessage(errorMessage: string): void {
         console.error(errorMessage);
+    }
+
+    async getBearerTokenForStreamingResponse(): Promise<string> {
+        // Get token from AuthService, refresh if expired
+        let token = this.authService.getAccessToken();
+        if (!token) {
+            throw new FatalError('No authentication token available. Please login again.');
+        }
+
+        // Check if token needs refresh
+        if (this.authService.isTokenExpired()) {
+            try {
+                await this.authService.refreshAccessToken();
+                token = this.authService.getAccessToken();
+                if (!token) {
+                    throw new FatalError('Failed to refresh authentication token. Please login again.');
+                }
+            } catch (error) {
+                throw new FatalError('Failed to refresh authentication token. Please login again.');
+            }
+        }
+
+        return `Bearer ${token}`;
     }
 }
