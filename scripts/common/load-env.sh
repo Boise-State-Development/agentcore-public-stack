@@ -92,12 +92,9 @@ validate_config() {
         errors=$((errors + 1))
     fi
     
-    # Skip AWS account validation if explicitly requested (e.g., for local Docker builds)
-    if [ "${SKIP_AWS_VALIDATION:-false}" != "true" ]; then
-        if [ -z "${CDK_AWS_ACCOUNT}" ]; then
-            log_error "AWS Account ID is required. Set it in cdk.context.json, CDK_DEFAULT_ACCOUNT, or AWS_ACCOUNT_ID"
-            errors=$((errors + 1))
-        fi
+    if [ -z "${CDK_AWS_ACCOUNT}" ]; then
+        log_error "AWS Account ID is required. Set it in cdk.context.json, CDK_DEFAULT_ACCOUNT, or AWS_ACCOUNT_ID"
+        errors=$((errors + 1))
     fi
     
     if [ $errors -gt 0 ]; then
@@ -116,28 +113,20 @@ fi
 # Display loaded configuration
 log_info "Configuration loaded successfully:"
 log_info "  Project Prefix: ${CDK_PROJECT_PREFIX}"
+log_info "  AWS Account:    ${CDK_AWS_ACCOUNT}"
+log_info "  AWS Region:     ${CDK_AWS_REGION}"
+log_info "  VPC CIDR:       ${CDK_VPC_CIDR}"
 
-if [ -n "${CDK_AWS_ACCOUNT}" ]; then
-    log_info "  AWS Account:    ${CDK_AWS_ACCOUNT}"
+if [ -n "${CDK_DOMAIN_NAME}" ]; then
+    log_info "  Domain Name:    ${CDK_DOMAIN_NAME}"
+fi
+
+# Check AWS credentials
+if ! aws sts get-caller-identity &> /dev/null; then
+    log_warn "AWS credentials not configured or invalid"
+    log_warn "Run 'aws configure' or set AWS_PROFILE environment variable"
 else
-    log_warn "  AWS Account:    Not set (skipped validation)"
-fi
-fi
-
-# Check AWS credentials (skip if validation is disabled)
-if [ "${SKIP_AWS_VALIDATION:-false}" != "true" ]; then
-    if ! aws sts get-caller-identity &> /dev/null; then
-        log_warn "AWS credentials not configured or invalid"
-        log_warn "Run 'aws configure' or set AWS_PROFILE environment variable"
-    else
-        CALLER_IDENTITY=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
-        if [ "${CALLER_IDENTITY}" != "${CDK_AWS_ACCOUNT}" ] && [ "${CALLER_IDENTITY}" != "unknown" ]; then
-            log_warn "AWS credentials account (${CALLER_IDENTITY}) does not match configured account (${CDK_AWS_ACCOUNT})"
-        else
-            log_info "  AWS Identity:   ${CALLER_IDENTITY}"
-        fi
-    fi
-fi  CALLER_IDENTITY=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
+    CALLER_IDENTITY=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
     if [ "${CALLER_IDENTITY}" != "${CDK_AWS_ACCOUNT}" ] && [ "${CALLER_IDENTITY}" != "unknown" ]; then
         log_warn "AWS credentials account (${CALLER_IDENTITY}) does not match configured account (${CDK_AWS_ACCOUNT})"
     else

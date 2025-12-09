@@ -8,8 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Load basic configuration (skip AWS account validation for local builds)
-export SKIP_AWS_VALIDATION=true
+# Source common utilities
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 
 # Logging functions
