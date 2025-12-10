@@ -120,7 +120,7 @@ export class FrontendStack extends cdk.Stack {
     let distributionProps: cloudfront.DistributionProps = {
       comment: `${config.projectPrefix} Frontend Distribution`,
       defaultBehavior: {
-        origin: new origins.S3Origin(this.bucket),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(this.bucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy,
         responseHeadersPolicy,

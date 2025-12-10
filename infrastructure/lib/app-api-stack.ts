@@ -335,7 +335,7 @@ export class AppApiStack extends cdk.Stack {
     this.ecsCluster = new ecs.Cluster(this, 'AppApiCluster', {
       vpc: this.vpc,
       clusterName: getResourceName(config, 'app-api-cluster'),
-      containerInsights: true, // TODO: Upgrade to containerInsightsV2 when CDK version supports it
+      containerInsightsV2: ecs.ContainerInsights.ENHANCED,
     });
 
     // ============================================================
