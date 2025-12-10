@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pyproject.toml and README for installation
+# Copy pyproject.toml and source code for installation
 COPY backend/pyproject.toml backend/README.md ./
+COPY backend/src ./src
 
 # Install Python dependencies from pyproject.toml
 RUN pip install --no-cache-dir --upgrade pip && \
