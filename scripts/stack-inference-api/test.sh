@@ -49,8 +49,7 @@ main() {
             --color=yes \
             --disable-warnings
     else
-        log_info "No tests/ directory found. Skipping unit tests."
-        log_info "Note: Full validation will occur during Docker image testing."
+        log_info "No tests/ directory found. Skipping tests."
     fi
     
     log_success "Inference API tests completed successfully!"

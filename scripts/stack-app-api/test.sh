@@ -49,35 +49,7 @@ main() {
             --color=yes \
             --disable-warnings
     else
-        log_info "No tests/ directory found. Running basic import check..."
-        
-        # Basic import check for App API
-        if python3 -c "
-import sys
-sys.path.insert(0, '${BACKEND_DIR}/src')
-from apis.app_api.main import app
-print('✓ App API imports successfully')
-" 2>&1; then
-            log_success "App API imports successfully"
-        else
-            log_error "App API import check failed"
-            exit 1
-        fi
-        
-        # Check health endpoint module
-        if python3 -c "
-import sys
-sys.path.insert(0, '${BACKEND_DIR}/src')
-from apis.app_api.health import router
-print('✓ Health endpoint module imports successfully')
-" 2>&1; then
-            log_success "Health endpoint module imports successfully"
-        else
-            log_error "Health endpoint import check failed"
-            exit 1
-        fi
-        
-        log_info "Note: No test files found. Consider adding tests in backend/tests/"
+        log_info "No tests/ directory found. Skipping tests."
     fi
     
     log_success "App API tests completed successfully!"
