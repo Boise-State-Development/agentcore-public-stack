@@ -34,6 +34,13 @@ export class InferenceApiStack extends cdk.Stack {
 
     const { config } = props;
 
+    // Validate imageTag is provided
+    if (!config.inferenceApi.imageTag) {
+      throw new Error(
+        'InferenceApiStack requires imageTag to be provided. Pass --context imageTag=<tag> when deploying.'
+      );
+    }
+
     // Apply standard tags
     applyStandardTags(this, config);
 

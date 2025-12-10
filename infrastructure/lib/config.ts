@@ -102,7 +102,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       cpu: parseIntEnv(process.env.CDK_APP_API_CPU) || scope.node.tryGetContext('appApi')?.cpu || 512,
       memory: parseIntEnv(process.env.CDK_APP_API_MEMORY) || scope.node.tryGetContext('appApi')?.memory || 1024,
       desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT) ?? scope.node.tryGetContext('appApi')?.desiredCount ?? 0,
-      imageTag: process.env.IMAGE_TAG || 'latest',
+      imageTag: scope.node.tryGetContext('imageTag') || '',
       maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity || 10,
       databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
       enableRds: false,
@@ -114,7 +114,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       desiredCount: 1,
       maxCapacity: 5,
       enableGpu: false,
-      imageTag: process.env.IMAGE_TAG || 'latest',
+      imageTag: scope.node.tryGetContext('imageTag') || '',
     },
     agentCore: scope.node.tryGetContext('agentCore') || {
       enabled: true,
