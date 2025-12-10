@@ -82,14 +82,6 @@ main() {
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context awsRegion="${CDK_AWS_REGION}"
     
-    # Validate that IMAGE_TAG is set before deployment
-    if [ -z "${IMAGE_TAG:-}" ]; then
-        log_error "IMAGE_TAG is not set. This should be the version tag from the build step."
-        exit 1
-    fi
-    
-    log_info "Using image tag: ${IMAGE_TAG}"
-    
     # Deploy CDK stack
     log_info "Deploying InferenceApiStack with CDK..."
     
@@ -102,7 +94,6 @@ main() {
         --context projectPrefix="${CDK_PROJECT_PREFIX}" \
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context awsRegion="${CDK_AWS_REGION}" \
-        --context imageTag="${IMAGE_TAG}" \
         --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
     
     log_success "CDK deployment completed successfully"

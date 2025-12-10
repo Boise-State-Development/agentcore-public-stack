@@ -194,11 +194,27 @@ main() {
     LOCAL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
     push_to_ecr "${LOCAL_IMAGE}" "${ECR_URI}" "${IMAGE_TAG}" "${CDK_AWS_REGION}"
     
+    # Store image tag in SSM Parameter Store for CDK to use
+    SSM_PARAM_NAME="/${CDK_PROJECT_PREFIX}/app-api/image-tag"
+    log_info "Storing image tag in SSM Parameter: ${SSM_PARAM_NAME}"
+    
+    aws ssm put-parameter \
+        --name "${SSM_PARAM_NAME}" \
+        --value "${IMAGE_TAG}" \
+        --type "String" \
+        --description "Current image tag for App API deployed to ECR" \
+        --overwrite \
+        --region "${CDK_AWS_REGION}" \
+        --tags "Key=Project,Value=${CDK_PROJECT_PREFIX}" "Key=ManagedBy,Value=GitHubActions"
+    
+    log_success "Image tag stored in SSM: ${IMAGE_TAG}"
+    
     # Output the image tag for use in deploy step
     echo ""
     log_success "Push completed successfully!"
     log_info "Image tag: ${IMAGE_TAG}"
     log_info "Full image URI: ${ECR_URI}:${IMAGE_TAG}"
+    log_info "SSM Parameter: ${SSM_PARAM_NAME}"
     echo ""
     echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_OUTPUT
 }

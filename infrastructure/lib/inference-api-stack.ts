@@ -34,13 +34,6 @@ export class InferenceApiStack extends cdk.Stack {
 
     const { config } = props;
 
-    // Validate imageTag is provided
-    if (!config.inferenceApi.imageTag) {
-      throw new Error(
-        'InferenceApiStack requires imageTag to be provided. Pass --context imageTag=<tag> when deploying.'
-      );
-    }
-
     // Apply standard tags
     applyStandardTags(this, config);
 
@@ -64,6 +57,12 @@ export class InferenceApiStack extends cdk.Stack {
     const availabilityZonesString = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/network/availability-zones`
+    );
+
+    // Import image tag from SSM (set by push-to-ecr.sh)
+    const imageTag = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/inference-api/image-tag`
     );
 
     const vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
@@ -176,7 +175,7 @@ export class InferenceApiStack extends cdk.Stack {
     // Container Definition
     const container = taskDefinition.addContainer('InferenceApiContainer', {
       containerName: 'inference-api',
-      image: ecs.ContainerImage.fromEcrRepository(ecrRepository, config.inferenceApi.imageTag),
+      image: ecs.ContainerImage.fromEcrRepository(ecrRepository, imageTag),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'inference-api',
         logGroup: logGroup,
