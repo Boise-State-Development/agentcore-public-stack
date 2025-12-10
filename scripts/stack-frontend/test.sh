@@ -54,15 +54,15 @@ fi
 
 # Run tests in headless mode (no watch, single run)
 # This is appropriate for CI/CD environments
-log_info "Running: ng test --no-watch --code-coverage"
+log_info "Running: ng test --no-watch --coverage"
 
 # Set environment variable for CI
 export CI=true
 
 # Run tests with code coverage
-# Angular 17+ uses Vitest which handles headless mode automatically in CI environments
+# Angular uses Vitest which handles headless mode automatically in CI environments
 # The CI=true environment variable triggers headless behavior
-./node_modules/.bin/ng test --no-watch --code-coverage
+./node_modules/.bin/ng test --no-watch --coverage
 
 # Check test exit code
 TEST_EXIT_CODE=$?
