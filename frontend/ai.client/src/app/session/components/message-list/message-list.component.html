@@ -1,9 +1,9 @@
 <div class="space-y-6">
   <!-- Debug: Show JSON -->
-  <!-- <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
+  <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
     <summary class="cursor-pointer text-sm font-semibold">Debug: View Messages JSON</summary>
     <pre class="mt-2 overflow-x-auto text-xs">{{ messages() | json }}</pre>
-  </details> -->
+  </details>
 
   @for (message of messages(); track message.id) {
     @if (message.role === 'user') {

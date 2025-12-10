@@ -1,2 +1,6 @@
 /* Login page specific styles if needed */
 
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+

@@ -10,5 +10,5 @@ import { Topnav } from './components/topnav/topnav';
   styleUrl: './app.css',
 })
 export class App {
-  protected readonly title = signal('ai.client');
+  protected readonly title = signal('boisestate.ai');
 }

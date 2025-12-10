@@ -48,13 +48,13 @@ export class ChatHttpService {
     async sendChatRequest(requestObject: any): Promise<void> {
         const abortController = this.chatStateService.getAbortController();
 
-        const bearerToken = await this.getBearerTokenForStreamingResponse();
+        const token = await this.getBearerTokenForStreamingResponse();
 
         return fetchEventSource(`${environment.inferenceApiUrl}/chat/invocations`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                // 'Authorization': `Bearer ${token}`,
+                'Authorization': `Bearer ${token}`,
                 'Accept': 'text/event-stream'
             },
             body: JSON.stringify(requestObject),
@@ -199,6 +199,6 @@ export class ChatHttpService {
             }
         }
 
-        return `Bearer ${token}`;
+        return token;
     }
 }
