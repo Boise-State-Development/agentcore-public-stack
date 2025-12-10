@@ -88,21 +88,21 @@ export function loadConfig(scope: cdk.App): AppConfig {
     awsAccount,
     awsRegion,
     vpcCidr: scope.node.tryGetContext('vpcCidr') || '10.0.0.0/16',
-    domainName: scope.node.tryGetContext('domainName'),
-    enableRoute53: scope.node.tryGetContext('enableRoute53') || false,
-    certificateArn: scope.node.tryGetContext('certificateArn'),
+    domainName: process.env.CDK_DOMAIN_NAME || scope.node.tryGetContext('domainName'),
+    enableRoute53: parseBooleanEnv(process.env.CDK_ENABLE_ROUTE53) ?? scope.node.tryGetContext('enableRoute53') ?? false,
+    certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
     frontend: {
-      enabled: (scope.node.tryGetContext('frontend')?.enabled ?? true),
+      enabled: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLED) ?? scope.node.tryGetContext('frontend')?.enabled ?? true,
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
-      cloudFrontPriceClass: scope.node.tryGetContext('frontend')?.cloudFrontPriceClass || 'PriceClass_100',
+      cloudFrontPriceClass: process.env.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS || scope.node.tryGetContext('frontend')?.cloudFrontPriceClass || 'PriceClass_100',
     },
     appApi: {
-      enabled: scope.node.tryGetContext('appApi')?.enabled ?? true,
-      cpu: scope.node.tryGetContext('appApi')?.cpu || 512,
-      memory: scope.node.tryGetContext('appApi')?.memory || 1024,
-      desiredCount: scope.node.tryGetContext('appApi')?.desiredCount ?? 0,
+      enabled: parseBooleanEnv(process.env.CDK_APP_API_ENABLED) ?? scope.node.tryGetContext('appApi')?.enabled ?? true,
+      cpu: parseIntEnv(process.env.CDK_APP_API_CPU) || scope.node.tryGetContext('appApi')?.cpu || 512,
+      memory: parseIntEnv(process.env.CDK_APP_API_MEMORY) || scope.node.tryGetContext('appApi')?.memory || 1024,
+      desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT) ?? scope.node.tryGetContext('appApi')?.desiredCount ?? 0,
       imageTag: process.env.IMAGE_TAG || 'latest',
-      maxCapacity: 10,
+      maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity || 10,
       databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
       enableRds: false,
     },
@@ -151,6 +151,29 @@ function getRequiredContext(scope: cdk.App, key: string): string {
     );
   }
   return value;
+}
+
+/**
+ * Parse boolean environment variable
+ * Returns undefined if the value is not set, allowing for fallback logic
+ */
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  return value.toLowerCase() === 'true';
+}
+
+/**
+ * Parse integer environment variable
+ * Returns undefined if the value is not set or invalid, allowing for fallback logic
+ */
+function parseIntEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? undefined : parsed;
 }
 
 /**
