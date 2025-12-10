@@ -16,6 +16,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Source common utilities
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 
+# Additional logging function
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
 # ===========================================================
 # Deploy Infrastructure Stack
 # ===========================================================
