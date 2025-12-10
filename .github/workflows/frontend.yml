@@ -92,12 +92,13 @@ jobs:
           retention-days: 7
       
       - name: Upload test results
-        if: ${{ github.event.inputs.skip_tests != 'true' && always() }}
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: frontend-test-results
           path: frontend/ai.client/coverage/
           retention-days: 7
+          if-no-files-found: ignore
 
   deploy-infrastructure:
     name: Deploy CDK Infrastructure
