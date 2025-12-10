@@ -1,14 +1,32 @@
 
-<div class="relative min-h-full pb-20 max-w-4xl mx-auto px-4 py-6">
-    <!-- Debug: Show JSON -->
-    <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
-        <summary class="cursor-pointer text-sm font-semibold">Debug: View Session JSON</summary>
-        <pre class="mt-2 overflow-x-auto text-xs">{{ sessionConversation() | json }}</pre>
-    </details>
-    <!-- Your component content -->
-    <div>
-        <app-message-list [messages]="messages()" />
-    </div>
+<div class="relative pb-30 max-w-4xl mx-auto px-4 py-6">
+    @if (!hasMessages()) {
+        <div class="flex items-center justify-center px-4 pt-40">
+          <div class="w-full max-w-3xl animate-fade-in">
+              <!-- <img src="/img/logo-light.png" alt="Logo" class="w-35"> -->
+            <div class="mb-8 text-center">
+              <h1 class="text-4xl/tight font-semibold text-gray-900 dark:text-gray-100">
+                How can I help you today?
+              </h1>
+            </div>
+            <app-chat-input
+              (messageSubmitted)="onMessageSubmitted($event)"
+              (fileAttached)="onFileAttached($event)">
+            </app-chat-input>
+          </div>
+        </div>
+      } @else {
+          <!-- Debug: Show JSON -->
+          <!-- <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
+              <summary class="cursor-pointer text-sm font-semibold">Debug: View Session JSON</summary>
+              <pre class="mt-2 overflow-x-auto text-xs">{{ sessionConversation() | json }}</pre>
+          </details> -->
+          <!-- Your component content -->
+          <div>
+              <app-message-list [messages]="messages()" />
+          </div>
+
+      }
     
     <!-- Loading indicator -->
     @if (isChatLoading()) {
@@ -16,12 +34,15 @@
             Loading animation goes here...
         </div>
     }
-    <!-- Footer (fixed, content scrolls underneath) -->
-    <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72">
-        <div class="max-w-4xl mx-auto px-4">
-            <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
+
+    @if(hasMessages()) {
+        <!-- Footer (fixed, content scrolls underneath) -->
+        <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72 animate-fade-in">
+            <div class="max-w-4xl mx-auto px-4">
+                <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
+            </div>
         </div>
-    </div>
+    }
   </div>
 
 

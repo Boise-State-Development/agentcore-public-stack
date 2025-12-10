@@ -1,4 +1,4 @@
-import { Component, inject, effect, Signal, signal, OnDestroy } from '@angular/core';
+import { Component, inject, effect, Signal, signal, computed, OnDestroy } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { MessageListComponent } from './components/message-list/message-list.component';
@@ -29,6 +29,9 @@ export class ConversationPage implements OnDestroy {
   private routeSubscription?: Subscription;
   readonly sessionConversation = this.sessionService.currentSession;
   readonly isChatLoading = this.chatStateService.isChatLoading;
+
+  // Computed signal to check if session has messages
+  readonly hasMessages = computed(() => this.messages().length > 0);
 
   constructor() {
     // Subscribe to route parameter changes
