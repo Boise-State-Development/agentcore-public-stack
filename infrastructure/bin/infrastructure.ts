@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib/core';
+import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { AppApiStack } from '../lib/app-api-stack';
 import { InferenceApiStack } from '../lib/inference-api-stack';
@@ -11,6 +12,14 @@ const app = new cdk.App();
 const config = loadConfig(app);
 const env = getStackEnv(config);
 
+// Infrastructure Stack - VPC + ALB + ECS Cluster (DEPLOY FIRST)
+new InfrastructureStack(app, 'InfrastructureStack', {
+  config,
+  env,
+  description: `${config.projectPrefix} Infrastructure Stack - Shared Network Resources`,
+  stackName: `${config.projectPrefix}-InfrastructureStack`,
+});
+
 // Frontend Stack - S3 + CloudFront + Route53
 if (config.frontend.enabled) {
   new FrontendStack(app, 'FrontendStack', {
@@ -21,12 +30,12 @@ if (config.frontend.enabled) {
   });
 }
 
-// App API Stack - VPC + ALB + Fargate + Database
+// App API Stack - Fargate + Database
 if (config.appApi.enabled) {
   new AppApiStack(app, 'AppApiStack', {
     config,
     env,
-    description: `${config.projectPrefix} App API Stack - VPC, ALB, Fargate, and Database`,
+    description: `${config.projectPrefix} App API Stack - Fargate and Database`,
     stackName: `${config.projectPrefix}-AppApiStack`,
   });
 }

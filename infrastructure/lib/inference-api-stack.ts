@@ -18,11 +18,11 @@ export interface InferenceApiStackProps extends cdk.StackProps {
  * This stack creates:
  * - ECS Fargate service for inference workloads
  * - Target group for ALB integration
- * - Listener rule for routing /inference/** paths
+ * - Listener rule for routing /inference/* paths
  * - Higher CPU/memory allocation for AI workloads
  * 
  * Dependencies:
- * - VPC, Subnets, ALB, and Listener from App API Stack (imported via SSM)
+ * - VPC, ALB, Listener, ECS Cluster from Infrastructure Stack (imported via SSM)
  * 
  * Note: ECR repository is created by the build pipeline, not by CDK.
  */
@@ -38,30 +38,43 @@ export class InferenceApiStack extends cdk.Stack {
     applyStandardTags(this, config);
 
     // ============================================================
-    // Import Network Resources from SSM (created by App API Stack)
+    // Import Network Resources from Infrastructure Stack
     // ============================================================
     
-    // Import VPC ID
+    // Import VPC
     const vpcId = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/network/vpc-id`
     );
-
-    // Import VPC using the ID
-    const vpc = ec2.Vpc.fromLookup(this, 'ImportedVpc', {
-      vpcId: vpcId,
-    });
-
-    // Import private subnet IDs
+    const vpcCidr = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/network/vpc-cidr`
+    );
     const privateSubnetIdsString = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/network/private-subnet-ids`
     );
-    const privateSubnetIds = cdk.Fn.split(',', privateSubnetIdsString);
+    const availabilityZonesString = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/network/availability-zones`
+    );
 
-    // Import private subnets
-    const privateSubnets = privateSubnetIds.map((subnetId, index) =>
-      ec2.Subnet.fromSubnetId(this, `PrivateSubnet${index}`, subnetId)
+    const vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
+      vpcId: vpcId,
+      vpcCidrBlock: vpcCidr,
+      availabilityZones: cdk.Fn.split(',', availabilityZonesString),
+      privateSubnetIds: cdk.Fn.split(',', privateSubnetIdsString),
+    });
+
+    // Import ALB Security Group
+    const albSecurityGroupId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/network/alb-security-group-id`
+    );
+    const albSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(
+      this,
+      'ImportedAlbSecurityGroup',
+      albSecurityGroupId
     );
 
     // Import ALB
@@ -74,8 +87,7 @@ export class InferenceApiStack extends cdk.Stack {
       'ImportedAlb',
       {
         loadBalancerArn: albArn,
-        securityGroupId: '', // Will be retrieved from ALB
-        vpc: vpc,
+        securityGroupId: albSecurityGroupId,
       }
     );
 
@@ -89,9 +101,25 @@ export class InferenceApiStack extends cdk.Stack {
       'ImportedAlbListener',
       {
         listenerArn: albListenerArn,
-        securityGroup: alb.connections.securityGroups[0],
+        securityGroup: albSecurityGroup,
       }
     );
+
+    // Import ECS Cluster
+    const ecsClusterName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/network/ecs-cluster-name`
+    );
+    const ecsClusterArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/network/ecs-cluster-arn`
+    );
+    const ecsCluster = ecs.Cluster.fromClusterAttributes(this, 'ImportedEcsCluster', {
+      clusterName: ecsClusterName,
+      clusterArn: ecsClusterArn,
+      vpc: vpc,
+      securityGroups: [],
+    });
 
     // ============================================================
     // Security Groups
@@ -107,21 +135,10 @@ export class InferenceApiStack extends cdk.Stack {
 
     // Allow inbound traffic from ALB on port 8000
     ecsSecurityGroup.addIngressRule(
-      ec2.Peer.securityGroupId(alb.connections.securityGroups[0].securityGroupId),
+      albSecurityGroup,
       ec2.Port.tcp(8000),
       'Allow traffic from ALB to Inference API tasks'
     );
-
-    // ============================================================
-    // ECS Cluster (Import from App API Stack)
-    // ============================================================
-    
-    // Import ECS Cluster by name
-    const ecsCluster = ecs.Cluster.fromClusterAttributes(this, 'ImportedEcsCluster', {
-      vpc: vpc,
-      clusterName: getResourceName(config, 'app-api-cluster'), // Reuse App API cluster
-      securityGroups: [],
-    });
 
     // ============================================================
     // ECS Task Definition
@@ -223,7 +240,7 @@ export class InferenceApiStack extends cdk.Stack {
       desiredCount: config.inferenceApi.desiredCount,
       securityGroups: [ecsSecurityGroup],
       vpcSubnets: {
-        subnets: privateSubnets,
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
       assignPublicIp: false,
       healthCheckGracePeriod: cdk.Duration.seconds(60),
