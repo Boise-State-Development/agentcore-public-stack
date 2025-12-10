@@ -59,6 +59,9 @@ get_json_value() {
     fi
 }
 
+# Default to 'prod' environment if not set
+export DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-prod}"
+
 # Export core configuration
 # Priority: Environment variables > cdk.context.json
 export CDK_PROJECT_PREFIX="${CDK_PROJECT_PREFIX:-$(get_json_value "projectPrefix" "${CONTEXT_FILE}")}"
@@ -112,6 +115,7 @@ fi
 
 # Display loaded configuration
 log_info "Configuration loaded successfully:"
+log_info "  Environment:    ${DEPLOY_ENVIRONMENT}"
 log_info "  Project Prefix: ${CDK_PROJECT_PREFIX}"
 log_info "  AWS Account:    ${CDK_AWS_ACCOUNT}"
 log_info "  AWS Region:     ${CDK_AWS_REGION}"

@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 
 export interface AppConfig {
+  environment: string; // 'prod', 'dev', 'test', etc.
   projectPrefix: string;
   awsAccount: string;
   awsRegion: string;
@@ -82,6 +83,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   }
 
   const config: AppConfig = {
+    environment: scope.node.tryGetContext('environment') || process.env.DEPLOY_ENVIRONMENT || 'prod',
     projectPrefix,
     awsAccount,
     awsRegion,
@@ -200,10 +202,13 @@ export function getStackEnv(config: AppConfig): cdk.Environment {
 }
 
 /**
- * Generate a standardized resource name
+ * Generate a standardized resource name with environment suffix for non-prod
  */
 export function getResourceName(config: AppConfig, ...parts: string[]): string {
-  return [config.projectPrefix, ...parts].join('-');
+  // Add environment suffix for non-prod environments
+  const envSuffix = config.environment === 'prod' ? '' : `-${config.environment}`;
+  const allParts = [config.projectPrefix + envSuffix, ...parts];
+  return allParts.join('-');
 }
 
 /**
