@@ -51,6 +51,26 @@
             }
           </div>
 
+          <!-- Provider -->
+          <div>
+            <label for="provider" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Provider <span class="text-red-600">*</span>
+            </label>
+            <select
+              id="provider"
+              formControlName="provider"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              [class.border-red-500]="modelForm.controls.provider.invalid && modelForm.controls.provider.touched"
+            >
+              @for (provider of availableProviders; track provider) {
+                <option [value]="provider">{{ provider }}</option>
+              }
+            </select>
+            @if (modelForm.controls.provider.invalid && modelForm.controls.provider.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Provider is required</p>
+            }
+          </div>
+
           <!-- Provider Name -->
           <div>
             <label for="providerName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">

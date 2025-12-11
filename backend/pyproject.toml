@@ -36,6 +36,9 @@ agentcore = [
     # "aws-opentelemetry-distro>=0.10.1",
     "bedrock-agentcore",
     "nova-act==2.3.18.0",
+    # Multi-provider LLM support
+    "openai>=1.0.0",  # For OpenAI models
+    "google-genai>=1.0.0",  # For Google Gemini models
 ]
 
 # Development dependencies

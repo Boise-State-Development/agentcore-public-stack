@@ -117,6 +117,7 @@ async def invocations(
     try:
         # Get agent instance with user-specific configuration
         # AgentCore Memory tracks preferences across sessions per user_id
+        # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
         agent = get_agent(
             session_id=input_data.session_id,
             user_id=user_id,
@@ -124,7 +125,9 @@ async def invocations(
             model_id=input_data.model_id,
             temperature=input_data.temperature,
             system_prompt=input_data.system_prompt,
-            caching_enabled=input_data.caching_enabled
+            caching_enabled=input_data.caching_enabled,
+            provider=input_data.provider,
+            max_tokens=input_data.max_tokens
         )
 
         # Stream response from agent as SSE (with optional files)

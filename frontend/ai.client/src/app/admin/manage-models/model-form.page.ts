@@ -1,11 +1,12 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } from '@angular/forms';
-import { AVAILABLE_ROLES, ManagedModelFormData } from './models/managed-model.model';
+import { AVAILABLE_ROLES, AVAILABLE_PROVIDERS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
 
 interface ModelFormGroup {
   modelId: FormControl<string>;
   modelName: FormControl<string>;
+  provider: FormControl<ModelProvider>;
   providerName: FormControl<string>;
   inputModalities: FormControl<string[]>;
   outputModalities: FormControl<string[]>;
@@ -33,6 +34,7 @@ export class ModelFormPage implements OnInit {
 
   // Available options for multi-select fields
   readonly availableRoles = AVAILABLE_ROLES;
+  readonly availableProviders = AVAILABLE_PROVIDERS;
   readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'EMBEDDING'];
   readonly availableInferenceTypes = ['ON_DEMAND', 'PROVISIONED'];
   readonly availableCustomizations = ['FINE_TUNING', 'CONTINUED_PRE_TRAINING'];
@@ -47,6 +49,7 @@ export class ModelFormPage implements OnInit {
   readonly modelForm: FormGroup<ModelFormGroup> = this.fb.group({
     modelId: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     modelName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
+    provider: this.fb.control<ModelProvider>('bedrock', { nonNullable: true, validators: [Validators.required] }),
     providerName: this.fb.control('', { nonNullable: true, validators: [Validators.required] }),
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
@@ -95,6 +98,7 @@ export class ModelFormPage implements OnInit {
       this.modelForm.patchValue({
         modelId: params['modelId'] || '',
         modelName: params['modelName'] || '',
+        provider: params['provider'] || 'bedrock',
         providerName: params['providerName'] || '',
         inputModalities: params['inputModalities'] ? params['inputModalities'].split(',') : [],
         outputModalities: params['outputModalities'] ? params['outputModalities'].split(',') : [],

@@ -133,9 +133,14 @@
                   {{ model.modelId }}
                 </p>
               </div>
-              <span class="inline-flex shrink-0 items-center rounded-sm bg-blue-100 px-3 py-1 text-xs/5 font-medium text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
-                {{ model.providerName }}
-              </span>
+              <div class="flex shrink-0 gap-2">
+                <span class="inline-flex items-center rounded-sm bg-blue-100 px-3 py-1 text-xs/5 font-medium text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                  {{ model.provider }}
+                </span>
+                <span class="inline-flex items-center rounded-sm bg-gray-100 px-3 py-1 text-xs/5 font-medium text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+                  {{ model.providerName }}
+                </span>
+              </div>
             </div>
 
             <!-- Model Details Grid -->

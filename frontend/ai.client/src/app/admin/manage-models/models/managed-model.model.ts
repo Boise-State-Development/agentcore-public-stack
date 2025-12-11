@@ -1,4 +1,14 @@
 /**
+ * Available model providers.
+ */
+export type ModelProvider = 'bedrock' | 'openai' | 'gemini';
+
+/**
+ * Available model providers as a constant array.
+ */
+export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini'];
+
+/**
  * Represents a managed model in the system.
  * This extends the Bedrock foundation model with additional metadata
  * for role-based access control and pricing.
@@ -10,6 +20,8 @@ export interface ManagedModel {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /** Model provider (AWS, OpenAI, Google) */
+  provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
   providerName: string;
   /** List of supported input modalities (e.g., 'TEXT', 'IMAGE') */
@@ -46,6 +58,8 @@ export interface ManagedModelFormData {
   modelId: string;
   /** Human-readable name of the model */
   modelName: string;
+  /** Model provider (AWS, OpenAI, Google) */
+  provider: ModelProvider;
   /** Provider name (e.g., 'Anthropic', 'Amazon', 'Meta') */
   providerName: string;
   /** List of supported input modalities */

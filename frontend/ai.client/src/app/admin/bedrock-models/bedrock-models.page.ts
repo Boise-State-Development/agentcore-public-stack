@@ -119,6 +119,7 @@ export class BedrockModelsPage {
       queryParams: {
         modelId: model.modelId,
         modelName: model.modelName,
+        provider: 'bedrock',
         providerName: model.providerName,
         inputModalities: model.inputModalities.join(','),
         outputModalities: model.outputModalities.join(','),

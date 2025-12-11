@@ -48,19 +48,27 @@ class StrandsAgent:
         model_id: Optional[str] = None,
         temperature: Optional[float] = None,
         system_prompt: Optional[str] = None,
-        caching_enabled: Optional[bool] = None
+        caching_enabled: Optional[bool] = None,
+        provider: Optional[str] = None,
+        max_tokens: Optional[int] = None
     ):
         """
-        Initialize Strands Agent with modular architecture
+        Initialize Strands Agent with modular architecture and multi-provider support
 
         Args:
             session_id: Session identifier for message persistence
             user_id: User identifier for cross-session preferences (defaults to session_id)
             enabled_tools: List of tool IDs to enable. If None, all tools are enabled.
-            model_id: Bedrock model ID to use
+            model_id: Model ID to use (format depends on provider)
+                - Bedrock: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+                - OpenAI: "gpt-4o", "gpt-4o-mini", "o1-preview"
+                - Gemini: "gemini-2.5-flash", "gemini-2.5-pro"
             temperature: Model temperature (0.0 - 1.0)
             system_prompt: System prompt text
-            caching_enabled: Whether to enable prompt caching
+            caching_enabled: Whether to enable prompt caching (Bedrock only)
+            provider: LLM provider ("bedrock", "openai", or "gemini"). If not specified,
+                     will auto-detect from model_id
+            max_tokens: Maximum tokens to generate (optional)
         """
         # Basic state
         self.session_id = session_id
@@ -72,7 +80,9 @@ class StrandsAgent:
         self.model_config = ModelConfig.from_params(
             model_id=model_id,
             temperature=temperature,
-            caching_enabled=caching_enabled
+            caching_enabled=caching_enabled,
+            provider=provider,
+            max_tokens=max_tokens
         )
 
         # Initialize system prompt builder
