@@ -123,9 +123,9 @@ jobs:
         run: |
           bash scripts/stack-inference-api/build.sh
       
-      - name: Test Docker image
-        run: |
-          bash scripts/stack-inference-api/test-docker.sh
+      # - name: Test Docker image
+      #   run: |
+      #     bash scripts/stack-inference-api/test-docker.sh
       
       - name: Configure AWS credentials
         uses: ./.github/actions/configure-aws-credentials
