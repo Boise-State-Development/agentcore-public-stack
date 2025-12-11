@@ -234,27 +234,49 @@
                 </div>
               </div>
 
-              <!-- Model Features -->
-              <div class="mt-4 flex gap-4 border-t border-gray-200 pt-4 dark:border-gray-700">
-                <div class="flex items-center gap-2">
-                  @if (model.responseStreamingSupported) {
-                    <svg class="size-5 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
-                    </svg>
-                    <span class="text-sm/6 text-gray-700 dark:text-gray-300">Streaming supported</span>
-                  } @else {
-                    <svg class="size-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
-                    </svg>
-                    <span class="text-sm/6 text-gray-500 dark:text-gray-400">No streaming</span>
+              <!-- Model Features and Actions -->
+              <div class="mt-4 flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+                <div class="flex gap-4">
+                  <div class="flex items-center gap-2">
+                    @if (model.responseStreamingSupported) {
+                      <svg class="size-5 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                      </svg>
+                      <span class="text-sm/6 text-gray-700 dark:text-gray-300">Streaming supported</span>
+                    } @else {
+                      <svg class="size-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                      </svg>
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">No streaming</span>
+                    }
+                  </div>
+
+                  @if (model.modelLifecycle) {
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm/6 text-gray-600 dark:text-gray-400">Status:</span>
+                      <span class="font-medium text-sm/6 text-gray-900 dark:text-white">{{ model.modelLifecycle }}</span>
+                    </div>
                   }
                 </div>
 
-                @if (model.modelLifecycle) {
-                  <div class="flex items-center gap-2">
-                    <span class="text-sm/6 text-gray-600 dark:text-gray-400">Status:</span>
-                    <span class="font-medium text-sm/6 text-gray-900 dark:text-white">{{ model.modelLifecycle }}</span>
+                <!-- Add Model Button or Added Status -->
+                @if (isModelAdded(model.modelId)) {
+                  <div class="inline-flex items-center gap-2 rounded-sm bg-green-100 px-3 py-1.5 text-sm/6 font-medium text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                    <svg class="size-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                    Added
                   </div>
+                } @else {
+                  <button
+                    (click)="addModelFromBedrock(model)"
+                    class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  >
+                    <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add Model
+                  </button>
                 }
               </div>
             </div>

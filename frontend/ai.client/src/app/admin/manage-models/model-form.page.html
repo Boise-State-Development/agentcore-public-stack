@@ -1,0 +1,348 @@
+<div class="min-h-dvh bg-white dark:bg-gray-900">
+  <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">{{ pageTitle() }}</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        Configure model settings and access controls
+      </p>
+    </div>
+
+    <!-- Form -->
+    <form [formGroup]="modelForm" (ngSubmit)="onSubmit()" class="space-y-8">
+      <!-- Basic Information Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Basic Information</h2>
+
+        <div class="space-y-4">
+          <!-- Model ID -->
+          <div>
+            <label for="modelId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Model ID <span class="text-red-600">*</span>
+            </label>
+            <input
+              type="text"
+              id="modelId"
+              formControlName="modelId"
+              placeholder="e.g., anthropic.claude-3-5-sonnet-20241022-v2:0"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              [class.border-red-500]="modelForm.controls.modelId.invalid && modelForm.controls.modelId.touched"
+            />
+            @if (modelForm.controls.modelId.invalid && modelForm.controls.modelId.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Model ID is required</p>
+            }
+          </div>
+
+          <!-- Model Name -->
+          <div>
+            <label for="modelName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Model Name <span class="text-red-600">*</span>
+            </label>
+            <input
+              type="text"
+              id="modelName"
+              formControlName="modelName"
+              placeholder="e.g., Claude 3.5 Sonnet v2"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              [class.border-red-500]="modelForm.controls.modelName.invalid && modelForm.controls.modelName.touched"
+            />
+            @if (modelForm.controls.modelName.invalid && modelForm.controls.modelName.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Model name is required</p>
+            }
+          </div>
+
+          <!-- Provider Name -->
+          <div>
+            <label for="providerName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Provider Name <span class="text-red-600">*</span>
+            </label>
+            <input
+              type="text"
+              id="providerName"
+              formControlName="providerName"
+              placeholder="e.g., Anthropic"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+              [class.border-red-500]="modelForm.controls.providerName.invalid && modelForm.controls.providerName.touched"
+            />
+            @if (modelForm.controls.providerName.invalid && modelForm.controls.providerName.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Provider name is required</p>
+            }
+          </div>
+
+          <!-- Model Lifecycle -->
+          <div>
+            <label for="modelLifecycle" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Lifecycle Status
+            </label>
+            <select
+              id="modelLifecycle"
+              formControlName="modelLifecycle"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            >
+              @for (lifecycle of availableLifecycles; track lifecycle) {
+                <option [value]="lifecycle">{{ lifecycle }}</option>
+              }
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Capabilities Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Model Capabilities</h2>
+
+        <div class="space-y-6">
+          <!-- Input Modalities -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Input Modalities <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              @for (modality of availableModalities; track modality) {
+                <button
+                  type="button"
+                  (click)="toggleArrayValue('inputModalities', modality)"
+                  [class.bg-blue-600]="isSelected('inputModalities', modality)"
+                  [class.text-white]="isSelected('inputModalities', modality)"
+                  [class.bg-gray-100]="!isSelected('inputModalities', modality)"
+                  [class.text-gray-700]="!isSelected('inputModalities', modality)"
+                  [class.dark:bg-blue-500]="isSelected('inputModalities', modality)"
+                  [class.dark:bg-gray-700]="!isSelected('inputModalities', modality)"
+                  [class.dark:text-gray-300]="!isSelected('inputModalities', modality)"
+                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50"
+                >
+                  {{ modality }}
+                </button>
+              }
+            </div>
+            @if (modelForm.controls.inputModalities.invalid && modelForm.controls.inputModalities.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one input modality</p>
+            }
+          </div>
+
+          <!-- Output Modalities -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Output Modalities <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              @for (modality of availableModalities; track modality) {
+                <button
+                  type="button"
+                  (click)="toggleArrayValue('outputModalities', modality)"
+                  [class.bg-blue-600]="isSelected('outputModalities', modality)"
+                  [class.text-white]="isSelected('outputModalities', modality)"
+                  [class.bg-gray-100]="!isSelected('outputModalities', modality)"
+                  [class.text-gray-700]="!isSelected('outputModalities', modality)"
+                  [class.dark:bg-blue-500]="isSelected('outputModalities', modality)"
+                  [class.dark:bg-gray-700]="!isSelected('outputModalities', modality)"
+                  [class.dark:text-gray-300]="!isSelected('outputModalities', modality)"
+                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50"
+                >
+                  {{ modality }}
+                </button>
+              }
+            </div>
+            @if (modelForm.controls.outputModalities.invalid && modelForm.controls.outputModalities.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one output modality</p>
+            }
+          </div>
+
+          <!-- Inference Types -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Inference Types <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              @for (type of availableInferenceTypes; track type) {
+                <button
+                  type="button"
+                  (click)="toggleArrayValue('inferenceTypesSupported', type)"
+                  [class.bg-green-600]="isSelected('inferenceTypesSupported', type)"
+                  [class.text-white]="isSelected('inferenceTypesSupported', type)"
+                  [class.bg-gray-100]="!isSelected('inferenceTypesSupported', type)"
+                  [class.text-gray-700]="!isSelected('inferenceTypesSupported', type)"
+                  [class.dark:bg-green-500]="isSelected('inferenceTypesSupported', type)"
+                  [class.dark:bg-gray-700]="!isSelected('inferenceTypesSupported', type)"
+                  [class.dark:text-gray-300]="!isSelected('inferenceTypesSupported', type)"
+                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-green-500/50"
+                >
+                  {{ type }}
+                </button>
+              }
+            </div>
+            @if (modelForm.controls.inferenceTypesSupported.invalid && modelForm.controls.inferenceTypesSupported.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one inference type</p>
+            }
+          </div>
+
+          <!-- Customizations Supported -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Customizations Supported
+            </label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              @for (customization of availableCustomizations; track customization) {
+                <button
+                  type="button"
+                  (click)="toggleArrayValue('customizationsSupported', customization)"
+                  [class.bg-purple-600]="isSelected('customizationsSupported', customization)"
+                  [class.text-white]="isSelected('customizationsSupported', customization)"
+                  [class.bg-gray-100]="!isSelected('customizationsSupported', customization)"
+                  [class.text-gray-700]="!isSelected('customizationsSupported', customization)"
+                  [class.dark:bg-purple-500]="isSelected('customizationsSupported', customization)"
+                  [class.dark:bg-gray-700]="!isSelected('customizationsSupported', customization)"
+                  [class.dark:text-gray-300]="!isSelected('customizationsSupported', customization)"
+                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-purple-500/50"
+                >
+                  {{ customization }}
+                </button>
+              }
+            </div>
+          </div>
+
+          <!-- Response Streaming -->
+          <div class="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="responseStreamingSupported"
+              formControlName="responseStreamingSupported"
+              class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <label for="responseStreamingSupported" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Supports Response Streaming
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Access Control Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Access Control</h2>
+
+        <div class="space-y-6">
+          <!-- Available to Roles -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Available to Roles <span class="text-red-600">*</span>
+            </label>
+            <div class="mt-2 flex flex-wrap gap-2">
+              @for (role of availableRoles; track role) {
+                <button
+                  type="button"
+                  (click)="toggleArrayValue('availableToRoles', role)"
+                  [class.bg-purple-600]="isSelected('availableToRoles', role)"
+                  [class.text-white]="isSelected('availableToRoles', role)"
+                  [class.bg-gray-100]="!isSelected('availableToRoles', role)"
+                  [class.text-gray-700]="!isSelected('availableToRoles', role)"
+                  [class.dark:bg-purple-500]="isSelected('availableToRoles', role)"
+                  [class.dark:bg-gray-700]="!isSelected('availableToRoles', role)"
+                  [class.dark:text-gray-300]="!isSelected('availableToRoles', role)"
+                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-purple-500/50"
+                >
+                  {{ role }}
+                </button>
+              }
+            </div>
+            @if (modelForm.controls.availableToRoles.invalid && modelForm.controls.availableToRoles.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one role</p>
+            }
+          </div>
+
+          <!-- Enabled -->
+          <div class="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="enabled"
+              formControlName="enabled"
+              class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <label for="enabled" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Model Enabled (Users can select this model)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pricing Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Pricing</h2>
+
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Input Price -->
+          <div>
+            <label for="inputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Input Price (per 1M tokens) <span class="text-red-600">*</span>
+            </label>
+            <div class="relative mt-1">
+              <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
+                $
+              </span>
+              <input
+                type="number"
+                id="inputPricePerMillionTokens"
+                formControlName="inputPricePerMillionTokens"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                class="block w-full rounded-sm border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-red-500]="modelForm.controls.inputPricePerMillionTokens.invalid && modelForm.controls.inputPricePerMillionTokens.touched"
+              />
+            </div>
+            @if (modelForm.controls.inputPricePerMillionTokens.invalid && modelForm.controls.inputPricePerMillionTokens.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+            }
+          </div>
+
+          <!-- Output Price -->
+          <div>
+            <label for="outputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Output Price (per 1M tokens) <span class="text-red-600">*</span>
+            </label>
+            <div class="relative mt-1">
+              <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
+                $
+              </span>
+              <input
+                type="number"
+                id="outputPricePerMillionTokens"
+                formControlName="outputPricePerMillionTokens"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                class="block w-full rounded-sm border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-red-500]="modelForm.controls.outputPricePerMillionTokens.invalid && modelForm.controls.outputPricePerMillionTokens.touched"
+              />
+            </div>
+            @if (modelForm.controls.outputPricePerMillionTokens.invalid && modelForm.controls.outputPricePerMillionTokens.touched) {
+              <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Enter a valid price (0 or greater)</p>
+            }
+          </div>
+        </div>
+      </div>
+
+      <!-- Form Actions -->
+      <div class="flex gap-3 border-t border-gray-200 pt-6 dark:border-gray-700">
+        <button
+          type="submit"
+          [disabled]="isSubmitting() || modelForm.invalid"
+          class="rounded-sm bg-blue-600 px-6 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          @if (isSubmitting()) {
+            Saving...
+          } @else {
+            {{ isEditMode() ? 'Update Model' : 'Add Model' }}
+          }
+        </button>
+        <button
+          type="button"
+          (click)="onCancel()"
+          [disabled]="isSubmitting()"
+          class="rounded-sm border border-gray-300 bg-white px-6 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

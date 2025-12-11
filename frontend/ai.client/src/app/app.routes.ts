@@ -26,5 +26,20 @@ export const routes: Routes = [
         path: 'admin/bedrock/models',
         loadComponent: () => import('./admin/bedrock-models/bedrock-models.page').then(m => m.BedrockModelsPage),
         canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/manage-models',
+        loadComponent: () => import('./admin/manage-models/manage-models.page').then(m => m.ManageModelsPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/manage-models/new',
+        loadComponent: () => import('./admin/manage-models/model-form.page').then(m => m.ModelFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/manage-models/edit/:id',
+        loadComponent: () => import('./admin/manage-models/model-form.page').then(m => m.ModelFormPage),
+        canActivate: [adminGuard],
     }
 ];

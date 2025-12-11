@@ -1,7 +1,10 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@angular/core';
+import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { BedrockModelsService } from './services/bedrock-models.service';
 import { LoadingComponent } from '../../components/loading.component';
+import { FoundationModelSummary } from './models/bedrock-model.model';
+import { ManagedModelsService } from '../manage-models/services/managed-models.service';
 
 @Component({
   selector: 'app-bedrock-models-page',
@@ -12,6 +15,8 @@ import { LoadingComponent } from '../../components/loading.component';
 })
 export class BedrockModelsPage {
   private bedrockModelsService = inject(BedrockModelsService);
+  private managedModelsService = inject(ManagedModelsService);
+  private router = inject(Router);
 
   // Filter signals
   providerFilter = signal<string>('');
@@ -98,4 +103,30 @@ export class BedrockModelsPage {
       this.maxResultsFilter()
     );
   });
+
+  /**
+   * Check if a model has already been added to the managed models list
+   */
+  isModelAdded(modelId: string): boolean {
+    return this.managedModelsService.isModelAdded(modelId);
+  }
+
+  /**
+   * Navigate to add model form with prepopulated data from a Bedrock model
+   */
+  addModelFromBedrock(model: FoundationModelSummary): void {
+    this.router.navigate(['/admin/manage-models/new'], {
+      queryParams: {
+        modelId: model.modelId,
+        modelName: model.modelName,
+        providerName: model.providerName,
+        inputModalities: model.inputModalities.join(','),
+        outputModalities: model.outputModalities.join(','),
+        responseStreamingSupported: model.responseStreamingSupported,
+        customizationsSupported: model.customizationsSupported.join(','),
+        inferenceTypesSupported: model.inferenceTypesSupported.join(','),
+        modelLifecycle: model.modelLifecycle,
+      }
+    });
+  }
 }
