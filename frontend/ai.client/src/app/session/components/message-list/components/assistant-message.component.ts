@@ -17,8 +17,7 @@ import { ToolUseComponent } from './tool-use';
                 @if (block.type === 'text' && block.text) {
                     <div class="message-block text-block" [style.animation-delay]="($index * 0.1) + 's'">
                         <div class="flex w-full justify-start">
-                          <pre>{{ block.text}}</pre>
-                            <!-- <markdown clipboard mermaid katex [data]="block.text"></markdown> -->
+                            <markdown clipboard mermaid katex [data]="block.text"></markdown>
                         </div>
                     </div>
                 }
