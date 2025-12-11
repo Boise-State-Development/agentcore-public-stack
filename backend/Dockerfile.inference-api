@@ -15,9 +15,9 @@ RUN apt-get update && apt-get install -y \
 COPY backend/pyproject.toml backend/README.md ./
 COPY backend/src ./src
 
-# Install Python dependencies from pyproject.toml
+# Install Python dependencies from pyproject.toml with agentcore extras
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir ".[agentcore]"
 
 # Production stage
 FROM python:3.11-slim
