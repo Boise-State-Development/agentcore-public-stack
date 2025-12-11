@@ -168,76 +168,96 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 **🔒 HUMAN APPROVAL REQUIRED**
 - [x] [HUMAN] Phase 3 verified and approved to proceed to Phase 4
 
-### Phase 4: Agent Core Stack (AWS Bedrock AgentCore Runtime)
-**Goal**: Deploy Strands Agent as AWS Bedrock AgentCore Runtime with managed memory, code interpreter, and browser capabilities
+### Phase 4: Refactor Inference API to AWS Bedrock AgentCore Runtime
+**Goal**: Refactor Phase 3's Inference API Stack to use AWS Bedrock AgentCore Runtime instead of ECS/Fargate, adding managed memory, code interpreter, and browser capabilities
 
-#### CDK Infrastructure
-- [ ] **Create AgentCoreStack File**: Create `infrastructure/lib/agent-core-stack.ts`.
-- [ ] **Define ECR Repository**: Create ECR repository for agent container images (`${projectPrefix}-agent-core-${awsAccount}`).
-- [ ] **Define IAM Execution Role**: Create execution role for AgentCore Runtime with permissions for:
+#### CDK Infrastructure Refactoring
+- [ ] **Remove ECS/Fargate Resources**: Delete from `infrastructure/lib/inference-api-stack.ts`:
+  - ECS Cluster definition
+  - ECS Task Definition
+  - ECS Service
+  - Target Group and ALB Listener Rule (no longer needed - AgentCore Runtime has built-in HTTP endpoint)
+- [ ] **Add IAM Execution Role**: Create execution role for AgentCore Runtime with permissions for:
   - CloudWatch Logs (create log groups/streams, put log events)
   - X-Ray tracing (put trace segments, telemetry records)
   - CloudWatch Metrics (put metric data to `bedrock-agentcore` namespace)
   - Bedrock model access (invoke models including Claude, Nova, etc.)
-  - AgentCore Gateway access (invoke gateway for MCP tools)
+  - AgentCore Gateway access (invoke gateway for MCP tools if Phase 5 is implemented)
   - AgentCore Memory access (create/retrieve events, memory records)
-  - AgentCore Code Interpreter access (create/invoke sessions)
-  - AgentCore Browser access (start/control browser sessions, web automation)
   - SSM Parameter Store access (read parameters under `/${projectPrefix}/`)
-- [ ] **Define Memory Execution Role**: Create dedicated role for AgentCore Memory with Bedrock model inference policy.
-- [ ] **Create AgentCore Memory**: Deploy `CfnMemory` with L1 construct including:
+- [ ] **Add Memory Execution Role**: Create dedicated role for AgentCore Memory with Bedrock model inference policy.
+- [ ] **Add AgentCore Memory**: Deploy `CfnMemory` with L1 construct including:
   - User preference extraction strategy
-  - Semantic fact extraction strategy
+  - Semantic fact extraction strategy  
   - Conversation summary strategy
   - Event expiry duration (90 days for short-term memory)
-- [ ] **Create AgentCore Runtime**: Deploy `CfnRuntime` with:
-  - Container URI pointing to ECR repository (`${repositoryUri}:git sha`)
+- [ ] **Add Code Interpreter**: Deploy `CfnCodeInterpreter` with L1 construct for Python code execution capabilities.
+- [ ] **Add Browser Tool**: Deploy `CfnBrowser` with L1 construct for web browsing capabilities.
+- [ ] **Add AgentCore Runtime**: Deploy `CfnRuntime` with L1 construct:
+  - Container URI pointing to existing ECR repository (`${repositoryUri}:latest`)
   - Network mode: PUBLIC (for internet access)
   - Protocol configuration: HTTP
   - Environment variables: LOG_LEVEL, PROJECT_NAME, ENVIRONMENT, MEMORY_ARN, MEMORY_ID, BROWSER_ID, CODE_INTERPRETER_ID
   - Dependencies on execution role, memory, code interpreter, and browser resources
-- [ ] **Export AgentCore Resources to SSM**: Store in Parameter Store:
-  - `/${projectPrefix}/agentcore/runtime-arn`
-  - `/${projectPrefix}/agentcore/runtime-id`
-  - `/${projectPrefix}/agentcore/memory-arn`
-  - `/${projectPrefix}/agentcore/memory-id`
-  - `/${projectPrefix}/agentcore/browser-id`
-  - `/${projectPrefix}/agentcore/code-interpreter-id`
-  - `/${projectPrefix}/agentcore/ecr-repository-uri`
-- [ ] **Add CloudFormation Outputs**: Export Runtime ARN, Memory ARN, ECR Repository URI.
+- [ ] **Update SSM Parameter Exports**: Replace ECS-related parameters with:
+  - `/${projectPrefix}/inference-api/runtime-arn`
+  - `/${projectPrefix}/inference-api/runtime-id`
+  - `/${projectPrefix}/inference-api/runtime-url` (HTTP endpoint for AgentCore Runtime)
+  - `/${projectPrefix}/inference-api/memory-arn`
+  - `/${projectPrefix}/inference-api/memory-id`
+  - `/${projectPrefix}/inference-api/browser-id`
+  - `/${projectPrefix}/inference-api/code-interpreter-id`
+- [ ] **Update CloudFormation Outputs**: Replace ECS outputs with Runtime ARN, Runtime URL, Memory ARN, ECR Repository URI.
 
-#### Build & Deploy Scripts
-- [ ] **Create Scripts Directory**: Set up `scripts/stack-agent-core/`.
-- [ ] **Create Dockerfile for Agent**: Create `backend/Dockerfile.agent-core` to containerize the Strands Agent from `backend/src/agents/strands_agent/` with:
-  - ARM64 platform support (`--platform linux/arm64`)
-  - Python runtime with all agent dependencies
-  - Entry point configured for AgentCore Runtime HTTP protocol
-  - Include builtin_tools, local_tools, and utils modules
-- [ ] **Script: Install Dependencies**: Create `scripts/stack-agent-core/install.sh` to install Poetry/pip dependencies for agent.
-- [ ] **Script: Build Docker Image**: Create `scripts/stack-agent-core/build.sh` to build ARM64 container image and tag as `agent-core:latest`.
-- [ ] **Script: Push to ECR**: Create `scripts/stack-agent-core/push-to-ecr.sh` to authenticate and push to ECR repository.
-- [ ] **Script: Tag Latest**: Create `scripts/stack-agent-core/tag-latest.sh` to tag and push latest version.
-- [ ] **Script: Run Tests**: Create `scripts/stack-agent-core/test.sh` to run pytest for agent tests.
-- [ ] **Script: Test Docker Locally**: Create `scripts/stack-agent-core/test-docker.sh` to test container locally before deployment.
-- [ ] **Script: Deploy Infrastructure**: Create `scripts/stack-agent-core/deploy.sh` to:
-  - Deploy CDK stack (creates Runtime, Memory, Browser, Code Interpreter)
-  - Build Docker image
-  - Push to ECR
-  - Update Runtime to use new image (if Runtime already exists)
+#### Dockerfile Refactoring
+- [ ] **Update Dockerfile.inference-api**: Modify `backend/Dockerfile.inference-api` to support AgentCore Runtime:
+  - Add FROM platform specification: `FROM --platform=linux/arm64` or build with `docker build --platform linux/arm64` (AgentCore Runtime requires ARM64)
+  - Change EXPOSE from 8000 to 8080 (AgentCore Runtime expects port 8080)
+  - Update CMD to use port 8080: `uvicorn apis.inference_api.main:app --host 0.0.0.0 --port 8080`
+  - Update HEALTHCHECK to check port 8080 instead of 8000
+  - Add OpenTelemetry instrumentation: Install `aws-opentelemetry-distro==0.10.1` and wrap CMD with `opentelemetry-instrument`
+  - Set AWS region environment variables: `AWS_REGION` and `AWS_DEFAULT_REGION`
+  - Create non-root user `bedrock_agentcore` with UID 1000 (security best practice)
+  - Add HEALTHCHECK for `/ping` endpoint (AgentCore Runtime standard)
+  - Verify all agent dependencies are included from `backend/src/agents/` (already in current Dockerfile)
 
-#### CI/CD Pipeline
-- [ ] **Create Workflow File**: Create `.github/workflows/agent-core.yml`.
-- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on:
-  - `backend/src/agents/**`
-  - `backend/Dockerfile.agent-core`
-  - `infrastructure/lib/agent-core-stack.ts`
-- [ ] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
-- [ ] **Add Install Step**: Call `scripts/stack-agent-core/install.sh`.
-- [ ] **Add Build Step**: Call `scripts/stack-agent-core/build.sh`.
-- [ ] **Add Test Step**: Call `scripts/stack-agent-core/test.sh`.
-- [ ] **Add ECR Push Step**: Call `scripts/stack-agent-core/push-to-ecr.sh`.
-- [ ] **Add Deploy Step**: Call `scripts/stack-agent-core/deploy.sh`.
-- [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+#### Build & Deploy Script Updates
+- [ ] **Update build.sh**: Modify `scripts/stack-inference-api/build.sh`:
+  - Add `--platform linux/arm64` flag to Docker build command
+  - Update image tag to include git commit SHA for versioning
+- [ ] **Update push-to-ecr.sh**: Modify `scripts/stack-inference-api/push-to-ecr.sh`:
+  - Ensure ARM64 image is pushed to ECR
+  - Add tagging for both `latest` and git SHA
+- [ ] **Update deploy.sh**: Modify `scripts/stack-inference-api/deploy.sh`:
+  - Remove ECS service update logic
+  - Add AgentCore Runtime update after image push (trigger Runtime to pull new image)
+  - Add validation that Runtime is healthy after deployment
+- [ ] **Update test-docker.sh**: Modify `scripts/stack-inference-api/test-docker.sh`:
+  - Test ARM64 container locally with QEMU if on x86_64
+  - Test HTTP protocol endpoints match AgentCore Runtime expectations
+  - Validate health check endpoint returns 200 OK
+
+#### Agent Integration
+- [ ] **Integrate Strands Agent**: Update `backend/src/apis/inference_api/main.py` to:
+  - Import and initialize Strands Agent from `backend/src/agents/strands_agent/`
+  - Pass Memory ARN/ID from environment variables to agent
+  - Pass Code Interpreter ID and Browser ID to agent for tool access
+  - Configure agent with project-specific tools from `local_tools/`
+- [ ] **Add Memory Integration**: Implement memory retrieval/storage in agent invocations:
+  - Retrieve relevant memory events before agent execution
+  - Store new memory events after agent responses
+- [ ] **Add Tool Integration**: Enable built-in tools in agent configuration:
+  - Code interpreter tool for Python execution
+  - Browser tool for web scraping and research
+  - Local tools from `backend/src/agents/local_tools/`
+
+#### CI/CD Pipeline Updates
+- [ ] **Update Workflow File**: Modify `.github/workflows/inference-api.yml`:
+  - Update build step to use ARM64 platform flag
+  - Add validation step to ensure AgentCore Runtime is accessible after deployment
+  - Update test step to verify HTTP protocol compatibility
+  - Keep existing path triggers for `backend/src/apis/inference_api/**`, `backend/Dockerfile.inference-api`, `infrastructure/lib/inference-api-stack.ts`
+  - Add new path trigger for agent code: `backend/src/agents/**`
 
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 4 verified and approved to proceed to Phase 5
