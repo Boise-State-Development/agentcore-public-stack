@@ -1,5 +1,6 @@
 // user-dropdown.component.ts
 import { Component, input, output, ChangeDetectionStrategy } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 
@@ -12,7 +13,7 @@ export interface User {
 @Component({
   selector: 'app-user-dropdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem],
+  imports: [RouterLink, CdkMenuTrigger, CdkMenu, CdkMenuItem],
   template: `
     <div class="relative">
       <button
@@ -83,6 +84,47 @@ export interface User {
 
             <!-- Menu items -->
             <div class="py-1">
+              <!-- Admin-only menu items -->
+              @if (isAdmin()) {
+                <a
+                  cdkMenuItem
+                  routerLink="/admin/bedrock/models"
+                  class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                  role="menuitem"
+                >
+                  <svg
+                    class="size-5 text-gray-400 dark:text-gray-500"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M10 3.5a1.5 1.5 0 0 1 3 0V4a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-.5a1.5 1.5 0 0 0 0 3h.5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-.5a1.5 1.5 0 0 0-3 0v.5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-3a1 1 0 0 0-1-1h-.5a1.5 1.5 0 0 1 0-3H4a1 1 0 0 0 1-1V6a1 1 0 0 1 1-1h3a1 1 0 0 0 1-1v-.5Z"
+                    />
+                  </svg>
+                  <span>Bedrock Models</span>
+                </a>
+
+                <a
+                  cdkMenuItem
+                  routerLink="/admin/manage-models"
+                  class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                  role="menuitem"
+                >
+                  <svg
+                    class="size-5 text-gray-400 dark:text-gray-500"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"
+                    />
+                  </svg>
+                  <span>Manage Models</span>
+                </a>
+              }
+
               <button
                 cdkMenuItem
                 type="button"
@@ -90,21 +132,21 @@ export interface User {
                 class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
                 role="menuitem"
               >
-                <svg 
-                  class="size-5 text-gray-400 dark:text-gray-500" 
-                  viewBox="0 0 20 20" 
+                <svg
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                  viewBox="0 0 20 20"
                   fill="currentColor"
                   aria-hidden="true"
                 >
-                  <path 
-                    fill-rule="evenodd" 
-                    d="M3 4.25A2.25 2.25 0 0 1 5.25 2h5.5A2.25 2.25 0 0 1 13 4.25v2a.75.75 0 0 1-1.5 0v-2a.75.75 0 0 0-.75-.75h-5.5a.75.75 0 0 0-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 10.75 18h-5.5A2.25 2.25 0 0 1 3 15.75V4.25Z" 
-                    clip-rule="evenodd" 
+                  <path
+                    fill-rule="evenodd"
+                    d="M3 4.25A2.25 2.25 0 0 1 5.25 2h5.5A2.25 2.25 0 0 1 13 4.25v2a.75.75 0 0 1-1.5 0v-2a.75.75 0 0 0-.75-.75h-5.5a.75.75 0 0 0-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 10.75 18h-5.5A2.25 2.25 0 0 1 3 15.75V4.25Z"
+                    clip-rule="evenodd"
                   />
-                  <path 
-                    fill-rule="evenodd" 
-                    d="M6 10a.75.75 0 0 1 .75-.75h9.546l-1.048-.943a.75.75 0 1 1 1.004-1.114l2.5 2.25a.75.75 0 0 1 0 1.114l-2.5 2.25a.75.75 0 1 1-1.004-1.114l1.048-.943H6.75A.75.75 0 0 1 6 10Z" 
-                    clip-rule="evenodd" 
+                  <path
+                    fill-rule="evenodd"
+                    d="M6 10a.75.75 0 0 1 .75-.75h9.546l-1.048-.943a.75.75 0 1 1 1.004-1.114l2.5 2.25a.75.75 0 0 1 0 1.114l-2.5 2.25a.75.75 0 1 1-1.004-1.114l1.048-.943H6.75A.75.75 0 0 1 6 10Z"
+                    clip-rule="evenodd"
                   />
                 </svg>
                 <span>Logout</span>
@@ -151,7 +193,8 @@ export interface User {
 export class UserDropdownComponent {
   // Inputs
   user = input.required<User>();
-  
+  isAdmin = input.required<boolean>();
+
   // Outputs
   logout = output<void>();
   
