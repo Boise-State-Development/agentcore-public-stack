@@ -45,6 +45,17 @@ export interface InferenceApiConfig {
   maxCapacity: number;
   enableGpu: boolean;
   imageTag: string;
+  // Environment variables for runtime container
+  enableAuthentication: string;
+  logLevel: string;
+  uploadDir: string;
+  outputDir: string;
+  generatedImagesDir: string;
+  apiUrl: string;
+  frontendUrl: string;
+  corsOrigins: string;
+  tavilyApiKey: string;
+  novaActApiKey: string;
 }
 
 export interface AgentCoreConfig {
@@ -115,6 +126,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       maxCapacity: 5,
       enableGpu: false,
       imageTag: scope.node.tryGetContext('imageTag') || '',
+      // Environment variables from GitHub Secrets/Variables
+      enableAuthentication: process.env.ENABLE_AUTHENTICATION || 'true',
+      logLevel: process.env.LOG_LEVEL || 'INFO',
+      uploadDir: process.env.UPLOAD_DIR || 'uploads',
+      outputDir: process.env.OUTPUT_DIR || 'output',
+      generatedImagesDir: process.env.GENERATED_IMAGES_DIR || 'generated_images',
+      apiUrl: process.env.API_URL || '',
+      frontendUrl: process.env.FRONTEND_URL || '',
+      corsOrigins: process.env.CORS_ORIGINS || '',
+      tavilyApiKey: process.env.TAVILY_API_KEY || '',
+      novaActApiKey: process.env.NOVA_ACT_API_KEY || '',
     },
     agentCore: scope.node.tryGetContext('agentCore') || {
       enabled: true,

@@ -311,14 +311,39 @@ export class InferenceApiStack extends cdk.Stack {
       protocolConfiguration: 'HTTP',
       description: 'AgentCore Runtime for AI agent workloads with LangGraph and Strands framework support',
       environmentVariables: {
-        'LOG_LEVEL': 'INFO',
+        // AgentCore Runtime configuration
+        'LOG_LEVEL': config.inferenceApi.logLevel,
         'PROJECT_NAME': config.projectPrefix,
         'ENVIRONMENT': config.environment || 'production',
+        
+        // AWS Configuration
         'AWS_REGION': config.awsRegion,
+        'AWS_DEFAULT_REGION': config.awsRegion,
+        
+        // AgentCore Resources
         'MEMORY_ARN': this.memory.attrMemoryArn,
         'MEMORY_ID': this.memory.attrMemoryId,
         'CODE_INTERPRETER_ID': this.codeInterpreter.attrCodeInterpreterId,
         'BROWSER_ID': this.browser.attrBrowserId,
+        
+        // Authentication (from GitHub Variables)
+        'ENABLE_AUTHENTICATION': config.inferenceApi.enableAuthentication,
+        
+        // Storage directories (from GitHub Variables)
+        'UPLOAD_DIR': config.inferenceApi.uploadDir,
+        'OUTPUT_DIR': config.inferenceApi.outputDir,
+        'GENERATED_IMAGES_DIR': config.inferenceApi.generatedImagesDir,
+        
+        // API URLs (from GitHub Variables)
+        'API_URL': config.inferenceApi.apiUrl,
+        'FRONTEND_URL': config.inferenceApi.frontendUrl,
+        
+        // CORS Configuration (from GitHub Variables)
+        'CORS_ORIGINS': config.inferenceApi.corsOrigins,
+        
+        // API Keys (from GitHub Secrets)
+        'TAVILY_API_KEY': config.inferenceApi.tavilyApiKey,
+        'NOVA_ACT_API_KEY': config.inferenceApi.novaActApiKey,
       },
     });
 
