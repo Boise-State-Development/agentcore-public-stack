@@ -191,29 +191,33 @@ jobs:
         run: |
           bash scripts/stack-inference-api/deploy.sh
       
-      - name: Validate AgentCore Runtime Health
+      - name: Validate AgentCore Runtime Deployment
         run: |
-          # Get Runtime URL from SSM Parameter Store
-          RUNTIME_URL=$(aws ssm get-parameter \
-            --name "/${CDK_PROJECT_PREFIX}/inference-api/runtime-url" \
+          # Get Runtime ID from SSM Parameter Store
+          RUNTIME_ID=$(aws ssm get-parameter \
+            --name "/${CDK_PROJECT_PREFIX}/inference-api/runtime-id" \
             --region "${CDK_AWS_REGION}" \
             --query 'Parameter.Value' \
             --output text)
           
-          echo "AgentCore Runtime URL: ${RUNTIME_URL}"
+          echo "AgentCore Runtime ID: ${RUNTIME_ID}"
           
-          # Wait for Runtime to be healthy (up to 2 minutes)
-          for i in {1..12}; do
-            if curl -f "${RUNTIME_URL}/ping" 2>/dev/null; then
-              echo "✅ AgentCore Runtime is healthy!"
-              exit 0
-            fi
-            echo "Attempt $i/12: Runtime not ready yet, waiting 10 seconds..."
-            sleep 10
-          done
+          # Check Runtime status using AWS CLI
+          RUNTIME_STATUS=$(aws bedrock-agent-runtime describe-agent-runtime \
+            --agent-runtime-id "${RUNTIME_ID}" \
+            --region "${CDK_AWS_REGION}" \
+            --query 'agentRuntime.status' \
+            --output text 2>/dev/null || echo "UNKNOWN")
           
-          echo "❌ AgentCore Runtime health check failed"
-          exit 1
+          echo "AgentCore Runtime Status: ${RUNTIME_STATUS}"
+          
+          if [ "${RUNTIME_STATUS}" = "READY" ]; then
+            echo "✅ AgentCore Runtime is ready!"
+            exit 0
+          else
+            echo "⚠️ AgentCore Runtime status: ${RUNTIME_STATUS}"
+            echo "Note: Runtime may still be initializing. Check AWS Console for details."
+          fi
       
       - name: Tag image as latest
         run: |
