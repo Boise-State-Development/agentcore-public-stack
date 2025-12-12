@@ -235,211 +235,211 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     });
 
-    // // ============================================================
-    // // AgentCore Code Interpreter Custom
-    // // ============================================================
+    // ============================================================
+    // AgentCore Code Interpreter Custom
+    // ============================================================
     
-    // this.codeInterpreter = new bedrock.CfnCodeInterpreterCustom(this, 'CodeInterpreterCustom', {
-    //   name: getResourceName(config, 'code_interpreter').replace(/-/g, '_'),
-    //   description: 'Custom Code Interpreter for Python code execution with advanced configuration',
-    //   networkConfiguration: {
-    //     networkMode: 'PUBLIC',
-    //   },
-    //   executionRoleArn: codeInterpreterExecutionRole.roleArn,
-    // });
+    this.codeInterpreter = new bedrock.CfnCodeInterpreterCustom(this, 'CodeInterpreterCustom', {
+      name: getResourceName(config, 'code_interpreter').replace(/-/g, '_'),
+      description: 'Custom Code Interpreter for Python code execution with advanced configuration',
+      networkConfiguration: {
+        networkMode: 'PUBLIC',
+      },
+      executionRoleArn: codeInterpreterExecutionRole.roleArn,
+    });
 
-    // this.codeInterpreter.node.addDependency(codeInterpreterExecutionRole);
+    this.codeInterpreter.node.addDependency(codeInterpreterExecutionRole);
 
-    // // ============================================================
-    // // AgentCore Browser Custom
-    // // ============================================================
+    // ============================================================
+    // AgentCore Browser Custom
+    // ============================================================
     
-    // this.browser = new bedrock.CfnBrowserCustom(this, 'BrowserCustom', {
-    //   name: getResourceName(config, 'browser').replace(/-/g, '_'),
-    //   description: 'Custom Browser for secure web interaction and data extraction',
-    //   networkConfiguration: {
-    //     networkMode: 'PUBLIC',
-    //   },
-    //   executionRoleArn: browserExecutionRole.roleArn,
-    // });
+    this.browser = new bedrock.CfnBrowserCustom(this, 'BrowserCustom', {
+      name: getResourceName(config, 'browser').replace(/-/g, '_'),
+      description: 'Custom Browser for secure web interaction and data extraction',
+      networkConfiguration: {
+        networkMode: 'PUBLIC',
+      },
+      executionRoleArn: browserExecutionRole.roleArn,
+    });
 
-    // this.browser.node.addDependency(browserExecutionRole);
+    this.browser.node.addDependency(browserExecutionRole);
 
-  //   // ============================================================
-  //   // AgentCore Runtime
-  //   // ============================================================
+    // ============================================================
+    // AgentCore Runtime
+    // ============================================================
     
-  //   // Grant Runtime permission to access Memory
-  //   runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-  //     effect: iam.Effect.ALLOW,
-  //     actions: [
-  //       'bedrock:CreateEvent',
-  //       'bedrock:RetrieveMemory',
-  //     ],
-  //     resources: [this.memory.attrMemoryArn],
-  //   }));
+    // Grant Runtime permission to access Memory
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:CreateEvent',
+        'bedrock:RetrieveMemory',
+      ],
+      resources: [this.memory.attrMemoryArn],
+    }));
 
-  //   // Grant Runtime permission to use Code Interpreter
-  //   runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-  //     effect: iam.Effect.ALLOW,
-  //     actions: [
-  //       'bedrock:InvokeCodeInterpreter',
-  //     ],
-  //     resources: [this.codeInterpreter.attrCodeInterpreterArn],
-  //   }));
+    // Grant Runtime permission to use Code Interpreter
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeCodeInterpreter',
+      ],
+      resources: [this.codeInterpreter.attrCodeInterpreterArn],
+    }));
 
-  //   // Grant Runtime permission to use Browser
-  //   runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-  //     effect: iam.Effect.ALLOW,
-  //     actions: [
-  //       'bedrock:InvokeBrowser',
-  //     ],
-  //     resources: [this.browser.attrBrowserArn],
-  //   }));
+    // Grant Runtime permission to use Browser
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeBrowser',
+      ],
+      resources: [this.browser.attrBrowserArn],
+    }));
 
-  //   this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
-  //     agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
-  //     roleArn: runtimeExecutionRole.roleArn,
-  //     agentRuntimeArtifact: {
-  //       containerConfiguration: {
-  //         containerUri: containerImageUri,
-  //       },
-  //     },
-  //     networkConfiguration: {
-  //       networkMode: 'PUBLIC',
-  //     },
-  //     protocolConfiguration: 'HTTP',
-  //     description: 'AgentCore Runtime for AI agent workloads with LangGraph and Strands framework support',
-  //     environmentVariables: {
-  //       // AgentCore Runtime configuration
-  //       'LOG_LEVEL': config.inferenceApi.logLevel,
-  //       'PROJECT_NAME': config.projectPrefix,
-  //       'ENVIRONMENT': config.environment || 'production',
+    this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
+      agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
+      roleArn: runtimeExecutionRole.roleArn,
+      agentRuntimeArtifact: {
+        containerConfiguration: {
+          containerUri: containerImageUri,
+        },
+      },
+      networkConfiguration: {
+        networkMode: 'PUBLIC',
+      },
+      protocolConfiguration: 'HTTP',
+      description: 'AgentCore Runtime for AI agent workloads with LangGraph and Strands framework support',
+      environmentVariables: {
+        // AgentCore Runtime configuration
+        'LOG_LEVEL': config.inferenceApi.logLevel,
+        'PROJECT_NAME': config.projectPrefix,
+        'ENVIRONMENT': config.environment || 'production',
         
-  //       // AWS Configuration
-  //       'AWS_REGION': config.awsRegion,
-  //       'AWS_DEFAULT_REGION': config.awsRegion,
+        // AWS Configuration
+        'AWS_REGION': config.awsRegion,
+        'AWS_DEFAULT_REGION': config.awsRegion,
         
-  //       // AgentCore Resources
-  //       'MEMORY_ARN': this.memory.attrMemoryArn,
-  //       'MEMORY_ID': this.memory.attrMemoryId,
-  //       'CODE_INTERPRETER_ID': this.codeInterpreter.attrCodeInterpreterId,
-  //       'BROWSER_ID': this.browser.attrBrowserId,
+        // AgentCore Resources
+        'MEMORY_ARN': this.memory.attrMemoryArn,
+        'MEMORY_ID': this.memory.attrMemoryId,
+        'CODE_INTERPRETER_ID': this.codeInterpreter.attrCodeInterpreterId,
+        'BROWSER_ID': this.browser.attrBrowserId,
         
-  //       // Authentication (from GitHub Variables)
-  //       'ENABLE_AUTHENTICATION': config.inferenceApi.enableAuthentication,
+        // Authentication (from GitHub Variables)
+        'ENABLE_AUTHENTICATION': config.inferenceApi.enableAuthentication,
         
-  //       // Storage directories (from GitHub Variables)
-  //       'UPLOAD_DIR': config.inferenceApi.uploadDir,
-  //       'OUTPUT_DIR': config.inferenceApi.outputDir,
-  //       'GENERATED_IMAGES_DIR': config.inferenceApi.generatedImagesDir,
+        // Storage directories (from GitHub Variables)
+        'UPLOAD_DIR': config.inferenceApi.uploadDir,
+        'OUTPUT_DIR': config.inferenceApi.outputDir,
+        'GENERATED_IMAGES_DIR': config.inferenceApi.generatedImagesDir,
         
-  //       // API URLs (from GitHub Variables)
-  //       'API_URL': config.inferenceApi.apiUrl,
-  //       'FRONTEND_URL': config.inferenceApi.frontendUrl,
+        // API URLs (from GitHub Variables)
+        'API_URL': config.inferenceApi.apiUrl,
+        'FRONTEND_URL': config.inferenceApi.frontendUrl,
         
-  //       // CORS Configuration (from GitHub Variables)
-  //       'CORS_ORIGINS': config.inferenceApi.corsOrigins,
+        // CORS Configuration (from GitHub Variables)
+        'CORS_ORIGINS': config.inferenceApi.corsOrigins,
         
-  //       // API Keys (from GitHub Secrets)
-  //       'TAVILY_API_KEY': config.inferenceApi.tavilyApiKey,
-  //       'NOVA_ACT_API_KEY': config.inferenceApi.novaActApiKey,
-  //     },
-  //   });
+        // API Keys (from GitHub Secrets)
+        'TAVILY_API_KEY': config.inferenceApi.tavilyApiKey,
+        'NOVA_ACT_API_KEY': config.inferenceApi.novaActApiKey,
+      },
+    });
 
-  //   // Ensure Runtime is created after IAM roles and dependencies
-  //   this.runtime.node.addDependency(runtimeExecutionRole);
-  //   this.runtime.node.addDependency(memoryExecutionRole);
-  //   this.runtime.node.addDependency(codeInterpreterExecutionRole);
-  //   this.runtime.node.addDependency(browserExecutionRole);
-  //   this.runtime.node.addDependency(this.memory);
-  //   this.runtime.node.addDependency(this.codeInterpreter);
-  //   this.runtime.node.addDependency(this.browser);
+    // Ensure Runtime is created after IAM roles and dependencies
+    this.runtime.node.addDependency(runtimeExecutionRole);
+    this.runtime.node.addDependency(memoryExecutionRole);
+    this.runtime.node.addDependency(codeInterpreterExecutionRole);
+    this.runtime.node.addDependency(browserExecutionRole);
+    this.runtime.node.addDependency(this.memory);
+    this.runtime.node.addDependency(this.codeInterpreter);
+    this.runtime.node.addDependency(this.browser);
 
-  //   // ============================================================
-  //   // SSM Parameters for Cross-Stack References
-  //   // ============================================================
+    // ============================================================
+    // SSM Parameters for Cross-Stack References
+    // ============================================================
     
-  //   new ssm.StringParameter(this, 'InferenceApiRuntimeArnParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/runtime-arn`,
-  //     stringValue: this.runtime.attrAgentRuntimeArn,
-  //     description: 'Inference API AgentCore Runtime ARN',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiRuntimeArnParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-arn`,
+      stringValue: this.runtime.attrAgentRuntimeArn,
+      description: 'Inference API AgentCore Runtime ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   new ssm.StringParameter(this, 'InferenceApiRuntimeIdParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/runtime-id`,
-  //     stringValue: this.runtime.attrAgentRuntimeId,
-  //     description: 'Inference API AgentCore Runtime ID',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiRuntimeIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-id`,
+      stringValue: this.runtime.attrAgentRuntimeId,
+      description: 'Inference API AgentCore Runtime ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   new ssm.StringParameter(this, 'InferenceApiMemoryArnParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/memory-arn`,
-  //     stringValue: this.memory.attrMemoryArn,
-  //     description: 'Inference API AgentCore Memory ARN',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiMemoryArnParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/memory-arn`,
+      stringValue: this.memory.attrMemoryArn,
+      description: 'Inference API AgentCore Memory ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   new ssm.StringParameter(this, 'InferenceApiMemoryIdParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/memory-id`,
-  //     stringValue: this.memory.attrMemoryId,
-  //     description: 'Inference API AgentCore Memory ID',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiMemoryIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/memory-id`,
+      stringValue: this.memory.attrMemoryId,
+      description: 'Inference API AgentCore Memory ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   new ssm.StringParameter(this, 'InferenceApiCodeInterpreterIdParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/code-interpreter-id`,
-  //     stringValue: this.codeInterpreter.attrCodeInterpreterId,
-  //     description: 'Inference API AgentCore Code Interpreter ID',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiCodeInterpreterIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/code-interpreter-id`,
+      stringValue: this.codeInterpreter.attrCodeInterpreterId,
+      description: 'Inference API AgentCore Code Interpreter ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   new ssm.StringParameter(this, 'InferenceApiBrowserIdParameter', {
-  //     parameterName: `/${config.projectPrefix}/inference-api/browser-id`,
-  //     stringValue: this.browser.attrBrowserId,
-  //     description: 'Inference API AgentCore Browser ID',
-  //     tier: ssm.ParameterTier.STANDARD,
-  //   });
+    new ssm.StringParameter(this, 'InferenceApiBrowserIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/browser-id`,
+      stringValue: this.browser.attrBrowserId,
+      description: 'Inference API AgentCore Browser ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-  //   // ============================================================
-  //   // CloudFormation Outputs
-  //   // ============================================================
+    // ============================================================
+    // CloudFormation Outputs
+    // ============================================================
     
-  //   new cdk.CfnOutput(this, 'InferenceApiRuntimeArn', {
-  //     value: this.runtime.attrAgentRuntimeArn,
-  //     description: 'Inference API AgentCore Runtime ARN',
-  //     exportName: `${config.projectPrefix}-InferenceApiRuntimeArn`,
-  //   });
+    new cdk.CfnOutput(this, 'InferenceApiRuntimeArn', {
+      value: this.runtime.attrAgentRuntimeArn,
+      description: 'Inference API AgentCore Runtime ARN',
+      exportName: `${config.projectPrefix}-InferenceApiRuntimeArn`,
+    });
 
-  //   new cdk.CfnOutput(this, 'InferenceApiRuntimeId', {
-  //     value: this.runtime.attrAgentRuntimeId,
-  //     description: 'Inference API AgentCore Runtime ID',
-  //     exportName: `${config.projectPrefix}-InferenceApiRuntimeId`,
-  //   });
+    new cdk.CfnOutput(this, 'InferenceApiRuntimeId', {
+      value: this.runtime.attrAgentRuntimeId,
+      description: 'Inference API AgentCore Runtime ID',
+      exportName: `${config.projectPrefix}-InferenceApiRuntimeId`,
+    });
 
-  //   new cdk.CfnOutput(this, 'InferenceApiMemoryArn', {
-  //     value: this.memory.attrMemoryArn,
-  //     description: 'Inference API AgentCore Memory ARN',
-  //     exportName: `${config.projectPrefix}-InferenceApiMemoryArn`,
-  //   });
+    new cdk.CfnOutput(this, 'InferenceApiMemoryArn', {
+      value: this.memory.attrMemoryArn,
+      description: 'Inference API AgentCore Memory ARN',
+      exportName: `${config.projectPrefix}-InferenceApiMemoryArn`,
+    });
 
-  //   new cdk.CfnOutput(this, 'InferenceApiCodeInterpreterId', {
-  //     value: this.codeInterpreter.attrCodeInterpreterId,
-  //     description: 'Inference API AgentCore Code Interpreter ID',
-  //     exportName: `${config.projectPrefix}-InferenceApiCodeInterpreterId`,
-  //   });
+    new cdk.CfnOutput(this, 'InferenceApiCodeInterpreterId', {
+      value: this.codeInterpreter.attrCodeInterpreterId,
+      description: 'Inference API AgentCore Code Interpreter ID',
+      exportName: `${config.projectPrefix}-InferenceApiCodeInterpreterId`,
+    });
 
-  //   new cdk.CfnOutput(this, 'InferenceApiBrowserId', {
-  //     value: this.browser.attrBrowserId,
-  //     description: 'Inference API AgentCore Browser ID',
-  //     exportName: `${config.projectPrefix}-InferenceApiBrowserId`,
-  //   });
+    new cdk.CfnOutput(this, 'InferenceApiBrowserId', {
+      value: this.browser.attrBrowserId,
+      description: 'Inference API AgentCore Browser ID',
+      exportName: `${config.projectPrefix}-InferenceApiBrowserId`,
+    });
 
-  //   new cdk.CfnOutput(this, 'EcrRepositoryUri', {
-  //     value: ecrRepository.repositoryUri,
-  //     description: 'Inference API ECR Repository URI',
-  //     exportName: `${config.projectPrefix}-InferenceApiEcrRepositoryUri`,
-  //   });
+    new cdk.CfnOutput(this, 'EcrRepositoryUri', {
+      value: ecrRepository.repositoryUri,
+      description: 'Inference API ECR Repository URI',
+      exportName: `${config.projectPrefix}-InferenceApiEcrRepositoryUri`,
+    });
    }
 }
