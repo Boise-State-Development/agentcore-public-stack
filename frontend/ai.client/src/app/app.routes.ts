@@ -33,6 +33,11 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
+        path: 'admin/openai/models',
+        loadComponent: () => import('./admin/openai-models/openai-models.page').then(m => m.OpenAIModelsPage),
+        canActivate: [adminGuard],
+    },
+    {
         path: 'admin/manage-models',
         loadComponent: () => import('./admin/manage-models/manage-models.page').then(m => m.ManageModelsPage),
         canActivate: [adminGuard],
