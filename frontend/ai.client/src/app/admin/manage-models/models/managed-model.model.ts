@@ -44,6 +44,10 @@ export interface ManagedModel {
   inputPricePerMillionTokens: number;
   /** Output price per million tokens (in USD) */
   outputPricePerMillionTokens: number;
+  /** Whether this is a reasoning model (e.g., o1, o3) */
+  isReasoningModel: boolean;
+  /** Knowledge cutoff date for the model */
+  knowledgeCutoffDate?: string | null;
   /** Date the model was added to the system */
   createdAt?: Date;
   /** Date the model was last updated */
@@ -82,6 +86,10 @@ export interface ManagedModelFormData {
   inputPricePerMillionTokens: number;
   /** Output price per million tokens (in USD) */
   outputPricePerMillionTokens: number;
+  /** Whether this is a reasoning model (e.g., o1, o3) */
+  isReasoningModel: boolean;
+  /** Knowledge cutoff date for the model */
+  knowledgeCutoffDate?: string | null;
 }
 
 /**

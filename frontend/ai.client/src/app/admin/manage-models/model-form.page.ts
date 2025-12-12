@@ -18,6 +18,8 @@ interface ModelFormGroup {
   enabled: FormControl<boolean>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
+  isReasoningModel: FormControl<boolean>;
+  knowledgeCutoffDate: FormControl<string | null>;
 }
 
 @Component({
@@ -59,6 +61,8 @@ export class ModelFormPage implements OnInit {
     enabled: this.fb.control(true, { nonNullable: true }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
+    isReasoningModel: this.fb.control(false, { nonNullable: true }),
+    knowledgeCutoffDate: this.fb.control<string | null>(null),
   });
 
   readonly pageTitle = computed(() => this.isEditMode() ? 'Edit Model' : 'Add Model');
@@ -104,6 +108,8 @@ export class ModelFormPage implements OnInit {
         maxInputTokens: params['maxInputTokens'] ? parseInt(params['maxInputTokens'], 10) : 0,
         maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : 0,
         modelLifecycle: params['modelLifecycle'] || 'ACTIVE',
+        isReasoningModel: params['isReasoningModel'] === 'true',
+        knowledgeCutoffDate: params['knowledgeCutoffDate'] || null,
       });
     }
   }
