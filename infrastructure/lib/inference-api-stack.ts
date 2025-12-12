@@ -65,7 +65,7 @@ export class InferenceApiStack extends cdk.Stack {
     
     const runtimeExecutionRole = new iam.Role(this, 'AgentCoreRuntimeExecutionRole', {
       roleName: getResourceName(config, 'agentcore-runtime-role'),
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AWS Bedrock AgentCore Runtime',
     });
 
@@ -146,7 +146,7 @@ export class InferenceApiStack extends cdk.Stack {
     
     const memoryExecutionRole = new iam.Role(this, 'AgentCoreMemoryExecutionRole', {
       roleName: getResourceName(config, 'agentcore-memory-role'),
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AWS Bedrock AgentCore Memory',
     });
 
@@ -168,7 +168,7 @@ export class InferenceApiStack extends cdk.Stack {
     
     const codeInterpreterExecutionRole = new iam.Role(this, 'CodeInterpreterExecutionRole', {
       roleName: getResourceName(config, 'code-interpreter-role'),
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AWS Bedrock AgentCore Code Interpreter',
     });
 
@@ -189,7 +189,7 @@ export class InferenceApiStack extends cdk.Stack {
     
     const browserExecutionRole = new iam.Role(this, 'BrowserExecutionRole', {
       roleName: getResourceName(config, 'browser-role'),
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AWS Bedrock AgentCore Browser',
     });
 
