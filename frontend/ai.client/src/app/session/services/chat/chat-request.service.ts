@@ -80,9 +80,9 @@ export class ChatRequestService {
     return {
       message,
       session_id,
-      model_id: 'gpt-5.2',
+      model_id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       enabled_tools: ['calculator', 'fetch_url_content'],
-      provider: 'openai'
+      provider: 'bedrock'
     };
   }
 }
