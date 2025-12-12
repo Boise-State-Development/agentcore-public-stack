@@ -162,47 +162,47 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // // ============================================================
-    // // IAM Execution Role for Code Interpreter
-    // // ============================================================
+    // ============================================================
+    // IAM Execution Role for Code Interpreter
+    // ============================================================
     
-    // const codeInterpreterExecutionRole = new iam.Role(this, 'CodeInterpreterExecutionRole', {
-    //   roleName: getResourceName(config, 'code-interpreter-role'),
-    //   assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
-    //   description: 'Execution role for AWS Bedrock AgentCore Code Interpreter',
-    // });
+    const codeInterpreterExecutionRole = new iam.Role(this, 'CodeInterpreterExecutionRole', {
+      roleName: getResourceName(config, 'code-interpreter-role'),
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      description: 'Execution role for AWS Bedrock AgentCore Code Interpreter',
+    });
 
-    // // CloudWatch Logs permissions
-    // codeInterpreterExecutionRole.addToPolicy(new iam.PolicyStatement({
-    //   effect: iam.Effect.ALLOW,
-    //   actions: [
-    //     'logs:CreateLogGroup',
-    //     'logs:CreateLogStream',
-    //     'logs:PutLogEvents',
-    //   ],
-    //   resources: [`arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/bedrock/agentcore/${config.projectPrefix}/code-interpreter/*`],
-    // }));
+    // CloudWatch Logs permissions
+    codeInterpreterExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'logs:CreateLogGroup',
+        'logs:CreateLogStream',
+        'logs:PutLogEvents',
+      ],
+      resources: [`arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/bedrock/agentcore/${config.projectPrefix}/code-interpreter/*`],
+    }));
 
-    // // ============================================================
-    // // IAM Execution Role for Browser
-    // // ============================================================
+    // ============================================================
+    // IAM Execution Role for Browser
+    // ============================================================
     
-    // const browserExecutionRole = new iam.Role(this, 'BrowserExecutionRole', {
-    //   roleName: getResourceName(config, 'browser-role'),
-    //   assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
-    //   description: 'Execution role for AWS Bedrock AgentCore Browser',
-    // });
+    const browserExecutionRole = new iam.Role(this, 'BrowserExecutionRole', {
+      roleName: getResourceName(config, 'browser-role'),
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      description: 'Execution role for AWS Bedrock AgentCore Browser',
+    });
 
-    // // CloudWatch Logs permissions
-    // browserExecutionRole.addToPolicy(new iam.PolicyStatement({
-    //   effect: iam.Effect.ALLOW,
-    //   actions: [
-    //     'logs:CreateLogGroup',
-    //     'logs:CreateLogStream',
-    //     'logs:PutLogEvents',
-    //   ],
-    //   resources: [`arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/bedrock/agentcore/${config.projectPrefix}/browser/*`],
-    // }));
+    // CloudWatch Logs permissions
+    browserExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'logs:CreateLogGroup',
+        'logs:CreateLogStream',
+        'logs:PutLogEvents',
+      ],
+      resources: [`arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/bedrock/agentcore/${config.projectPrefix}/browser/*`],
+    }));
 
     // // ============================================================
     // // AgentCore Memory
