@@ -20,7 +20,7 @@ from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(tags=["chat"])
 
 # Stream timeout configuration (in seconds)
 # Prevents hanging streams and resource exhaustion
