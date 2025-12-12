@@ -6,6 +6,7 @@ import { ChatHttpService } from './chat-http.service';
 import { MessageMapService } from '../session/message-map.service';
 import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
+import { ModelService } from '../model/model.service';
 // import { ConversationService, Conversation } from '../conversation/conversation.service';
 // import { createMessage, createTextContent } from '../models';
 
@@ -26,6 +27,7 @@ export class ChatRequestService {
   private messageMapService = inject(MessageMapService);
   private sessionService = inject(SessionService);
   private userService = inject(UserService);
+  private modelService = inject(ModelService);
   private router = inject(Router);
   // TODO: Inject proper logging service
   
@@ -77,12 +79,14 @@ export class ChatRequestService {
   }
 
   private buildChatRequestObject(message: string, session_id: string) {
+    const selectedModel = this.modelService.getSelectedModel();
+
     return {
       message,
       session_id,
-      model_id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      model_id: selectedModel.modelId,
       enabled_tools: ['calculator', 'fetch_url_content'],
-      provider: 'bedrock'
+      provider: selectedModel.provider
     };
   }
 }

@@ -1,6 +1,7 @@
 import { Component, signal, output, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
 
 interface Message {
   content: string;
@@ -9,7 +10,7 @@ interface Message {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule],
+  imports: [FormsModule, ModelDropdownComponent],
   templateUrl: './chat-input.component.html',
   styleUrl: './chat-input.component.css'
 })

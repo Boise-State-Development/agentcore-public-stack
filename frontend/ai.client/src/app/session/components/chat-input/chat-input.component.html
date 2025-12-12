@@ -70,18 +70,7 @@
         <!-- Right Controls -->
         <div class="flex items-center gap-3">
           <!-- Model Selector -->
-          <div class="flex items-center gap-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Sonnet 4.5</span>
-            <button
-              type="button"
-              class="flex size-6 items-center justify-center text-gray-500 dark:text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-300"
-              aria-label="Select model"
-            >
-              <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-4">
-                <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-              </svg>
-            </button>
-          </div>
+          <app-model-dropdown />
 
           <!-- Submit/Stop Button -->
           <button
