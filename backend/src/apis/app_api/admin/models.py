@@ -64,13 +64,16 @@ class GeminiModelSummary(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
+    base_model_id: Optional[str] = Field(None, alias="baseModelId")
+    version: Optional[str] = None
     display_name: str = Field(..., alias="displayName")
     description: Optional[str] = None
-    version: Optional[str] = None
-    supported_generation_methods: List[str] = Field(default_factory=list, alias="supportedGenerationMethods")
     input_token_limit: Optional[int] = Field(None, alias="inputTokenLimit")
     output_token_limit: Optional[int] = Field(None, alias="outputTokenLimit")
+    supported_generation_methods: List[str] = Field(default_factory=list, alias="supportedGenerationMethods")
+    thinking: Optional[bool] = None
     temperature: Optional[float] = None
+    max_temperature: Optional[float] = Field(None, alias="maxTemperature")
     top_p: Optional[float] = Field(None, alias="topP")
     top_k: Optional[int] = Field(None, alias="topK")
 
@@ -78,4 +81,20 @@ class GeminiModelSummary(BaseModel):
 class GeminiModelsResponse(BaseModel):
     """Response model for listing Gemini models."""
     models: List[GeminiModelSummary]
+    total_count: int = Field(..., alias="totalCount")
+
+
+class OpenAIModelSummary(BaseModel):
+    """Summary information for an OpenAI model."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    created: Optional[int] = None
+    owned_by: str = Field(..., alias="ownedBy")
+    object: Optional[str] = None
+
+
+class OpenAIModelsResponse(BaseModel):
+    """Response model for listing OpenAI models."""
+    models: List[OpenAIModelSummary]
     total_count: int = Field(..., alias="totalCount")

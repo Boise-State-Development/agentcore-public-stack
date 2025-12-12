@@ -21,6 +21,8 @@ from .models import (
     FoundationModelSummary,
     GeminiModelsResponse,
     GeminiModelSummary,
+    OpenAIModelsResponse,
+    OpenAIModelSummary,
 )
 from apis.shared.auth import User, require_admin, require_roles, has_any_role, get_current_user
 from apis.app_api.sessions.services.metadata import list_user_sessions, get_session_metadata
@@ -363,7 +365,7 @@ async def list_bedrock_models(
             model_lifecycle = model.get('modelLifecycle')
             if isinstance(model_lifecycle, dict):
                 model_lifecycle = model_lifecycle.get('status')
-            
+
             model_summaries.append(
                 FoundationModelSummary(
                     modelId=model.get('modelId', ''),
@@ -377,6 +379,9 @@ async def list_bedrock_models(
                     modelLifecycle=model_lifecycle,
                 )
             )
+
+        # Sort models by ID in reverse order (newest versions typically have higher version numbers/dates)
+        model_summaries.sort(key=lambda m: m.model_id, reverse=True)
 
         logger.info(f"✅ Retrieved {len(model_summaries)} Bedrock foundation models")
 
@@ -463,20 +468,36 @@ async def list_gemini_models(
         all_models = []
 
         for model in client.models.list():
-            # Extract model information
+            # Extract model information according to Gemini API response structure
+            # Note: The API returns camelCase properties (e.g., displayName, inputTokenLimit)
+            # The SDK may expose these properties directly or convert them to snake_case
+
+            # Get supportedGenerationMethods - try both naming conventions
+            # According to API docs, this array includes: generateContent, countTokens, createCachedContent, batchGenerateContent
+            # Note: streamGenerateContent is NOT listed but is available via SDK's generate_content_stream()
+            supported_methods = getattr(model, 'supportedGenerationMethods', None)
+            if supported_methods is None:
+                supported_methods = getattr(model, 'supported_generation_methods', [])
+
             model_data = GeminiModelSummary(
                 name=model.name,
-                displayName=getattr(model, 'display_name', model.name),
-                description=getattr(model, 'description', None),
+                baseModelId=getattr(model, 'baseModelId', getattr(model, 'base_model_id', None)),
                 version=getattr(model, 'version', None),
-                supportedGenerationMethods=getattr(model, 'supported_generation_methods', []),
-                inputTokenLimit=getattr(model, 'input_token_limit', None),
-                outputTokenLimit=getattr(model, 'output_token_limit', None),
+                displayName=getattr(model, 'displayName', getattr(model, 'display_name', model.name)),
+                description=getattr(model, 'description', None),
+                inputTokenLimit=getattr(model, 'inputTokenLimit', getattr(model, 'input_token_limit', None)),
+                outputTokenLimit=getattr(model, 'outputTokenLimit', getattr(model, 'output_token_limit', None)),
+                supportedGenerationMethods=supported_methods if supported_methods else [],
+                thinking=getattr(model, 'thinking', None),
                 temperature=getattr(model, 'temperature', None),
-                topP=getattr(model, 'top_p', None),
-                topK=getattr(model, 'top_k', None),
+                maxTemperature=getattr(model, 'maxTemperature', getattr(model, 'max_temperature', None)),
+                topP=getattr(model, 'topP', getattr(model, 'top_p', None)),
+                topK=getattr(model, 'topK', getattr(model, 'top_k', None)),
             )
             all_models.append(model_data)
+
+        # Sort models by name in reverse order (newest versions typically have higher version numbers)
+        all_models.sort(key=lambda m: m.name, reverse=True)
 
         # Apply client-side limiting if requested
         if max_results and len(all_models) > max_results:
@@ -498,4 +519,97 @@ async def list_gemini_models(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching Gemini models: {str(e)}"
+        )
+
+
+@router.get("/openai/models", response_model=OpenAIModelsResponse)
+async def list_openai_models(
+    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List available OpenAI models (admin only).
+
+    This endpoint uses the OpenAI Python SDK to retrieve information about available
+    models from OpenAI's API.
+
+    Note: The OpenAI list models endpoint provides limited information compared to
+    Bedrock and Gemini APIs. For more detailed model specifications, see:
+    https://platform.openai.com/docs/models/compare
+
+    Args:
+        max_results: Optional limit on number of models to return
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        OpenAIModelsResponse with list of OpenAI models
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if OpenAI API error or server error
+    """
+    logger.info(f"Admin {admin_user.email} listing OpenAI models")
+
+    try:
+        # Check if OpenAI API key is configured
+        openai_api_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_api_key:
+            logger.error("OPENAI_API_KEY environment variable not set")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+            )
+
+        # Import OpenAI SDK
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("OpenAI SDK not installed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OpenAI SDK not installed. Please install openai package."
+            )
+
+        # Initialize OpenAI client
+        client = OpenAI(api_key=openai_api_key)
+
+        # List available models
+        logger.debug("Fetching OpenAI models from OpenAI API")
+        all_models = []
+
+        response = client.models.list()
+        for model in response.data:
+            model_data = OpenAIModelSummary(
+                id=model.id,
+                created=model.created,
+                ownedBy=model.owned_by,
+                object=model.object,
+            )
+            all_models.append(model_data)
+
+        # Sort models by creation date (newest first), then by ID for consistency
+        all_models.sort(key=lambda m: (-(m.created or 0), m.id))
+
+        # Apply client-side limiting if requested
+        if max_results and len(all_models) > max_results:
+            all_models = all_models[:max_results]
+            logger.debug(f"Limited results to {max_results} models")
+
+        logger.info(f"✅ Retrieved {len(all_models)} OpenAI models")
+
+        return OpenAIModelsResponse(
+            models=all_models,
+            totalCount=len(all_models),
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error listing OpenAI models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching OpenAI models: {str(e)}"
         )

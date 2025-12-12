@@ -159,8 +159,9 @@ class StrandsAgent:
         stop_hook = StopHook(self.session_manager)
         hooks.append(stop_hook)
 
-        # Add conversation caching hook if enabled
-        if self.model_config.caching_enabled:
+        # Add conversation caching hook if enabled (Bedrock only - other providers don't support cachePoint)
+        from agents.strands_agent.core import ModelProvider
+        if self.model_config.caching_enabled and self.model_config.get_provider() == ModelProvider.BEDROCK:
             conversation_hook = ConversationCachingHook(enabled=True)
             hooks.append(conversation_hook)
 
