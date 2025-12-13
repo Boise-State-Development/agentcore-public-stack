@@ -23,10 +23,21 @@ from .models import (
     GeminiModelSummary,
     OpenAIModelsResponse,
     OpenAIModelSummary,
+    ManagedModelCreate,
+    ManagedModelUpdate,
+    ManagedModel,
+    ManagedModelsListResponse,
 )
 from apis.shared.auth import User, require_admin, require_roles, has_any_role, get_current_user
 from apis.app_api.sessions.services.metadata import list_user_sessions, get_session_metadata
 from apis.app_api.sessions.services.messages import get_messages
+from apis.app_api.admin.services.managed_models import (
+    create_managed_model,
+    get_managed_model,
+    list_managed_models,
+    update_managed_model,
+    delete_managed_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -612,4 +623,234 @@ async def list_openai_models(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching OpenAI models: {str(e)}"
+        )
+
+
+# =============================================================================
+# Enabled Models Endpoints (Model Management)
+# =============================================================================
+
+@router.get("/managed-models", response_model=ManagedModelsListResponse)
+async def list_managed_models_endpoint(
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List all enabled models (admin only).
+
+    This endpoint returns all models that have been enabled for use in the system,
+    regardless of role restrictions. Use GET /models for user-facing endpoint
+    with role-based filtering.
+
+    Args:
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModelsListResponse with list of all enabled models
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} listing all enabled models")
+
+    try:
+        models = await list_managed_models(user_roles=None)  # None = no role filtering
+
+        return ManagedModelsListResponse(
+            models=models,
+            total_count=len(models),
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error listing enabled models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing enabled models: {str(e)}"
+        )
+
+
+@router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
+async def create_managed_model_endpoint(
+    model_data: ManagedModelCreate,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Create a new enabled model (admin only).
+
+    This endpoint allows admins to add new models to the system and configure
+    which roles have access to them.
+
+    Args:
+        model_data: Model creation data
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Created model with ID and timestamps
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 400 if model with same modelId already exists
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} creating enabled model: {model_data.model_name}")
+
+    try:
+        model = await create_managed_model(model_data)
+        return model
+
+    except ValueError as e:
+        # Model already exists
+        logger.warning(f"Model creation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error creating enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating enabled model: {str(e)}"
+        )
+
+
+@router.get("/managed-models/{model_id}", response_model=ManagedModel)
+async def get_managed_model_endpoint(
+    model_id: str,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Get a specific enabled model by ID (admin only).
+
+    Args:
+        model_id: Model identifier
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Model details
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} requesting enabled model: {model_id}")
+
+    try:
+        model = await get_managed_model(model_id)
+
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return model
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error getting enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting enabled model: {str(e)}"
+        )
+
+
+@router.put("/managed-models/{model_id}", response_model=ManagedModel)
+async def update_managed_model_endpoint(
+    model_id: str,
+    updates: ManagedModelUpdate,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Update an enabled model (admin only).
+
+    This endpoint allows admins to update model configuration, including
+    pricing, role access, and enabled status.
+
+    Args:
+        model_id: Model identifier
+        updates: Fields to update
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Updated model
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} updating enabled model: {model_id}")
+
+    try:
+        model = await update_managed_model(model_id, updates)
+
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return model
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error updating enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating enabled model: {str(e)}"
+        )
+
+
+@router.delete("/managed-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_managed_model_endpoint(
+    model_id: str,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Delete an enabled model (admin only).
+
+    This endpoint permanently removes a model from the system.
+
+    Args:
+        model_id: Model identifier
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} deleting enabled model: {model_id}")
+
+    try:
+        deleted = await delete_managed_model(model_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return None
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting enabled model: {str(e)}"
         )
