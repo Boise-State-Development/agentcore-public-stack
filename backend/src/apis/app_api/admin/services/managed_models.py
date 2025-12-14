@@ -326,6 +326,9 @@ async def _update_managed_model_local(model_id: str, updates: ManagedModelUpdate
 
     Returns:
         Updated ManagedModel if found, None otherwise
+
+    Raises:
+        ValueError: If updating modelId to a value that already exists for another model
     """
     model = await _get_managed_model_local(model_id)
 
@@ -334,6 +337,18 @@ async def _update_managed_model_local(model_id: str, updates: ManagedModelUpdate
 
     # Apply updates
     update_data = updates.model_dump(exclude_none=True, by_alias=True)
+    
+    # Check if modelId is being updated and if it conflicts with another model
+    if 'modelId' in update_data:
+        new_model_id = update_data['modelId']
+        # Only check for duplicates if the modelId is actually changing
+        if new_model_id != model.model_id:
+            existing_models = await _list_managed_models_local()
+            for existing_model in existing_models:
+                # Skip the current model being updated
+                if existing_model.id != model_id and existing_model.model_id == new_model_id:
+                    raise ValueError(f"Model with modelId '{new_model_id}' already exists")
+
     model_dict = model.model_dump(by_alias=True)
 
     # Update fields
@@ -355,6 +370,9 @@ async def _update_managed_model_local(model_id: str, updates: ManagedModelUpdate
         logger.info(f"💾 Updated managed model: {updated_model.model_name} (ID: {model_id})")
         return updated_model
 
+    except ValueError:
+        # Re-raise ValueError (duplicate modelId)
+        raise
     except Exception as e:
         logger.error(f"Failed to update managed model in local storage: {e}")
         return None

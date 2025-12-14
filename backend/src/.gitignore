@@ -10,6 +10,7 @@ output/
 uploads/
 generated_images/
 /sessions/
+/managed_models/
 
 # Virtual environments
 venv/

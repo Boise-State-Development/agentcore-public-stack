@@ -128,6 +128,7 @@ class ManagedModelUpdate(BaseModel):
     """Request model for updating a managed model."""
     model_config = ConfigDict(populate_by_name=True)
 
+    model_id: Optional[str] = Field(None, alias="modelId", min_length=1)
     model_name: Optional[str] = Field(None, alias="modelName")
     provider: Optional[str] = None
     provider_name: Optional[str] = Field(None, alias="providerName")

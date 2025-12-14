@@ -29,7 +29,7 @@ export interface ManagedModel {
   /** List of supported output modalities (e.g., 'TEXT', 'IMAGE') */
   outputModalities: string[];
   /** Whether the model supports response streaming */
-  responseStreamingSupported: boolean;
+  responseStreamingSupported?: boolean;
   /** Maximum number of input tokens the model can accept */
   maxInputTokens: number;
   /** Maximum number of output tokens the model can generate */
@@ -48,10 +48,10 @@ export interface ManagedModel {
   isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
-  /** Date the model was added to the system */
-  createdAt?: Date;
-  /** Date the model was last updated */
-  updatedAt?: Date;
+  /** Date the model was added to the system (ISO string from API) */
+  createdAt?: string | Date;
+  /** Date the model was last updated (ISO string from API) */
+  updatedAt?: string | Date;
 }
 
 /**

@@ -48,8 +48,11 @@ async def list_models_for_user(
 
         logger.info(f"✅ Found {len(models)} models available to user {current_user.email}")
 
+        # Convert ManagedModel instances to dicts for Pydantic v2 validation
+        models_dict = [model.model_dump(by_alias=True) for model in models]
+
         return ManagedModelsListResponse(
-            models=models,
+            models=models_dict,
             total_count=len(models),
         )
 

@@ -403,8 +403,11 @@ async def list_managed_models_endpoint(
     try:
         models = await list_managed_models(user_roles=None)  # None = no role filtering
 
+        # Convert ManagedModel instances to dicts for Pydantic v2 validation
+        models_dict = [model.model_dump(by_alias=True) for model in models]
+        
         return ManagedModelsListResponse(
-            models=models,
+            models=models_dict,
             total_count=len(models),
         )
 
@@ -547,6 +550,13 @@ async def update_managed_model_endpoint(
 
         return model
 
+    except ValueError as e:
+        # Duplicate modelId or other validation error
+        logger.warning(f"Model update failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except HTTPException:
         raise
     except Exception as e:

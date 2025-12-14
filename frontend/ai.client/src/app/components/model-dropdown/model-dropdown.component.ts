@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
-import { ModelService, Model } from '../../session/services/model/model.service';
+import { ModelService } from '../../session/services/model/model.service';
+import { ManagedModel } from '../../admin/manage-models/models/managed-model.model';
 
 @Component({
   selector: 'app-model-dropdown',
@@ -16,7 +17,7 @@ import { ModelService, Model } from '../../session/services/model/model.service'
         class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
         aria-label="Select model"
       >
-        <span>{{ modelService.selectedModel().name }}</span>
+        <span>{{ modelService.selectedModel()?.modelName || 'Loading...' }}</span>
         <svg
           viewBox="0 0 20 20"
           fill="currentColor"
@@ -42,34 +43,70 @@ import { ModelService, Model } from '../../session/services/model/model.service'
           aria-orientation="vertical"
         >
           <div class="p-1">
-            @for (model of modelService.availableModels(); track model.modelId) {
+            @if (modelService.modelsLoading()) {
+              <div class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                Loading models...
+              </div>
+            } @else if (modelService.modelsError()) {
+              <div class="px-3 py-2 text-sm text-red-600 dark:text-red-400">
+                {{ modelService.modelsError() }}
+              </div>
+            } @else if (modelService.availableModels().length === 0) {
+              <!-- Show default model option when no models are available -->
               <button
                 cdkMenuItem
                 type="button"
-                (click)="selectModel(model)"
                 class="flex w-full items-center justify-between px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
                 role="menuitem"
+                disabled
               >
                 <div class="flex flex-col items-start">
-                  <span class="font-medium">{{ model.name }}</span>
-                  <span class="text-xs text-gray-500 dark:text-gray-400">{{ model.providerName }}</span>
+                  <span class="font-medium">{{ modelService.selectedModel()?.modelName || 'System Default' }}</span>
+                  <span class="text-xs text-gray-500 dark:text-gray-400">Using backend default</span>
                 </div>
-
-                @if (isSelected(model)) {
-                  <svg
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                    aria-hidden="true"
-                    class="size-5 text-primary-500"
-                  >
-                    <path
-                      fill-rule="evenodd"
-                      d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
-                      clip-rule="evenodd"
-                    />
-                  </svg>
-                }
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden="true"
+                  class="size-5 text-primary-500"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
               </button>
+            } @else {
+              @for (model of modelService.availableModels(); track model.modelId) {
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="selectModel(model)"
+                  class="flex w-full items-center justify-between px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                  role="menuitem"
+                >
+                  <div class="flex flex-col items-start">
+                    <span class="font-medium">{{ model.modelName }}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ model.providerName }}</span>
+                  </div>
+
+                  @if (isSelected(model)) {
+                    <svg
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      aria-hidden="true"
+                      class="size-5 text-primary-500"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  }
+                </button>
+              }
             }
           </div>
         </div>
@@ -145,11 +182,12 @@ export class ModelDropdownComponent {
     this.menuOpen = false;
   }
 
-  protected selectModel(model: Model): void {
+  protected selectModel(model: ManagedModel): void {
     this.modelService.setSelectedModel(model);
   }
 
-  protected isSelected(model: Model): boolean {
-    return this.modelService.selectedModel().modelId === model.modelId;
+  protected isSelected(model: ManagedModel): boolean {
+    const selected = this.modelService.selectedModel();
+    return selected?.modelId === model.modelId;
   }
 }
