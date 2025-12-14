@@ -37,7 +37,7 @@ import { ModelService, Model } from '../../session/services/model/model.service'
           cdkMenu
           (closed)="onMenuClosed()"
           (opened)="onMenuOpened()"
-          class="w-64 rounded-sm bg-white shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
+          class="w-64 rounded-md bg-white shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
           role="menu"
           aria-orientation="vertical"
         >
