@@ -1,0 +1,21 @@
+/* Page-specific styles for Bedrock Models page */
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Smooth transitions for hover states */
+button {
+  transition: background-color 150ms ease-in-out, border-color 150ms ease-in-out;
+}
+
+/* Card hover transition */
+.space-y-4 > div {
+  transition: border-color 150ms ease-in-out;
+}
+
+/* Select dropdown styling - use browser default arrow */
+select {
+  appearance: auto;
+  -webkit-appearance: auto;
+  -moz-appearance: auto;
+}

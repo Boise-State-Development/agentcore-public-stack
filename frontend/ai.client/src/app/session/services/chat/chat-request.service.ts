@@ -6,6 +6,7 @@ import { ChatHttpService } from './chat-http.service';
 import { MessageMapService } from '../session/message-map.service';
 import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
+import { ModelService } from '../model/model.service';
 // import { ConversationService, Conversation } from '../conversation/conversation.service';
 // import { createMessage, createTextContent } from '../models';
 
@@ -26,6 +27,7 @@ export class ChatRequestService {
   private messageMapService = inject(MessageMapService);
   private sessionService = inject(SessionService);
   private userService = inject(UserService);
+  private modelService = inject(ModelService);
   private router = inject(Router);
   // TODO: Inject proper logging service
   
@@ -77,10 +79,21 @@ export class ChatRequestService {
   }
 
   private buildChatRequestObject(message: string, session_id: string) {
+    const selectedModel = this.modelService.getSelectedModel();
+
+    if (!selectedModel) {
+      throw new Error('No model selected. Please select a model before sending a message.');
+    }
+
+    // If using the system default model, send null for model_id to let backend use its default
+    const isDefaultModel = this.modelService.isUsingDefaultModel();
+    
     return {
       message,
       session_id,
-      enabled_tools: ['calculator', 'fetch_url_content']
+      model_id: isDefaultModel ? null : selectedModel.modelId,
+      enabled_tools: ['calculator', 'fetch_url_content'],
+      provider: isDefaultModel ? null : selectedModel.provider
     };
   }
 }

@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, computed } from '@angular/core';
 import { ThemeToggleComponent } from './components/theme-toggle/theme-toggle.component';
 import { UserService } from '../../auth/user.service';
 import { SessionService } from '../../session/services/session/session.service';
@@ -15,4 +15,10 @@ export class Topnav {
   protected userService = inject(UserService);
   protected sessionService = inject(SessionService);
   readonly currentSession = this.sessionService.currentSession;
+
+  // Check if user has admin roles
+  protected isAdmin = computed(() => {
+    const requiredRoles = ['Admin', 'SuperAdmin', 'DotNetDevelopers'];
+    return this.userService.hasAnyRole(requiredRoles);
+  });
 }

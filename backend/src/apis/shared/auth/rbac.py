@@ -155,7 +155,7 @@ def has_all_roles(user: User, *roles: str) -> bool:
 # These can be used directly as dependencies: async def endpoint(user: User = Depends(require_admin))
 
 # Admin access - requires either Admin or SuperAdmin role
-require_admin = require_roles("Admin", "SuperAdmin")
+require_admin = require_roles("Admin", "SuperAdmin", "DotNetDevelopers")
 
 # Faculty access
 require_faculty = require_roles("Faculty")

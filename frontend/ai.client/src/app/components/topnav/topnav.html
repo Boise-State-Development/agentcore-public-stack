@@ -20,7 +20,7 @@
           <div aria-hidden="true" class="hidden lg:block lg:h-6 lg:w-px lg:bg-gray-200 dark:lg:bg-white/10"></div>
 
             @if (userService.currentUser(); as user) {
-              <app-user-dropdown [user]="user"></app-user-dropdown>
+              <app-user-dropdown [user]="user" [isAdmin]="isAdmin()"></app-user-dropdown>
             }
         </div>
       </div>

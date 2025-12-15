@@ -1,10 +1,10 @@
 // services/stream-parser.service.ts
 import { Injectable, signal, computed, inject } from '@angular/core';
-import { 
-  Message, 
-  ContentBlock, 
-  TextContentBlock, 
-  ToolUseContentBlock, 
+import {
+  Message,
+  ContentBlock,
+  TextContentBlock,
+  ToolUseContentBlock,
   MessageStartEvent,
   ContentBlockStartEvent,
   ContentBlockDeltaEvent,
@@ -15,6 +15,7 @@ import {
 import { MetadataEvent } from '../models/content-types';
 import { ChatStateService } from './chat-state.service';
 import { v4 as uuidv4 } from 'uuid';
+import { ErrorService, StreamErrorEvent } from '../../../services/error/error.service';
 
 /**
  * Internal representation of a message being built from stream events.
@@ -77,6 +78,7 @@ enum StreamState {
 })
 export class StreamParserService {
   private chatStateService = inject(ChatStateService);
+  private errorService = inject(ErrorService);
 
   // =========================================================================
   // State Signals
@@ -315,25 +317,34 @@ export class StreamParserService {
   
   /**
    * Validate ContentBlockStartEvent data structure.
+   *
+   * NOTE: According to AWS ConverseStream API docs, contentBlockStart is:
+   * - OPTIONAL for text blocks (Claude skips it entirely for text)
+   * - REQUIRED for tool_use blocks (contains toolUseId and name)
+   *
+   * Some providers (like Gemini via Strands) emit contentBlockStart without
+   * a type field for text blocks. We accept this and default to 'text'.
    */
   private validateContentBlockStartEvent(data: unknown): data is ContentBlockStartEvent {
     if (!data || typeof data !== 'object') {
       this.setError('content_block_start: data must be an object');
       return false;
     }
-    
+
     const event = data as Partial<ContentBlockStartEvent>;
-    
+
     if (!this.validateContentBlockIndex(event.contentBlockIndex, 'content_block_start')) {
       return false;
     }
-    
-    if (!event.type || (event.type !== 'text' && event.type !== 'tool_use' && event.type !== 'tool_result')) {
+
+    // Type is optional - if missing, we'll default to 'text' in the handler
+    // This handles providers that emit contentBlockStart without type for text blocks
+    if (event.type && event.type !== 'text' && event.type !== 'tool_use' && event.type !== 'tool_result') {
       this.setError(`content_block_start: type must be 'text', 'tool_use', or 'tool_result', got ${event.type}`);
       return false;
     }
-    
-    // Validate tool_use specific fields
+
+    // Validate tool_use specific fields only when type is explicitly tool_use
     if (event.type === 'tool_use' && event.toolUse) {
       if (!event.toolUse.toolUseId || typeof event.toolUse.toolUseId !== 'string') {
         this.setError('content_block_start: toolUse.toolUseId must be a non-empty string');
@@ -344,41 +355,44 @@ export class StreamParserService {
         return false;
       }
     }
-    
+
     return true;
   }
   
   /**
    * Validate ContentBlockDeltaEvent data structure.
+   *
+   * NOTE: The 'type' field may be inferred from content:
+   * - If 'text' field is present -> type is 'text'
+   * - If 'input' field is present -> type is 'tool_use'
+   * This handles providers that may not always include explicit type.
    */
   private validateContentBlockDeltaEvent(data: unknown): data is ContentBlockDeltaEvent {
     if (!data || typeof data !== 'object') {
       this.setError('content_block_delta: data must be an object');
       return false;
     }
-    
+
     const event = data as Partial<ContentBlockDeltaEvent>;
-    
+
     if (!this.validateContentBlockIndex(event.contentBlockIndex, 'content_block_delta')) {
       return false;
     }
-    
-    if (!event.type || (event.type !== 'text' && event.type !== 'tool_use' && event.type !== 'tool_result')) {
+
+    // Type can be explicit or inferred from content
+    // If type is provided, validate it's a known type
+    if (event.type && event.type !== 'text' && event.type !== 'tool_use' && event.type !== 'tool_result') {
       this.setError(`content_block_delta: type must be 'text', 'tool_use', or 'tool_result', got ${event.type}`);
       return false;
     }
-    
-    // Validate that at least one content field is present
-    if (event.type === 'text' && event.text === undefined && event.input === undefined) {
-      this.setError('content_block_delta: text block must have text field');
+
+    // Must have at least one of: text, input (for type inference and content)
+    // If type is missing, we can infer from content in the handler
+    if (event.text === undefined && event.input === undefined) {
+      this.setError('content_block_delta: must have either text or input field');
       return false;
     }
-    
-    if (event.type === 'tool_use' && event.input === undefined && event.text === undefined) {
-      this.setError('content_block_delta: tool_use block must have input field');
-      return false;
-    }
-    
+
     return true;
   }
   
@@ -630,27 +644,31 @@ export class StreamParserService {
   }
 
   private handleContentBlockStart(data: unknown): void {
-    
     // Validate event data
     if (!this.validateContentBlockStartEvent(data)) {
       return; // Error already set by validator
     }
-    
+
     const eventData = data as ContentBlockStartEvent;
-    
+
     // Ensure we have an active message builder
     const currentBuilder = this.currentMessageBuilder();
     if (!currentBuilder) {
       this.setError('content_block_start: received without active message. Ensure message_start was called first.');
       return;
     }
-    
+
     // Check if block already exists
     if (currentBuilder.contentBlocks.has(eventData.contentBlockIndex)) {
       this.setError(`content_block_start: block at index ${eventData.contentBlockIndex} already exists`);
       return;
     }
-    
+
+    // Determine block type - default to 'text' if not specified
+    // AWS ConverseStream API: contentBlockStart without type indicates text block
+    // Tool use blocks will have explicit type='tool_use' with toolUse data
+    const blockType: 'text' | 'tool_use' = eventData.type === 'tool_use' ? 'tool_use' : 'text';
+
     this.currentMessageBuilder.update(builder => {
       if (!builder) {
         // This shouldn't happen after the check above, but handle defensively
@@ -659,7 +677,7 @@ export class StreamParserService {
 
       const blockBuilder: ContentBlockBuilder = {
         index: eventData.contentBlockIndex,
-        type: eventData.type === 'tool_use' ? 'tool_use' : 'text',
+        type: blockType,
         textChunks: [],
         inputChunks: [],
         toolUseId: eventData.toolUse?.toolUseId,
@@ -676,9 +694,9 @@ export class StreamParserService {
         contentBlocks: newBlocks
       };
     });
-    
+
     // Show tool progress for tool_use blocks
-    if (eventData.type === 'tool_use' && eventData.toolUse) {
+    if (blockType === 'tool_use' && eventData.toolUse) {
       this.toolProgressSignal.set({
         visible: true,
         toolName: eventData.toolUse.name,
@@ -694,16 +712,24 @@ export class StreamParserService {
     if (!this.validateContentBlockDeltaEvent(data)) {
       return; // Error already set by validator
     }
-    
+
     const eventData = data as ContentBlockDeltaEvent;
-    
+
+    // Infer type from content if not provided
+    // AWS ConverseStream: text field -> text block, input field -> tool_use block
+    const inferredType: 'text' | 'tool_use' = eventData.type === 'tool_use'
+      ? 'tool_use'
+      : eventData.input !== undefined
+        ? 'tool_use'
+        : 'text';
+
     // Ensure we have an active message builder
     const currentBuilder = this.currentMessageBuilder();
     if (!currentBuilder) {
       this.setError('content_block_delta: received without active message. Ensure message_start was called first.');
       return;
     }
-    
+
     this.currentMessageBuilder.update(builder => {
       if (!builder) {
         // This shouldn't happen after the check above, but handle defensively
@@ -711,42 +737,41 @@ export class StreamParserService {
       }
 
       let block = builder.contentBlocks.get(eventData.contentBlockIndex);
-      
-      // Auto-create block if it doesn't exist (backend not sending content_block_start)
-      if (!block) {
 
+      // Auto-create block if it doesn't exist (Claude skips content_block_start for text)
+      if (!block) {
         block = {
           index: eventData.contentBlockIndex,
-          type: eventData.type === 'tool_use' ? 'tool_use' : 'text',
+          type: inferredType,
           textChunks: [],
           inputChunks: [],
           isComplete: false
         };
       }
-      
-      // Validate that block type matches event type
-      if (block.type !== eventData.type && block.type !== 'text') {
-        // Allow text blocks to receive tool_use deltas (graceful degradation)
-        if (eventData.type === 'tool_use') {
-          block.type = 'tool_use';
-        }
+
+      // Upgrade block type if needed (text -> tool_use)
+      // This handles edge cases where block was created as text but receives tool_use delta
+      if (block.type === 'text' && inferredType === 'tool_use') {
+        block.type = 'tool_use';
       }
-      
-      // Update the appropriate chunks based on type
-      if (eventData.type === 'text' && eventData.text !== undefined) {
+
+      // Update the appropriate chunks based on inferred type
+      if (eventData.text !== undefined) {
         if (typeof eventData.text !== 'string') {
           this.setError(`content_block_delta: text field must be a string, got ${typeof eventData.text}`);
           return builder;
         }
         block.textChunks.push(eventData.text);
-      } else if (eventData.type === 'tool_use' && eventData.input !== undefined) {
+      }
+
+      if (eventData.input !== undefined) {
         if (typeof eventData.input !== 'string') {
           this.setError(`content_block_delta: input field must be a string, got ${typeof eventData.input}`);
           return builder;
         }
         block.inputChunks.push(eventData.input);
       }
-      
+
       // Create new Map reference to trigger reactivity
       const newBlocks = new Map(builder.contentBlocks);
       newBlocks.set(eventData.contentBlockIndex, { ...block });
@@ -1011,16 +1036,43 @@ export class StreamParserService {
   
   private handleError(data: unknown): void {
     let errorMessage = 'Unknown error';
-    
+
+    // Check if this is a structured error event from backend
     if (data && typeof data === 'object') {
-      const errorData = data as { error?: string; message?: string };
-      errorMessage = errorData.error || errorData.message || errorMessage;
+      const potentialStructuredError = data as Partial<StreamErrorEvent>;
+
+      if (potentialStructuredError.error && potentialStructuredError.code) {
+        // This is a structured StreamErrorEvent from backend
+        const streamError: StreamErrorEvent = {
+          error: potentialStructuredError.error,
+          code: potentialStructuredError.code,
+          detail: potentialStructuredError.detail,
+          recoverable: potentialStructuredError.recoverable ?? false,
+          metadata: potentialStructuredError.metadata
+        };
+
+        // Use ErrorService to display the error
+        this.errorService.handleStreamError(streamError);
+        errorMessage = streamError.error;
+      } else {
+        // Legacy unstructured error
+        const errorData = data as { error?: string; message?: string };
+        errorMessage = errorData.error || errorData.message || errorMessage;
+
+        // Add to ErrorService with generic code
+        this.errorService.addError(
+          'Stream Error',
+          errorMessage
+        );
+      }
     } else if (typeof data === 'string') {
       errorMessage = data;
+      this.errorService.addError('Stream Error', errorMessage);
     } else if (data instanceof Error) {
       errorMessage = data.message;
+      this.errorService.addError('Stream Error', errorMessage);
     }
-    
+
     this.setError(`Stream error: ${errorMessage}`);
   }
   

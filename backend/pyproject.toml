@@ -30,12 +30,16 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.14.0",
+    "strands-agents==1.19.0",
     "strands-agents-tools==0.2.3",
     "ddgs>=9.0.0",
     # "aws-opentelemetry-distro>=0.10.1",
     "bedrock-agentcore",
-    "nova-act==2.3.18.0",
+    # NOTE: nova-act temporarily disabled due to strands-agents version conflict
+    # "nova-act==3.0.5.0",  # Requires strands-agents<=1.14.0
+    # Multi-provider LLM support
+    "openai>=1.0.0",  # For OpenAI models
+    "google-genai>=1.0.0",  # For Google Gemini models
 ]
 
 # Development dependencies

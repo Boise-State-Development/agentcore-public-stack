@@ -1,0 +1,222 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Google Gemini Models</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        View and manage available Google Gemini models
+      </p>
+    </div>
+
+    <!-- Filters Section -->
+    <div class="mb-6 rounded-sm border border-gray-200 bg-gray-50 p-6 dark:border-gray-700 dark:bg-gray-800">
+      <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Filters</h2>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <!-- Search Filter -->
+        <div>
+          <label for="search" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Search Models
+          </label>
+          <input
+            type="text"
+            id="search"
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+            placeholder="Search by name or description..."
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+
+        <!-- Max Results Filter -->
+        <div>
+          <label for="maxResults" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Max Results
+          </label>
+          <input
+            type="number"
+            id="maxResults"
+            [ngModel]="maxResultsFilter()"
+            (ngModelChange)="maxResultsFilter.set($event || undefined)"
+            placeholder="No limit"
+            min="1"
+            max="1000"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+      </div>
+
+      <!-- Filter Actions -->
+      <div class="mt-4 flex gap-3">
+        <button
+          (click)="applyFilters()"
+          class="rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          Apply Filters
+        </button>
+        @if (hasActiveFilters()) {
+          <button
+            (click)="resetFilters()"
+            class="rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Reset Filters
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    @if (isLoading()) {
+      <div class="flex items-center justify-center py-12">
+        <app-loading />
+      </div>
+    }
+
+    <!-- Error State -->
+    @if (error()) {
+      <div class="rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <h3 class="text-sm/6 font-medium text-red-800 dark:text-red-400">Error loading models</h3>
+        <p class="mt-1 text-sm/6 text-red-700 dark:text-red-500">{{ error() }}</p>
+      </div>
+    }
+
+    <!-- Results Header -->
+    @if (!isLoading() && !error()) {
+      <div class="mb-4 flex items-center justify-between">
+        <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+          Showing {{ models().length }} model{{ models().length !== 1 ? 's' : '' }}
+        </p>
+      </div>
+
+      <!-- Models List -->
+      @if (models().length === 0) {
+        <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+          <p class="text-base/7 text-gray-500 dark:text-gray-400">
+            No models found.
+          </p>
+        </div>
+      } @else {
+        <div class="space-y-4">
+          @for (model of models(); track model.name) {
+            <div class="rounded-sm border border-gray-200 bg-white p-6 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600">
+              <!-- Model Header -->
+              <div class="mb-4 flex items-start justify-between">
+                <div class="flex-1">
+                  <h3 class="text-lg/7 font-semibold text-gray-900 dark:text-white">
+                    {{ model.displayName }}
+                  </h3>
+                  <p class="mt-1 font-mono text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ model.name }}
+                  </p>
+                  @if (model.description) {
+                    <p class="mt-2 text-sm/6 text-gray-700 dark:text-gray-300">
+                      {{ model.description }}
+                    </p>
+                  }
+                </div>
+                <span class="inline-flex shrink-0 items-center rounded-sm bg-blue-100 px-3 py-1 text-xs/5 font-medium text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                  Google
+                </span>
+              </div>
+
+              <!-- Model Details Grid -->
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <!-- Token Limits -->
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Token Limits</h4>
+                  <div class="mt-2 space-y-1">
+                    @if (model.inputTokenLimit) {
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs/5 text-gray-600 dark:text-gray-400">Input:</span>
+                        <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.inputTokenLimit | number }}</span>
+                      </div>
+                    }
+                    @if (model.outputTokenLimit) {
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs/5 text-gray-600 dark:text-gray-400">Output:</span>
+                        <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.outputTokenLimit | number }}</span>
+                      </div>
+                    }
+                    @if (!model.inputTokenLimit && !model.outputTokenLimit) {
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">Not specified</span>
+                    }
+                  </div>
+                </div>
+
+                <!-- Model Parameters -->
+                @if (model.temperature !== null || model.topP !== null || model.topK !== null) {
+                  <div>
+                    <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Parameters</h4>
+                    <div class="mt-2 space-y-1">
+                      @if (model.temperature !== null) {
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs/5 text-gray-600 dark:text-gray-400">Temperature:</span>
+                          <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.temperature }}</span>
+                        </div>
+                      }
+                      @if (model.topP !== null) {
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs/5 text-gray-600 dark:text-gray-400">Top-P:</span>
+                          <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.topP }}</span>
+                        </div>
+                      }
+                      @if (model.topK !== null) {
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs/5 text-gray-600 dark:text-gray-400">Top-K:</span>
+                          <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.topK }}</span>
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+
+                <!-- Version -->
+                @if (model.version) {
+                  <div>
+                    <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Version</h4>
+                    <p class="mt-2 text-sm/6 text-gray-900 dark:text-white">{{ model.version }}</p>
+                  </div>
+                }
+              </div>
+
+              <!-- Model Features and Actions -->
+              <div class="mt-4 flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+                <div class="flex flex-wrap gap-4">
+                  <!-- Thinking/Reasoning Capability -->
+                  @if (model.thinking) {
+                    <div class="flex items-center gap-2">
+                      <svg class="size-5 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10 9a3 3 0 100-6 3 3 0 000 6zM6 8a2 2 0 11-4 0 2 2 0 014 0zM1.49 15.326a.78.78 0 01-.358-.442 3 3 0 014.308-3.516 6.484 6.484 0 00-1.905 3.959c-.023.222-.014.442.025.654a4.97 4.97 0 01-2.07-.655zM16.44 15.98a4.97 4.97 0 002.07-.654.78.78 0 00.357-.442 3 3 0 00-4.308-3.517 6.484 6.484 0 011.907 3.96 2.32 2.32 0 01-.026.654zM18 8a2 2 0 11-4 0 2 2 0 014 0zM5.304 16.19a.844.844 0 01-.277-.71 5 5 0 019.947 0 .843.843 0 01-.277.71A6.975 6.975 0 0110 18a6.974 6.974 0 01-4.696-1.81z" />
+                      </svg>
+                      <span class="text-sm/6 text-purple-700 dark:text-purple-300">Thinking model</span>
+                    </div>
+                  }
+                </div>
+
+                <!-- Add Model Button or Added Status -->
+                @if (isModelAdded(model.name)) {
+                  <div class="inline-flex items-center gap-2 rounded-sm bg-green-100 px-3 py-1.5 text-sm/6 font-medium text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                    <svg class="size-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                    Added
+                  </div>
+                } @else {
+                  <button
+                    (click)="addModelFromGemini(model)"
+                    class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  >
+                    <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add Model
+                  </button>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+</div>

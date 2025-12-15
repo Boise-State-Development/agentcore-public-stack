@@ -19,272 +19,32 @@ from .models import (
     SystemStatsResponse,
     BedrockModelsResponse,
     FoundationModelSummary,
+    GeminiModelsResponse,
+    GeminiModelSummary,
+    OpenAIModelsResponse,
+    OpenAIModelSummary,
+    ManagedModelCreate,
+    ManagedModelUpdate,
+    ManagedModel,
+    ManagedModelsListResponse,
 )
 from apis.shared.auth import User, require_admin, require_roles, has_any_role, get_current_user
 from apis.app_api.sessions.services.metadata import list_user_sessions, get_session_metadata
 from apis.app_api.sessions.services.messages import get_messages
+from apis.app_api.admin.services.managed_models import (
+    create_managed_model,
+    get_managed_model,
+    list_managed_models,
+    update_managed_model,
+    delete_managed_model,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/me", response_model=UserInfo)
-async def get_admin_info(admin_user: User = Depends(require_admin)):
-    """
-    Get information about the current admin user.
 
-    This endpoint demonstrates basic admin authentication.
-    Requires Admin or SuperAdmin role.
-
-    Args:
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        UserInfo with admin user details
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-    """
-    logger.info(f"Admin user info requested: {admin_user.email}")
-
-    return UserInfo(
-        email=admin_user.email,
-        user_id=admin_user.user_id,
-        name=admin_user.name,
-        roles=admin_user.roles,
-        picture=admin_user.picture,
-    )
-
-
-@router.get("/sessions/all", response_model=AllSessionsResponse)
-async def list_all_sessions(
-    limit: Optional[int] = Query(100, ge=1, le=1000, description="Maximum sessions to return"),
-    next_token: Optional[str] = Query(None, description="Pagination token"),
-    admin_user: User = Depends(require_admin),
-):
-    """
-    List all sessions across all users (admin only).
-
-    This endpoint allows admins to view sessions from any user in the system.
-    Useful for monitoring, debugging, or support purposes.
-
-    Args:
-        limit: Maximum number of sessions to return (1-1000)
-        next_token: Pagination token for next page
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        AllSessionsResponse with sessions and pagination info
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-            - 500 if server error
-    """
-    logger.info(f"Admin {admin_user.email} listing all sessions (limit: {limit})")
-
-    # NOTE: This is a simplified example. In a real implementation, you would:
-    # 1. Query your database/storage to get all sessions across all users
-    # 2. Implement proper pagination
-    # 3. Add filtering/sorting options
-
-    # For demonstration, we'll return a mock response
-    # You should replace this with actual storage queries
-
-    return AllSessionsResponse(
-        sessions=[],
-        total_count=0,
-        next_token=None,
-    )
-
-
-@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
-async def delete_any_session(
-    session_id: str,
-    admin_user: User = Depends(require_admin),
-):
-    """
-    Delete any user's session (admin only).
-
-    This endpoint allows admins to delete sessions from any user.
-    Useful for handling abuse, privacy requests, or data cleanup.
-
-    Args:
-        session_id: ID of the session to delete
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        SessionDeleteResponse with deletion status
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-            - 404 if session not found
-            - 500 if server error
-    """
-    logger.info(f"Admin {admin_user.email} deleting session: {session_id}")
-
-    # NOTE: This is a simplified example. In a real implementation, you would:
-    # 1. Verify the session exists
-    # 2. Delete session metadata and messages from storage
-    # 3. Log the deletion for audit purposes
-    # 4. Handle cleanup of related resources
-
-    # For demonstration purposes, we'll return a success response
-    # You should replace this with actual deletion logic
-
-    return SessionDeleteResponse(
-        success=True,
-        session_id=session_id,
-        message=f"Session {session_id} deleted by admin {admin_user.email}",
-    )
-
-
-@router.get("/stats", response_model=SystemStatsResponse)
-async def get_system_stats(
-    admin_user: User = Depends(require_admin),
-):
-    """
-    Get system-wide statistics (admin only).
-
-    Returns aggregated statistics about users, sessions, and messages.
-    Useful for monitoring system usage and health.
-
-    Args:
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        SystemStatsResponse with system statistics
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-            - 500 if server error
-    """
-    logger.info(f"Admin {admin_user.email} requesting system stats")
-
-    # NOTE: This is a simplified example. In a real implementation, you would:
-    # 1. Query your database for actual statistics
-    # 2. Cache results for performance
-    # 3. Add more detailed metrics
-
-    # For demonstration purposes, we'll return mock data
-    # You should replace this with actual statistics queries
-
-    return SystemStatsResponse(
-        total_users=0,
-        total_sessions=0,
-        active_sessions=0,
-        total_messages=0,
-        stats_as_of=datetime.utcnow(),
-    )
-
-
-@router.get("/users/{user_id}/sessions")
-async def get_user_sessions(
-    user_id: str,
-    limit: Optional[int] = Query(100, ge=1, le=1000),
-    next_token: Optional[str] = Query(None),
-    admin_user: User = Depends(require_admin),
-):
-    """
-    Get all sessions for a specific user (admin only).
-
-    This endpoint allows admins to view sessions for any user in the system.
-    Useful for support and debugging purposes.
-
-    Args:
-        user_id: User ID to get sessions for
-        limit: Maximum number of sessions to return
-        next_token: Pagination token
-        admin_user: Authenticated admin user (injected by dependency)
-
-    Returns:
-        SessionsListResponse with user's sessions
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 403 if user lacks admin role
-            - 404 if user not found
-            - 500 if server error
-    """
-    logger.info(f"Admin {admin_user.email} viewing sessions for user: {user_id}")
-
-    # Use existing session service to get user's sessions
-    result = await list_user_sessions(
-        user_id=user_id,
-        limit=limit,
-        next_token=next_token,
-    )
-
-    return result
-
-
-@router.get("/conditional-example")
-async def conditional_admin_feature(
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Example endpoint showing conditional admin features.
-
-    This demonstrates how to use has_any_role() for conditional logic
-    within a route handler, rather than blocking access entirely.
-
-    Regular users can access this endpoint, but admins see additional data.
-
-    Args:
-        current_user: Authenticated user (injected by dependency)
-
-    Returns:
-        Dict with user-specific or admin-specific data
-    """
-    response = {
-        "message": "Welcome!",
-        "user_email": current_user.email,
-        "user_roles": current_user.roles,
-    }
-
-    # Add admin-specific data if user is an admin
-    if has_any_role(current_user, "Admin", "SuperAdmin"):
-        logger.info(f"Admin {current_user.email} accessing with admin privileges")
-        response["admin_data"] = {
-            "debug_info": "Additional admin information",
-            "system_health": "All systems operational",
-        }
-
-    return response
-
-
-@router.post("/require-multiple-roles-example")
-async def require_multiple_roles_example(
-    admin_user: User = Depends(require_roles("Admin", "SuperAdmin", "DotNetDevelopers")),
-):
-    """
-    Example endpoint requiring one of multiple specific roles.
-
-    This demonstrates using require_roles() with multiple role options.
-    User must have at least ONE of: Admin, SuperAdmin, or DotNetDevelopers.
-
-    Args:
-        admin_user: Authenticated user with required role (injected by dependency)
-
-    Returns:
-        Dict with success message
-    """
-    logger.info(f"User {admin_user.email} with roles {admin_user.roles} accessed multi-role endpoint")
-
-    return {
-        "message": "Access granted",
-        "user": admin_user.email,
-        "matched_roles": [role for role in admin_user.roles if role in ["Admin", "SuperAdmin", "DotNetDevelopers"]],
-    }
 
 
 @router.get("/bedrock/models", response_model=BedrockModelsResponse)
@@ -292,8 +52,8 @@ async def list_bedrock_models(
     by_provider: Optional[str] = Query(None, description="Filter by provider name (e.g., 'Anthropic', 'Amazon')"),
     by_output_modality: Optional[str] = Query(None, description="Filter by output modality (e.g., 'TEXT', 'IMAGE')"),
     by_inference_type: Optional[str] = Query(None, description="Filter by inference type (e.g., 'ON_DEMAND', 'PROVISIONED')"),
-    max_results: Optional[int] = Query(100, ge=1, le=1000, description="Maximum number of models to return"),
-    next_token: Optional[str] = Query(None, description="Pagination token for next page"),
+    by_customization_type: Optional[str] = Query(None, description="Filter by customization type (e.g., 'FINE_TUNING', 'CONTINUED_PRE_TRAINING')"),
+    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return (client-side limit)"),
     admin_user: User = Depends(require_admin),
 ):
     """
@@ -302,16 +62,20 @@ async def list_bedrock_models(
     This endpoint queries AWS Bedrock to retrieve information about available
     foundation models, including their capabilities, providers, and configurations.
 
+    Note: The AWS Bedrock API doesn't support pagination or maxResults parameters.
+    All filtering is done server-side via query parameters. Client-side limiting
+    can be applied using the max_results parameter.
+
     Args:
         by_provider: Optional filter by provider name
         by_output_modality: Optional filter by output modality
         by_inference_type: Optional filter by inference type
-        max_results: Maximum number of models to return (1-1000, default: 100)
-        next_token: Pagination token for retrieving next page
+        by_customization_type: Optional filter by customization type
+        max_results: Optional client-side limit on number of models to return
         admin_user: Authenticated admin user (injected by dependency)
 
     Returns:
-        BedrockModelsResponse with list of foundation models and pagination info
+        BedrockModelsResponse with list of foundation models
 
     Raises:
         HTTPException:
@@ -326,46 +90,60 @@ async def list_bedrock_models(
         bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
         bedrock_client = boto3.client('bedrock', region_name=bedrock_region)
 
-        # Build request parameters
-        request_params = {
-            'maxResults': max_results,
-        }
+        # Build request parameters (only supported parameters)
+        request_params = {}
 
-        # Add optional filters
+        # Add optional filters (only these are supported by the API)
         if by_provider:
             request_params['byProvider'] = by_provider
         if by_output_modality:
             request_params['byOutputModality'] = by_output_modality
         if by_inference_type:
             request_params['byInferenceType'] = by_inference_type
-        if next_token:
-            request_params['nextToken'] = next_token
+        if by_customization_type:
+            request_params['byCustomizationType'] = by_customization_type
 
         # Call AWS Bedrock API
         logger.debug(f"Calling list_foundation_models with params: {request_params}")
         response = bedrock_client.list_foundation_models(**request_params)
 
         # Transform AWS response to our response model
-        model_summaries = [
-            FoundationModelSummary(
-                modelId=model.get('modelId', ''),
-                modelName=model.get('modelName', ''),
-                providerName=model.get('providerName', ''),
-                inputModalities=model.get('inputModalities', []),
-                outputModalities=model.get('outputModalities', []),
-                responseStreamingSupported=model.get('responseStreamingSupported', False),
-                customizationsSupported=model.get('customizationsSupported', []),
-                inferenceTypesSupported=model.get('inferenceTypesSupported', []),
-                modelLifecycle=model.get('modelLifecycle'),
+        all_models = response.get('modelSummaries', [])
+        
+        # Apply client-side limiting if requested
+        if max_results and len(all_models) > max_results:
+            all_models = all_models[:max_results]
+            logger.debug(f"Limited results to {max_results} models (client-side)")
+
+        model_summaries = []
+        for model in all_models:
+            # Extract modelLifecycle status - it can be a dict with 'status' key or a string
+            model_lifecycle = model.get('modelLifecycle')
+            if isinstance(model_lifecycle, dict):
+                model_lifecycle = model_lifecycle.get('status')
+
+            model_summaries.append(
+                FoundationModelSummary(
+                    modelId=model.get('modelId', ''),
+                    modelName=model.get('modelName', ''),
+                    providerName=model.get('providerName', ''),
+                    inputModalities=model.get('inputModalities', []),
+                    outputModalities=model.get('outputModalities', []),
+                    responseStreamingSupported=model.get('responseStreamingSupported', False),
+                    customizationsSupported=model.get('customizationsSupported', []),
+                    inferenceTypesSupported=model.get('inferenceTypesSupported', []),
+                    modelLifecycle=model_lifecycle,
+                )
             )
-            for model in response.get('modelSummaries', [])
-        ]
+
+        # Sort models by ID in reverse order (newest versions typically have higher version numbers/dates)
+        model_summaries.sort(key=lambda m: m.model_id, reverse=True)
 
         logger.info(f"✅ Retrieved {len(model_summaries)} Bedrock foundation models")
 
         return BedrockModelsResponse(
             models=model_summaries,
-            nextToken=response.get('nextToken'),
+            nextToken=None,  # API doesn't support pagination
             totalCount=len(model_summaries),
         )
 
@@ -388,4 +166,446 @@ async def list_bedrock_models(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}"
+        )
+
+
+@router.get("/gemini/models", response_model=GeminiModelsResponse)
+async def list_gemini_models(
+    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List available Google Gemini models (admin only).
+
+    This endpoint uses the Google AI Python SDK to retrieve information about available
+    Gemini models, including their capabilities, token limits, and supported methods.
+
+    Args:
+        max_results: Optional limit on number of models to return
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        GeminiModelsResponse with list of Gemini models
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if Google API error or server error
+    """
+    logger.info(f"Admin {admin_user.email} listing Gemini models")
+
+    try:
+        # Check if Google API key is configured
+        # Try both GOOGLE_API_KEY and GOOGLE_GEMINI_API_KEY for compatibility
+        google_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_GEMINI_API_KEY')
+        if not google_api_key:
+            logger.error("GOOGLE_API_KEY or GOOGLE_GEMINI_API_KEY environment variable not set")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Google API key not configured. Please set GOOGLE_API_KEY or GOOGLE_GEMINI_API_KEY environment variable."
+            )
+
+        # Import Google AI SDK
+        try:
+            from google import genai
+        except ImportError:
+            logger.error("Google GenAI SDK not installed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Google GenAI SDK not installed. Please install google-genai package."
+            )
+
+        # Initialize Gemini client
+        client = genai.Client(api_key=google_api_key)
+
+        # List available models
+        logger.debug("Fetching Gemini models from Google API")
+        all_models = []
+
+        for model in client.models.list():
+            # Extract model information according to Gemini API response structure
+            # Note: The API returns camelCase properties (e.g., displayName, inputTokenLimit)
+            # The SDK may expose these properties directly or convert them to snake_case
+
+            # Get supportedGenerationMethods - try both naming conventions
+            # According to API docs, this array includes: generateContent, countTokens, createCachedContent, batchGenerateContent
+            # Note: streamGenerateContent is NOT listed but is available via SDK's generate_content_stream()
+            supported_methods = getattr(model, 'supportedGenerationMethods', None)
+            if supported_methods is None:
+                supported_methods = getattr(model, 'supported_generation_methods', [])
+
+            model_data = GeminiModelSummary(
+                name=model.name,
+                baseModelId=getattr(model, 'baseModelId', getattr(model, 'base_model_id', None)),
+                version=getattr(model, 'version', None),
+                displayName=getattr(model, 'displayName', getattr(model, 'display_name', model.name)),
+                description=getattr(model, 'description', None),
+                inputTokenLimit=getattr(model, 'inputTokenLimit', getattr(model, 'input_token_limit', None)),
+                outputTokenLimit=getattr(model, 'outputTokenLimit', getattr(model, 'output_token_limit', None)),
+                supportedGenerationMethods=supported_methods if supported_methods else [],
+                thinking=getattr(model, 'thinking', None),
+                temperature=getattr(model, 'temperature', None),
+                maxTemperature=getattr(model, 'maxTemperature', getattr(model, 'max_temperature', None)),
+                topP=getattr(model, 'topP', getattr(model, 'top_p', None)),
+                topK=getattr(model, 'topK', getattr(model, 'top_k', None)),
+            )
+            all_models.append(model_data)
+
+        # Sort models by name in reverse order (newest versions typically have higher version numbers)
+        all_models.sort(key=lambda m: m.name, reverse=True)
+
+        # Apply client-side limiting if requested
+        if max_results and len(all_models) > max_results:
+            all_models = all_models[:max_results]
+            logger.debug(f"Limited results to {max_results} models")
+
+        logger.info(f"✅ Retrieved {len(all_models)} Gemini models")
+
+        return GeminiModelsResponse(
+            models=all_models,
+            totalCount=len(all_models),
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error listing Gemini models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching Gemini models: {str(e)}"
+        )
+
+
+@router.get("/openai/models", response_model=OpenAIModelsResponse)
+async def list_openai_models(
+    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List available OpenAI models (admin only).
+
+    This endpoint uses the OpenAI Python SDK to retrieve information about available
+    models from OpenAI's API.
+
+    Note: The OpenAI list models endpoint provides limited information compared to
+    Bedrock and Gemini APIs. For more detailed model specifications, see:
+    https://platform.openai.com/docs/models/compare
+
+    Args:
+        max_results: Optional limit on number of models to return
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        OpenAIModelsResponse with list of OpenAI models
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if OpenAI API error or server error
+    """
+    logger.info(f"Admin {admin_user.email} listing OpenAI models")
+
+    try:
+        # Check if OpenAI API key is configured
+        openai_api_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_api_key:
+            logger.error("OPENAI_API_KEY environment variable not set")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+            )
+
+        # Import OpenAI SDK
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("OpenAI SDK not installed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OpenAI SDK not installed. Please install openai package."
+            )
+
+        # Initialize OpenAI client
+        client = OpenAI(api_key=openai_api_key)
+
+        # List available models
+        logger.debug("Fetching OpenAI models from OpenAI API")
+        all_models = []
+
+        response = client.models.list()
+        for model in response.data:
+            model_data = OpenAIModelSummary(
+                id=model.id,
+                created=model.created,
+                ownedBy=model.owned_by,
+                object=model.object,
+            )
+            all_models.append(model_data)
+
+        # Sort models by creation date (newest first), then by ID for consistency
+        all_models.sort(key=lambda m: (-(m.created or 0), m.id))
+
+        # Apply client-side limiting if requested
+        if max_results and len(all_models) > max_results:
+            all_models = all_models[:max_results]
+            logger.debug(f"Limited results to {max_results} models")
+
+        logger.info(f"✅ Retrieved {len(all_models)} OpenAI models")
+
+        return OpenAIModelsResponse(
+            models=all_models,
+            totalCount=len(all_models),
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error listing OpenAI models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching OpenAI models: {str(e)}"
+        )
+
+
+# =============================================================================
+# Enabled Models Endpoints (Model Management)
+# =============================================================================
+
+@router.get("/managed-models", response_model=ManagedModelsListResponse)
+async def list_managed_models_endpoint(
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List all enabled models (admin only).
+
+    This endpoint returns all models that have been enabled for use in the system,
+    regardless of role restrictions. Use GET /models for user-facing endpoint
+    with role-based filtering.
+
+    Args:
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModelsListResponse with list of all enabled models
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} listing all enabled models")
+
+    try:
+        models = await list_managed_models(user_roles=None)  # None = no role filtering
+
+        # Convert ManagedModel instances to dicts for Pydantic v2 validation
+        models_dict = [model.model_dump(by_alias=True) for model in models]
+        
+        return ManagedModelsListResponse(
+            models=models_dict,
+            total_count=len(models),
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error listing enabled models: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing enabled models: {str(e)}"
+        )
+
+
+@router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
+async def create_managed_model_endpoint(
+    model_data: ManagedModelCreate,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Create a new enabled model (admin only).
+
+    This endpoint allows admins to add new models to the system and configure
+    which roles have access to them.
+
+    Args:
+        model_data: Model creation data
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Created model with ID and timestamps
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 400 if model with same modelId already exists
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} creating enabled model: {model_data.model_name}")
+
+    try:
+        model = await create_managed_model(model_data)
+        return model
+
+    except ValueError as e:
+        # Model already exists
+        logger.warning(f"Model creation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error creating enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating enabled model: {str(e)}"
+        )
+
+
+@router.get("/managed-models/{model_id}", response_model=ManagedModel)
+async def get_managed_model_endpoint(
+    model_id: str,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Get a specific enabled model by ID (admin only).
+
+    Args:
+        model_id: Model identifier
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Model details
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} requesting enabled model: {model_id}")
+
+    try:
+        model = await get_managed_model(model_id)
+
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return model
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error getting enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting enabled model: {str(e)}"
+        )
+
+
+@router.put("/managed-models/{model_id}", response_model=ManagedModel)
+async def update_managed_model_endpoint(
+    model_id: str,
+    updates: ManagedModelUpdate,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Update an enabled model (admin only).
+
+    This endpoint allows admins to update model configuration, including
+    pricing, role access, and enabled status.
+
+    Args:
+        model_id: Model identifier
+        updates: Fields to update
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Updated model
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} updating enabled model: {model_id}")
+
+    try:
+        model = await update_managed_model(model_id, updates)
+
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return model
+
+    except ValueError as e:
+        # Duplicate modelId or other validation error
+        logger.warning(f"Model update failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error updating enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating enabled model: {str(e)}"
+        )
+
+
+@router.delete("/managed-models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_managed_model_endpoint(
+    model_id: str,
+    admin_user: User = Depends(require_admin),
+):
+    """
+    Delete an enabled model (admin only).
+
+    This endpoint permanently removes a model from the system.
+
+    Args:
+        model_id: Model identifier
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} deleting enabled model: {model_id}")
+
+    try:
+        deleted = await delete_managed_model(model_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        return None
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting enabled model: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting enabled model: {str(e)}"
         )

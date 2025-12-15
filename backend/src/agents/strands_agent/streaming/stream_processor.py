@@ -44,6 +44,8 @@ from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, TypedDict
 from uuid import UUID
 
+from apis.shared.errors import StreamErrorEvent, ErrorCode
+
 logger = logging.getLogger(__name__)
 
 # Type aliases for better readability
@@ -296,13 +298,22 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     # We also break because processing should stop on error
     if event.get("force_stop", False):
         reason = event.get("force_stop_reason", "unknown reason")
-        events.append(_create_event("error", {"error": f"Agent force-stopped: {reason}"}))
+
+        # Create structured error event
+        error_event = StreamErrorEvent(
+            error=f"Agent force-stopped: {reason}",
+            code=ErrorCode.AGENT_ERROR,
+            detail=str(reason) if reason != "unknown reason" else None,
+            recoverable=False
+        )
+        # Convert to event dict format
+        events.append(_create_event("error", error_event.model_dump(exclude_none=True)))
         should_break = True
 
     return events, should_break
 
 
-def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
+def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str, int]) -> List[ProcessedEvent]:
     """Process content block events from the agent stream.
 
     CONTENT BLOCK EVENTS - STRUCTURAL FOUNDATION:
@@ -339,8 +350,14 @@ def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
     - messageStop: Marks the end of a message
       * Includes stopReason (end_turn, tool_use, max_tokens, etc.)
 
+    PROVIDER COMPATIBILITY:
+    - Some providers (like OpenAI) don't send contentBlockIndex
+    - We track it ourselves using current_block_index dict to ensure correct indexing
+    - This fixes issues with multiple tool uses being merged into one block
+
     Args:
         event: Raw event from Strands Agents
+        current_block_index: Dict to track current block index across calls
 
     Returns:
         List of processed events (may be empty if no content block events found)
@@ -355,8 +372,10 @@ def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
 
     # messageStart: Beginning of a message
     # Contains role (typically "assistant")
+    # Reset block index when new message starts
     if "messageStart" in inner_event:
         message_start = inner_event["messageStart"]
+        current_block_index["index"] = 0  # Reset to 0 for new message
         events.append(_create_event("message_start", {
             "role": message_start.get("role", "assistant")
         }))
@@ -365,8 +384,17 @@ def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
     # Contains start object (toolUse or text) and contentBlockIndex
     if "contentBlockStart" in inner_event:
         block_start = inner_event["contentBlockStart"]
+
+        # Get contentBlockIndex from provider, or use our tracked index
+        # Some providers (like OpenAI) don't send contentBlockIndex
+        if "contentBlockIndex" in block_start:
+            block_index = block_start["contentBlockIndex"]
+        else:
+            # Provider didn't send index, use our tracked index
+            block_index = current_block_index.get("index", 0)
+
         block_data = {
-            "contentBlockIndex": block_start.get("contentBlockIndex", 0)
+            "contentBlockIndex": block_index
         }
 
         # Extract start object (toolUse or text)
@@ -393,8 +421,17 @@ def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
     # Contains delta object (text or toolUse input) and contentBlockIndex
     if "contentBlockDelta" in inner_event:
         block_delta = inner_event["contentBlockDelta"]
+
+        # Get contentBlockIndex from provider, or use our tracked index
+        # Some providers (like OpenAI) don't send contentBlockIndex
+        if "contentBlockIndex" in block_delta:
+            block_index = block_delta["contentBlockIndex"]
+        else:
+            # Provider didn't send index, use our tracked index
+            block_index = current_block_index.get("index", 0)
+
         delta_data = {
-            "contentBlockIndex": block_delta.get("contentBlockIndex", 0)
+            "contentBlockIndex": block_index
         }
 
         # Extract delta object
@@ -419,9 +456,23 @@ def _handle_content_block_events(event: RawEvent) -> List[ProcessedEvent]:
     # Contains contentBlockIndex
     if "contentBlockStop" in inner_event:
         block_stop = inner_event["contentBlockStop"]
+
+        # Get contentBlockIndex from provider, or use our tracked index
+        # Some providers (like OpenAI) don't send contentBlockIndex
+        if "contentBlockIndex" in block_stop:
+            block_index = block_stop["contentBlockIndex"]
+        else:
+            # Provider didn't send index, use our tracked index
+            block_index = current_block_index.get("index", 0)
+
         events.append(_create_event("content_block_stop", {
-            "contentBlockIndex": block_stop.get("contentBlockIndex", 0)
+            "contentBlockIndex": block_index
         }))
+
+        # Increment block index for next block (when provider doesn't send it)
+        # Only increment if provider didn't send index (they manage their own)
+        if "contentBlockIndex" not in block_stop:
+            current_block_index["index"] = block_index + 1
 
     # messageStop: End of a message
     # Contains stopReason (e.g., "end_turn", "tool_use", "max_tokens")
@@ -1160,10 +1211,14 @@ async def process_agent_stream(
     }
     first_token_time: Optional[float] = None
 
+    # Track current content block index for providers that don't send it (like OpenAI)
+    # Using dict for mutability across function calls
+    current_block_index: Dict[str, int] = {"index": 0}
+
     try:
         # Track if we've seen result to know when it's safe to break on complete
         result_seen = False
-        
+
         # Iterate through each raw event from the agent stream
         # The agent stream is an async generator that yields events as they occur
         async for event in agent_stream:
@@ -1237,7 +1292,7 @@ async def process_agent_stream(
             # These track the lifecycle of content blocks (text and tool uses) in the model's response
             # Provides structured tracking with contentBlockIndex, messageStart/Stop, etc.
             # ALSO track first token time for latency calculation
-            for processed_event in _handle_content_block_events(event):
+            for processed_event in _handle_content_block_events(event, current_block_index):
                 # Track first token time for latency calculation
                 # Track ANY content block delta (text OR tool use) as first token
                 # Reasoning events are tracked separately in STEP 6
@@ -1322,10 +1377,24 @@ async def process_agent_stream(
         else:
             # Unexpected RuntimeError - treat as error
             logger.error(f"Runtime error processing agent stream: {e}", exc_info=True)
-            yield _create_event("error", {"error": str(e)})
+            # Create structured error event
+            error_event = StreamErrorEvent(
+                error="Runtime error during streaming",
+                code=ErrorCode.STREAM_ERROR,
+                detail=str(e),
+                recoverable=False
+            )
+            yield _create_event("error", error_event.model_dump(exclude_none=True))
 
     except Exception as e:
         # ERROR HANDLING: If anything else goes wrong, log it and send an error event
         # This ensures the client always gets a response, even on failure
         logger.error(f"Error processing agent stream: {e}", exc_info=True)
-        yield _create_event("error", {"error": str(e)})
+        # Create structured error event
+        error_event = StreamErrorEvent(
+            error="An unexpected error occurred during streaming",
+            code=ErrorCode.STREAM_ERROR,
+            detail=str(e),
+            recoverable=False
+        )
+        yield _create_event("error", error_event.model_dump(exclude_none=True))

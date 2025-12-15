@@ -15,7 +15,7 @@ class FileContent(BaseModel):
 
 
 class InvocationRequest(BaseModel):
-    """Input for /invocations endpoint"""
+    """Input for /invocations endpoint with multi-provider support"""
     session_id: str
     message: str
     model_id: Optional[str] = None
@@ -24,6 +24,8 @@ class InvocationRequest(BaseModel):
     caching_enabled: Optional[bool] = None
     enabled_tools: Optional[List[str]] = None  # User-specific tool preferences
     files: Optional[List[FileContent]] = None  # Multimodal file attachments
+    provider: Optional[str] = None  # LLM provider: "bedrock", "openai", or "gemini"
+    max_tokens: Optional[int] = None  # Maximum tokens to generate
 
 
 # class InvocationRequest(BaseModel):

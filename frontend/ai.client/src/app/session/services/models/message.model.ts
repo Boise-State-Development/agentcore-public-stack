@@ -127,9 +127,18 @@ export interface MessageStartEvent {
   // Note: Message ID is no longer sent by server, computed client-side as msg-{sessionId}-{index}
 }
 
+/**
+ * Event emitted at the start of a content block.
+ *
+ * NOTE: According to AWS ConverseStream API:
+ * - contentBlockStart is OPTIONAL for text blocks (Claude skips it entirely)
+ * - contentBlockStart is REQUIRED for tool_use blocks (contains toolUseId and name)
+ * - Some providers (like Gemini) emit contentBlockStart without type for text blocks
+ */
 export interface ContentBlockStartEvent {
   contentBlockIndex: number;
-  type: ContentBlockType;
+  /** Type is optional - defaults to 'text' if not specified */
+  type?: ContentBlockType;
   toolUse?: {
     toolUseId: string;
     name: string;
@@ -137,9 +146,17 @@ export interface ContentBlockStartEvent {
   };
 }
 
+/**
+ * Event emitted for content block deltas (incremental updates).
+ *
+ * NOTE: Type can be inferred from content:
+ * - If 'text' field is present -> type is 'text'
+ * - If 'input' field is present -> type is 'tool_use'
+ */
 export interface ContentBlockDeltaEvent {
   contentBlockIndex: number;
-  type: ContentBlockType;
+  /** Type is optional - can be inferred from text/input fields */
+  type?: ContentBlockType;
   text?: string;
   input?: string;
 }

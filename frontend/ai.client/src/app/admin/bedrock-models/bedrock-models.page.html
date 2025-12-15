@@ -1,0 +1,303 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Bedrock Foundation Models</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        View and filter available AWS Bedrock foundation models
+      </p>
+    </div>
+
+    <!-- Filters Section -->
+    <div class="mb-6 rounded-sm border border-gray-200 bg-gray-50 p-6 dark:border-gray-700 dark:bg-gray-800">
+      <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Filters</h2>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <!-- Search Filter -->
+        <div>
+          <label for="search" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Search Models
+          </label>
+          <input
+            type="text"
+            id="search"
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+            placeholder="Search by ID, name, or provider..."
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+
+        <!-- Provider Filter -->
+        <div>
+          <label for="provider" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Provider
+          </label>
+          <select
+            id="provider"
+            [ngModel]="providerFilter()"
+            (ngModelChange)="providerFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Providers</option>
+            @for (provider of availableProviders(); track provider) {
+              <option [value]="provider">{{ provider }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Output Modality Filter -->
+        <div>
+          <label for="outputModality" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Output Modality
+          </label>
+          <select
+            id="outputModality"
+            [ngModel]="outputModalityFilter()"
+            (ngModelChange)="outputModalityFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Modalities</option>
+            @for (modality of availableOutputModalities(); track modality) {
+              <option [value]="modality">{{ modality }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Inference Type Filter -->
+        <div>
+          <label for="inferenceType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Inference Type
+          </label>
+          <select
+            id="inferenceType"
+            [ngModel]="inferenceTypeFilter()"
+            (ngModelChange)="inferenceTypeFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Types</option>
+            @for (type of availableInferenceTypes(); track type) {
+              <option [value]="type">{{ type }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Customization Type Filter -->
+        <div>
+          <label for="customizationType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Customization Type
+          </label>
+          <select
+            id="customizationType"
+            [ngModel]="customizationTypeFilter()"
+            (ngModelChange)="customizationTypeFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Types</option>
+            @for (type of availableCustomizationTypes(); track type) {
+              <option [value]="type">{{ type }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Max Results Filter -->
+        <div>
+          <label for="maxResults" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Max Results
+          </label>
+          <input
+            type="number"
+            id="maxResults"
+            [ngModel]="maxResultsFilter()"
+            (ngModelChange)="maxResultsFilter.set($event || undefined)"
+            placeholder="No limit"
+            min="1"
+            max="1000"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+      </div>
+
+      <!-- Filter Actions -->
+      <div class="mt-4 flex gap-3">
+        <button
+          (click)="applyFilters()"
+          class="rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          Apply Filters
+        </button>
+        @if (hasActiveFilters()) {
+          <button
+            (click)="resetFilters()"
+            class="rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Reset Filters
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    @if (isLoading()) {
+      <div class="flex items-center justify-center py-12">
+        <app-loading />
+      </div>
+    }
+
+    <!-- Error State -->
+    @if (error()) {
+      <div class="rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <h3 class="text-sm/6 font-medium text-red-800 dark:text-red-400">Error loading models</h3>
+        <p class="mt-1 text-sm/6 text-red-700 dark:text-red-500">{{ error() }}</p>
+      </div>
+    }
+
+    <!-- Results Header -->
+    @if (!isLoading() && !error()) {
+      <div class="mb-4 flex items-center justify-between">
+        <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+          Showing {{ models().length }} model{{ models().length !== 1 ? 's' : '' }}
+        </p>
+      </div>
+
+      <!-- Models List -->
+      @if (models().length === 0) {
+        <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+          <p class="text-base/7 text-gray-500 dark:text-gray-400">
+            No models found matching the current filters.
+          </p>
+        </div>
+      } @else {
+        <div class="space-y-4">
+          @for (model of models(); track model.modelId) {
+            <div class="rounded-sm border border-gray-200 bg-white p-6 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600">
+              <!-- Model Header -->
+              <div class="mb-4 flex items-start justify-between">
+                <div class="flex-1">
+                  <h3 class="text-lg/7 font-semibold text-gray-900 dark:text-white">
+                    {{ model.modelName }}
+                  </h3>
+                  <p class="mt-1 font-mono text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ model.modelId }}
+                  </p>
+                </div>
+                <span class="inline-flex shrink-0 items-center rounded-sm bg-blue-100 px-3 py-1 text-xs/5 font-medium text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                  {{ model.providerName }}
+                </span>
+              </div>
+
+              <!-- Model Details Grid -->
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <!-- Input Modalities -->
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Input Modalities</h4>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    @for (modality of model.inputModalities; track modality) {
+                      <span class="inline-flex items-center rounded-sm bg-gray-100 px-2 py-1 text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                        {{ modality }}
+                      </span>
+                    }
+                    @if (model.inputModalities.length === 0) {
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">None</span>
+                    }
+                  </div>
+                </div>
+
+                <!-- Output Modalities -->
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Output Modalities</h4>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    @for (modality of model.outputModalities; track modality) {
+                      <span class="inline-flex items-center rounded-sm bg-gray-100 px-2 py-1 text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                        {{ modality }}
+                      </span>
+                    }
+                    @if (model.outputModalities.length === 0) {
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">None</span>
+                    }
+                  </div>
+                </div>
+
+                <!-- Inference Types -->
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Inference Types</h4>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    @for (type of model.inferenceTypesSupported; track type) {
+                      <span class="inline-flex items-center rounded-sm bg-green-100 px-2 py-1 text-xs/5 text-green-700 dark:bg-green-900/50 dark:text-green-300">
+                        {{ type }}
+                      </span>
+                    }
+                    @if (model.inferenceTypesSupported.length === 0) {
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">None</span>
+                    }
+                  </div>
+                </div>
+
+                <!-- Customizations Supported -->
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Customizations</h4>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    @for (customization of model.customizationsSupported; track customization) {
+                      <span class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                        {{ customization }}
+                      </span>
+                    }
+                    @if (model.customizationsSupported.length === 0) {
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">None</span>
+                    }
+                  </div>
+                </div>
+              </div>
+
+              <!-- Model Features and Actions -->
+              <div class="mt-4 flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+                <div class="flex gap-4">
+                  <div class="flex items-center gap-2">
+                    @if (model.responseStreamingSupported) {
+                      <svg class="size-5 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                      </svg>
+                      <span class="text-sm/6 text-gray-700 dark:text-gray-300">Streaming supported</span>
+                    } @else {
+                      <svg class="size-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clip-rule="evenodd" />
+                      </svg>
+                      <span class="text-sm/6 text-gray-500 dark:text-gray-400">No streaming</span>
+                    }
+                  </div>
+
+                  @if (model.modelLifecycle) {
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm/6 text-gray-600 dark:text-gray-400">Status:</span>
+                      <span class="font-medium text-sm/6 text-gray-900 dark:text-white">{{ model.modelLifecycle }}</span>
+                    </div>
+                  }
+                </div>
+
+                <!-- Add Model Button or Added Status -->
+                @if (isModelAdded(model.modelId)) {
+                  <div class="inline-flex items-center gap-2 rounded-sm bg-green-100 px-3 py-1.5 text-sm/6 font-medium text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                    <svg class="size-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+                    </svg>
+                    Added
+                  </div>
+                } @else {
+                  <button
+                    (click)="addModelFromBedrock(model)"
+                    class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                  >
+                    <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    Add Model
+                  </button>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+</div>

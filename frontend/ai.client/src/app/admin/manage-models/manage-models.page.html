@@ -1,0 +1,227 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8 flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Manage Models</h1>
+        <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+          View and manage AI models available to users
+        </p>
+      </div>
+      <a
+        routerLink="/admin/manage-models/new"
+        class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
+      >
+        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Add Model
+      </a>
+    </div>
+
+    <!-- Filters Section -->
+    <div class="mb-6 rounded-sm border border-gray-200 bg-gray-50 p-6 dark:border-gray-700 dark:bg-gray-800">
+      <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Search & Filters</h2>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <!-- Search -->
+        <div>
+          <label for="search" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Search
+          </label>
+          <input
+            type="text"
+            id="search"
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+            placeholder="Search by name, ID, or provider..."
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+
+        <!-- Provider Filter -->
+        <div>
+          <label for="provider" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Provider
+          </label>
+          <select
+            id="provider"
+            [ngModel]="providerFilter()"
+            (ngModelChange)="providerFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Providers</option>
+            @for (provider of availableProviders(); track provider) {
+              <option [value]="provider">{{ provider }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Enabled Filter -->
+        <div>
+          <label for="enabled" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Status
+          </label>
+          <select
+            id="enabled"
+            [ngModel]="enabledFilter()"
+            (ngModelChange)="enabledFilter.set($event)"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Statuses</option>
+            <option value="enabled">Enabled</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Filter Actions -->
+      @if (hasActiveFilters()) {
+        <div class="mt-4">
+          <button
+            (click)="resetFilters()"
+            class="rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Reset Filters
+          </button>
+        </div>
+      }
+    </div>
+
+    <!-- Results Header -->
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+        Showing {{ filteredModels().length }} model{{ filteredModels().length !== 1 ? 's' : '' }}
+      </p>
+      <div class="flex flex-wrap gap-3 sm:gap-4">
+        <a
+          routerLink="/admin/bedrock/models"
+          class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          Browse Bedrock Models →
+        </a>
+        <a
+          routerLink="/admin/gemini/models"
+          class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          Browse Gemini Models →
+        </a>
+        <a
+          routerLink="/admin/openai/models"
+          class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          Browse OpenAI Models →
+        </a>
+      </div>
+    </div>
+
+    <!-- Models List -->
+    @if (filteredModels().length === 0) {
+      <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+        <p class="text-base/7 text-gray-500 dark:text-gray-400">
+          No models found matching the current filters.
+        </p>
+      </div>
+    } @else {
+      <div class="space-y-4">
+        @for (model of filteredModels(); track model.id) {
+          <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+            <!-- Model Header -->
+            <div class="mb-4 flex items-start justify-between">
+              <div class="flex-1">
+                <div class="flex items-center gap-3">
+                  <h3 class="text-lg/7 font-semibold text-gray-900 dark:text-white">
+                    {{ model.modelName }}
+                  </h3>
+                  @if (model.enabled) {
+                    <span class="inline-flex items-center rounded-sm bg-green-100 px-2 py-1 text-xs/5 font-medium text-green-800 dark:bg-green-900/50 dark:text-green-300">
+                      Enabled
+                    </span>
+                  } @else {
+                    <span class="inline-flex items-center rounded-sm bg-red-100 px-2 py-1 text-xs/5 font-medium text-red-800 dark:bg-red-900/50 dark:text-red-300">
+                      Disabled
+                    </span>
+                  }
+                </div>
+                <p class="mt-1 font-mono text-sm/6 text-gray-600 dark:text-gray-400">
+                  {{ model.modelId }}
+                </p>
+              </div>
+              <div class="flex shrink-0 gap-2">
+                <span class="inline-flex items-center rounded-sm bg-blue-100 px-3 py-1 text-xs/5 font-medium text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                  {{ model.provider }}
+                </span>
+                <span class="inline-flex items-center rounded-sm bg-gray-100 px-3 py-1 text-xs/5 font-medium text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+                  {{ model.providerName }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Model Details Grid -->
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <!-- Available to Roles -->
+              <div>
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Available to Roles</h4>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  @for (role of model.availableToRoles; track role) {
+                    <span class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
+                      {{ role }}
+                    </span>
+                  }
+                </div>
+              </div>
+
+              <!-- Pricing -->
+              <div>
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Pricing (per 1M tokens)</h4>
+                <div class="mt-2 space-y-1">
+                  <p class="text-sm/6 text-gray-900 dark:text-white">
+                    Input: <span class="font-semibold">${{ model.inputPricePerMillionTokens.toFixed(2) }}</span>
+                  </p>
+                  <p class="text-sm/6 text-gray-900 dark:text-white">
+                    Output: <span class="font-semibold">${{ model.outputPricePerMillionTokens.toFixed(2) }}</span>
+                  </p>
+                </div>
+              </div>
+
+              <!-- Modalities -->
+              <div>
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Modalities</h4>
+                <div class="mt-2 space-y-1">
+                  <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                    <span class="font-medium">Input:</span> {{ model.inputModalities.join(', ') }}
+                  </p>
+                  <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                    <span class="font-medium">Output:</span> {{ model.outputModalities.join(', ') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="mt-4 flex gap-3 border-t border-gray-200 pt-4 dark:border-gray-700">
+              <a
+                [routerLink]="['/admin/manage-models/edit', model.id]"
+                class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              >
+                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                Edit
+              </a>
+              <button
+                (click)="deleteModel(model.id)"
+                class="inline-flex items-center gap-2 rounded-sm border border-red-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-red-700 hover:bg-red-50 focus:outline-hidden focus:ring-3 focus:ring-red-500/50 dark:border-red-600 dark:bg-gray-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+</div>

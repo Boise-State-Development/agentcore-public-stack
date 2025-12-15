@@ -10,14 +10,15 @@ import base64
 from typing import Dict, Any, Optional
 from bedrock_agentcore.tools.browser_client import BrowserClient
 
-# Import Nova Act error types for better error handling
-from nova_act import (
-    ActInvalidModelGenerationError,
-    ActExceededMaxStepsError,
-    ActTimeoutError,
-    ActAgentError,
-    ActClientError
-)
+# NOVA_ACT DISABLED: Commented out temporarily due to version conflict with strands-agents
+# To re-enable: Uncomment this import and uncomment nova-act in pyproject.toml
+# from nova_act import (
+#     ActInvalidModelGenerationError,
+#     ActExceededMaxStepsError,
+#     ActTimeoutError,
+#     ActAgentError,
+#     ActClientError
+# )
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +37,34 @@ class BrowserController:
         self.browser_id = self._get_browser_id()
         self.browser_name = os.getenv('BROWSER_NAME')
 
+        # NOVA_ACT DISABLED: API key loading commented out
+        # To re-enable: Uncomment this section and uncomment nova-act in pyproject.toml
         # Try to load Nova Act API key from environment variable first
-        self.nova_api_key = os.getenv('NOVA_ACT_API_KEY')
+        # self.nova_api_key = os.getenv('NOVA_ACT_API_KEY')
+        self.nova_api_key = None  # Set to None when nova_act is disabled
 
         # If not in environment, try to load from Secrets Manager
-        if not self.nova_api_key:
-            try:
-                import boto3
-
-                secrets_client = boto3.client('secretsmanager', region_name=self.region)
-                project_name = os.getenv('PROJECT_NAME', 'strands-agent-chatbot')
-                secret_name = f"{project_name}/nova-act-api-key"
-
-                logger.info(f"Loading Nova Act API key from Secrets Manager: {secret_name}")
-                response = secrets_client.get_secret_value(SecretId=secret_name)
-
-                self.nova_api_key = response['SecretString']
-                logger.info("Nova Act API key loaded successfully from Secrets Manager")
-            except secrets_client.exceptions.ResourceNotFoundException:
-                raise ValueError(
-                    "❌ Nova Act API key not configured. "
-                    "Browser automation tools are disabled. "
-                    "To enable, run deployment and enter your Nova Act API key."
-                )
-            except Exception as e:
-                raise ValueError(f"Failed to load Nova Act API key: {e}")
+        # if not self.nova_api_key:
+        #     try:
+        #         import boto3
+        #
+        #         secrets_client = boto3.client('secretsmanager', region_name=self.region)
+        #         project_name = os.getenv('PROJECT_NAME', 'strands-agent-chatbot')
+        #         secret_name = f"{project_name}/nova-act-api-key"
+        #
+        #         logger.info(f"Loading Nova Act API key from Secrets Manager: {secret_name}")
+        #         response = secrets_client.get_secret_value(SecretId=secret_name)
+        #
+        #         self.nova_api_key = response['SecretString']
+        #         logger.info("Nova Act API key loaded successfully from Secrets Manager")
+        #     except secrets_client.exceptions.ResourceNotFoundException:
+        #         raise ValueError(
+        #             "❌ Nova Act API key not configured. "
+        #             "Browser automation tools are disabled. "
+        #             "To enable, run deployment and enter your Nova Act API key."
+        #         )
+        #     except Exception as e:
+        #         raise ValueError(f"Failed to load Nova Act API key: {e}")
 
         self.browser_session_client = None
         self.page = None  # Will be set from NovaAct.page
@@ -125,22 +129,31 @@ class BrowserController:
             logger.info(f"✅ Browser session started: {session_id}")
             ws_url, headers = self.browser_session_client.generate_ws_headers()
 
+            # NOVA_ACT DISABLED: NovaAct initialization commented out
+            # To re-enable: Uncomment this section and uncomment nova-act in pyproject.toml
             # Initialize Nova Act client with AgentCore Browser CDP connection
-            from nova_act import NovaAct
-            self.nova_client = NovaAct(
-                cdp_endpoint_url=ws_url,
-                cdp_headers=headers,
-                nova_act_api_key=self.nova_api_key,
-                starting_page="about:blank"  # Will navigate later
+            # from nova_act import NovaAct
+            # self.nova_client = NovaAct(
+            #     cdp_endpoint_url=ws_url,
+            #     cdp_headers=headers,
+            #     nova_act_api_key=self.nova_api_key,
+            #     starting_page="about:blank"  # Will navigate later
+            # )
+            # # Start NovaAct (enters context manager)
+            # self.nova_client.__enter__()
+            #
+            # # Get page from NovaAct for screenshots
+            # self.page = self.nova_client.page
+
+            # When nova_act is disabled, browser tools are not available
+            raise ValueError(
+                "❌ Nova Act is currently disabled. "
+                "Browser automation tools require nova-act which is temporarily disabled due to version conflicts. "
+                "To re-enable: Uncomment nova-act in pyproject.toml and uncomment nova_act code in browser_controller.py"
             )
-            # Start NovaAct (enters context manager)
-            self.nova_client.__enter__()
 
-            # Get page from NovaAct for screenshots
-            self.page = self.nova_client.page
-
-            self._connected = True
-            logger.info(f"Successfully connected to AgentCore Browser for session {self.session_id}")
+            # self._connected = True
+            # logger.info(f"Successfully connected to AgentCore Browser for session {self.session_id}")
 
         except Exception as e:
             logger.error(f"Failed to connect to AgentCore Browser: {e}")
@@ -149,37 +162,46 @@ class BrowserController:
 
     def navigate(self, url: str) -> Dict[str, Any]:
         """Navigate to URL and return result with screenshot"""
-        try:
-            if not self._connected:
-                self.connect()
-
-            logger.info(f"Navigating to {url}")
-
-            # Use NovaAct's go_to_url() instead of act() for more reliable navigation
-            # go_to_url() handles timeout better and waits for page to fully load
-            self.nova_client.go_to_url(url)
-
-            current_url = self.page.url
-            page_title = self.page.title()
-            screenshot_data = self._take_screenshot()
-
-            logger.info(f"✅ Successfully navigated to: {current_url}")
-            logger.info(f"   Page title: {page_title}")
-
-            return {
-                "status": "success",
-                "message": f"Navigated to {current_url}",
-                "current_url": current_url,
-                "page_title": page_title,
-                "screenshot": screenshot_data
-            }
-        except Exception as e:
-            logger.error(f"Navigation failed: {e}")
-            return {
-                "status": "error",
-                "message": f"Navigation failed: {str(e)}",
-                "screenshot": None
-            }
+        # NOVA_ACT DISABLED: Browser navigation requires nova_act
+        logger.warning("Browser navigation is disabled - nova_act is not available")
+        return {
+            "status": "error",
+            "message": "❌ Browser navigation is currently disabled. Nova Act is temporarily disabled due to version conflicts. To re-enable: Uncomment nova-act in pyproject.toml and uncomment nova_act code in browser_controller.py",
+            "screenshot": None
+        }
+        
+        # Original implementation (commented out):
+        # try:
+        #     if not self._connected:
+        #         self.connect()
+        #
+        #     logger.info(f"Navigating to {url}")
+        #
+        #     # Use NovaAct's go_to_url() instead of act() for more reliable navigation
+        #     # go_to_url() handles timeout better and waits for page to fully load
+        #     self.nova_client.go_to_url(url)
+        #
+        #     current_url = self.page.url
+        #     page_title = self.page.title()
+        #     screenshot_data = self._take_screenshot()
+        #
+        #     logger.info(f"✅ Successfully navigated to: {current_url}")
+        #     logger.info(f"   Page title: {page_title}")
+        #
+        #     return {
+        #         "status": "success",
+        #         "message": f"Navigated to {current_url}",
+        #         "current_url": current_url,
+        #         "page_title": page_title,
+        #         "screenshot": screenshot_data
+        #     }
+        # except Exception as e:
+        #     logger.error(f"Navigation failed: {e}")
+        #     return {
+        #         "status": "error",
+        #         "message": f"Navigation failed: {str(e)}",
+        #         "screenshot": None
+        #     }
 
     def act(self, instruction: str, max_steps: int = 5, timeout: int = 120) -> Dict[str, Any]:
         """Execute natural language instruction using Nova Act
@@ -189,118 +211,128 @@ class BrowserController:
             max_steps: Maximum number of steps (browser actuations) to take
             timeout: Timeout in seconds for the entire act call
         """
-        try:
-            if not self._connected:
-                self.connect()
-
-            logger.info(f"Executing action: {instruction}")
-            logger.info(f"Parameters: max_steps={max_steps}, timeout={timeout}s")
-
-            # Execute Nova Act instruction (first arg is positional)
-            # observation_delay_ms: Wait after action for page loads (1.5s helps with slow-loading content)
-            result = self.nova_client.act(
-                instruction,
-                max_steps=max_steps,
-                timeout=timeout,
-                observation_delay_ms=1500  # 1.5 second delay for page loads
-            )
-
-            current_url = self.page.url
-            page_title = self.page.title()
-            screenshot_data = self._take_screenshot()
-
-            # Parse Nova Act result
-            success = getattr(result, 'success', False)
-            details = getattr(result, 'details', '') or str(result)
-
-            # Extract and log execution metadata
-            metadata = getattr(result, 'metadata', None)
-            execution_info = ""
-            if metadata:
-                session_id = getattr(metadata, 'session_id', None)
-                act_id = getattr(metadata, 'act_id', None)
-                steps_executed = getattr(metadata, 'num_steps_executed', None)
-                start_time = getattr(metadata, 'start_time', None)
-                end_time = getattr(metadata, 'end_time', None)
-
-                # Log detailed metadata
-                logger.info(f"✅ Act completed:")
-                if session_id:
-                    logger.info(f"   Session ID: {session_id}")
-                if act_id:
-                    logger.info(f"   Act ID: {act_id}")
-                if steps_executed is not None:
-                    logger.info(f"   Steps: {steps_executed}/{max_steps}")
-                    execution_info = f" (executed {steps_executed}/{max_steps} steps)"
-                if start_time and end_time:
-                    duration = end_time - start_time
-                    logger.info(f"   Duration: {duration:.2f}s")
-
-            # Note: Bedrock API only accepts "success" or "error" status
-            # Even if action was partial, we return "success" with details in message
-            return {
-                "status": "success",  # Always "success" if no exception (Bedrock requirement)
-                "message": f"{'✓ ' if success else '⚠️ '}{details}{execution_info}",
-                "instruction": instruction,
-                "current_url": current_url,
-                "page_title": page_title,
-                "screenshot": screenshot_data
-            }
-
-        except ActInvalidModelGenerationError as e:
-            # Schema validation failed or model generated invalid output
-            logger.error(f"❌ Invalid model generation: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Invalid model output: {str(e)}\n\nTry simplifying the instruction or breaking it into smaller steps.",
-                "instruction": instruction,
-                "screenshot": screenshot_data
-            }
-
-        except ActExceededMaxStepsError as e:
-            # Task too complex for the given max_steps
-            logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Task too complex (exceeded {max_steps} steps): {str(e)}\n\nBreak this into smaller, simpler instructions.",
-                "instruction": instruction,
-                "screenshot": screenshot_data
-            }
-
-        except ActTimeoutError as e:
-            # Operation timed out
-            logger.error(f"❌ Timeout ({timeout}s): {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Operation timed out after {timeout}s: {str(e)}\n\nTry increasing timeout or simplifying the task.",
-                "instruction": instruction,
-                "screenshot": screenshot_data
-            }
-
-        except (ActAgentError, ActClientError) as e:
-            # Retriable errors - agent failed or invalid request
-            logger.error(f"❌ Act error: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Action failed: {str(e)}\n\nYou may retry with a different instruction.",
-                "instruction": instruction,
-                "screenshot": screenshot_data
-            }
-
-        except Exception as e:
-            # Unknown error
-            logger.error(f"❌ Unexpected error: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Action failed: {str(e)}",
-                "instruction": instruction,
-                "screenshot": screenshot_data
-            }
+        # NOVA_ACT DISABLED: Browser actions require nova_act
+        logger.warning("Browser act is disabled - nova_act is not available")
+        return {
+            "status": "error",
+            "message": "❌ Browser actions are currently disabled. Nova Act is temporarily disabled due to version conflicts. To re-enable: Uncomment nova-act in pyproject.toml and uncomment nova_act code in browser_controller.py",
+            "instruction": instruction,
+            "screenshot": None
+        }
+        
+        # Original implementation (commented out):
+        # try:
+        #     if not self._connected:
+        #         self.connect()
+        #
+        #     logger.info(f"Executing action: {instruction}")
+        #     logger.info(f"Parameters: max_steps={max_steps}, timeout={timeout}s")
+        #
+        #     # Execute Nova Act instruction (first arg is positional)
+        #     # observation_delay_ms: Wait after action for page loads (1.5s helps with slow-loading content)
+        #     result = self.nova_client.act(
+        #         instruction,
+        #         max_steps=max_steps,
+        #         timeout=timeout,
+        #         observation_delay_ms=1500  # 1.5 second delay for page loads
+        #     )
+        #
+        #     current_url = self.page.url
+        #     page_title = self.page.title()
+        #     screenshot_data = self._take_screenshot()
+        #
+        #     # Parse Nova Act result
+        #     success = getattr(result, 'success', False)
+        #     details = getattr(result, 'details', '') or str(result)
+        #
+        #     # Extract and log execution metadata
+        #     metadata = getattr(result, 'metadata', None)
+        #     execution_info = ""
+        #     if metadata:
+        #         session_id = getattr(metadata, 'session_id', None)
+        #         act_id = getattr(metadata, 'act_id', None)
+        #         steps_executed = getattr(metadata, 'num_steps_executed', None)
+        #         start_time = getattr(metadata, 'start_time', None)
+        #         end_time = getattr(metadata, 'end_time', None)
+        #
+        #         # Log detailed metadata
+        #         logger.info(f"✅ Act completed:")
+        #         if session_id:
+        #             logger.info(f"   Session ID: {session_id}")
+        #         if act_id:
+        #             logger.info(f"   Act ID: {act_id}")
+        #         if steps_executed is not None:
+        #             logger.info(f"   Steps: {steps_executed}/{max_steps}")
+        #             execution_info = f" (executed {steps_executed}/{max_steps} steps)"
+        #         if start_time and end_time:
+        #             duration = end_time - start_time
+        #             logger.info(f"   Duration: {duration:.2f}s")
+        #
+        #     # Note: Bedrock API only accepts "success" or "error" status
+        #     # Even if action was partial, we return "success" with details in message
+        #     return {
+        #         "status": "success",  # Always "success" if no exception (Bedrock requirement)
+        #         "message": f"{'✓ ' if success else '⚠️ '}{details}{execution_info}",
+        #         "instruction": instruction,
+        #         "current_url": current_url,
+        #         "page_title": page_title,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActInvalidModelGenerationError as e:
+        #     # Schema validation failed or model generated invalid output
+        #     logger.error(f"❌ Invalid model generation: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Invalid model output: {str(e)}\n\nTry simplifying the instruction or breaking it into smaller steps.",
+        #         "instruction": instruction,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActExceededMaxStepsError as e:
+        #     # Task too complex for the given max_steps
+        #     logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Task too complex (exceeded {max_steps} steps): {str(e)}\n\nBreak this into smaller, simpler instructions.",
+        #         "instruction": instruction,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActTimeoutError as e:
+        #     # Operation timed out
+        #     logger.error(f"❌ Timeout ({timeout}s): {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Operation timed out after {timeout}s: {str(e)}\n\nTry increasing timeout or simplifying the task.",
+        #         "instruction": instruction,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except (ActAgentError, ActClientError) as e:
+        #     # Retriable errors - agent failed or invalid request
+        #     logger.error(f"❌ Act error: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Action failed: {str(e)}\n\nYou may retry with a different instruction.",
+        #         "instruction": instruction,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except Exception as e:
+        #     # Unknown error
+        #     logger.error(f"❌ Unexpected error: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Action failed: {str(e)}",
+        #         "instruction": instruction,
+        #         "screenshot": screenshot_data
+        #     }
 
     def _get_error_screenshot(self) -> Optional[bytes]:
         """Helper to safely capture screenshot on error"""
@@ -320,120 +352,130 @@ class BrowserController:
             max_steps: Maximum number of steps for extraction
             timeout: Timeout in seconds for extraction
         """
-        try:
-            if not self._connected:
-                self.connect()
-
-            logger.info(f"Extracting data: {description}")
-            logger.info(f"Parameters: max_steps={max_steps}, timeout={timeout}s, schema={schema is not None}")
-
-            # Build extraction prompt
-            prompt = f"{description} from the current webpage"
-
-            # Execute Nova Act extraction (first arg is positional)
-            # observation_delay_ms: Wait after action for page loads (1.5s helps with slow-loading content)
-            result = self.nova_client.act(
-                prompt,
-                schema=schema,
-                max_steps=max_steps,
-                timeout=timeout,
-                observation_delay_ms=1500  # 1.5 second delay for page loads
-            )
-
-            current_url = self.page.url
-            page_title = self.page.title()
-            screenshot_data = self._take_screenshot()
-
-            # Parse extracted data
-            extracted_data = getattr(result, 'parsed_response', None) or getattr(result, 'response', {})
-
-            # Extract and log execution metadata
-            metadata = getattr(result, 'metadata', None)
-            execution_info = ""
-            if metadata:
-                session_id = getattr(metadata, 'session_id', None)
-                act_id = getattr(metadata, 'act_id', None)
-                steps_executed = getattr(metadata, 'num_steps_executed', None)
-                start_time = getattr(metadata, 'start_time', None)
-                end_time = getattr(metadata, 'end_time', None)
-
-                # Log detailed metadata
-                logger.info(f"✅ Extraction completed:")
-                if session_id:
-                    logger.info(f"   Session ID: {session_id}")
-                if act_id:
-                    logger.info(f"   Act ID: {act_id}")
-                if steps_executed is not None:
-                    logger.info(f"   Steps: {steps_executed}/{max_steps}")
-                    execution_info = f" (executed {steps_executed}/{max_steps} steps)"
-                if start_time and end_time:
-                    duration = end_time - start_time
-                    logger.info(f"   Duration: {duration:.2f}s")
-
-            return {
-                "status": "success",
-                "message": f"Data extracted successfully{execution_info}",
-                "data": extracted_data,
-                "description": description,
-                "current_url": current_url,
-                "page_title": page_title,
-                "screenshot": screenshot_data
-            }
-
-        except ActInvalidModelGenerationError as e:
-            # Schema validation failed - this is the error you experienced!
-            logger.error(f"❌ Schema validation failed: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Schema validation failed: {str(e)}\n\nThe extracted data didn't match the expected format. Try simplifying the description or using no schema.",
-                "description": description,
-                "screenshot": screenshot_data
-            }
-
-        except ActExceededMaxStepsError as e:
-            # Extraction too complex
-            logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Extraction too complex (exceeded {max_steps} steps): {str(e)}\n\nSimplify what you're trying to extract.",
-                "description": description,
-                "screenshot": screenshot_data
-            }
-
-        except ActTimeoutError as e:
-            # Extraction timed out
-            logger.error(f"❌ Timeout ({timeout}s): {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Extraction timed out after {timeout}s: {str(e)}",
-                "description": description,
-                "screenshot": screenshot_data
-            }
-
-        except (ActAgentError, ActClientError) as e:
-            # Retriable errors
-            logger.error(f"❌ Extraction error: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Extraction failed: {str(e)}\n\nYou may retry with a different description.",
-                "description": description,
-                "screenshot": screenshot_data
-            }
-
-        except Exception as e:
-            # Unknown error
-            logger.error(f"❌ Unexpected error: {e}")
-            screenshot_data = self._get_error_screenshot()
-            return {
-                "status": "error",
-                "message": f"Extraction failed: {str(e)}",
-                "description": description,
-                "screenshot": screenshot_data
-            }
+        # NOVA_ACT DISABLED: Browser extraction requires nova_act
+        logger.warning("Browser extraction is disabled - nova_act is not available")
+        return {
+            "status": "error",
+            "message": "❌ Browser extraction is currently disabled. Nova Act is temporarily disabled due to version conflicts. To re-enable: Uncomment nova-act in pyproject.toml and uncomment nova_act code in browser_controller.py",
+            "description": description,
+            "screenshot": None
+        }
+        
+        # Original implementation (commented out):
+        # try:
+        #     if not self._connected:
+        #         self.connect()
+        #
+        #     logger.info(f"Extracting data: {description}")
+        #     logger.info(f"Parameters: max_steps={max_steps}, timeout={timeout}s, schema={schema is not None}")
+        #
+        #     # Build extraction prompt
+        #     prompt = f"{description} from the current webpage"
+        #
+        #     # Execute Nova Act extraction (first arg is positional)
+        #     # observation_delay_ms: Wait after action for page loads (1.5s helps with slow-loading content)
+        #     result = self.nova_client.act(
+        #         prompt,
+        #         schema=schema,
+        #         max_steps=max_steps,
+        #         timeout=timeout,
+        #         observation_delay_ms=1500  # 1.5 second delay for page loads
+        #     )
+        #
+        #     current_url = self.page.url
+        #     page_title = self.page.title()
+        #     screenshot_data = self._take_screenshot()
+        #
+        #     # Parse extracted data
+        #     extracted_data = getattr(result, 'parsed_response', None) or getattr(result, 'response', {})
+        #
+        #     # Extract and log execution metadata
+        #     metadata = getattr(result, 'metadata', None)
+        #     execution_info = ""
+        #     if metadata:
+        #         session_id = getattr(metadata, 'session_id', None)
+        #         act_id = getattr(metadata, 'act_id', None)
+        #         steps_executed = getattr(metadata, 'num_steps_executed', None)
+        #         start_time = getattr(metadata, 'start_time', None)
+        #         end_time = getattr(metadata, 'end_time', None)
+        #
+        #         # Log detailed metadata
+        #         logger.info(f"✅ Extraction completed:")
+        #         if session_id:
+        #             logger.info(f"   Session ID: {session_id}")
+        #         if act_id:
+        #             logger.info(f"   Act ID: {act_id}")
+        #         if steps_executed is not None:
+        #             logger.info(f"   Steps: {steps_executed}/{max_steps}")
+        #             execution_info = f" (executed {steps_executed}/{max_steps} steps)"
+        #         if start_time and end_time:
+        #             duration = end_time - start_time
+        #             logger.info(f"   Duration: {duration:.2f}s")
+        #
+        #     return {
+        #         "status": "success",
+        #         "message": f"Data extracted successfully{execution_info}",
+        #         "data": extracted_data,
+        #         "description": description,
+        #         "current_url": current_url,
+        #         "page_title": page_title,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActInvalidModelGenerationError as e:
+        #     # Schema validation failed - this is the error you experienced!
+        #     logger.error(f"❌ Schema validation failed: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Schema validation failed: {str(e)}\n\nThe extracted data didn't match the expected format. Try simplifying the description or using no schema.",
+        #         "description": description,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActExceededMaxStepsError as e:
+        #     # Extraction too complex
+        #     logger.error(f"❌ Exceeded max steps ({max_steps}): {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Extraction too complex (exceeded {max_steps} steps): {str(e)}\n\nSimplify what you're trying to extract.",
+        #         "description": description,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except ActTimeoutError as e:
+        #     # Extraction timed out
+        #     logger.error(f"❌ Timeout ({timeout}s): {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Extraction timed out after {timeout}s: {str(e)}",
+        #         "description": description,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except (ActAgentError, ActClientError) as e:
+        #     # Retriable errors
+        #     logger.error(f"❌ Extraction error: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Extraction failed: {str(e)}\n\nYou may retry with a different description.",
+        #         "description": description,
+        #         "screenshot": screenshot_data
+        #     }
+        #
+        # except Exception as e:
+        #     # Unknown error
+        #     logger.error(f"❌ Unexpected error: {e}")
+        #     screenshot_data = self._get_error_screenshot()
+        #     return {
+        #         "status": "error",
+        #         "message": f"Extraction failed: {str(e)}",
+        #         "description": description,
+        #         "screenshot": screenshot_data
+        #     }
 
     def get_page_info(self) -> Dict[str, Any]:
         """Get structured information about the current page state.
@@ -441,184 +483,192 @@ class BrowserController:
         Fast and reliable - uses Playwright API directly (no AI inference).
         Returns comprehensive page state for quick situation assessment.
         """
-        try:
-            if not self._connected:
-                self.connect()
-
-            logger.info("Getting page info")
-
-            # Page context
-            page_info = {
-                "url": self.page.url,
-                "title": self.page.title(),
-                "load_state": "complete" if self.page.url != "about:blank" else "initial"
-            }
-
-            # Scroll position
-            scroll_info = self.page.evaluate("""() => {
-                return {
-                    current: window.scrollY,
-                    max: Math.max(
-                        document.body.scrollHeight,
-                        document.documentElement.scrollHeight
-                    ) - window.innerHeight,
-                    viewport_height: window.innerHeight
-                }
-            }""")
-
-            max_scroll = max(scroll_info['max'], 1)  # Avoid division by zero
-            page_info["scroll"] = {
-                "current": scroll_info['current'],
-                "max": max_scroll,
-                "percentage": int((scroll_info['current'] / max_scroll) * 100) if max_scroll > 0 else 0
-            }
-
-            # Interactive elements (visible only, top 10 each)
-            buttons = self.page.evaluate("""() => {
-                const buttons = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]'));
-                return buttons
-                    .filter(btn => {
-                        const rect = btn.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0 &&
-                               rect.top < window.innerHeight && rect.bottom > 0;
-                    })
-                    .slice(0, 10)
-                    .map(btn => ({
-                        text: (btn.innerText || btn.value || btn.getAttribute('aria-label') || '').trim().slice(0, 50),
-                        visible: true,
-                        enabled: !btn.disabled
-                    }))
-                    .filter(btn => btn.text.length > 0);
-            }""")
-
-            links = self.page.evaluate("""() => {
-                const links = Array.from(document.querySelectorAll('a[href]'));
-                return links
-                    .filter(link => {
-                        const rect = link.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0 &&
-                               rect.top < window.innerHeight && rect.bottom > 0;
-                    })
-                    .slice(0, 10)
-                    .map(link => ({
-                        text: (link.innerText || link.textContent || '').trim().slice(0, 50),
-                        href: link.getAttribute('href')
-                    }))
-                    .filter(link => link.text.length > 0);
-            }""")
-
-            inputs = self.page.evaluate("""() => {
-                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, select'));
-                return inputs
-                    .filter(input => {
-                        const rect = input.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
-                    })
-                    .slice(0, 10)
-                    .map(input => {
-                        const base = {
-                            type: input.type || input.tagName.toLowerCase(),
-                            name: input.name || input.id || '',
-                            placeholder: input.placeholder || '',
-                            label: (input.labels?.[0]?.textContent || '').trim().slice(0, 50)
-                        };
-
-                        if (input.tagName.toLowerCase() === 'select') {
-                            base.options = Array.from(input.options).slice(0, 5).map(opt => opt.text.trim());
-                        }
-
-                        return base;
-                    });
-            }""")
-
-            interactive = {
-                "buttons": buttons,
-                "links": links,
-                "inputs": inputs
-            }
-
-            # Content structure
-            headings = self.page.evaluate("""() => {
-                const headings = Array.from(document.querySelectorAll('h1, h2, h3'));
-                return headings
-                    .slice(0, 10)
-                    .map(h => h.textContent.trim().slice(0, 100))
-                    .filter(text => text.length > 0);
-            }""")
-
-            content_info = self.page.evaluate("""() => {
-                return {
-                    image_count: document.querySelectorAll('img').length,
-                    has_form: document.querySelectorAll('form').length > 0,
-                    has_table: document.querySelectorAll('table').length > 0
-                };
-            }""")
-
-            content = {
-                "headings": headings,
-                "image_count": content_info['image_count'],
-                "has_form": content_info['has_form'],
-                "has_table": content_info['has_table']
-            }
-
-            # State indicators
-            state_info = self.page.evaluate("""() => {
-                const alerts = Array.from(document.querySelectorAll('[role="alert"], .alert, .error, .warning'));
-                const modals = Array.from(document.querySelectorAll('[role="dialog"], .modal, [aria-modal="true"]'));
-                const loading = Array.from(document.querySelectorAll('.loading, .spinner, [aria-busy="true"]'));
-
-                return {
-                    has_alerts: alerts.length > 0,
-                    alert_messages: alerts.slice(0, 3).map(a => a.textContent.trim().slice(0, 100)).filter(t => t),
-                    has_modals: modals.filter(m => {
-                        const style = window.getComputedStyle(m);
-                        return style.display !== 'none';
-                    }).length > 0,
-                    has_loading: loading.filter(l => {
-                        const style = window.getComputedStyle(l);
-                        return style.display !== 'none';
-                    }).length > 0
-                };
-            }""")
-
-            state = {
-                "has_alerts": state_info['has_alerts'],
-                "alert_messages": state_info['alert_messages'],
-                "has_modals": state_info['has_modals'],
-                "has_loading": state_info['has_loading']
-            }
-
-            # Navigation
-            breadcrumbs = self.page.evaluate("""() => {
-                const crumbs = document.querySelectorAll('[aria-label*="breadcrumb"] a, .breadcrumb a, .breadcrumbs a');
-                return Array.from(crumbs)
-                    .map(a => a.textContent.trim())
-                    .filter(text => text.length > 0);
-            }""")
-
-            navigation = {
-                "can_go_back": self.page.evaluate("() => window.history.length > 1"),
-                "can_go_forward": False,  # Not easily detectable
-                "breadcrumbs": breadcrumbs
-            }
-
-            logger.info(f"✅ Page info collected: {len(buttons)} buttons, {len(links)} links, {len(inputs)} inputs")
-
-            return {
-                "status": "success",
-                "page": page_info,
-                "interactive": interactive,
-                "content": content,
-                "state": state,
-                "navigation": navigation
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to get page info: {e}")
-            return {
-                "status": "error",
-                "message": f"Failed to get page info: {str(e)}"
-            }
+        # NOVA_ACT DISABLED: get_page_info requires a connected browser session
+        logger.warning("Browser get_page_info is disabled - nova_act is not available")
+        return {
+            "status": "error",
+            "message": "❌ Browser page info is currently disabled. Nova Act is temporarily disabled due to version conflicts. To re-enable: Uncomment nova-act in pyproject.toml and uncomment nova_act code in browser_controller.py"
+        }
+        
+        # Original implementation (commented out):
+        # try:
+        #     if not self._connected:
+        #         self.connect()
+        #
+        #     logger.info("Getting page info")
+        #
+        #     # Page context
+        #     page_info = {
+        #         "url": self.page.url,
+        #         "title": self.page.title(),
+        #         "load_state": "complete" if self.page.url != "about:blank" else "initial"
+        #     }
+        #
+        #     # Scroll position
+        #     scroll_info = self.page.evaluate("""() => {
+        #         return {
+        #             current: window.scrollY,
+        #             max: Math.max(
+        #                 document.body.scrollHeight,
+        #                 document.documentElement.scrollHeight
+        #             ) - window.innerHeight,
+        #             viewport_height: window.innerHeight
+        #         }
+        #     }""")
+        #
+        #     max_scroll = max(scroll_info['max'], 1)  # Avoid division by zero
+        #     page_info["scroll"] = {
+        #         "current": scroll_info['current'],
+        #         "max": max_scroll,
+        #         "percentage": int((scroll_info['current'] / max_scroll) * 100) if max_scroll > 0 else 0
+        #     }
+        #
+        #     # Interactive elements (visible only, top 10 each)
+        #     buttons = self.page.evaluate("""() => {
+        #         const buttons = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]'));
+        #         return buttons
+        #             .filter(btn => {
+        #                 const rect = btn.getBoundingClientRect();
+        #                 return rect.width > 0 && rect.height > 0 &&
+        #                        rect.top < window.innerHeight && rect.bottom > 0;
+        #             })
+        #             .slice(0, 10)
+        #             .map(btn => ({
+        #                 text: (btn.innerText || btn.value || btn.getAttribute('aria-label') || '').trim().slice(0, 50),
+        #                 visible: true,
+        #                 enabled: !btn.disabled
+        #             }))
+        #             .filter(btn => btn.text.length > 0);
+        #     }""")
+        #
+        #     links = self.page.evaluate("""() => {
+        #         const links = Array.from(document.querySelectorAll('a[href]'));
+        #         return links
+        #             .filter(link => {
+        #                 const rect = link.getBoundingClientRect();
+        #                 return rect.width > 0 && rect.height > 0 &&
+        #                        rect.top < window.innerHeight && rect.bottom > 0;
+        #             })
+        #             .slice(0, 10)
+        #             .map(link => ({
+        #                 text: (link.innerText || link.textContent || '').trim().slice(0, 50),
+        #                 href: link.getAttribute('href')
+        #             }))
+        #             .filter(link => link.text.length > 0);
+        #     }""")
+        #
+        #     inputs = self.page.evaluate("""() => {
+        #         const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, select'));
+        #         return inputs
+        #             .filter(input => {
+        #                 const rect = input.getBoundingClientRect();
+        #                 return rect.width > 0 && rect.height > 0;
+        #             })
+        #             .slice(0, 10)
+        #             .map(input => {
+        #                 const base = {
+        #                     type: input.type || input.tagName.toLowerCase(),
+        #                     name: input.name || input.id || '',
+        #                     placeholder: input.placeholder || '',
+        #                     label: (input.labels?.[0]?.textContent || '').trim().slice(0, 50)
+        #                 };
+        #
+        #                 if (input.tagName.toLowerCase() === 'select') {
+        #                     base.options = Array.from(input.options).slice(0, 5).map(opt => opt.text.trim());
+        #                 }
+        #
+        #                 return base;
+        #             });
+        #     }""")
+        #
+        #     interactive = {
+        #         "buttons": buttons,
+        #         "links": links,
+        #         "inputs": inputs
+        #     }
+        #
+        #     # Content structure
+        #     headings = self.page.evaluate("""() => {
+        #         const headings = Array.from(document.querySelectorAll('h1, h2, h3'));
+        #         return headings
+        #             .slice(0, 10)
+        #             .map(h => h.textContent.trim().slice(0, 100))
+        #             .filter(text => text.length > 0);
+        #     }""")
+        #
+        #     content_info = self.page.evaluate("""() => {
+        #         return {
+        #             image_count: document.querySelectorAll('img').length,
+        #             has_form: document.querySelectorAll('form').length > 0,
+        #             has_table: document.querySelectorAll('table').length > 0
+        #         };
+        #     }""")
+        #
+        #     content = {
+        #         "headings": headings,
+        #         "image_count": content_info['image_count'],
+        #         "has_form": content_info['has_form'],
+        #         "has_table": content_info['has_table']
+        #     }
+        #
+        #     # State indicators
+        #     state_info = self.page.evaluate("""() => {
+        #         const alerts = Array.from(document.querySelectorAll('[role="alert"], .alert, .error, .warning'));
+        #         const modals = Array.from(document.querySelectorAll('[role="dialog"], .modal, [aria-modal="true"]'));
+        #         const loading = Array.from(document.querySelectorAll('.loading, .spinner, [aria-busy="true"]'));
+        #
+        #         return {
+        #             has_alerts: alerts.length > 0,
+        #             alert_messages: alerts.slice(0, 3).map(a => a.textContent.trim().slice(0, 100)).filter(t => t),
+        #             has_modals: modals.filter(m => {
+        #                 const style = window.getComputedStyle(m);
+        #                 return style.display !== 'none';
+        #             }).length > 0,
+        #             has_loading: loading.filter(l => {
+        #                 const style = window.getComputedStyle(l);
+        #                 return style.display !== 'none';
+        #             }).length > 0
+        #         };
+        #     }""")
+        #
+        #     state = {
+        #         "has_alerts": state_info['has_alerts'],
+        #         "alert_messages": state_info['alert_messages'],
+        #         "has_modals": state_info['has_modals'],
+        #         "has_loading": state_info['has_loading']
+        #     }
+        #
+        #     # Navigation
+        #     breadcrumbs = self.page.evaluate("""() => {
+        #         const crumbs = document.querySelectorAll('[aria-label*="breadcrumb"] a, .breadcrumb a, .breadcrumbs a');
+        #         return Array.from(crumbs)
+        #             .map(a => a.textContent.trim())
+        #             .filter(text => text.length > 0);
+        #     }""")
+        #
+        #     navigation = {
+        #         "can_go_back": self.page.evaluate("() => window.history.length > 1"),
+        #         "can_go_forward": False,  # Not easily detectable
+        #         "breadcrumbs": breadcrumbs
+        #     }
+        #
+        #     logger.info(f"✅ Page info collected: {len(buttons)} buttons, {len(links)} links, {len(inputs)} inputs")
+        #
+        #     return {
+        #         "status": "success",
+        #         "page": page_info,
+        #         "interactive": interactive,
+        #         "content": content,
+        #         "state": state,
+        #         "navigation": navigation
+        #     }
+        #
+        # except Exception as e:
+        #     logger.error(f"Failed to get page info: {e}")
+        #     return {
+        #         "status": "error",
+        #         "message": f"Failed to get page info: {str(e)}"
+        #     }
 
     def _take_screenshot(self) -> Optional[bytes]:
         """Take screenshot and return as raw bytes"""
@@ -637,12 +687,13 @@ class BrowserController:
     def close(self):
         """Close browser session and cleanup"""
         try:
+            # NOVA_ACT DISABLED: NovaAct cleanup commented out
             # Close NovaAct context manager first
-            if self.nova_client:
-                try:
-                    self.nova_client.__exit__(None, None, None)
-                except Exception as e:
-                    logger.warning(f"Error closing NovaAct client: {e}")
+            # if self.nova_client:
+            #     try:
+            #         self.nova_client.__exit__(None, None, None)
+            #     except Exception as e:
+            #         logger.warning(f"Error closing NovaAct client: {e}")
 
             # Close browser session
             if self.browser_session_client:

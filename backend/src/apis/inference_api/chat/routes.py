@@ -17,6 +17,7 @@ from .models import InvocationRequest, ChatRequest, ChatEvent, GenerateTitleRequ
 from .service import get_agent, generate_conversation_title
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
+from apis.shared.errors import StreamErrorEvent, ErrorCode, create_error_response
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ async def invocations(
     try:
         # Get agent instance with user-specific configuration
         # AgentCore Memory tracks preferences across sessions per user_id
+        # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
         agent = get_agent(
             session_id=input_data.session_id,
             user_id=user_id,
@@ -124,7 +126,9 @@ async def invocations(
             model_id=input_data.model_id,
             temperature=input_data.temperature,
             system_prompt=input_data.system_prompt,
-            caching_enabled=input_data.caching_enabled
+            caching_enabled=input_data.caching_enabled,
+            provider=input_data.provider,
+            max_tokens=input_data.max_tokens
         )
 
         # Stream response from agent as SSE (with optional files)
@@ -143,11 +147,21 @@ async def invocations(
             }
         )
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is (e.g., from auth)
+        raise
     except Exception as e:
-        logger.error(f"Error in invocations: {e}")
+        logger.error(f"Error in invocations: {e}", exc_info=True)
+        error_detail = create_error_response(
+            code=ErrorCode.AGENT_ERROR,
+            message="Agent processing failed",
+            detail=str(e),
+            status_code=500,
+            metadata={"session_id": input_data.session_id}
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Agent processing failed: {str(e)}"
+            detail=error_detail
         )
 
 
@@ -187,17 +201,20 @@ async def chat_stream(
                         yield event
 
             except asyncio.TimeoutError:
-                # Stream exceeded timeout - send error and cleanup
+                # Stream exceeded timeout - send structured error and cleanup
                 logger.error(
                     f"⏱️ Stream timeout ({STREAM_TIMEOUT_SECONDS}s) for session {request.session_id}"
                 )
 
-                # Send timeout error event to client
-                error_data = {
-                    "type": "error",
-                    "message": f"Stream timeout - request exceeded {STREAM_TIMEOUT_SECONDS // 60} minutes"
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
+                # Send structured timeout error event to client
+                error_event = StreamErrorEvent(
+                    error=f"Stream timeout - request exceeded {STREAM_TIMEOUT_SECONDS // 60} minutes",
+                    code=ErrorCode.TIMEOUT,
+                    detail=f"Stream processing time exceeded {STREAM_TIMEOUT_SECONDS} seconds",
+                    recoverable=True,
+                    metadata={"session_id": request.session_id, "timeout_seconds": STREAM_TIMEOUT_SECONDS}
+                )
+                yield error_event.to_sse_format()
 
             except asyncio.CancelledError:
                 # Client disconnected (e.g., stop button clicked)
@@ -221,8 +238,18 @@ async def chat_stream(
                 raise
 
             except Exception as e:
-                # Log unexpected errors
-                logger.error(f"Error during streaming for session {request.session_id}: {e}")
+                # Log unexpected errors and send to client
+                logger.error(f"Error during streaming for session {request.session_id}: {e}", exc_info=True)
+
+                # Send structured error event to client
+                error_event = StreamErrorEvent(
+                    error="An unexpected error occurred during streaming",
+                    code=ErrorCode.STREAM_ERROR,
+                    detail=str(e),
+                    recoverable=False,
+                    metadata={"session_id": request.session_id}
+                )
+                yield error_event.to_sse_format()
                 raise
 
             finally:
@@ -254,15 +281,22 @@ async def chat_stream(
             }
         )
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is (e.g., from auth)
+        raise
     except Exception as e:
-        logger.error(f"Error in chat_stream: {e}")
+        logger.error(f"Error in chat_stream: {e}", exc_info=True)
 
         async def error_generator():
-            error_data = {
-                "type": "error",
-                "message": str(e)
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
+            # Send structured error event
+            error_event = StreamErrorEvent(
+                error="Failed to initialize chat stream",
+                code=ErrorCode.STREAM_ERROR,
+                detail=str(e),
+                recoverable=False,
+                metadata={"session_id": request.session_id}
+            )
+            yield error_event.to_sse_format()
 
         return StreamingResponse(
             error_generator(),

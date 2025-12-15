@@ -47,7 +47,9 @@ def _create_cache_key(
     model_id: Optional[str],
     temperature: Optional[float],
     system_prompt: Optional[str],
-    caching_enabled: Optional[bool]
+    caching_enabled: Optional[bool],
+    provider: Optional[str],
+    max_tokens: Optional[int]
 ) -> Tuple:
     """
     Create a cache key for agent instances
@@ -60,6 +62,8 @@ def _create_cache_key(
         temperature: Model temperature
         system_prompt: System prompt text
         caching_enabled: Whether caching is enabled
+        provider: LLM provider
+        max_tokens: Maximum tokens to generate
 
     Returns:
         Tuple suitable for use as cache key
@@ -79,7 +83,9 @@ def _create_cache_key(
         model_id or "default",
         temperature or 0.0,
         prompt_hash,
-        caching_enabled or False
+        caching_enabled or False,
+        provider or "bedrock",
+        max_tokens or 0
     )
 
 
@@ -97,7 +103,9 @@ def get_agent(
     model_id: Optional[str] = None,
     temperature: Optional[float] = None,
     system_prompt: Optional[str] = None,
-    caching_enabled: Optional[bool] = None
+    caching_enabled: Optional[bool] = None,
+    provider: Optional[str] = None,
+    max_tokens: Optional[int] = None
 ) -> StrandsAgent:
     """
     Get or create agent instance with current configuration for session
@@ -110,10 +118,12 @@ def get_agent(
         session_id: Session identifier
         user_id: User identifier (defaults to session_id)
         enabled_tools: List of tool IDs to enable
-        model_id: Bedrock model ID
+        model_id: Model ID (provider-specific format)
         temperature: Model temperature
         system_prompt: System prompt text
-        caching_enabled: Whether to enable prompt caching
+        caching_enabled: Whether to enable prompt caching (Bedrock only)
+        provider: LLM provider ("bedrock", "openai", or "gemini")
+        max_tokens: Maximum tokens to generate
 
     Returns:
         StrandsAgent instance (cached or newly created)
@@ -126,7 +136,9 @@ def get_agent(
         model_id=model_id,
         temperature=temperature,
         system_prompt=system_prompt,
-        caching_enabled=caching_enabled
+        caching_enabled=caching_enabled,
+        provider=provider,
+        max_tokens=max_tokens
     )
 
     # Check cache
@@ -137,7 +149,7 @@ def get_agent(
     # Cache miss - create new agent
     logger.debug(f"⚠️ Agent cache miss for session {session_id} - creating new instance")
 
-    # Create agent with AgentCore Memory - messages and preferences automatically loaded/saved
+    # Create agent with multi-provider support
     agent = StrandsAgent(
         session_id=session_id,
         user_id=user_id,
@@ -145,7 +157,9 @@ def get_agent(
         model_id=model_id,
         temperature=temperature,
         system_prompt=system_prompt,
-        caching_enabled=caching_enabled
+        caching_enabled=caching_enabled,
+        provider=provider,
+        max_tokens=max_tokens
     )
 
     # Add to cache with LRU eviction

@@ -80,11 +80,13 @@ from .health import router as health_router
 from .auth.routes import router as auth_router
 from .sessions.routes import router as sessions_router
 from .admin.routes import router as admin_router
+from .models.routes import router as models_router
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)
+app.include_router(models_router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

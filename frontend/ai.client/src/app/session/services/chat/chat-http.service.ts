@@ -8,6 +8,7 @@ import { environment } from '../../../../environments/environment';
 import { firstValueFrom } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { SessionService } from '../session/session.service';
+import { ErrorService } from '../../../services/error/error.service';
 
 class RetriableError extends Error {
     constructor(message?: string) {
@@ -43,6 +44,7 @@ export class ChatHttpService {
     private authService = inject(AuthService);
     private http = inject(HttpClient);
     private sessionService = inject(SessionService);
+    private errorService = inject(ErrorService);
 
 
     async sendChatRequest(requestObject: any): Promise<void> {
@@ -64,15 +66,38 @@ export class ChatHttpService {
                 if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
                     return; // everything's good
                 } else if (response.status === 403) {
-                    // Handle usage limit exceeded
-                    const errorData = await response.json().catch(() => ({ message: 'Forbidden' }));
-                    throw new FatalError(errorData.message || 'Access forbidden');
-                } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-                    // client-side errors are usually non-retriable:
-                    let errorMessage = `Request failed with status ${response.status}`;
+                    // Handle forbidden (e.g., usage limit exceeded)
+                    let errorMessage = 'Access forbidden';
+                    let errorDetail: string | undefined;
+
                     try {
                         const errorData = await response.json();
-                        errorMessage = errorData.message || errorMessage;
+                        if (errorData.error) {
+                            // Structured error from backend
+                            errorMessage = errorData.error.message || errorMessage;
+                            errorDetail = errorData.error.detail;
+                        } else if (errorData.message) {
+                            errorMessage = errorData.message;
+                        }
+                    } catch {
+                        // Response not JSON, use default
+                    }
+
+                    throw new FatalError(errorMessage);
+                } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                    // Client-side errors are usually non-retriable
+                    let errorMessage = `Request failed with status ${response.status}`;
+                    let errorDetail: string | undefined;
+
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.error) {
+                            // Structured error from backend
+                            errorMessage = errorData.error.message || errorMessage;
+                            errorDetail = errorData.error.detail;
+                        } else if (errorData.message) {
+                            errorMessage = errorData.message;
+                        }
                     } catch {
                         // If response is not JSON, try to get text
                         try {
@@ -82,9 +107,10 @@ export class ChatHttpService {
                             // Ignore if we can't read the response
                         }
                     }
+
                     throw new FatalError(errorMessage);
                 } else {
-                    // Server errors or unexpected status codes
+                    // Server errors or unexpected status codes (retriable)
                     const errorMessage = `Server error: ${response.status} ${response.statusText}`;
                     console.error('RetriableError:', errorMessage);
                     throw new RetriableError(errorMessage);
@@ -123,12 +149,29 @@ export class ChatHttpService {
             onerror: (err) => {
                 this.messageMapService.endStreaming();
                 this.chatStateService.setChatLoading(false);
-                
-                // Display error message to user
+
+                // Display error message to user using ErrorService
                 if (err instanceof FatalError) {
-                    // Add the error as a system message
-                    this.addErrorMessage(err.message);
+                    this.errorService.addError(
+                        'Chat Request Failed',
+                        err.message,
+                        undefined,
+                        undefined
+                    );
+                } else if (err instanceof RetriableError) {
+                    // For retriable errors, show with retry suggestion
+                    this.errorService.addError(
+                        'Connection Error',
+                        'A temporary connection error occurred. The request may be retried automatically.',
+                        err.message
+                    );
+                } else {
+                    // Unknown error type
+                    this.errorService.handleNetworkError(
+                        err instanceof Error ? err.message : String(err)
+                    );
                 }
+
                 throw err;
             }
         });
@@ -170,13 +213,10 @@ export class ChatHttpService {
             return response;
         } catch (error) {
             console.error('Failed to generate title:', error);
+            // Use ErrorService for non-critical errors (title generation)
+            // Don't show to user as it's a background operation
             throw error;
         }
-    }
-
-
-    private addErrorMessage(errorMessage: string): void {
-        console.error(errorMessage);
     }
 
     async getBearerTokenForStreamingResponse(): Promise<string> {

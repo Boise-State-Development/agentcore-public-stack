@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import AsyncGenerator, Optional, Any, Union, List, Dict
 
 from .stream_processor import process_agent_stream
+from apis.shared.errors import StreamErrorEvent, ErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ class StreamCoordinator:
 
     def _create_error_event(self, error_message: str) -> str:
         """
-        Create SSE error event
+        Create SSE error event with structured format
 
         Args:
             error_message: Error message
@@ -280,7 +281,14 @@ class StreamCoordinator:
         Returns:
             str: SSE formatted error event
         """
-        return f"event: error\ndata: {json.dumps({'error': error_message})}\n\n"
+        # Create structured error event
+        error_event = StreamErrorEvent(
+            error=error_message,
+            code=ErrorCode.STREAM_ERROR,
+            detail=None,
+            recoverable=False
+        )
+        return f"event: error\ndata: {json.dumps(error_event.model_dump(exclude_none=True))}\n\n"
 
     async def _store_metadata_parallel(
         self,
