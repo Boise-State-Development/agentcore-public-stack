@@ -327,7 +327,7 @@ export class InferenceApiStack extends cdk.Stack {
         'BROWSER_ID': this.browser.attrBrowserId,
         
         // Authentication (from GitHub Variables)
-        'ENABLE_AUTHENTICATION': config.inferenceApi.enableAuthentication,
+        'ENABLE_AUTHENTICATION': 'false',
         
         // Storage directories (from GitHub Variables)
         'UPLOAD_DIR': config.inferenceApi.uploadDir,

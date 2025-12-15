@@ -127,7 +127,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enableGpu: false,
       imageTag: scope.node.tryGetContext('imageTag') || '',
       // Environment variables from GitHub Secrets/Variables
-      enableAuthentication: process.env.ENABLE_AUTHENTICATION || scope.node.tryGetContext('enableAuthentication') || 'false',
+      enableAuthentication: 'false',
       logLevel: process.env.LOG_LEVEL || 'INFO',
       uploadDir: process.env.UPLOAD_DIR || 'uploads',
       outputDir: process.env.OUTPUT_DIR || 'output',
