@@ -103,6 +103,7 @@ main() {
         --context projectPrefix="${CDK_PROJECT_PREFIX}" \
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context awsRegion="${CDK_AWS_REGION}" \
+        --context enableAuthentication="${ENABLE_AUTHENTICATION}" \
         --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
     
     log_success "CDK deployment completed successfully"

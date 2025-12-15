@@ -299,10 +299,10 @@ export class InferenceApiStack extends cdk.Stack {
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
       agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
-      roleArn: runtimeExecutionRole.roleArn,
+      roleArn: runtimeExecutionRole.roleArn,      
       agentRuntimeArtifact: {
         containerConfiguration: {
-          containerUri: containerImageUri,
+          containerUri: containerImageUri
         },
       },
       networkConfiguration: {
