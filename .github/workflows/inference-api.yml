@@ -50,16 +50,16 @@ env:
   CDK_REQUIRE_APPROVAL: never
   # Application Configuration - from GitHub Variables
   ENABLE_AUTHENTICATION: ${{ vars.ENABLE_AUTHENTICATION || 'true' }}
-  LOG_LEVEL: ${{ vars.LOG_LEVEL || 'DEBUG' }}
-  UPLOAD_DIR: ${{ vars.UPLOAD_DIR || 'test' }}
-  OUTPUT_DIR: ${{ vars.OUTPUT_DIR || 'test' }}
-  GENERATED_IMAGES_DIR: ${{ vars.GENERATED_IMAGES_DIR || 'test' }}
-  API_URL: ${{ vars.API_URL || 'test' }}
-  FRONTEND_URL: ${{ vars.FRONTEND_URL || 'test' }}
-  CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'test' }}
+  LOG_LEVEL: ${{ vars.LOG_LEVEL || 'INFO' }}
+  UPLOAD_DIR: ${{ vars.UPLOAD_DIR || 'uploads' }}
+  OUTPUT_DIR: ${{ vars.OUTPUT_DIR || 'output' }}
+  GENERATED_IMAGES_DIR: ${{ vars.GENERATED_IMAGES_DIR || 'generated_images' }}
+  API_URL: ${{ vars.API_URL || '' }}
+  FRONTEND_URL: ${{ vars.FRONTEND_URL || '' }}
+  CORS_ORIGINS: ${{ vars.CORS_ORIGINS || '' }}
   # API Keys - from GitHub Secrets
-  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY || 'test' }}
-  NOVA_ACT_API_KEY: ${{ secrets.NOVA_ACT_API_KEY || 'test' }}
+  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY || '' }}
+  NOVA_ACT_API_KEY: ${{ secrets.NOVA_ACT_API_KEY || '' }}
 
 # Ensure only one deployment runs at a time
 concurrency:
