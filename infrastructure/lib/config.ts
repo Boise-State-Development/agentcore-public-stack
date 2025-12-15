@@ -118,7 +118,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
       enableRds: false,
     },
-    inferenceApi: scope.node.tryGetContext('inferenceApi') || {
+    inferenceApi: {
       enabled: true,
       cpu: 1024,
       memory: 2048,
@@ -126,17 +126,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       maxCapacity: 5,
       enableGpu: false,
       imageTag: scope.node.tryGetContext('imageTag') || '',
-      // Environment variables from GitHub Secrets/Variables
-      enableAuthentication: 'false',
-      logLevel: process.env.LOG_LEVEL || 'INFO',
-      uploadDir: process.env.UPLOAD_DIR || 'uploads',
-      outputDir: process.env.OUTPUT_DIR || 'output',
-      generatedImagesDir: process.env.GENERATED_IMAGES_DIR || 'generated_images',
-      apiUrl: process.env.API_URL || '',
-      frontendUrl: process.env.FRONTEND_URL || '',
-      corsOrigins: process.env.CORS_ORIGINS || '',
-      tavilyApiKey: process.env.TAVILY_API_KEY || '',
-      novaActApiKey: process.env.NOVA_ACT_API_KEY || '',
+      // Environment variables from GitHub Secrets/Variables with context fallback
+      enableAuthentication: process.env.ENABLE_AUTHENTICATION || scope.node.tryGetContext('inferenceApi')?.enableAuthentication || 'true',
+      logLevel: process.env.LOG_LEVEL || scope.node.tryGetContext('inferenceApi')?.logLevel || 'INFO',
+      uploadDir: process.env.UPLOAD_DIR || scope.node.tryGetContext('inferenceApi')?.uploadDir || 'uploads',
+      outputDir: process.env.OUTPUT_DIR || scope.node.tryGetContext('inferenceApi')?.outputDir || 'output',
+      generatedImagesDir: process.env.GENERATED_IMAGES_DIR || scope.node.tryGetContext('inferenceApi')?.generatedImagesDir || 'generated_images',
+      apiUrl: process.env.API_URL || scope.node.tryGetContext('inferenceApi')?.apiUrl || '',
+      frontendUrl: process.env.FRONTEND_URL || scope.node.tryGetContext('inferenceApi')?.frontendUrl || '',
+      corsOrigins: process.env.CORS_ORIGINS || scope.node.tryGetContext('inferenceApi')?.corsOrigins || '',
+      tavilyApiKey: process.env.TAVILY_API_KEY || scope.node.tryGetContext('inferenceApi')?.tavilyApiKey || '',
+      novaActApiKey: process.env.NOVA_ACT_API_KEY || scope.node.tryGetContext('inferenceApi')?.novaActApiKey || '',
     },
     agentCore: scope.node.tryGetContext('agentCore') || {
       enabled: true,
@@ -157,6 +157,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       ManagedBy: 'CDK',
     },
   };
+
+  // console.log the loaded config for debugging
+  console.log('Loaded AppConfig:', JSON.stringify(config, null, 2));
 
   // Validate configuration
   validateConfig(config);

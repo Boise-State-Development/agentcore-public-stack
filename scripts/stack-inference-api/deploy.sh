@@ -103,7 +103,7 @@ main() {
         --context projectPrefix="${CDK_PROJECT_PREFIX}" \
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context awsRegion="${CDK_AWS_REGION}" \
-        --context enableAuthentication="${ENABLE_AUTHENTICATION}" \
+        --context inferenceApi="{\"enableAuthentication\":\"${ENABLE_AUTHENTICATION}\",\"logLevel\":\"${LOG_LEVEL}\",\"uploadDir\":\"${UPLOAD_DIR}\",\"outputDir\":\"${OUTPUT_DIR}\",\"generatedImagesDir\":\"${GENERATED_IMAGES_DIR}\",\"apiUrl\":\"${API_URL}\",\"frontendUrl\":\"${FRONTEND_URL}\",\"corsOrigins\":\"${CORS_ORIGINS}\",\"tavilyApiKey\":\"${TAVILY_API_KEY}\",\"novaActApiKey\":\"${NOVA_ACT_API_KEY}\"}" \
         --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
     
     log_success "CDK deployment completed successfully"
