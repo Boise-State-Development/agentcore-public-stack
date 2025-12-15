@@ -154,12 +154,12 @@ push_to_ecr() {
     docker push "${remote_image}"
     
     # Also tag and push as 'latest' for convenience
-    local latest_image="${ecr_uri}:latest"
-    log_info "Tagging image as latest: ${latest_image}"
-    docker tag "${local_image}" "${latest_image}"
+    # local latest_image="${ecr_uri}:latest"
+    # log_info "Tagging image as latest: ${latest_image}"
+    # docker tag "${local_image}" "${latest_image}"
     
-    log_info "Pushing latest image to ECR..."
-    docker push "${latest_image}"
+    # log_info "Pushing latest image to ECR..."
+    # docker push "${latest_image}"
     
     log_success "Docker image pushed successfully to ECR with tags: ${image_tag}, latest"
 }
