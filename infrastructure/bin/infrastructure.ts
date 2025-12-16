@@ -20,15 +20,15 @@ new InfrastructureStack(app, 'InfrastructureStack', {
   stackName: `${config.projectPrefix}-InfrastructureStack`,
 });
 
-// // Frontend Stack - S3 + CloudFront + Route53
-// if (config.frontend.enabled) {
-//   new FrontendStack(app, 'FrontendStack', {
-//     config,
-//     env,
-//     description: `${config.projectPrefix} Frontend Stack - S3, CloudFront, and Route53`,
-//     stackName: `${config.projectPrefix}-FrontendStack`,
-//   });
-// }
+// Frontend Stack - S3 + CloudFront + Route53
+if (config.frontend.enabled) {
+  new FrontendStack(app, 'FrontendStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} Frontend Stack - S3, CloudFront, and Route53`,
+    stackName: `${config.projectPrefix}-FrontendStack`,
+  });
+}
 
 // // App API Stack - Fargate + Database
 // if (config.appApi.enabled) {
