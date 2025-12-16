@@ -92,6 +92,11 @@ jobs:
     name: Build Frontend
     runs-on: ubuntu-latest
     needs: install
+    
+    permissions:
+      id-token: write
+      contents: read
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -118,6 +123,15 @@ jobs:
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Configure AWS Credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-Synth
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
 
       - name: Install system dependencies
         run: |
