@@ -120,6 +120,18 @@ class ManagedModelCreate(BaseModel):
     enabled: bool = True
     input_price_per_million_tokens: float = Field(..., alias="inputPricePerMillionTokens", ge=0)
     output_price_per_million_tokens: float = Field(..., alias="outputPricePerMillionTokens", ge=0)
+    cache_write_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheWritePricePerMillionTokens",
+        ge=0,
+        description="Price per million tokens written to cache (Bedrock only, ~25% markup)"
+    )
+    cache_read_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheReadPricePerMillionTokens",
+        ge=0,
+        description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
+    )
     is_reasoning_model: bool = Field(False, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
 
@@ -140,12 +152,24 @@ class ManagedModelUpdate(BaseModel):
     enabled: Optional[bool] = None
     input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens", ge=0)
     output_price_per_million_tokens: Optional[float] = Field(None, alias="outputPricePerMillionTokens", ge=0)
+    cache_write_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheWritePricePerMillionTokens",
+        ge=0,
+        description="Price per million tokens written to cache (Bedrock only, ~25% markup)"
+    )
+    cache_read_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheReadPricePerMillionTokens",
+        ge=0,
+        description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
+    )
     is_reasoning_model: Optional[bool] = Field(None, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
 
 
 class ManagedModel(BaseModel):
-    """Managed model with full details."""
+    """Managed model with full details including cache pricing."""
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
@@ -161,6 +185,16 @@ class ManagedModel(BaseModel):
     enabled: bool
     input_price_per_million_tokens: float = Field(..., alias="inputPricePerMillionTokens")
     output_price_per_million_tokens: float = Field(..., alias="outputPricePerMillionTokens")
+    cache_write_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheWritePricePerMillionTokens",
+        description="Price per million tokens written to cache (Bedrock only, ~25% markup)"
+    )
+    cache_read_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="cacheReadPricePerMillionTokens",
+        description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
+    )
     is_reasoning_model: bool = Field(..., alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     created_at: datetime = Field(..., alias="createdAt")

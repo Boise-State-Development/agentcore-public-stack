@@ -413,16 +413,30 @@ class StreamCoordinator:
                     "no first_token_time from processor and no timeToFirstByteMs in metrics"
                 )
 
-            # Extract ModelInfo from agent (for cost tracking foundation)
+            # Extract ModelInfo from agent and create pricing snapshot for cost tracking
             model_info = None
+            pricing_snapshot = None
+            cost = None
+
             if agent and hasattr(agent, 'model_config'):
                 model_id = agent.model_config.model_id
+
+                # Get pricing snapshot from managed models database
+                pricing_snapshot = await self._get_pricing_snapshot(model_id)
+
                 model_info = ModelInfo(
                     model_id=model_id,
                     model_name=self._extract_model_name(model_id),
-                    model_version=self._extract_model_version(model_id)
-                    # pricing_snapshot will be added in future implementation
+                    model_version=self._extract_model_version(model_id),
+                    pricing_snapshot=pricing_snapshot
                 )
+
+                # Calculate cost if we have both usage and pricing
+                if token_usage and pricing_snapshot:
+                    cost = self._calculate_message_cost(
+                        usage=accumulated_metadata.get("usage", {}),
+                        pricing=pricing_snapshot
+                    )
 
             # Create Attribution for cost tracking foundation
             attribution = Attribution(
@@ -439,7 +453,8 @@ class StreamCoordinator:
                     latency=latency_metrics,
                     token_usage=token_usage,
                     model_info=model_info,
-                    attribution=attribution
+                    attribution=attribution,
+                    cost=cost
                 )
 
                 # Store metadata
@@ -500,6 +515,68 @@ class StreamCoordinator:
                 if part.startswith("v") and ":" in part:
                     return part.split(":")[0]
         return None
+
+    async def _get_pricing_snapshot(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get pricing snapshot from managed models database
+
+        Args:
+            model_id: Full model identifier
+
+        Returns:
+            PricingSnapshot dict or None if model not found
+        """
+        try:
+            from apis.app_api.costs.pricing_config import create_pricing_snapshot
+            from apis.app_api.messages.models import PricingSnapshot
+
+            # Get pricing snapshot from managed models
+            snapshot_dict = await create_pricing_snapshot(model_id)
+            if not snapshot_dict:
+                logger.warning(f"No pricing found for model: {model_id}")
+                return None
+
+            # Convert to PricingSnapshot model for validation
+            snapshot = PricingSnapshot.model_validate(snapshot_dict)
+            return snapshot
+
+        except Exception as e:
+            logger.error(f"Failed to get pricing snapshot for {model_id}: {e}")
+            return None
+
+    def _calculate_message_cost(
+        self,
+        usage: Dict[str, Any],
+        pricing: Optional[Dict[str, Any]]
+    ) -> Optional[float]:
+        """
+        Calculate message cost from usage and pricing
+
+        Args:
+            usage: Token usage dict
+            pricing: Pricing snapshot (PricingSnapshot model)
+
+        Returns:
+            Total cost in USD or None if pricing unavailable
+        """
+        if not pricing:
+            return None
+
+        try:
+            from apis.app_api.costs.calculator import CostCalculator
+
+            # Convert PricingSnapshot model to dict for calculator
+            if hasattr(pricing, 'model_dump'):
+                pricing_dict = pricing.model_dump(by_alias=True)
+            else:
+                pricing_dict = pricing
+
+            total_cost, _ = CostCalculator.calculate_message_cost(usage, pricing_dict)
+            return total_cost
+
+        except Exception as e:
+            logger.error(f"Failed to calculate message cost: {e}")
+            return None
 
     async def _update_session_metadata(
         self,

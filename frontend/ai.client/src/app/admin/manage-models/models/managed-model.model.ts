@@ -44,6 +44,10 @@ export interface ManagedModel {
   inputPricePerMillionTokens: number;
   /** Output price per million tokens (in USD) */
   outputPricePerMillionTokens: number;
+  /** Cache write price per million tokens (in USD) - Bedrock only */
+  cacheWritePricePerMillionTokens?: number | null;
+  /** Cache read price per million tokens (in USD) - Bedrock only */
+  cacheReadPricePerMillionTokens?: number | null;
   /** Whether this is a reasoning model (e.g., o1, o3) */
   isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
@@ -86,6 +90,10 @@ export interface ManagedModelFormData {
   inputPricePerMillionTokens: number;
   /** Output price per million tokens (in USD) */
   outputPricePerMillionTokens: number;
+  /** Cache write price per million tokens (in USD) - Bedrock only */
+  cacheWritePricePerMillionTokens?: number | null;
+  /** Cache read price per million tokens (in USD) - Bedrock only */
+  cacheReadPricePerMillionTokens?: number | null;
   /** Whether this is a reasoning model (e.g., o1, o3) */
   isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */

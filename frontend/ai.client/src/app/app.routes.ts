@@ -51,5 +51,10 @@ export const routes: Routes = [
         path: 'admin/manage-models/edit/:id',
         loadComponent: () => import('./admin/manage-models/model-form.page').then(m => m.ModelFormPage),
         canActivate: [adminGuard],
+    },
+    {
+        path: 'costs',
+        loadComponent: () => import('./costs/cost-dashboard.page').then(m => m.CostDashboardPage),
+        canActivate: [authGuard],
     }
 ];

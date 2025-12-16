@@ -22,6 +22,7 @@ dependencies = [
     # Utilities
     "python-dotenv>=1.0.0",
     "httpx>=0.24.0",
+    "aiofiles>=25.1.0",
 
     # Authentication (for shared auth module)
     "pyjwt[crypto]>=2.8.0",
@@ -49,6 +50,7 @@ dev = [
     "black>=22.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "types-aiofiles>=25.1.0",
 ]
 
 # All dependencies (convenience)

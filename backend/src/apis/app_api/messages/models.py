@@ -42,9 +42,18 @@ class PricingSnapshot(BaseModel):
 
     input_price_per_mtok: float = Field(..., alias="inputPricePerMtok", description="Price per million input tokens (USD)")
     output_price_per_mtok: float = Field(..., alias="outputPricePerMtok", description="Price per million output tokens (USD)")
-    cache_write_price_per_mtok: float = Field(..., alias="cacheWritePricePerMtok", description="Price per million cache write tokens (USD)")
-    cache_read_price_per_mtok: float = Field(..., alias="cacheReadPricePerMtok", description="Price per million cache read tokens (USD)")
+    cache_write_price_per_mtok: Optional[float] = Field(
+        None,
+        alias="cacheWritePricePerMtok",
+        description="Price per million cache write tokens (USD) - Bedrock only"
+    )
+    cache_read_price_per_mtok: Optional[float] = Field(
+        None,
+        alias="cacheReadPricePerMtok",
+        description="Price per million cache read tokens (USD) - Bedrock only"
+    )
     currency: str = Field(default="USD", description="Currency code")
+    snapshot_at: str = Field(..., alias="snapshotAt", description="ISO timestamp when pricing was captured")
 
 
 class ModelInfo(BaseModel):
@@ -79,6 +88,10 @@ class MessageMetadata(BaseModel):
     token_usage: Optional[TokenUsage] = Field(None, alias="tokenUsage", description="Token usage statistics")
     model_info: Optional[ModelInfo] = Field(None, alias="modelInfo", description="Model information for cost tracking")
     attribution: Optional[Attribution] = Field(None, description="Attribution for cost tracking and billing")
+    cost: Optional[float] = Field(
+        None,
+        description="Total cost in USD for this message (computed from token usage and pricing)"
+    )
     # Note: Feedback will be added in future implementation
     # feedback: Optional[Feedback] = None
 

@@ -1,5 +1,13 @@
 import { Component, signal, output, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import {
+  heroPlus,
+  heroAdjustmentsHorizontal,
+  heroClock,
+  heroStop,
+  heroPaperAirplane
+} from '@ng-icons/heroicons/outline';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
 
@@ -10,7 +18,16 @@ interface Message {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent],
+  imports: [FormsModule, ModelDropdownComponent, NgIcon],
+  providers: [
+    provideIcons({
+      heroPlus,
+      heroAdjustmentsHorizontal,
+      heroClock,
+      heroStop,
+      heroPaperAirplane
+    })
+  ],
   templateUrl: './chat-input.component.html',
   styleUrl: './chat-input.component.css'
 })

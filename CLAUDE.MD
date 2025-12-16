@@ -208,6 +208,43 @@ template: `
 - **Use `NgOptimizedImage`** for all static images
 - Note: `NgOptimizedImage` does not work for inline base64 images
 
+#### Icons
+
+This project uses **ng-icons** (v18.0.0+) with **Heroicons** for icon management. Ng Icons supports standalone components and provides optimal tree-shaking.
+
+**Setup:**
+
+As of version 18.0.0, Ng Icons supports standalone components. Import icons using the `provideIcons` function, which can be placed anywhere you can register providers. The optimal location is in the `@Component` providers array.
+
+You can also import the component directly by importing `NgIcon` or the `NG_ICON_DIRECTIVES` constant.
+
+**Example:**
+
+```typescript
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { featherAirplay } from '@ng-icons/feather-icons';
+import { heroUsers } from '@ng-icons/heroicons/outline';
+
+@Component({
+  selector: 'app-my-component',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [NgIcon],
+  providers: [provideIcons({ featherAirplay, heroUsers })],
+  template: `
+    <ng-icon name="featherAirplay" class="size-6" />
+    <ng-icon name="heroUsers" class="size-6" />
+  `
+})
+export class MyComponent {}
+```
+
+**Best Practices:**
+
+- **Register icons at component level** - Use `provideIcons()` in the component's `providers` array for optimal tree-shaking
+- **Import only needed icons** - Import specific icons rather than entire icon sets
+- **Use Heroicons outline variant** - Prefer `@ng-icons/heroicons/outline` for consistent styling
+- **Apply Tailwind sizing** - Use Tailwind size utilities like `size-6` instead of inline styles
+
 #### State Management
 
 - **Use signals** for local component state

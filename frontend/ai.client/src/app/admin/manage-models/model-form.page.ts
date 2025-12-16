@@ -17,6 +17,8 @@ interface ModelFormGroup {
   enabled: FormControl<boolean>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
+  cacheWritePricePerMillionTokens: FormControl<number | null>;
+  cacheReadPricePerMillionTokens: FormControl<number | null>;
   isReasoningModel: FormControl<boolean>;
   knowledgeCutoffDate: FormControl<string | null>;
 }
@@ -58,6 +60,8 @@ export class ModelFormPage implements OnInit {
     enabled: this.fb.control(true, { nonNullable: true }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
+    cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     isReasoningModel: this.fb.control(false, { nonNullable: true }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
   });
@@ -101,6 +105,8 @@ export class ModelFormPage implements OnInit {
         enabled: model.enabled,
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
+        cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
+        cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
         isReasoningModel: model.isReasoningModel,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
       });

@@ -1,8 +1,18 @@
 import { Component, inject, signal, ChangeDetectionStrategy, effect, ElementRef } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroSun, heroMoon, heroComputerDesktop } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme.service';
 @Component({
   selector: 'app-theme-toggle',
+  imports: [NgIcon],
+  providers: [
+    provideIcons({
+      heroSun,
+      heroMoon,
+      heroComputerDesktop
+    })
+  ],
   templateUrl: './theme-toggle.component.html',
   styleUrl: './theme-toggle.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

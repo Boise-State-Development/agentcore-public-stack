@@ -1,14 +1,23 @@
-"""Cost tracking and calculation services (Future Implementation)
+"""Cost tracking and calculation services
 
-This module will handle:
+This module handles:
 - Cost calculation from token usage and model info
 - Cost aggregation across messages/sessions/users
 - Pricing configuration management
 """
 
-# TODO: Implement cost calculation and aggregation
-# from .calculator import CostCalculator
-# from .aggregator import CostAggregator
-# from .pricing import PricingConfig
+from .models import CostBreakdown, ModelCostSummary, UserCostSummary
+from .pricing_config import get_model_pricing, create_pricing_snapshot
+from .calculator import CostCalculator
 
-__all__ = []
+# TODO: Implement additional services
+# from .aggregator import CostAggregator
+
+__all__ = [
+    "CostBreakdown",
+    "ModelCostSummary",
+    "UserCostSummary",
+    "get_model_pricing",
+    "create_pricing_snapshot",
+    "CostCalculator",
+]
