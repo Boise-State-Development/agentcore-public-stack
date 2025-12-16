@@ -81,6 +81,7 @@ from auth.routes import router as auth_router
 from sessions.routes import router as sessions_router
 from admin.routes import router as admin_router
 from models.routes import router as models_router
+from costs.routes import router as costs_router
 
 # Include routers
 app.include_router(health_router)
@@ -88,6 +89,7 @@ app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)
 app.include_router(models_router)
+app.include_router(costs_router)
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

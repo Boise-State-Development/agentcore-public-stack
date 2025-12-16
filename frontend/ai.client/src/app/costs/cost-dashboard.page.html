@@ -1,0 +1,201 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Cost Dashboard</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        Track your AI usage costs and token consumption
+      </p>
+    </div>
+
+    <!-- Period Selector -->
+    <div class="mb-6 flex flex-wrap gap-4">
+      <button
+        type="button"
+        (click)="resetToCurrentMonth()"
+        [class.bg-blue-600]="selectedPeriodType() === 'current'"
+        [class.text-white]="selectedPeriodType() === 'current'"
+        [class.bg-white]="selectedPeriodType() !== 'current'"
+        [class.dark:bg-gray-700]="selectedPeriodType() !== 'current'"
+        [class.text-gray-700]="selectedPeriodType() !== 'current'"
+        [class.dark:text-gray-300]="selectedPeriodType() !== 'current'"
+        class="rounded-sm border border-gray-300 px-4 py-2 text-sm/6 font-medium transition-colors hover:bg-blue-700 dark:border-gray-600">
+        Current Month
+      </button>
+
+      <button
+        type="button"
+        (click)="loadLast30Days()"
+        [class.bg-blue-600]="selectedPeriodType() === 'last30'"
+        [class.text-white]="selectedPeriodType() === 'last30'"
+        [class.bg-white]="selectedPeriodType() !== 'last30'"
+        [class.dark:bg-gray-700]="selectedPeriodType() !== 'last30'"
+        [class.text-gray-700]="selectedPeriodType() !== 'last30'"
+        [class.dark:text-gray-300]="selectedPeriodType() !== 'last30'"
+        class="rounded-sm border border-gray-300 px-4 py-2 text-sm/6 font-medium transition-colors hover:bg-blue-700 dark:border-gray-600">
+        Last 30 Days
+      </button>
+
+      <div class="flex gap-2">
+        <input
+          type="date"
+          [value]="customStartDate()"
+          (input)="customStartDate.set($any($event.target).value)"
+          class="rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          placeholder="Start date">
+        <input
+          type="date"
+          [value]="customEndDate()"
+          (input)="customEndDate.set($any($event.target).value)"
+          class="rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          placeholder="End date">
+        <button
+          type="button"
+          (click)="loadCustomDateRange()"
+          class="rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">
+          Load Range
+        </button>
+      </div>
+    </div>
+
+    @if (customReportError()) {
+      <div class="mb-6 rounded-sm bg-red-50 p-4 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-200">
+        {{ customReportError() }}
+      </div>
+    }
+
+    <!-- Loading State -->
+    @if ((selectedPeriodType() === 'current' && costSummary.isLoading()) || isLoadingCustomReport()) {
+      <div class="flex items-center justify-center py-12">
+        <div class="text-center">
+          <div class="mb-4 inline-block size-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
+          <p class="text-base/7 text-gray-600 dark:text-gray-400">Loading cost data...</p>
+        </div>
+      </div>
+    }
+
+    <!-- Error State -->
+    @else if (selectedPeriodType() === 'current' && costSummary.error()) {
+      <div class="rounded-sm bg-red-50 p-6 dark:bg-red-900/20">
+        <h3 class="text-base/7 font-semibold text-red-800 dark:text-red-200">Error Loading Cost Data</h3>
+        <p class="mt-2 text-sm/6 text-red-700 dark:text-red-300">
+          {{ costSummary.error() }}
+        </p>
+      </div>
+    }
+
+    <!-- Cost Summary Cards -->
+    @else if (activeData()) {
+      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <!-- Total Cost Card -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Total Cost</h3>
+          <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">
+            {{ formatCurrency(totalCost()) }}
+          </p>
+          @if (totalCacheSavings() > 0) {
+            <p class="mt-2 text-xs/5 text-green-600 dark:text-green-400">
+              Saved {{ formatCurrency(totalCacheSavings()) }} with caching
+              ({{ cacheSavingsPercentage() | number: '1.1-1' }}%)
+            </p>
+          }
+        </div>
+
+        <!-- Total Requests Card -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Total Requests</h3>
+          <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">
+            {{ formatNumber(totalRequests()) }}
+          </p>
+          <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+            Avg: {{ formatCurrency(averageCostPerRequest()) }} per request
+          </p>
+        </div>
+
+        <!-- Total Tokens Card -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Total Tokens</h3>
+          <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">
+            {{ formatNumber(totalTokens()) }}
+          </p>
+          <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+            Avg: {{ formatNumber(averageTokensPerRequest()) }} per request
+          </p>
+        </div>
+
+        <!-- Token Breakdown Card -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Token Breakdown</h3>
+          <div class="mt-2 space-y-1">
+            <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+              Input: {{ formatNumber(totalInputTokens()) }}
+            </p>
+            <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+              Output: {{ formatNumber(totalOutputTokens()) }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-Model Breakdown -->
+      @if (models().length > 0) {
+        <div class="mt-8">
+          <h2 class="mb-4 text-xl/8 font-bold text-gray-900 dark:text-white">Cost by Model</h2>
+          <div class="overflow-hidden rounded-sm border border-gray-200 dark:border-gray-700">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead class="bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th scope="col" class="px-6 py-3 text-left text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Model
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-left text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Provider
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Requests
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Total Tokens
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    Cost
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-800">
+                @for (model of models(); track model.modelId) {
+                  <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td class="whitespace-nowrap px-6 py-4 text-sm/6 text-gray-900 dark:text-white">
+                      {{ model.modelName }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm/6 text-gray-600 dark:text-gray-400">
+                      {{ model.provider }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-right text-sm/6 text-gray-900 dark:text-white">
+                      {{ formatNumber(model.requestCount) }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-right text-sm/6 text-gray-900 dark:text-white">
+                      {{ formatNumber(model.totalInputTokens + model.totalOutputTokens) }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-right text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {{ formatCurrency(model.costBreakdown.totalCost) }}
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+
+      <!-- Empty State -->
+      @else {
+        <div class="mt-8 rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+          <p class="text-base/7 text-gray-500 dark:text-gray-400">
+            No cost data available for this period
+          </p>
+        </div>
+      }
+    }
+  </div>
+</div>
