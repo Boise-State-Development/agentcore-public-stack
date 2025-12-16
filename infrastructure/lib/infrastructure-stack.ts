@@ -190,7 +190,7 @@ export class InfrastructureStack extends cdk.Stack {
     this.ecsCluster = new ecs.Cluster(this, 'EcsCluster', {
       clusterName: getResourceName(config, 'ecs-cluster'),
       vpc: this.vpc,
-      containerInsights: true, // Enable CloudWatch Container Insights
+      containerInsightsV2: ecs.ContainerInsights.ENABLED, // Enable CloudWatch Container Insights
     });
 
     // Export ECS Cluster Name to SSM
