@@ -85,11 +85,7 @@ main() {
     
     # Bootstrap CDK if needed (idempotent operation)
     log_info "Ensuring CDK is bootstrapped..."
-    npx cdk bootstrap "aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION}" \
-        --context environment="${DEPLOY_ENVIRONMENT}" \
-        --context projectPrefix="${CDK_PROJECT_PREFIX}" \
-        --context awsAccount="${CDK_AWS_ACCOUNT}" \
-        --context awsRegion="${CDK_AWS_REGION}"
+    npx cdk bootstrap "aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION}"
     
     # Deploy CDK stack
     log_info "Deploying InferenceApiStack with CDK..."

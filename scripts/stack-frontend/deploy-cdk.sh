@@ -74,7 +74,7 @@ cdk bootstrap aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION} \
     --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess \
     --toolkit-stack-name ${CDK_PROJECT_PREFIX}-CDKToolkit \
     --qualifier ${CDK_PROJECT_PREFIX:0:10} \
-    --context environment="${DEPLOY_ENVIRONMENT}" || log_warn "Bootstrap may have already been completed"
+    || log_warn "Bootstrap may have already been completed"
 
 # Build context arguments
 CONTEXT_ARGS="--context environment=${DEPLOY_ENVIRONMENT}"
