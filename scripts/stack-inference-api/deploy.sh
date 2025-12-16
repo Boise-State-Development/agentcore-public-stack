@@ -84,8 +84,11 @@ main() {
     fi
     
     # Bootstrap CDK if needed (idempotent operation)
+    # Note: Run from project root to avoid loading CDK app context (see CLAUDES_LESSONS_PHASE4.md Challenge 1)
     log_info "Ensuring CDK is bootstrapped..."
+    cd "${PROJECT_ROOT}"
     npx cdk bootstrap "aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION}"
+    cd infrastructure/
     
     # Deploy CDK stack
     log_info "Deploying InferenceApiStack with CDK..."

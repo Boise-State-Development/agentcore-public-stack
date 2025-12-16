@@ -69,12 +69,15 @@ fi
 log_info "CDK version: $(cdk --version)"
 
 # Bootstrap CDK if needed (idempotent operation)
+# Note: Run from project root to avoid loading CDK app context (see CLAUDES_LESSONS_PHASE4.md Challenge 1)
 log_info "Ensuring CDK is bootstrapped in ${CDK_AWS_REGION}..."
+cd "${PROJECT_ROOT}"
 cdk bootstrap aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION} \
     --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess \
     --toolkit-stack-name ${CDK_PROJECT_PREFIX}-CDKToolkit \
     --qualifier ${CDK_PROJECT_PREFIX:0:10} \
     || log_warn "Bootstrap may have already been completed"
+cd infrastructure/
 
 # Build context arguments
 CONTEXT_ARGS="--context environment=${DEPLOY_ENVIRONMENT}"

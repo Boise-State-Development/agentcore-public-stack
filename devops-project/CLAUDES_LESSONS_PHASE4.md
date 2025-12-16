@@ -7,7 +7,35 @@ This document captures lessons learned during Phase 4 implementation: Refactorin
 
 ## Technical Challenges
 
-### Challenge 1: [To be filled during testing/troubleshooting]
+### Challenge 1: CDK Bootstrap Loading App Context
+
+**Issue:**
+Running `cdk bootstrap` from within a CDK app directory (containing cdk.json) causes it to load the entire CDK application and its configuration, triggering config.ts logging and potentially using incorrect context values.
+
+**Root Cause:**
+CDK CLI automatically searches for and loads the CDK app in the current directory when running any command, including bootstrap. This causes the configuration loading logic to execute even though bootstrap doesn't need app-specific context - it only needs AWS account and region.
+
+**Solution:**
+Always run `cdk bootstrap` from a neutral directory (without cdk.json) to avoid loading the CDK app:
+```bash
+# Bad - runs from CDK app directory
+cd infrastructure
+cdk bootstrap aws://${ACCOUNT}/${REGION}
+
+# Good - runs from parent directory
+cd project-root
+cdk bootstrap aws://${ACCOUNT}/${REGION}
+```
+
+**Lesson Learned:**
+- `cdk bootstrap` should never be passed `--context` parameters (they trigger app loading)
+- Run `cdk bootstrap` from outside the CDK app directory to prevent unwanted app initialization
+- Only `cdk synth` and `cdk deploy` should load the app and receive context parameters
+- This prevents unexpected side effects like logging, incorrect context values, or bootstrap failures
+
+---
+
+### Challenge 2: [To be filled during testing/troubleshooting]
 
 **Issue:**
 [Description of the issue]
