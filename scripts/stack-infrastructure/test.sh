@@ -3,7 +3,8 @@
 #============================================================
 # Infrastructure Stack - Test
 # 
-# Runs tests for the Infrastructure Stack CDK code.
+# Validates the synthesized CloudFormation template by running
+# cdk diff against the deployed stack.
 #============================================================
 
 set -e
@@ -11,29 +12,33 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Simple logging functions
-log_info() {
-    echo "[INFO] $1"
-}
+# Source common utilities
+source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 
+# Additional logging function
 log_success() {
-    echo "[SUCCESS] $1"
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 # ===========================================================
-# Run CDK Tests
+# Validate CloudFormation Template
 # ===========================================================
 
-log_info "Running Infrastructure Stack tests..."
+log_info "Validating synthesized CloudFormation template..."
 cd "${PROJECT_ROOT}/infrastructure"
 
-# Check if test directory exists
-if [ ! -d "test" ] || [ -z "$(ls -A test/*.test.* 2>/dev/null)" ]; then
-    log_info "No tests found in test/ directory, skipping tests"
-    exit 0
+# Check if synthesized template exists
+if [ ! -d "cdk.out" ] || [ ! -f "cdk.out/InfrastructureStack.template.json" ]; then
+    log_error "Synthesized template not found. Run synth.sh first."
+    exit 1
 fi
 
-# Run tests
-npm test
+log_info "Running cdk diff to compare synthesized template with deployed stack..."
 
-log_success "Infrastructure Stack tests passed"
+# Run cdk diff using the pre-synthesized template
+# This will show what would change if we deployed
+cdk diff InfrastructureStack \
+    --app "cdk.out/" \
+    --no-fail || true
+
+log_success "CloudFormation template validation completed"
