@@ -149,15 +149,15 @@ export class FrontendStack extends cdk.Stack {
     };
 
     // Add custom domain and certificate if configured
-    if (config.domainName && config.certificateArn) {
+    if (config.frontend.domainName && config.frontend.certificateArn) {
       const certificate = acm.Certificate.fromCertificateArn(
         this,
         'Certificate',
-        config.certificateArn
+        config.frontend.certificateArn
       );
       distributionProps = {
         ...distributionProps,
-        domainNames: [config.domainName],
+        domainNames: [config.frontend.domainName],
         certificate: certificate,
       };
     }
@@ -184,16 +184,16 @@ export class FrontendStack extends cdk.Stack {
     this.distributionDomainName = this.distribution.distributionDomainName;
 
     // Create Route53 A record if domain is configured and Route53 is enabled
-    if (config.enableRoute53 && config.domainName) {
+    if (config.frontend.enableRoute53 && config.frontend.domainName) {
       // Look up the hosted zone
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-        domainName: config.domainName,
+        domainName: config.frontend.domainName,
       });
 
       // Create A record aliasing to CloudFront
       new route53.ARecord(this, 'FrontendARecord', {
         zone: hostedZone,
-        recordName: config.domainName,
+        recordName: config.frontend.domainName,
         target: route53.RecordTarget.fromAlias(
           new targets.CloudFrontTarget(this.distribution)
         ),
@@ -210,7 +210,7 @@ export class FrontendStack extends cdk.Stack {
 
     new ssm.StringParameter(this, 'FrontendUrlParameter', {
       parameterName: `/${config.projectPrefix}/frontend/url`,
-      stringValue: config.domainName || `https://${this.distributionDomainName}`,
+      stringValue: config.frontend.domainName || `https://${this.distributionDomainName}`,
       description: 'Frontend website URL',
       tier: ssm.ParameterTier.STANDARD,
     });
@@ -242,7 +242,7 @@ export class FrontendStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'WebsiteUrl', {
-      value: config.domainName || `https://${this.distributionDomainName}`,
+      value: config.frontend.domainName || `https://${this.distributionDomainName}`,
       description: 'Frontend Website URL',
       exportName: `${config.projectPrefix}-WebsiteUrl`,
     });
