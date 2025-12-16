@@ -20,34 +20,34 @@ new InfrastructureStack(app, 'InfrastructureStack', {
   stackName: `${config.projectPrefix}-InfrastructureStack`,
 });
 
-// Frontend Stack - S3 + CloudFront + Route53
-if (config.frontend.enabled) {
-  new FrontendStack(app, 'FrontendStack', {
-    config,
-    env,
-    description: `${config.projectPrefix} Frontend Stack - S3, CloudFront, and Route53`,
-    stackName: `${config.projectPrefix}-FrontendStack`,
-  });
-}
+// // Frontend Stack - S3 + CloudFront + Route53
+// if (config.frontend.enabled) {
+//   new FrontendStack(app, 'FrontendStack', {
+//     config,
+//     env,
+//     description: `${config.projectPrefix} Frontend Stack - S3, CloudFront, and Route53`,
+//     stackName: `${config.projectPrefix}-FrontendStack`,
+//   });
+// }
 
-// App API Stack - Fargate + Database
-if (config.appApi.enabled) {
-  new AppApiStack(app, 'AppApiStack', {
-    config,
-    env,
-    description: `${config.projectPrefix} App API Stack - Fargate and Database`,
-    stackName: `${config.projectPrefix}-AppApiStack`,
-  });
-}
+// // App API Stack - Fargate + Database
+// if (config.appApi.enabled) {
+//   new AppApiStack(app, 'AppApiStack', {
+//     config,
+//     env,
+//     description: `${config.projectPrefix} App API Stack - Fargate and Database`,
+//     stackName: `${config.projectPrefix}-AppApiStack`,
+//   });
+// }
 
-// Inference API Stack - Fargate for AI Workloads
-if (config.inferenceApi.enabled) {
-  new InferenceApiStack(app, 'InferenceApiStack', {
-    config,
-    env,
-    description: `${config.projectPrefix} Inference API Stack - Fargate for AI Workloads`,
-    stackName: `${config.projectPrefix}-InferenceApiStack`,
-  });
-}
+// // Inference API Stack - Fargate for AI Workloads
+// if (config.inferenceApi.enabled) {
+//   new InferenceApiStack(app, 'InferenceApiStack', {
+//     config,
+//     env,
+//     description: `${config.projectPrefix} Inference API Stack - Fargate for AI Workloads`,
+//     stackName: `${config.projectPrefix}-InferenceApiStack`,
+//   });
+// }
 
 app.synth();
