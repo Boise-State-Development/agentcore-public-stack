@@ -95,8 +95,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
     );
   }
 
+  const environment = scope.node.tryGetContext('environment') || process.env.DEPLOY_ENVIRONMENT || 'prod';
+
   const config: AppConfig = {
-    environment: scope.node.tryGetContext('environment') || process.env.DEPLOY_ENVIRONMENT || 'prod',
+    environment,
     projectPrefix,
     awsAccount,
     awsRegion,
@@ -153,10 +155,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
       throttleBurstLimit: 5000,
       enableWaf: false,
     },
-    tags: scope.node.tryGetContext('tags') || {
-      Environment: 'dev',
-      Project: 'AgentCore',
+    tags: {
+      Environment: config.environment,
+      Project: projectPrefix,
       ManagedBy: 'CDK',
+      ...scope.node.tryGetContext('tags'),
     },
   };
 
