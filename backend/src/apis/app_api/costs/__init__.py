@@ -8,9 +8,9 @@ This module handles:
 
 from .models import CostBreakdown, ModelCostSummary, UserCostSummary
 from .pricing_config import get_model_pricing, create_pricing_snapshot
+from .calculator import CostCalculator
 
 # TODO: Implement additional services
-# from .calculator import CostCalculator
 # from .aggregator import CostAggregator
 
 __all__ = [
@@ -19,4 +19,5 @@ __all__ = [
     "UserCostSummary",
     "get_model_pricing",
     "create_pricing_snapshot",
+    "CostCalculator",
 ]
