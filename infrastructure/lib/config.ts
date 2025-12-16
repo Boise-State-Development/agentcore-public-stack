@@ -6,9 +6,10 @@ export interface AppConfig {
   awsAccount: string;
   awsRegion: string;
   vpcCidr: string;
-  domainName?: string;
-  enableRoute53: boolean;
-  certificateArn?: string;
+  // domainName?: string;
+  // enableRoute53: boolean;
+  // certificateArn?: string;
+  infrastructureHostedZoneDomain?: string;
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
@@ -100,9 +101,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
     awsAccount,
     awsRegion,
     vpcCidr: scope.node.tryGetContext('vpcCidr') || '10.0.0.0/16',
-    domainName: process.env.CDK_DOMAIN_NAME || scope.node.tryGetContext('domainName'),
-    enableRoute53: parseBooleanEnv(process.env.CDK_ENABLE_ROUTE53) ?? scope.node.tryGetContext('enableRoute53') ?? false,
-    certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
+    // domainName: process.env.CDK_DOMAIN_NAME || scope.node.tryGetContext('domainName'),
+    // enableRoute53: parseBooleanEnv(process.env.CDK_ENABLE_ROUTE53) ?? scope.node.tryGetContext('enableRoute53') ?? false,
+    // certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
+    infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
     frontend: {
       enabled: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLED) ?? scope.node.tryGetContext('frontend')?.enabled ?? true,
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
@@ -230,15 +232,15 @@ function validateConfig(config: AppConfig): void {
     throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
   }
 
-  // Validate Route53 domain if enabled
-  if (config.enableRoute53 && !config.domainName) {
-    throw new Error('domainName is required when enableRoute53 is true.');
-  }
+  // // Validate Route53 domain if enabled
+  // if (config.enableRoute53 && !config.domainName) {
+  //   throw new Error('domainName is required when enableRoute53 is true.');
+  // }
 
-  // Validate certificate ARN if domain is configured
-  if (config.domainName && !config.certificateArn) {
-    console.warn('Warning: domainName is set but certificateArn is not provided. HTTPS will not be configured.');
-  }
+  // // Validate certificate ARN if domain is configured
+  // if (config.domainName && !config.certificateArn) {
+  //   console.warn('Warning: domainName is set but certificateArn is not provided. HTTPS will not be configured.');
+  // }
 }
 
 /**

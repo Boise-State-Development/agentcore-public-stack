@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, applyStandardTags } from './config';
@@ -207,6 +208,45 @@ export class InfrastructureStack extends cdk.Stack {
       description: 'ECS Cluster ARN',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    // ============================================================
+    // Route53 Hosted Zone (Optional)
+    // ============================================================
+    if (config.infrastructureHostedZoneDomain) {
+      const hostedZone = new route53.PublicHostedZone(this, 'HostedZone', {
+        zoneName: config.infrastructureHostedZoneDomain,
+        comment: `Hosted zone for ${config.projectPrefix}`,
+      });
+
+      // Export Hosted Zone ID to SSM
+      new ssm.StringParameter(this, 'HostedZoneIdParameter', {
+        parameterName: `/${config.projectPrefix}/network/hosted-zone-id`,
+        stringValue: hostedZone.hostedZoneId,
+        description: 'Route53 Hosted Zone ID',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+
+      // Export Hosted Zone Name to SSM
+      new ssm.StringParameter(this, 'HostedZoneNameParameter', {
+        parameterName: `/${config.projectPrefix}/network/hosted-zone-name`,
+        stringValue: hostedZone.zoneName,
+        description: 'Route53 Hosted Zone Name',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+
+      // CloudFormation Output for Hosted Zone
+      new cdk.CfnOutput(this, 'HostedZoneId', {
+        value: hostedZone.hostedZoneId,
+        description: 'Route53 Hosted Zone ID',
+        exportName: `${config.projectPrefix}-hosted-zone-id`,
+      });
+
+      new cdk.CfnOutput(this, 'HostedZoneNameServers', {
+        value: cdk.Fn.join(', ', hostedZone.hostedZoneNameServers || []),
+        description: 'Route53 Hosted Zone Name Servers',
+        exportName: `${config.projectPrefix}-hosted-zone-ns`,
+      });
+    }
 
     // ============================================================
     // CloudFormation Outputs

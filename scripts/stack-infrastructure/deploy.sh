@@ -39,10 +39,21 @@ log_info "Ensuring CDK is bootstrapped..."
 cdk bootstrap aws://${CDK_DEFAULT_ACCOUNT}/${CDK_DEFAULT_REGION} || log_info "CDK already bootstrapped or bootstrap failed (continuing anyway)"
 
 # Deploy the Infrastructure Stack
-log_info "Deploying InfrastructureStack..."
-cdk deploy InfrastructureStack \
-    --require-approval never \
-    --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
+# Check if pre-synthesized template exists (from CI/CD pipeline)
+if [ -d "${PROJECT_ROOT}/infrastructure/cdk.out" ] && [ -f "${PROJECT_ROOT}/infrastructure/cdk.out/InfrastructureStack.template.json" ]; then
+    log_info "Using pre-synthesized CloudFormation template from cdk.out/..."
+    log_info "Deploying InfrastructureStack from pre-synthesized template..."
+    cdk deploy InfrastructureStack \
+        --app "cdk.out/" \
+        --require-approval never \
+        --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
+else
+    log_info "No pre-synthesized template found. Synthesizing and deploying..."
+    log_info "Deploying InfrastructureStack..."
+    cdk deploy InfrastructureStack \
+        --require-approval never \
+        --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
+fi
 
 log_success "Infrastructure Stack deployed successfully"
 
