@@ -111,6 +111,8 @@ async def _create_managed_model_local(model_data: ManagedModelCreate) -> Managed
         enabled=model_data.enabled,
         input_price_per_million_tokens=model_data.input_price_per_million_tokens,
         output_price_per_million_tokens=model_data.output_price_per_million_tokens,
+        cache_write_price_per_million_tokens=model_data.cache_write_price_per_million_tokens,
+        cache_read_price_per_million_tokens=model_data.cache_read_price_per_million_tokens,
         is_reasoning_model=model_data.is_reasoning_model,
         knowledge_cutoff_date=model_data.knowledge_cutoff_date,
         created_at=now,
