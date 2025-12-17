@@ -30,15 +30,15 @@ if (config.frontend.enabled) {
   });
 }
 
-// // App API Stack - Fargate + Database
-// if (config.appApi.enabled) {
-//   new AppApiStack(app, 'AppApiStack', {
-//     config,
-//     env,
-//     description: `${config.projectPrefix} App API Stack - Fargate and Database`,
-//     stackName: `${config.projectPrefix}-AppApiStack`,
-//   });
-// }
+// App API Stack - Fargate + Database
+if (config.appApi.enabled) {
+  new AppApiStack(app, 'AppApiStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} App API Stack - Fargate and Database`,
+    stackName: `${config.projectPrefix}-AppApiStack`,
+  });
+}
 
 // // Inference API Stack - Fargate for AI Workloads
 // if (config.inferenceApi.enabled) {
