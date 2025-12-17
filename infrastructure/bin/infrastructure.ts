@@ -4,6 +4,7 @@ import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { AppApiStack } from '../lib/app-api-stack';
 import { InferenceApiStack } from '../lib/inference-api-stack';
+import { GatewayStack } from '../lib/gateway-stack';
 import { loadConfig, getStackEnv } from '../lib/config';
 
 const app = new cdk.App();
@@ -47,6 +48,16 @@ if (config.inferenceApi.enabled) {
     env,
     description: `${config.projectPrefix} Inference API Stack - Fargate for AI Workloads`,
     stackName: `${config.projectPrefix}-InferenceApiStack`,
+  });
+}
+
+// Gateway Stack - Bedrock AgentCore Gateway with MCP Tools
+if (config.gateway.enabled) {
+  new GatewayStack(app, 'GatewayStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} Gateway Stack - Bedrock AgentCore Gateway with MCP Tools`,
+    stackName: `${config.projectPrefix}-GatewayStack`,
   });
 }
 
