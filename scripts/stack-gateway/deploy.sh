@@ -53,43 +53,6 @@ else
     }
 fi
 
-# ============================================================
-# Post-Deployment Validation
-# ============================================================
-
-log_info "Validating Gateway deployment..."
-
-# Get Gateway ID from SSM
-GATEWAY_ID=$(aws ssm get-parameter \
-    --name "/${CDK_PROJECT_PREFIX}/gateway/id" \
-    --region "${CDK_AWS_REGION}" \
-    --query "Parameter.Value" \
-    --output text 2>/dev/null || echo "")
-
-if [ -z "${GATEWAY_ID}" ]; then
-    log_warning "Could not retrieve Gateway ID from SSM"
-else
-    log_info "Gateway ID: ${GATEWAY_ID}"
-    
-    # Check Gateway status
-    log_info "Checking Gateway status..."
-    
-    set +e
-    GATEWAY_STATUS=$(aws bedrock-agentcore get-gateway \
-        --gateway-identifier "${GATEWAY_ID}" \
-        --region "${CDK_AWS_REGION}" \
-        --query "status" \
-        --output text 2>&1)
-    STATUS_EXIT=$?
-    set -e
-    
-    if [ $STATUS_EXIT -eq 0 ]; then
-        log_success "Gateway Status: ${GATEWAY_STATUS}"
-    else
-        log_warning "Could not verify Gateway status (this is normal immediately after creation)"
-    fi
-fi
-
 log_success "Gateway Stack deployment complete"
 
 # Display usage instructions
