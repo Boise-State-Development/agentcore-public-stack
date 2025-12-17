@@ -11,6 +11,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Set CDK_PROJECT_PREFIX from environment or use default
 # This script doesn't need full configuration validation, just the project prefix
 CDK_PROJECT_PREFIX="${CDK_PROJECT_PREFIX:-agentcore}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 # Logging functions
 log_info() {
@@ -28,8 +29,8 @@ log_success() {
 main() {
     log_info "Testing Docker image..."
     
-    # Use CDK_PROJECT_PREFIX from environment (set at workflow level)
-    IMAGE_NAME="${CDK_PROJECT_PREFIX}-app-api:latest"
+    # Use CDK_PROJECT_PREFIX and IMAGE_TAG from environment (set at workflow level)
+    IMAGE_NAME="${CDK_PROJECT_PREFIX}-app-api:${IMAGE_TAG}"
     
     log_info "Testing Docker image: ${IMAGE_NAME}"
     
