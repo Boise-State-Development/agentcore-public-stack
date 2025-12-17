@@ -39,13 +39,18 @@ export class GatewayStack extends cdk.Stack {
     // Import Secrets Manager Placeholders
     // ============================================================
     
-    // Google Custom Search Credentials Secret - Import existing secret
+    // Google Custom Search Credentials Secret - Create with placeholder values
     // Format: {"api_key": "YOUR_KEY", "search_engine_id": "YOUR_ID"}
-    const googleCredentialsSecret = secretsmanager.Secret.fromSecretNameV2(
-      this,
-      'GoogleCredentials',
-      `${config.projectPrefix}/mcp/google-credentials`
-    );
+    // Users should update this secret with real credentials after deployment
+    const googleCredentialsSecret = new secretsmanager.Secret(this, 'GoogleCredentials', {
+      secretName: `${config.projectPrefix}/mcp/google-credentials`,
+      description: 'Google Custom Search API credentials (update with real values)',
+      secretObjectValue: {
+        api_key: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_GOOGLE_API_KEY'),
+        search_engine_id: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_SEARCH_ENGINE_ID'),
+      },
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // Preserve secret on stack deletion
+    });
 
     // ============================================================
     // Lambda Execution Role
@@ -326,9 +331,9 @@ export class GatewayStack extends cdk.Stack {
 Gateway URL: ${gatewayUrl}
 Authentication: AWS_IAM (SigV4)
 
-To set Google API credentials (REQUIRED before deployment):
+⚠️  IMPORTANT: Update Google API credentials before using search tools
   aws secretsmanager put-secret-value \\
-    --secret-id ${config.projectPrefix}/mcp/google-credentials \\
+    --secret-id ${googleCredentialsSecret.secretName} \\
     --secret-string '{"api_key":"YOUR_API_KEY","search_engine_id":"YOUR_ENGINE_ID"}' \\
     --region ${this.region}
 
@@ -336,7 +341,7 @@ Get API credentials from:
   - API Key: https://console.cloud.google.com/apis/credentials
   - Search Engine ID: https://programmablesearchengine.google.com/
 
-To test with AWS CLI:
+To test Gateway connectivity:
   aws bedrock-agentcore invoke-gateway \\
     --gateway-identifier ${gatewayId} \\
     --region ${this.region}

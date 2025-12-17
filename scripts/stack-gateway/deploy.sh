@@ -22,51 +22,6 @@ log_warning() {
 log_info "Deploying Gateway Stack..."
 
 # ============================================================
-# Validate Prerequisites
-# ============================================================
-
-log_info "Validating prerequisites..."
-
-# Check if Google API credentials secret exists
-log_info "Checking for Google API credentials in Secrets Manager..."
-
-SECRET_NAME="${CDK_PROJECT_PREFIX}/mcp/google-credentials"
-
-set +e
-aws secretsmanager describe-secret \
-    --secret-id "${SECRET_NAME}" \
-    --region "${CDK_AWS_REGION}" \
-    --output json > /dev/null 2>&1
-SECRET_EXISTS=$?
-set -e
-
-if [ $SECRET_EXISTS -ne 0 ]; then
-    log_warning "Google API credentials secret not found: ${SECRET_NAME}"
-    log_warning ""
-    log_warning "You must create this secret before deploying the Gateway Stack:"
-    log_warning ""
-    log_warning "  aws secretsmanager create-secret \\"
-    log_warning "    --name \"${SECRET_NAME}\" \\"
-    log_warning "    --secret-string '{\"api_key\":\"YOUR_API_KEY\",\"search_engine_id\":\"YOUR_ENGINE_ID\"}' \\"
-    log_warning "    --description \"Google Custom Search API credentials\" \\"
-    log_warning "    --region \"${CDK_AWS_REGION}\""
-    log_warning ""
-    log_warning "Get credentials from:"
-    log_warning "  - API Key: https://console.cloud.google.com/apis/credentials"
-    log_warning "  - Search Engine ID: https://programmablesearchengine.google.com/"
-    log_warning ""
-    
-    read -p "Do you want to continue with deployment anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        log_info "Deployment cancelled"
-        exit 0
-    fi
-else
-    log_success "Google API credentials secret found"
-fi
-
-# ============================================================
 # Deploy Stack
 # ============================================================
 
@@ -141,6 +96,21 @@ log_success "Gateway Stack deployment complete"
 log_info ""
 log_info "============================================================"
 log_info "Gateway Usage Instructions"
+log_info "============================================================"
+log_info ""
+log_warning "⚠️  IMPORTANT: Update Google API credentials before using search tools"
+log_info ""
+log_info "The secret was created with placeholder values. Update with real credentials:"
+log_info ""
+log_info "  aws secretsmanager put-secret-value \\"
+log_info "    --secret-id ${CDK_PROJECT_PREFIX}/mcp/google-credentials \\"
+log_info "    --secret-string '{\"api_key\":\"YOUR_API_KEY\",\"search_engine_id\":\"YOUR_ENGINE_ID\"}' \\"
+log_info "    --region ${CDK_AWS_REGION}"
+log_info ""
+log_info "Get credentials from:"
+log_info "  - API Key: https://console.cloud.google.com/apis/credentials"
+log_info "  - Search Engine ID: https://programmablesearchengine.google.com/"
+log_info ""
 log_info "============================================================"
 log_info ""
 log_info "1. Test Gateway connectivity:"
