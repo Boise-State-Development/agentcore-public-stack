@@ -1,11 +1,12 @@
 """
-Agent Core Service
+AgentCore Runtime API
 
-Handles:
-1. Strands Agent execution
-2. Session management (agent pool)
-3. Tool execution (MCP clients)
-4. SSE streaming
+Handles AgentCore Runtime standard endpoints:
+1. GET /ping - Health check (required by AgentCore Runtime)
+2. POST /invocations - Agent invocation endpoint (required by AgentCore Runtime)
+
+This API is designed to comply with AWS Bedrock AgentCore Runtime requirements.
+All endpoints are at root level as required by the AgentCore Runtime specification.
 """
 
 from pathlib import Path
@@ -120,9 +121,9 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app with lifespan
 app = FastAPI(
-    title="Agent Core Public Stack - Inference API",
+    title="AgentCore Runtime API",
     version="2.0.0",
-    description="Handles agent execution, tool orchestration, and SSE response streaming",
+    description="AgentCore Runtime standard endpoints (ping, invocations) for AWS Bedrock AgentCore Runtime",
     lifespan=lifespan
 )
 
@@ -149,12 +150,12 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
         allow_headers=["*"],
     )
 
-# Import routers (using relative imports)
-# from .health.health import router as health_router
-from .chat.routes import router as chat_router
+# Import routers
+#from health.health import router as health_router
+from .chat.routes import router as agentcore_router
 # Include routers
-# app.include_router(health_router)
-app.include_router(chat_router)
+#app.include_router(health_router)
+app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

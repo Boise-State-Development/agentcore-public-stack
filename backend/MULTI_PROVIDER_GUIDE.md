@@ -157,10 +157,10 @@ agent = StrandsAgent(
 
 ### REST API Request
 
-Send provider configuration via the `/chat/invocations` endpoint:
+Send provider configuration via the `/invocations` endpoint:
 
 ```json
-POST /chat/invocations
+POST /invocations
 {
   "session_id": "session-123",
   "message": "What's the weather in Tokyo?",

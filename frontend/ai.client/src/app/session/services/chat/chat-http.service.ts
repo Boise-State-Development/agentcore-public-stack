@@ -52,7 +52,7 @@ export class ChatHttpService {
 
         const token = await this.getBearerTokenForStreamingResponse();
 
-        return fetchEventSource(`${environment.inferenceApiUrl}/chat/invocations`, {
+        return fetchEventSource(`${environment.inferenceApiUrl}/invocations`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -206,7 +206,7 @@ export class ChatHttpService {
         try {
             const response = await firstValueFrom(
                 this.http.post<GenerateTitleResponse>(
-                    `${environment.inferenceApiUrl}/chat/generate-title`,
+                    `${environment.appApiUrl}/chat/generate-title`,
                     requestBody
                 )
             );

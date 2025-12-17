@@ -21,7 +21,7 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
 
   // Skip error handling for SSE streaming endpoints
   // These are handled by fetchEventSource's onerror callback
-  const streamingEndpoints = ['/chat/invocations', '/chat/stream'];
+  const streamingEndpoints = ['/invocations', '/chat/stream'];
   const isStreamingRequest = streamingEndpoints.some(endpoint =>
     req.url.includes(endpoint)
   );
