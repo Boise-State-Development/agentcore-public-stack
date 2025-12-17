@@ -164,8 +164,8 @@ export class GatewayStack extends cdk.Stack {
       // Protocol: MCP
       protocolType: 'MCP',
 
-      // Exception level: DEBUG for dev, ERROR for prod
-      exceptionLevel: config.environment === 'prod' ? 'ERROR' : 'DEBUG',
+      // Exception level: Only DEBUG is supported
+      exceptionLevel: 'DEBUG',
 
       // MCP Protocol Configuration
       protocolConfiguration: {
