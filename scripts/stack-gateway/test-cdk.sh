@@ -11,6 +11,10 @@ INFRASTRUCTURE_DIR="${PROJECT_ROOT}/infrastructure"
 # Source common environment loader
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
 
+log_success() {
+    echo -e "\033[0;32m✓ $1\033[0m"
+}
+
 log_info "Testing Gateway Stack..."
 
 # ============================================================
