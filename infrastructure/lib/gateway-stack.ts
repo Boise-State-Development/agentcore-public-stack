@@ -171,7 +171,7 @@ export class GatewayStack extends cdk.Stack {
       protocolConfiguration: {
         mcp: {
           supportedVersions: ['2024-11-05'],
-          searchType: 'HYBRID',
+          searchType: 'SEMANTIC',
         },
       },
     });
