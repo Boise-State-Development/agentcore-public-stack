@@ -23,39 +23,17 @@ log_info "Testing Gateway Stack..."
 
 cd "${INFRASTRUCTURE_DIR}"
 
-# Get stack name
-STACK_NAME="${CDK_PROJECT_PREFIX}-GatewayStack"
-
-log_info "Running cdk diff for ${STACK_NAME}..."
-
-# Check if pre-synthesized templates exist
-if [ -d "cdk.out" ] && [ -f "cdk.out/${STACK_NAME}.template.json" ]; then
-    log_info "Using pre-synthesized templates from cdk.out/"
-    
-    # Run diff using pre-synthesized templates
-    cdk diff "${STACK_NAME}" --app "cdk.out/" || {
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            log_error "cdk diff failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
-        fi
-    }
-else
-    log_info "No pre-synthesized templates found, synthesizing on-the-fly"
-    
-    # Run diff with explicit context
-    cdk diff "${STACK_NAME}" \
-        --context projectPrefix="${CDK_PROJECT_PREFIX}" \
-        --context awsRegion="${CDK_AWS_REGION}" \
-        --context awsAccount="${CDK_AWS_ACCOUNT}" \
-        --context environment="${CDK_ENVIRONMENT}" \
-        || {
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -ne 0 ]; then
-            log_error "cdk diff failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
-        fi
-    }
+# Check if synthesized template exists
+if [ ! -d "cdk.out" ] || [ ! -f "cdk.out/GatewayStack.template.json" ]; then
+    log_error "Synthesized template not found. Run synth.sh first."
+    exit 1
 fi
+
+log_info "Running cdk diff to compare synthesized template with deployed stack..."
+
+# Run cdk diff using the pre-synthesized template
+# This will show what would change if we deployed
+cdk diff GatewayStack \
+    --app "cdk.out/"
 
 log_success "Gateway Stack validation complete"
