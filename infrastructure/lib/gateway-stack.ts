@@ -170,6 +170,8 @@ export class GatewayStack extends cdk.Stack {
       // MCP Protocol Configuration
       protocolConfiguration: {
         mcp: {
+          supportedVersions: ['2024-11-05'],
+          searchType: 'HYBRID',
         },
       },
     });
