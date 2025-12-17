@@ -10,7 +10,6 @@ export interface AppConfig {
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
-  agentCore: AgentCoreConfig;
   gateway: GatewayConfig;
   tags: { [key: string]: string };
 }
@@ -59,19 +58,13 @@ export interface InferenceApiConfig {
   novaActApiKey: string;
 }
 
-export interface AgentCoreConfig {
-  enabled: boolean;
-  lambdaMemory: number;
-  lambdaTimeout: number;
-  enableStepFunctions: boolean;
-}
-
 export interface GatewayConfig {
   enabled: boolean;
   apiType: 'REST' | 'HTTP';
   throttleRateLimit: number;
   throttleBurstLimit: number;
   enableWaf: boolean;
+  logLevel?: string;  // Log level for Lambda functions (INFO, DEBUG, ERROR)
 }
 
 /**
@@ -142,18 +135,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       tavilyApiKey: process.env.TAVILY_API_KEY || scope.node.tryGetContext('inferenceApi')?.tavilyApiKey || '',
       novaActApiKey: process.env.NOVA_ACT_API_KEY || scope.node.tryGetContext('inferenceApi')?.novaActApiKey || '',
     },
-    agentCore: scope.node.tryGetContext('agentCore') || {
-      enabled: true,
-      lambdaMemory: 512,
-      lambdaTimeout: 300,
-      enableStepFunctions: true,
-    },
-    gateway: scope.node.tryGetContext('gateway') || {
-      enabled: true,
-      apiType: 'HTTP',
-      throttleRateLimit: 10000,
-      throttleBurstLimit: 5000,
-      enableWaf: false,
+    gateway: {
+      enabled: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLED) ?? scope.node.tryGetContext('gateway')?.enabled ?? true,
+      apiType: (process.env.CDK_GATEWAY_API_TYPE as 'REST' | 'HTTP') || scope.node.tryGetContext('gateway')?.apiType || 'HTTP',
+      throttleRateLimit: parseIntEnv(process.env.CDK_GATEWAY_THROTTLE_RATE_LIMIT) || scope.node.tryGetContext('gateway')?.throttleRateLimit || 10000,
+      throttleBurstLimit: parseIntEnv(process.env.CDK_GATEWAY_THROTTLE_BURST_LIMIT) || scope.node.tryGetContext('gateway')?.throttleBurstLimit || 5000,
+      enableWaf: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLE_WAF) ?? scope.node.tryGetContext('gateway')?.enableWaf ?? false,
+      logLevel: process.env.CDK_GATEWAY_LOG_LEVEL || scope.node.tryGetContext('gateway')?.logLevel || 'INFO',
     },
     tags: {
       Environment: environment,

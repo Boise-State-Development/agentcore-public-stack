@@ -274,8 +274,8 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 
 **Purpose**: Provides two MCP tools (`google_web_search` and `google_image_search`) using Google Custom Search API
 
-- [ ] **Create Lambda Functions Directory**: Set up `backend/lambda-functions/google-search/` for MCP tool implementation.
-- [ ] **Create Lambda Handler**: Create `backend/lambda-functions/google-search/lambda_function.py` (279 lines):
+- [x] **Create Lambda Functions Directory**: Set up `backend/lambda-functions/google-search/` for MCP tool implementation.
+- [x] **Create Lambda Handler**: Create `backend/lambda-functions/google-search/lambda_function.py` (279 lines):
   - `lambda_handler(event, context)`: Routes to tools based on `bedrockAgentCoreToolName` from context
   - `get_google_credentials()`: Retrieves credentials from Secrets Manager with global caching
   - `google_web_search(params)`: Calls Google Custom Search API, returns up to 5 results
@@ -283,26 +283,26 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - `check_image_accessible(url)`: Validates image URLs via HEAD/range requests
   - `success_response(content)`: MCP-compliant response format with `content` array
   - `error_response(message)`: MCP-compliant error response
-- [ ] **Create Requirements File**: Create `backend/lambda-functions/google-search/requirements.txt`:
+- [x] **Create Requirements File**: Create `backend/lambda-functions/google-search/requirements.txt`:
   - `requests==2.32.4` - HTTP client for Google API calls
   - `boto3==1.35.93` - AWS SDK for Secrets Manager integration
 
 #### CDK Infrastructure - IAM & Secrets
-- [ ] **Create GatewayStack File**: Create `infrastructure/lib/gateway-stack.ts` as single unified stack.
-- [ ] **Define Secrets Manager Placeholders**: Import existing secrets for Google Custom Search API:
+- [x] **Create GatewayStack File**: Create `infrastructure/lib/gateway-stack.ts` as single unified stack.
+- [x] **Define Secrets Manager Placeholders**: Import existing secrets for Google Custom Search API:
   - `/${projectPrefix}/mcp/google-credentials` - JSON format: `{"api_key": "YOUR_KEY", "search_engine_id": "YOUR_ID"}`
   - Secret must be created manually before first deployment (see documentation section)
-- [ ] **Define Lambda Execution Role**: Create role with:
+- [x] **Define Lambda Execution Role**: Create role with:
   - CloudWatch Logs permissions (`logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`)
   - Secrets Manager read permissions (`secretsmanager:GetSecretValue`)
   - Managed policy: `service-role/AWSLambdaBasicExecutionRole`
-- [ ] **Define Gateway Execution Role**: Create role for AgentCore Gateway with:
+- [x] **Define Gateway Execution Role**: Create role for AgentCore Gateway with:
   - Lambda invocation permissions (`lambda:InvokeFunction`)
   - CloudWatch Logs permissions for Gateway logs
   - Service principal: `bedrock-agentcore.amazonaws.com`
 
 #### CDK Infrastructure - Lambda Functions
-- [ ] **Define Lambda Functions**: Create Lambda function using CDK `Code.fromAsset()`:
+- [x] **Define Lambda Functions**: Create Lambda function using CDK `Code.fromAsset()`:
   - **Function**: `mcp-google-search`
   - Runtime: `PYTHON_3_13`
   - Architecture: `ARM_64`
@@ -314,11 +314,11 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - Timeout: 60 seconds
   - Memory: 512 MB
   - Role: Lambda execution role from IAM section
-- [ ] **Add Lambda Permissions**: Grant Gateway permission to invoke Lambda function via `addPermission()`.
-- [ ] **Create CloudWatch Log Group**: Create log group `/aws/lambda/mcp-google-search` with 1-week retention.
+- [x] **Add Lambda Permissions**: Grant Gateway permission to invoke Lambda function via `addPermission()`.
+- [x] **Create CloudWatch Log Group**: Create log group `/aws/lambda/mcp-google-search` with 1-week retention.
 
 #### CDK Infrastructure - AgentCore Gateway
-- [ ] **Define AgentCore Gateway**: Create `CfnGateway` with:
+- [x] **Define AgentCore Gateway**: Create `CfnGateway` with:
   - Name: `${projectPrefix}-mcp-gateway`
   - Description: MCP Gateway for custom tools
   - Role: Gateway execution role
@@ -326,14 +326,14 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - Protocol type: `MCP`
   - Exception level: `DEBUG` for dev, `ERROR` for prod
   - MCP protocol configuration: Default settings
-- [ ] **Store Gateway URL in SSM**: Write Gateway URL to `/${projectPrefix}/gateway/url`.
-- [ ] **Store Gateway ID in SSM**: Write Gateway ID to `/${projectPrefix}/gateway/id`.
-- [ ] **Add Gateway Outputs**: Export Gateway ARN, URL, ID, and status.
+- [x] **Store Gateway URL in SSM**: Write Gateway URL to `/${projectPrefix}/gateway/url`.
+- [x] **Store Gateway ID in SSM**: Write Gateway ID to `/${projectPrefix}/gateway/id`.
+- [x] **Add Gateway Outputs**: Export Gateway ARN, URL, ID, and status.
 
 #### CDK Infrastructure - Gateway Targets
 **Note**: Gateway Targets connect Lambda functions to the Gateway as MCP tools
 
-- [ ] **Define Google Web Search Target**: Create `CfnGatewayTarget` for `google_web_search`:
+- [x] **Define Google Web Search Target**: Create `CfnGatewayTarget` for `google_web_search`:
   - Name: `google-web-search`
   - Gateway identifier: Reference to Gateway
   - Description: "Search the web using Google Custom Search API. Returns up to 5 high-quality results."
@@ -341,7 +341,7 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - Target configuration: MCP Lambda target with:
     - Lambda ARN: `mcp-google-search` function
     - Tool schema: JSON Schema defining `query` parameter (string, required)
-- [ ] **Define Google Image Search Target**: Create `CfnGatewayTarget` for `google_image_search`:
+- [x] **Define Google Image Search Target**: Create `CfnGatewayTarget` for `google_image_search`:
   - Name: `google-image-search`
   - Gateway identifier: Reference to Gateway
   - Description: "Search for images using Google's image search. Returns up to 5 verified accessible images."
@@ -349,32 +349,32 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - Target configuration: MCP Lambda target with:
     - Lambda ARN: `mcp-google-search` function
     - Tool schema: JSON Schema defining `query` parameter (string, required)
-- [ ] **Add Target Outputs**: Export total number of targets (2) and tool names.
+- [x] **Add Target Outputs**: Export total number of targets (2) and tool names.
 
 #### Build & Deploy Scripts
-- [ ] **Create Scripts Directory**: Set up `scripts/stack-gateway/`.
-- [ ] **Script: Install Dependencies**: Create `scripts/stack-gateway/install.sh` to install CDK and Python dependencies.
-- [ ] **Script: Build CDK**: Create `scripts/stack-gateway/build-cdk.sh` to compile TypeScript CDK code.
-- [ ] **Script: Synthesize Stack**: Create `scripts/stack-gateway/synth.sh` to synthesize CloudFormation with all context parameters.
-- [ ] **Script: Test CDK**: Create `scripts/stack-gateway/test-cdk.sh` to validate with `cdk diff`.
-- [ ] **Script: Deploy Stack**: Create `scripts/stack-gateway/deploy.sh` to:
+- [x] **Create Scripts Directory**: Set up `scripts/stack-gateway/`.
+- [x] **Script: Install Dependencies**: Create `scripts/stack-gateway/install.sh` to install CDK and Python dependencies.
+- [x] **Script: Build CDK**: Create `scripts/stack-gateway/build-cdk.sh` to compile TypeScript CDK code.
+- [x] **Script: Synthesize Stack**: Create `scripts/stack-gateway/synth.sh` to synthesize CloudFormation with all context parameters.
+- [x] **Script: Test CDK**: Create `scripts/stack-gateway/test-cdk.sh` to validate with `cdk diff`.
+- [x] **Script: Deploy Stack**: Create `scripts/stack-gateway/deploy.sh` to:
   - Check for pre-synthesized templates in `cdk.out/`
   - Deploy stack with explicit context parameters (CDK handles Lambda packaging automatically)
   - Validate Gateway is accessible after deployment
   - Output usage instructions for Runtime integration
-- [ ] **Script: Test Gateway**: Create `scripts/stack-gateway/test.sh` to validate Gateway connectivity and list tools.
+- [x] **Script: Test Gateway**: Create `scripts/stack-gateway/test.sh` to validate Gateway connectivity and list tools.
 
 #### Integration with Inference API Stack (Phase 4)
-- [ ] **Update Runtime Execution Role**: Add Gateway invoke permissions to Inference API Runtime:
+- [x] **Update Runtime Execution Role**: Add Gateway invoke permissions to Inference API Runtime:
   - `bedrock-agentcore:InvokeGateway`
   - `bedrock-agentcore:GetGateway`
   - `bedrock-agentcore:ListGateways`
   - Resources: `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*`
-- [ ] **Add Gateway URL to Runtime Environment**: Pass Gateway URL to AgentCore Runtime via SSM parameter lookup.
+- [x] **Add Gateway URL to Runtime Environment**: Pass Gateway URL to AgentCore Runtime via SSM parameter lookup.
 - [ ] **Update Agent Code**: Integrate Gateway client in `backend/src/apis/inference_api/` to invoke tools with SigV4 authentication.
 
 #### CI/CD Pipeline (9-Job Modular Pattern)
-- [ ] **Create Workflow File**: Create `.github/workflows/gateway.yml` using standard 9-job pattern:
+- [x] **Create Workflow File**: Create `.github/workflows/gateway.yml` using standard 9-job pattern:
   - **Job 1: install** - Install and cache CDK/Python dependencies
   - **Job 2: build-cdk** - Compile TypeScript CDK code
   - **Job 3: synth-cdk** - Synthesize CloudFormation templates, upload as artifact
@@ -382,14 +382,14 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - **Job 5: test-lambda** - Run Python unit tests for Lambda functions (if any)
   - **Job 6: deploy-stack** - Deploy CDK stack (CDK automatically packages Lambda functions)
   - **Job 7: test-gateway** - Validate Gateway connectivity and list tools
-- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on:
+- [x] **Configure Path Triggers**: Set `paths` filter to trigger on:
   - `infrastructure/lib/gateway-stack.ts`
   - `backend/lambda-functions/**`
   - `scripts/stack-gateway/**`
   - `.github/workflows/gateway.yml`
-- [ ] **Configure Environment Variables**: Use same pattern as other stacks (`CDK_AWS_REGION`, `CDK_PROJECT_PREFIX`, etc.)
-- [ ] **Configure AWS Credentials**: Use composite action `./.github/actions/configure-aws-credentials` with OIDC fallback
-- [ ] **Add Concurrency Control**: Use `concurrency: { group: gateway-${{ github.ref }}, cancel-in-progress: false }`
+- [x] **Configure Environment Variables**: Use same pattern as other stacks (`CDK_AWS_REGION`, `CDK_PROJECT_PREFIX`, etc.)
+- [x] **Configure AWS Credentials**: Use composite action `./.github/actions/configure-aws-credentials` with OIDC fallback
+- [x] **Add Concurrency Control**: Use `concurrency: { group: gateway-${{ github.ref }}, cancel-in-progress: false }`
 
 #### Documentation & Testing
 - [ ] **Update README**: Document Gateway stack in main README.md with architecture diagram.

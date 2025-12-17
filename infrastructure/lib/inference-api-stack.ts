@@ -139,6 +139,18 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // AgentCore Gateway permissions (for MCP tool integration)
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreGatewayAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:InvokeGateway',
+        'bedrock-agentcore:GetGateway',
+        'bedrock-agentcore:ListGateways',
+      ],
+      resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:gateway/*`],
+    }));
+
     // SSM Parameter Store read permissions
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -373,6 +385,14 @@ export class InferenceApiStack extends cdk.Stack {
         'MEMORY_ID': this.memory.attrMemoryId,
         'CODE_INTERPRETER_ID': this.codeInterpreter.attrCodeInterpreterId,
         'BROWSER_ID': this.browser.attrBrowserId,
+        
+        // AgentCore Gateway (optional - for MCP tools)
+        'GATEWAY_URL': config.gateway.enabled
+          ? ssm.StringParameter.valueForStringParameter(
+              this,
+              `/${config.projectPrefix}/gateway/url`
+            )
+          : '',
         
         // Authentication (from GitHub Variables)
         'ENABLE_AUTHENTICATION': config.inferenceApi.enableAuthentication
