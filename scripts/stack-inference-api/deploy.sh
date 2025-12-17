@@ -86,25 +86,35 @@ main() {
     # Bootstrap CDK if needed (idempotent operation)
     # Note: Run from project root to avoid loading CDK app context (see CLAUDES_LESSONS_PHASE4.md Challenge 1)
     log_info "Ensuring CDK is bootstrapped..."
-    cd "${REPO_ROOT}"
-    npx cdk bootstrap "aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION}" \
+    cd "${PROJECT_ROOT}"
+    cdk bootstrap "aws://${CDK_AWS_ACCOUNT}/${CDK_AWS_REGION}" \
         || log_info "CDK already bootstrapped or bootstrap failed (continuing anyway)"
-    cd infrastructure/
     
     # Deploy CDK stack
     log_info "Deploying InferenceApiStack with CDK..."
+    cd "${INFRASTRUCTURE_DIR}"
     
     # Use CDK_REQUIRE_APPROVAL env var with fallback to never
     REQUIRE_APPROVAL="${CDK_REQUIRE_APPROVAL:-never}"
     
-    npx cdk deploy InferenceApiStack \
-        --require-approval ${REQUIRE_APPROVAL} \
-        --context environment="${DEPLOY_ENVIRONMENT}" \
-        --context projectPrefix="${CDK_PROJECT_PREFIX}" \
-        --context awsAccount="${CDK_AWS_ACCOUNT}" \
-        --context awsRegion="${CDK_AWS_REGION}" \
-        --context inferenceApi="{\"enableAuthentication\":\"${ENABLE_AUTHENTICATION}\",\"logLevel\":\"${LOG_LEVEL}\",\"uploadDir\":\"${UPLOAD_DIR}\",\"outputDir\":\"${OUTPUT_DIR}\",\"generatedImagesDir\":\"${GENERATED_IMAGES_DIR}\",\"apiUrl\":\"${API_URL}\",\"frontendUrl\":\"${FRONTEND_URL}\",\"corsOrigins\":\"${CORS_ORIGINS}\",\"tavilyApiKey\":\"${TAVILY_API_KEY}\",\"novaActApiKey\":\"${NOVA_ACT_API_KEY}\"}" \
-        --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
+    # Check if pre-synthesized templates exist
+    if [ -d "cdk.out" ] && [ -f "cdk.out/InferenceApiStack.template.json" ]; then
+        log_info "Using pre-synthesized templates from cdk.out/"
+        cdk deploy InferenceApiStack \
+            --app "cdk.out/" \
+            --require-approval ${REQUIRE_APPROVAL} \
+            --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
+    else
+        log_info "Synthesizing templates on-the-fly"
+        cdk deploy InferenceApiStack \
+            --require-approval ${REQUIRE_APPROVAL} \
+            --context environment="${DEPLOY_ENVIRONMENT}" \
+            --context projectPrefix="${CDK_PROJECT_PREFIX}" \
+            --context awsAccount="${CDK_AWS_ACCOUNT}" \
+            --context awsRegion="${CDK_AWS_REGION}" \
+            --context inferenceApi="{\"enableAuthentication\":\"${ENABLE_AUTHENTICATION}\",\"logLevel\":\"${LOG_LEVEL}\",\"uploadDir\":\"${UPLOAD_DIR}\",\"outputDir\":\"${OUTPUT_DIR}\",\"generatedImagesDir\":\"${GENERATED_IMAGES_DIR}\",\"apiUrl\":\"${API_URL}\",\"frontendUrl\":\"${FRONTEND_URL}\",\"corsOrigins\":\"${CORS_ORIGINS}\",\"tavilyApiKey\":\"${TAVILY_API_KEY}\",\"novaActApiKey\":\"${NOVA_ACT_API_KEY}\"}" \
+            --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
+    fi
     
     log_success "CDK deployment completed successfully"
     

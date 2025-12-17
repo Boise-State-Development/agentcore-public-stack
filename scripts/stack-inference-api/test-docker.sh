@@ -42,8 +42,9 @@ main() {
         log_info "Running on ARM64 platform natively"
     fi
     
-    # Use CDK_PROJECT_PREFIX from environment (set at workflow level)
-    IMAGE_NAME="${CDK_PROJECT_PREFIX}-inference-api:latest"
+    # Use IMAGE_TAG from environment (set by build job), fallback to latest for local testing
+    IMAGE_TAG="${IMAGE_TAG:-latest}"
+    IMAGE_NAME="${CDK_PROJECT_PREFIX}-inference-api:${IMAGE_TAG}"
     
     log_info "Testing Docker image: ${IMAGE_NAME}"
     
