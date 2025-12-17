@@ -415,16 +415,102 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 - [x] [HUMAN] Phase 5 verified and approved to proceed to Phase 6
 
 ### Phase 6: Local Orchestration
-**Goal**: Interactive deployment script for local development
+**Goal**: Interactive deployment script that runs full build/test/deploy pipelines locally (mimicking GitHub Actions workflows)
 
+#### Basic Script Structure
 - [x] **Create Orchestration Script**: Create `deploy.sh` in repository root.
-- [x] **Implement Menu System**: Add interactive menu with options: "1) Deploy Infrastructure", "2) Deploy App API", "3) Deploy Inference API", "4) Deploy Gateway", "5) Deploy Frontend", "6) Deploy All", "7) Exit".
-- [x] **Implement Stack Deployment Functions**: Create functions that call the individual stack deploy scripts.
+- [x] **Implement Menu System**: Add interactive menu with ASCII art and options: "1) Deploy Infrastructure", "2) Deploy App API", "3) Deploy Inference API", "4) Deploy Gateway", "5) Deploy Frontend", "6) Deploy All", "7) Exit".
 - [x] **Add Environment Validation**: Check for required environment variables and AWS credentials before deploying.
 - [x] **Add Dry-Run Option**: Implement `--dry-run` flag to show what would be deployed without executing.
 - [x] **Add Logging**: Output clear status messages for each deployment step.
 - [x] **Make Script Executable**: Ensure script has proper shebang and execute permissions.
-- [x] **Test Local Deployment**: Verify the orchestration script works on local machine by running a test deployment.
+
+#### Full Pipeline Orchestration
+**Critical**: Each stack deployment must run the complete build/test/deploy pipeline, not just the final deploy script.
+
+- [x] **Infrastructure Stack Pipeline**: Implement full pipeline function:
+  - Run `scripts/common/install-deps.sh` (Node.js, CDK, Python, Docker)
+  - Run `scripts/stack-infrastructure/install.sh` (CDK dependencies)
+  - Run `scripts/stack-infrastructure/build.sh` (compile TypeScript CDK)
+  - Run `scripts/stack-infrastructure/test.sh` (CDK validation)
+  - Run `scripts/stack-infrastructure/synth.sh` (synthesize CloudFormation)
+  - Run `scripts/stack-infrastructure/deploy.sh` (deploy stack)
+  - Display deployment outputs (VPC ID, ALB ARN, etc.)
+
+- [x] **App API Stack Pipeline**: Implement full Docker + CDK pipeline:
+  - Run `scripts/common/install-deps.sh`
+  - Run `scripts/stack-app-api/install.sh` (Python dependencies)
+  - Run `scripts/stack-app-api/build.sh` (build Docker image)
+  - Run `scripts/stack-app-api/test-docker.sh` (test Docker container)
+  - Run `scripts/stack-app-api/test.sh` (Python unit tests)
+  - Run `scripts/stack-app-api/build-cdk.sh` (compile CDK)
+  - Run `scripts/stack-app-api/synth.sh` (synthesize CloudFormation)
+  - Run `scripts/stack-app-api/test-cdk.sh` (CDK validation)
+  - Run `scripts/stack-app-api/push-to-ecr.sh` (push Docker image)
+  - Run `scripts/stack-app-api/deploy.sh` (deploy stack)
+  - Display deployment outputs (Service URL, Task Definition ARN)
+
+- [x] **Inference API Stack Pipeline**: Implement full Docker + CDK pipeline:
+  - Run `scripts/common/install-deps.sh`
+  - Run `scripts/stack-inference-api/install.sh` (Python dependencies)
+  - Run `scripts/stack-inference-api/build.sh` (build ARM64 Docker image)
+  - Run `scripts/stack-inference-api/test-docker.sh` (test ARM64 container)
+  - Run `scripts/stack-inference-api/test.sh` (Python unit tests)
+  - Run `scripts/stack-inference-api/build-cdk.sh` (compile CDK)
+  - Run `scripts/stack-inference-api/synth.sh` (synthesize CloudFormation)
+  - Run `scripts/stack-inference-api/test-cdk.sh` (CDK validation)
+  - Run `scripts/stack-inference-api/push-to-ecr.sh` (push ARM64 image)
+  - Run `scripts/stack-inference-api/deploy.sh` (deploy AgentCore Runtime)
+  - Display deployment outputs (Runtime ARN, Runtime URL, Memory ID)
+
+- [x] **Gateway Stack Pipeline**: Implement full CDK pipeline:
+  - Run `scripts/common/install-deps.sh`
+  - Run `scripts/stack-gateway/install.sh` (CDK dependencies)
+  - Run `scripts/stack-gateway/build-cdk.sh` (compile CDK)
+  - Run `scripts/stack-gateway/synth.sh` (synthesize CloudFormation, CDK packages Lambda)
+  - Run `scripts/stack-gateway/test-cdk.sh` (CDK validation)
+  - Run `scripts/stack-gateway/deploy.sh` (deploy Gateway + Lambda)
+  - Run `scripts/stack-gateway/test.sh` (test Gateway connectivity)
+  - Display deployment outputs (Gateway ARN, Gateway URL, Tool count)
+
+- [x] **Frontend Stack Pipeline**: Implement full Angular + CDK pipeline:
+  - Run `scripts/common/install-deps.sh`
+  - Run `scripts/stack-frontend/install.sh` (Angular dependencies)
+  - Run `scripts/stack-frontend/build.sh` (build Angular with production config)
+  - Run `scripts/stack-frontend/test.sh` (run Vitest tests)
+  - Run `scripts/stack-frontend/build-cdk.sh` (compile CDK)
+  - Run `scripts/stack-frontend/synth.sh` (synthesize CloudFormation)
+  - Run `scripts/stack-frontend/test-cdk.sh` (CDK validation)
+  - Run `scripts/stack-frontend/deploy-cdk.sh` (deploy S3 + CloudFront)
+  - Run `scripts/stack-frontend/deploy-assets.sh` (sync to S3, invalidate CloudFront)
+  - Display deployment outputs (CloudFront URL, S3 Bucket)
+
+- [x] **Deploy All Pipeline**: Implement sequential deployment with dependency order:
+  - Deploy Infrastructure Stack (foundation)
+  - Deploy App API Stack (depends on Infrastructure)
+  - Deploy Inference API Stack (depends on Infrastructure)
+  - Deploy Gateway Stack (independent)
+  - Deploy Frontend Stack (independent)
+  - Display summary of all deployed stacks with URLs
+
+#### Enhanced User Experience
+- [x] **Add ASCII Art Banner**: Create eye-catching ASCII art header for the menu.
+- [x] **Add Progress Indicators**: Show current step (e.g., "Step 3/7: Building Docker image...").
+- [x] **Add Time Tracking**: Display elapsed time for each step and total deployment time.
+- [x] **Add Step Summaries**: After each major step, show summary (e.g., "✓ Build completed in 45s").
+- [x] **Add Deployment Summary Table**: At the end, display table with all stack URLs and important ARNs.
+- [x] **Add Continue-on-Error Option**: Add `--skip-tests` flag to skip test steps and `--continue-on-error` to continue even if a step fails.
+- [x] **Add Verbose Mode**: Add `--verbose` or `-v` flag to show full command output.
+- [ ] **Add Stack Status Check**: Before deploying, check if stack already exists and show current status.
+
+#### Error Handling & Recovery
+- [ ] **Add Rollback Support**: If deployment fails, offer to rollback to previous version.
+- [ ] **Add Resume Support**: Save progress to temp file, allow resuming failed deployments.
+- [x] **Add Pre-flight Checks**: Validate all required scripts exist before starting pipeline.
+- [x] **Add Dependency Checks**: Verify Docker is running (for Docker stacks), Node.js version, Python version, etc.
+
+#### Testing & Validation
+- [ ] **Test Local Deployment**: Verify the orchestration script works on local machine by running a test deployment.
 
 ---
 
