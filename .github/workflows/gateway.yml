@@ -130,6 +130,10 @@ jobs:
           name: gateway-cdk-build
           path: infrastructure
 
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
       - name: Synthesize CloudFormation templates
         run: |
           bash scripts/stack-gateway/synth.sh
@@ -171,6 +175,10 @@ jobs:
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
 
       - name: Test CDK stack
         run: |
@@ -231,6 +239,10 @@ jobs:
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
 
       - name: Deploy Gateway Stack
         run: |

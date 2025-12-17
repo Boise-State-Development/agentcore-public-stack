@@ -23,6 +23,12 @@ log_info "Synthesizing Gateway Stack..."
 
 cd "${INFRASTRUCTURE_DIR}"
 
+# Ensure dependencies are installed
+if [ ! -d "node_modules" ]; then
+    log_info "node_modules not found in CDK directory. Installing dependencies..."
+    npm install
+fi
+
 # Get stack name
 STACK_NAME="${CDK_PROJECT_PREFIX}-GatewayStack"
 
