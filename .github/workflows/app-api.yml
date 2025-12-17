@@ -1,0 +1,382 @@
+name: AppApiStack.BuildTest.Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/src/apis/app_api/**'
+      - 'backend/pyproject.toml'
+      - 'backend/Dockerfile.app-api'
+      - 'infrastructure/lib/app-api-stack.ts'
+      - 'scripts/stack-app-api/**'
+      - '.github/workflows/app-api.yml'
+  pull_request:
+    paths:
+      - 'backend/src/apis/app_api/**'
+      - 'backend/pyproject.toml'
+      - 'backend/Dockerfile.app-api'
+      - 'infrastructure/lib/app-api-stack.ts'
+      - 'scripts/stack-app-api/**'
+      - '.github/workflows/app-api.yml'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+      skip_deploy:
+        description: 'Skip deployment'
+        required: false
+        default: 'false'
+
+env:
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+  # CDK Configuration - from GitHub Variables
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
+  CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
+  CDK_APP_API_ENABLED: ${{ vars.CDK_APP_API_ENABLED }}
+  CDK_APP_API_CPU: ${{ vars.CDK_APP_API_CPU }}
+  CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
+  CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
+  CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
+  # CDK Secrets - from GitHub Secrets
+  CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
+  # AWS Authentication
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Build and Deploy Configuration
+  CDK_REQUIRE_APPROVAL: never
+
+# Ensure only one deployment runs at a time
+concurrency:
+  group: app-api-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Install app-api dependencies
+        run: |
+          bash scripts/stack-app-api/install.sh
+
+      - name: Save node_modules cache
+        uses: actions/cache/save@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: install
+    
+    outputs:
+      image-tag: ${{ steps.set-tag.outputs.IMAGE_TAG }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set image tag
+        id: set-tag
+        run: |
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Building with tag: ${IMAGE_TAG}"
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and export Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.app-api
+          tags: ${{ env.CDK_PROJECT_PREFIX }}-app-api:${{ steps.set-tag.outputs.IMAGE_TAG }}
+          outputs: type=docker,dest=${{ runner.temp }}/app-api-image.tar
+      
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-api-docker-image
+          path: ${{ runner.temp }}/app-api-image.tar
+          retention-days: 1
+
+  build-cdk:
+    name: Build CDK
+    runs-on: ubuntu-latest
+    needs: install
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Build CDK
+        run: |
+          bash scripts/stack-app-api/build-cdk.sh
+
+  test-docker:
+    name: Test Docker Image
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    
+    env:
+      IMAGE_TAG: ${{ needs.build-docker.outputs.image-tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-api-docker-image
+          path: ${{ runner.temp }}
+      
+      - name: Load Docker image
+        run: |
+          docker load --input ${{ runner.temp }}/app-api-image.tar
+          docker image ls -a
+      
+      - name: Test Docker image
+        run: |
+          bash scripts/stack-app-api/test-docker.sh
+
+  test-python:
+    name: Test Python Code
+    runs-on: ubuntu-latest
+    needs: install
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Python tests
+        run: |
+          bash scripts/stack-app-api/test.sh
+
+  synth-cdk:
+    name: Synthesize CDK
+    runs-on: ubuntu-latest
+    needs: build-cdk
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-AppApi-Synth
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Synthesize CloudFormation template
+        run: |
+          bash scripts/stack-app-api/synth.sh
+
+      - name: Upload synthesized templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-api-cdk-synth
+          path: infrastructure/cdk.out/
+          retention-days: 7
+
+  test-cdk:
+    name: Test CDK
+    runs-on: ubuntu-latest
+    needs: synth-cdk
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: app-api-cdk-synth
+          path: infrastructure/cdk.out/
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-AppApi-Test
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Validate CloudFormation template
+        run: |
+          bash scripts/stack-app-api/test-cdk.sh
+
+  push-to-ecr:
+    name: Push Docker Image to ECR
+    runs-on: ubuntu-latest
+    needs: [build-docker, test-docker, test-python]
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    outputs:
+      image-tag: ${{ needs.build-docker.outputs.image-tag }}
+    
+    env:
+      IMAGE_TAG: ${{ needs.build-docker.outputs.image-tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-api-docker-image
+          path: ${{ runner.temp }}
+      
+      - name: Load Docker image
+        run: |
+          docker load --input ${{ runner.temp }}/app-api-image.tar
+          docker image ls -a
+      
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-AppApi-ECR
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Push to ECR
+        run: |
+          bash scripts/stack-app-api/push-to-ecr.sh
+
+  deploy-infrastructure:
+    name: Deploy CDK Infrastructure
+    runs-on: ubuntu-latest
+    needs: [test-cdk, push-to-ecr]
+    if: |
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    env:
+      IMAGE_TAG: ${{ needs.push-to-ecr.outputs.image-tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: app-api-cdk-synth
+          path: infrastructure/cdk.out/
+      
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-AppApi-CDK
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}     
+        
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+          
+      - name: Deploy infrastructure
+        run: |
+          bash scripts/stack-app-api/deploy.sh
+      
+      - name: Tag image as latest
+        run: |
+          bash scripts/stack-app-api/tag-latest.sh
+     
+      - name: Upload stack outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-api-deployment-outputs
+          path: |
+            cdk-outputs-app-api.json
+          retention-days: 30
+            
+      - name: Deployment summary
+        if: success()
+        run: | 
+          echo "## App API Deployment Successful ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${CDK_AWS_REGION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${CDK_PROJECT_PREFIX}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack**: AppApiStack" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: ${IMAGE_TAG}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f cdk-outputs-app-api.json ]; then
+            echo "### Stack Outputs" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat cdk-outputs-app-api.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi

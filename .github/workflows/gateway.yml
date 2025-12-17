@@ -1,0 +1,287 @@
+name: GatewayStack.BuildTest.Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infrastructure/lib/gateway-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'backend/lambda-functions/google-search/**'
+      - 'scripts/stack-gateway/**'
+      - '.github/workflows/gateway.yml'
+  pull_request:
+    paths:
+      - 'infrastructure/lib/gateway-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'backend/lambda-functions/google-search/**'
+      - 'scripts/stack-gateway/**'
+      - '.github/workflows/gateway.yml'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+      skip_deploy:
+        description: 'Skip deployment'
+        required: false
+        default: 'false'
+
+env:
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+  # CDK Configuration - from GitHub Variables
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  # CDK Secrets - from GitHub Secrets
+  CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
+  # AWS Authentication
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Gateway Configuration - from GitHub Variables
+  CDK_GATEWAY_ENABLED: ${{ vars.CDK_GATEWAY_ENABLED }}
+  CDK_GATEWAY_API_TYPE: ${{ vars.CDK_GATEWAY_API_TYPE }}
+  CDK_GATEWAY_THROTTLE_RATE_LIMIT: ${{ vars.CDK_GATEWAY_THROTTLE_RATE_LIMIT }}
+  CDK_GATEWAY_THROTTLE_BURST_LIMIT: ${{ vars.CDK_GATEWAY_THROTTLE_BURST_LIMIT }}
+  CDK_GATEWAY_ENABLE_WAF: ${{ vars.CDK_GATEWAY_ENABLE_WAF }}
+  CDK_GATEWAY_LOG_LEVEL: ${{ vars.CDK_GATEWAY_LOG_LEVEL }}
+  # Build and Deploy Configuration
+  CDK_REQUIRE_APPROVAL: never
+
+# Ensure only one deployment runs at a time
+concurrency:
+  group: gateway-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Install gateway dependencies
+        run: |
+          bash scripts/stack-gateway/install.sh
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: infrastructure/node_modules
+          key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            gateway-node-
+
+  build-cdk:
+    name: Build CDK Code
+    runs-on: ubuntu-latest
+    needs: install
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: infrastructure/node_modules
+          key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            gateway-node-
+
+      - name: Build CDK code
+        run: |
+          bash scripts/stack-gateway/build-cdk.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-cdk-build
+          path: |
+            infrastructure/lib/**/*.js
+            infrastructure/lib/**/*.d.ts
+            infrastructure/bin/**/*.js
+            infrastructure/bin/**/*.d.ts
+          retention-days: 1
+
+  synth-cdk:
+    name: Synthesize CloudFormation
+    runs-on: ubuntu-latest
+    needs: build-cdk
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: infrastructure/node_modules
+          key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            gateway-node-
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-cdk-build
+          path: infrastructure
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Synthesize CloudFormation templates
+        run: |
+          bash scripts/stack-gateway/synth.sh
+
+      - name: Upload synthesized templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-cdk-templates
+          path: infrastructure/cdk.out/
+          retention-days: 1
+
+  test-cdk:
+    name: Test CDK Stack
+    runs-on: ubuntu-latest
+    needs: synth-cdk
+    if: github.event.inputs.skip_tests != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: infrastructure/node_modules
+          key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            gateway-node-
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-cdk-templates
+          path: infrastructure/cdk.out
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Test CDK stack
+        run: |
+          bash scripts/stack-gateway/test-cdk.sh
+
+  test-lambda:
+    name: Test Lambda Functions
+    runs-on: ubuntu-latest
+    if: github.event.inputs.skip_tests != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Lambda dependencies
+        run: |
+          cd backend/lambda-functions/google-search
+          pip install -r requirements.txt
+
+      - name: Run Lambda tests (if any)
+        run: |
+          # Note: Add unit tests here when available
+          echo "No unit tests defined for Lambda function yet"
+
+  deploy-stack:
+    name: Deploy Gateway Stack
+    runs-on: ubuntu-latest
+    needs: [test-cdk, test-lambda]
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Restore node_modules cache
+        uses: actions/cache@v4
+        with:
+          path: infrastructure/node_modules
+          key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            gateway-node-
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-cdk-templates
+          path: infrastructure/cdk.out
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Deploy Gateway Stack
+        run: |
+          bash scripts/stack-gateway/deploy.sh
+
+  test-gateway:
+    name: Test Gateway Connectivity
+    runs-on: ubuntu-latest
+    needs: deploy-stack
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Test Gateway
+        run: |
+          bash scripts/stack-gateway/test.sh

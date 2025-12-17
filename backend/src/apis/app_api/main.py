@@ -76,13 +76,13 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
     )
 
 # Import routers
-from health.health import router as health_router
-from auth.routes import router as auth_router
-from sessions.routes import router as sessions_router
-from admin.routes import router as admin_router
-from models.routes import router as models_router
-from costs.routes import router as costs_router
-from chat.routes import router as chat_router
+from .health import router as health_router
+from .auth.routes import router as auth_router
+from .sessions.routes import router as sessions_router
+from .admin.routes import router as admin_router
+from .models.routes import router as models_router
+from .costs.routes import router as costs_router
+from .chat.routes import router as chat_router
 
 # Include routers
 app.include_router(health_router)

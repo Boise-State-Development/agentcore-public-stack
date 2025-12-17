@@ -12,3 +12,8 @@ async def health_check():
         "service": "agent-core",
         "version": "2.0.0"
     }
+
+@router.get("/ping")
+async def ping():
+    """Ping endpoint for AgentCore Runtime health checks"""
+    return {"status": "ok"}

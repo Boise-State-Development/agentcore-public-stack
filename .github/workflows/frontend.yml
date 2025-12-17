@@ -1,0 +1,339 @@
+name: FrontendStack.BuildTest.Deploy
+
+on:
+  push:
+    branches:
+      - main      
+    paths:
+      - 'frontend/**'
+      - 'infrastructure/lib/frontend-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'infrastructure/bin/infrastructure.ts'
+      - 'scripts/stack-frontend/**'
+      - 'scripts/common/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    branches:
+      - main      
+    paths:
+      - 'frontend/**'
+      - 'infrastructure/lib/frontend-stack.ts'
+      - 'infrastructure/lib/config.ts'
+      - 'infrastructure/bin/infrastructure.ts'
+      - 'scripts/stack-frontend/**'
+      - 'scripts/common/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+      skip_deploy:
+        description: 'Skip deployment'
+        required: false
+        default: 'false'
+
+env:
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+  # CDK Configuration - from GitHub Variables
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  CDK_FRONTEND_DOMAIN_NAME: ${{ vars.CDK_FRONTEND_DOMAIN_NAME }}
+  CDK_FRONTEND_ENABLE_ROUTE53: ${{ vars.CDK_FRONTEND_ENABLE_ROUTE53 }}
+  CDK_FRONTEND_ENABLED: ${{ vars.CDK_FRONTEND_ENABLED }}
+  CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS: ${{ vars.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS }}
+  # CDK Secrets - from GitHub Secrets
+  CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
+  CDK_FRONTEND_CERTIFICATE_ARN: ${{ secrets.CDK_FRONTEND_CERTIFICATE_ARN }}
+  CDK_FRONTEND_BUCKET_NAME: ${{ secrets.CDK_FRONTEND_BUCKET_NAME }}
+  # AWS Authentication
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Build and Deploy Configuration
+  BUILD_CONFIG: production
+  CDK_REQUIRE_APPROVAL: never
+  WAIT_FOR_INVALIDATION: false
+
+# Ensure only one deployment runs at a time
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Install frontend dependencies
+        run: |
+          bash scripts/stack-frontend/install.sh
+
+      - name: Save frontend node_modules cache
+        uses: actions/cache/save@v4
+        with:
+          path: frontend/ai.client/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
+
+      - name: Save CDK node_modules cache
+        uses: actions/cache/save@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    needs: install
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore frontend node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: frontend/ai.client/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
+
+      - name: Build Frontend application
+        run: |
+          bash scripts/stack-frontend/build.sh
+
+      - name: Upload Frontend build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/ai.client/dist/
+          retention-days: 7
+
+  build-cdk:
+    name: Build CDK
+    runs-on: ubuntu-latest
+    needs: install
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore CDK node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Build CDK
+        run: |
+          bash scripts/stack-frontend/build-cdk.sh
+
+  test-frontend:
+    name: Test Frontend
+    runs-on: ubuntu-latest
+    needs: install
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore frontend node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: frontend/ai.client/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
+
+      - name: Run Frontend tests
+        run: |
+          bash scripts/stack-frontend/test.sh
+
+      - name: Upload Frontend test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: frontend/ai.client/coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  synth-cdk:
+    name: Synthesize CDK
+    runs-on: ubuntu-latest
+    needs: build-cdk
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore CDK node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-Synth
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Synthesize CloudFormation template
+        run: |
+          bash scripts/stack-frontend/synth.sh
+
+      - name: Upload synthesized templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-cdk-synth
+          path: infrastructure/cdk.out/
+          retention-days: 7
+
+  test-cdk:
+    name: Test CDK
+    runs-on: ubuntu-latest
+    needs: synth-cdk
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore CDK node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-cdk-synth
+          path: infrastructure/cdk.out/
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-Test
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Validate CloudFormation template
+        run: |
+          bash scripts/stack-frontend/test-cdk.sh
+
+  deploy-infrastructure:
+    name: Deploy CDK Infrastructure
+    runs-on: ubuntu-latest
+    needs: test-cdk
+    if: |
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore CDK node_modules cache
+        uses: actions/cache/restore@v4
+        with:
+          path: infrastructure/node_modules
+          key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
+
+      - name: Download synthesized templates
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-cdk-synth
+          path: infrastructure/cdk.out/
+      
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-CDK
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+      
+      - name: Deploy infrastructure
+        run: |
+          bash scripts/stack-frontend/deploy-cdk.sh
+      
+      - name: Upload stack outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-cdk-outputs
+          path: infrastructure/frontend-outputs.json
+          retention-days: 30
+
+  deploy-assets:
+    name: Deploy Frontend Assets
+    runs-on: ubuntu-latest
+    needs: [build-frontend, test-frontend, deploy-infrastructure]
+    if: |
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.skip_deploy != 'true'
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4      
+      
+      - name: Download Frontend build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/ai.client/dist/
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Frontend-Assets
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+      
+      - name: Deploy Frontend assets
+        run: |
+          bash scripts/stack-frontend/deploy-assets.sh
+      
+      - name: Summary
+        run: |
+          echo "## Frontend Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The frontend has been successfully deployed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** CloudFront cache invalidation is in progress. Changes may take 5-15 minutes to propagate globally." >> $GITHUB_STEP_SUMMARY

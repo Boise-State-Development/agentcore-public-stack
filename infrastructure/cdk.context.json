@@ -1,0 +1,70 @@
+{
+  "@aws-cdk/core:defaultStackSynthesizer": "VersionedStackSynthesizerCloudAssemblyContext",
+  "@aws-cdk/core:enableAssetManifest": true,
+  "@aws-cdk/core:checksumAssetForResourceTags": true,
+  "projectPrefix": "agentcore",
+  "awsAccount": "",
+  "awsRegion": "us-west-2",
+  "vpcCidr": "10.0.0.0/16",
+  "infrastructureHostedZoneDomain": "",
+  "frontend": {
+    "domainName": "",
+    "enableRoute53": false,
+    "certificateArn": "",
+    "enabled": true,
+    "bucketName": "",
+    "cloudFrontPriceClass": "PriceClass_100"
+  },
+  "appApi": {
+    "enabled": true,
+    "cpu": 512,
+    "memory": 1024,
+    "desiredCount": 1,
+    "maxCapacity": 10,
+    "databaseType": "dynamodb",
+    "enableRds": false,
+    "rdsInstanceClass": "t3.medium",
+    "rdsEngine": "aurora-postgresql",
+    "rdsDatabaseName": "appdb"
+  },
+  "inferenceApi": {
+    "enabled": true,
+    "cpu": 1024,
+    "memory": 2048,
+    "desiredCount": 1,
+    "maxCapacity": 5,
+    "enableGpu": false,
+    "enableAuthentication": "true",
+    "logLevel": "INFO",
+    "uploadDir": "uploads",
+    "outputDir": "output",
+    "generatedImagesDir": "generated_images",
+    "apiUrl": "",
+    "frontendUrl": "",
+    "corsOrigins": "",
+    "tavilyApiKey": "",
+    "novaActApiKey": ""
+  },
+  "gateway": {
+    "enabled": true,
+    "apiType": "HTTP",
+    "throttleRateLimit": 10000,
+    "throttleBurstLimit": 5000,
+    "enableWaf": false,
+    "logLevel": "INFO"
+  },
+  "tags": {
+    "Environment": "dev",
+    "Project": "AgentCore",
+    "ManagedBy": "CDK"
+  },
+  "availability-zones:account=490617140655:region=us-west-2": [
+    "us-west-2a",
+    "us-west-2b",
+    "us-west-2c",
+    "us-west-2d"
+  ],
+  "acknowledged-issue-numbers": [
+    34892
+  ]
+}

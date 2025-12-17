@@ -13,10 +13,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-# Load environment variables from .env file
-# Load .env file from backend/src directory (parent of apis/)
-env_path = Path(__file__).parent.parent.parent / '.env'
-load_dotenv(dotenv_path=env_path)
+# Load environment variables from .env file only if not already set
+# In production (Docker/AWS), env vars are set directly in the container
+# In local development, we fall back to .env file
+if not os.getenv('AWS_REGION') or not os.getenv('AWS_DEFAULT_REGION'):
+    env_path = Path(__file__).parent.parent.parent / '.env'
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+        print(f"Loaded environment variables from: {env_path}")
+    else:
+        print(f"Warning: .env file not found at {env_path}")
+else:
+    print("Using environment variables from container runtime")
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +46,61 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== AgentCore Public Stack API Starting ===")
     logger.info("Agent execution engine initialized")
+    
+    # Log configuration
+    logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
+    logger.info(f"Log Level: {os.getenv('LOG_LEVEL', 'INFO')}")
+    logger.info(f"AWS Region: {os.getenv('AWS_REGION', 'not set')}")
+    
+    # Log authentication settings
+    auth_enabled = os.getenv('ENABLE_AUTHENTICATION', 'false')
+    logger.info(f"Authentication: {'enabled' if auth_enabled.lower() == 'true' else 'disabled'}")
+    
+    # Log AgentCore Runtime environment variables
+    memory_arn = os.getenv('MEMORY_ARN')
+    memory_id = os.getenv('MEMORY_ID')
+    browser_id = os.getenv('BROWSER_ID')
+    code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
+    
+    if memory_arn:
+        logger.info(f"AgentCore Memory ARN: {memory_arn}")
+    if memory_id:
+        logger.info(f"AgentCore Memory ID: {memory_id}")
+    if browser_id:
+        logger.info(f"AgentCore Browser ID: {browser_id}")
+    if code_interpreter_id:
+        logger.info(f"AgentCore Code Interpreter ID: {code_interpreter_id}")
+    
+    # Log storage directories
+    upload_dir = os.getenv('UPLOAD_DIR', 'uploads')
+    output_dir_name = os.getenv('OUTPUT_DIR', 'output')
+    generated_images_dir_name = os.getenv('GENERATED_IMAGES_DIR', 'generated_images')
+    logger.info(f"Storage directories - Upload: {upload_dir}, Output: {output_dir_name}, Images: {generated_images_dir_name}")
+    
+    # Log API URLs (if configured)
+    api_url = os.getenv('API_URL')
+    frontend_url = os.getenv('FRONTEND_URL')
+    if api_url:
+        logger.info(f"API URL: {api_url}")
+    if frontend_url:
+        logger.info(f"Frontend URL: {frontend_url}")
+    
+    # Log CORS configuration
+    cors_origins = os.getenv('CORS_ORIGINS')
+    if cors_origins:
+        logger.info(f"CORS Origins: {cors_origins}")
+    
+    # Log API key availability (without exposing values)
+    tavily_key = os.getenv('TAVILY_API_KEY')
+    nova_key = os.getenv('NOVA_ACT_API_KEY')
+    if tavily_key:
+        logger.info(f"Tavily API Key: configured ({tavily_key[:10]}...)")
+    else:
+        logger.info("Tavily API Key: not configured")
+    if nova_key:
+        logger.info(f"Nova Act API Key: configured ({nova_key[:10]}...)")
+    else:
+        logger.info("Nova Act API Key: not configured")
 
     # Create output directories if they don't exist
     base_dir = Path(__file__).parent.parent
@@ -88,10 +151,10 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
     )
 
 # Import routers
-from health.health import router as health_router
-from chat.routes import router as agentcore_router
+#from health.health import router as health_router
+from .chat.routes import router as agentcore_router
 # Include routers
-app.include_router(health_router)
+#app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
 
 # Mount static file directories for serving generated content
