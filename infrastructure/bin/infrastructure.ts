@@ -40,14 +40,14 @@ if (config.appApi.enabled) {
   });
 }
 
-// // Inference API Stack - Fargate for AI Workloads
-// if (config.inferenceApi.enabled) {
-//   new InferenceApiStack(app, 'InferenceApiStack', {
-//     config,
-//     env,
-//     description: `${config.projectPrefix} Inference API Stack - Fargate for AI Workloads`,
-//     stackName: `${config.projectPrefix}-InferenceApiStack`,
-//   });
-// }
+// Inference API Stack - Fargate for AI Workloads
+if (config.inferenceApi.enabled) {
+  new InferenceApiStack(app, 'InferenceApiStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} Inference API Stack - Fargate for AI Workloads`,
+    stackName: `${config.projectPrefix}-InferenceApiStack`,
+  });
+}
 
 app.synth();
