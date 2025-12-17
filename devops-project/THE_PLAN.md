@@ -270,16 +270,28 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 **Stack Components**: Single unified stack deploying Gateway + IAM + Lambda + Gateway Targets
 
 #### Lambda Functions (MCP Tools)
-**Note**: Simplified approach - create initial Lambda function placeholders that will be populated with custom tools later
+**Implementation**: Verbatim copy of google-search Lambda from reference architecture
 
-- [ ] **Create Lambda Functions Directory**: Set up `backend/lambda-functions/` for MCP tool implementations.
-- [ ] **Create Placeholder Lambda**: Create `backend/lambda-functions/placeholder-tool/lambda_function.py` with basic MCP response structure.
-- [ ] **Create Requirements File**: Create `backend/lambda-functions/placeholder-tool/requirements.txt` for Python dependencies.
+**Purpose**: Provides two MCP tools (`google_web_search` and `google_image_search`) using Google Custom Search API
+
+- [ ] **Create Lambda Functions Directory**: Set up `backend/lambda-functions/google-search/` for MCP tool implementation.
+- [ ] **Create Lambda Handler**: Create `backend/lambda-functions/google-search/lambda_function.py` (279 lines):
+  - `lambda_handler(event, context)`: Routes to tools based on `bedrockAgentCoreToolName` from context
+  - `get_google_credentials()`: Retrieves credentials from Secrets Manager with global caching
+  - `google_web_search(params)`: Calls Google Custom Search API, returns up to 5 results
+  - `google_image_search(params)`: Calls Google Image Search API with accessibility validation, returns up to 5 images
+  - `check_image_accessible(url)`: Validates image URLs via HEAD/range requests
+  - `success_response(content)`: MCP-compliant response format with `content` array
+  - `error_response(message)`: MCP-compliant error response
+- [ ] **Create Requirements File**: Create `backend/lambda-functions/google-search/requirements.txt`:
+  - `requests==2.32.4` - HTTP client for Google API calls
+  - `boto3==1.35.93` - AWS SDK for Secrets Manager integration
 
 #### CDK Infrastructure - IAM & Secrets
 - [ ] **Create GatewayStack File**: Create `infrastructure/lib/gateway-stack.ts` as single unified stack.
-- [ ] **Define Secrets Manager Placeholders**: Import existing secrets for API keys (optional, based on tools deployed):
-  - `/${projectPrefix}/mcp/tool-api-key` (placeholder pattern for future tool API keys)
+- [ ] **Define Secrets Manager Placeholders**: Import existing secrets for Google Custom Search API:
+  - `/${projectPrefix}/mcp/google-credentials` - JSON format: `{"api_key": "YOUR_KEY", "search_engine_id": "YOUR_ID"}`
+  - Secret must be created manually before first deployment (see documentation section)
 - [ ] **Define Lambda Execution Role**: Create role with:
   - CloudWatch Logs permissions (`logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`)
   - Secrets Manager read permissions (`secretsmanager:GetSecretValue`)
@@ -290,17 +302,20 @@ All logic resides here. CI/CD pipelines merely call these scripts.
   - Service principal: `bedrock-agentcore.amazonaws.com`
 
 #### CDK Infrastructure - Lambda Functions
-- [ ] **Define Lambda Functions**: Create Lambda functions using CDK `Code.fromAsset()`:
+- [ ] **Define Lambda Functions**: Create Lambda function using CDK `Code.fromAsset()`:
+  - **Function**: `mcp-google-search`
   - Runtime: `PYTHON_3_13`
   - Architecture: `ARM_64`
   - Handler: `lambda_function.lambda_handler`
-  - Code location: `Code.fromAsset('backend/lambda-functions/placeholder-tool')` (CDK handles ZIP creation and upload)
-  - Environment variables: `LOG_LEVEL`, tool-specific config, `CDK_PROJECT_PREFIX`
-  - Timeout: Configurable per function (60-300 seconds)
-  - Memory: Configurable per function (512-1024 MB)
+  - Code location: `Code.fromAsset('backend/lambda-functions/google-search')` (CDK handles ZIP creation and upload)
+  - Environment variables:
+    - `GOOGLE_CREDENTIALS_SECRET_NAME`: `${projectPrefix}/mcp/google-credentials`
+    - `LOG_LEVEL`: `INFO`
+  - Timeout: 60 seconds
+  - Memory: 512 MB
   - Role: Lambda execution role from IAM section
-- [ ] **Add Lambda Permissions**: Grant Gateway permission to invoke Lambda functions via `addPermission()`.
-- [ ] **Create CloudWatch Log Groups**: Create log groups for each Lambda function with 1-week retention.
+- [ ] **Add Lambda Permissions**: Grant Gateway permission to invoke Lambda function via `addPermission()`.
+- [ ] **Create CloudWatch Log Group**: Create log group `/aws/lambda/mcp-google-search` with 1-week retention.
 
 #### CDK Infrastructure - AgentCore Gateway
 - [ ] **Define AgentCore Gateway**: Create `CfnGateway` with:
@@ -318,15 +333,23 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 #### CDK Infrastructure - Gateway Targets
 **Note**: Gateway Targets connect Lambda functions to the Gateway as MCP tools
 
-- [ ] **Define Gateway Targets**: For each Lambda function, create `CfnGatewayTarget` with:
-  - Name: Tool name (e.g., `placeholder-tool`)
+- [ ] **Define Google Web Search Target**: Create `CfnGatewayTarget` for `google_web_search`:
+  - Name: `google-web-search`
   - Gateway identifier: Reference to Gateway
-  - Description: Tool purpose
+  - Description: "Search the web using Google Custom Search API. Returns up to 5 high-quality results."
   - Credential provider: `GATEWAY_IAM_ROLE`
   - Target configuration: MCP Lambda target with:
-    - Lambda ARN
-    - Tool schema: `inputSchema` defining tool parameters (JSON Schema format)
-- [ ] **Add Target Outputs**: Export total number of targets and summary.
+    - Lambda ARN: `mcp-google-search` function
+    - Tool schema: JSON Schema defining `query` parameter (string, required)
+- [ ] **Define Google Image Search Target**: Create `CfnGatewayTarget` for `google_image_search`:
+  - Name: `google-image-search`
+  - Gateway identifier: Reference to Gateway
+  - Description: "Search for images using Google's image search. Returns up to 5 verified accessible images."
+  - Credential provider: `GATEWAY_IAM_ROLE`
+  - Target configuration: MCP Lambda target with:
+    - Lambda ARN: `mcp-google-search` function
+    - Tool schema: JSON Schema defining `query` parameter (string, required)
+- [ ] **Add Target Outputs**: Export total number of targets (2) and tool names.
 
 #### Build & Deploy Scripts
 - [ ] **Create Scripts Directory**: Set up `scripts/stack-gateway/`.
@@ -371,12 +394,22 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 #### Documentation & Testing
 - [ ] **Update README**: Document Gateway stack in main README.md with architecture diagram.
 - [ ] **Create Gateway Usage Guide**: Add section to README documenting how to:
-  - Add new Lambda-based MCP tools (create directory, implement handler, update CDK stack)
-  - Set API keys in Secrets Manager (if needed for tools)
-  - Test individual Lambda functions locally
-  - Test Gateway connectivity via AWS CLI
-  - Integrate Gateway with AgentCore Runtime (SigV4 authentication pattern)
-  - Debug Lambda function issues via CloudWatch Logs
+  - **Set Google API Keys**: Create Secrets Manager secret before deployment:
+    ```bash
+    aws secretsmanager create-secret \
+      --name "${CDK_PROJECT_PREFIX}/mcp/google-credentials" \
+      --secret-string '{"api_key":"YOUR_API_KEY","search_engine_id":"YOUR_ENGINE_ID"}' \
+      --description "Google Custom Search API credentials" \
+      --region ${CDK_AWS_REGION}
+    ```
+  - **Get Google API Credentials**:
+    - API Key: https://console.cloud.google.com/apis/credentials
+    - Search Engine ID: https://programmablesearchengine.google.com/
+  - **Add New Lambda-based MCP Tools**: Create directory, implement handler with tool routing, update CDK stack with new function and Gateway Targets
+  - **Test Individual Lambda Functions Locally**: Use AWS SAM or Docker for local testing with mock events
+  - **Test Gateway Connectivity**: Use AWS CLI to list tools and test invocation
+  - **Integrate Gateway with AgentCore Runtime**: SigV4 authentication pattern with boto3 + botocore.auth.SigV4Auth
+  - **Debug Lambda Function Issues**: Check CloudWatch Logs for errors, verify Secrets Manager permissions
 
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 5 verified and approved to proceed to Phase 6
