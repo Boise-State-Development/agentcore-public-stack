@@ -65,15 +65,44 @@ debug_log() {
 ###############################################################################
 # Interactive configuration prompts
 ###############################################################################
+get_cdk_context_value() {
+    local json_path=$1
+    local cdk_context_file="${PROJECT_ROOT}/infrastructure/cdk.context.json"
+    
+    if [ -f "$cdk_context_file" ]; then
+        # Use jq if available, otherwise fallback to grep/sed
+        if command -v jq &> /dev/null; then
+            jq -r "$json_path // empty" "$cdk_context_file" 2>/dev/null || echo ""
+        else
+            # Simple fallback for basic paths (won't work for nested objects)
+            local key=$(echo "$json_path" | sed 's/^\.//; s/\./ /g')
+            grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$cdk_context_file" | sed 's/.*: *"\(.*\)".*/\1/' || echo ""
+        fi
+    else
+        echo ""
+    fi
+}
+
 prompt_for_config() {
     local var_name=$1
     local prompt_text=$2
+    local json_path=$3
+    
+    # First check environment variable
     local current_value="${!var_name:-}"
+    
+    # If not set, check cdk.context.json
+    if [ -z "$current_value" ] && [ -n "$json_path" ]; then
+        current_value=$(get_cdk_context_value "$json_path")
+    fi
     
     if [ -n "$current_value" ]; then
         read -p "${prompt_text} [${current_value}]: " user_input
         if [ -n "$user_input" ]; then
             export "${var_name}=${user_input}"
+        else
+            # Keep the current value (from env or cdk.context.json)
+            export "${var_name}=${current_value}"
         fi
     else
         read -p "${prompt_text} [empty]: " user_input
@@ -89,11 +118,11 @@ configure_infrastructure() {
     echo "Configure Infrastructure settings (press Enter to keep current/default values):"
     echo ""
     
-    prompt_for_config "CDK_PROJECT_PREFIX" "Project Prefix (lowercase, alphanumeric, 2-21 chars)"
-    prompt_for_config "CDK_AWS_ACCOUNT" "AWS Account ID"
-    prompt_for_config "CDK_AWS_REGION" "AWS Region"
-    prompt_for_config "CDK_VPC_CIDR" "VPC CIDR Block"
-    prompt_for_config "CDK_HOSTED_ZONE_DOMAIN" "Hosted Zone Domain (optional)"
+    prompt_for_config "CDK_PROJECT_PREFIX" "Project Prefix (lowercase, alphanumeric, 2-21 chars)" ".projectPrefix"
+    prompt_for_config "CDK_AWS_ACCOUNT" "AWS Account ID" ".awsAccount"
+    prompt_for_config "CDK_AWS_REGION" "AWS Region" ".awsRegion"
+    prompt_for_config "CDK_VPC_CIDR" "VPC CIDR Block" ".vpcCidr"
+    prompt_for_config "CDK_HOSTED_ZONE_DOMAIN" "Hosted Zone Domain (optional)" ".infrastructureHostedZoneDomain"
     
     echo ""
     log_success "Configuration updated"
@@ -106,11 +135,11 @@ configure_app_api() {
     echo "Configure App API settings (press Enter to keep current/default values):"
     echo ""
     
-    prompt_for_config "CDK_APP_API_ENABLED" "Enable App API Stack (true/false)"
-    prompt_for_config "CDK_APP_API_CPU" "CPU units (256, 512, 1024, 2048, 4096)"
-    prompt_for_config "CDK_APP_API_MEMORY" "Memory in MB (512, 1024, 2048, 4096, 8192)"
-    prompt_for_config "CDK_APP_API_DESIRED_COUNT" "Desired task count"
-    prompt_for_config "CDK_APP_API_MAX_CAPACITY" "Max auto-scaling capacity"
+    prompt_for_config "CDK_APP_API_ENABLED" "Enable App API Stack (true/false)" ".appApi.enabled"
+    prompt_for_config "CDK_APP_API_CPU" "CPU units (256, 512, 1024, 2048, 4096)" ".appApi.cpu"
+    prompt_for_config "CDK_APP_API_MEMORY" "Memory in MB (512, 1024, 2048, 4096, 8192)" ".appApi.memory"
+    prompt_for_config "CDK_APP_API_DESIRED_COUNT" "Desired task count" ".appApi.desiredCount"
+    prompt_for_config "CDK_APP_API_MAX_CAPACITY" "Max auto-scaling capacity" ".appApi.maxCapacity"
     
     echo ""
     log_success "Configuration updated"
@@ -123,14 +152,14 @@ configure_inference_api() {
     echo "Configure Inference API (AgentCore Runtime) settings (press Enter to keep current/default values):"
     echo ""
     
-    prompt_for_config "CDK_INFERENCE_API_ENABLED" "Enable Inference API Stack (true/false)"
-    prompt_for_config "CDK_INFERENCE_API_CPU" "CPU units (256, 512, 1024, 2048, 4096)"
-    prompt_for_config "CDK_INFERENCE_API_MEMORY" "Memory in MB (512, 1024, 2048, 4096, 8192)"
-    prompt_for_config "CDK_INFERENCE_API_ENABLE_GPU" "Enable GPU support (true/false)"
-    prompt_for_config "ENV_INFERENCE_API_LOG_LEVEL" "Log level (DEBUG, INFO, WARNING, ERROR)"
-    prompt_for_config "ENV_INFERENCE_API_ENABLE_AUTHENTICATION" "Enable authentication (true/false)"
-    prompt_for_config "ENV_INFERENCE_API_TAVILY_API_KEY" "Tavily API Key (optional)"
-    prompt_for_config "ENV_INFERENCE_API_NOVA_ACT_API_KEY" "Nova Act API Key (optional)"
+    prompt_for_config "CDK_INFERENCE_API_ENABLED" "Enable Inference API Stack (true/false)" ".inferenceApi.enabled"
+    prompt_for_config "CDK_INFERENCE_API_CPU" "CPU units (256, 512, 1024, 2048, 4096)" ".inferenceApi.cpu"
+    prompt_for_config "CDK_INFERENCE_API_MEMORY" "Memory in MB (512, 1024, 2048, 4096, 8192)" ".inferenceApi.memory"
+    prompt_for_config "CDK_INFERENCE_API_ENABLE_GPU" "Enable GPU support (true/false)" ".inferenceApi.enableGpu"
+    prompt_for_config "ENV_INFERENCE_API_LOG_LEVEL" "Log level (DEBUG, INFO, WARNING, ERROR)" ".inferenceApi.logLevel"
+    prompt_for_config "ENV_INFERENCE_API_ENABLE_AUTHENTICATION" "Enable authentication (true/false)" ".inferenceApi.enableAuthentication"
+    prompt_for_config "ENV_INFERENCE_API_TAVILY_API_KEY" "Tavily API Key (optional)" ".inferenceApi.tavilyApiKey"
+    prompt_for_config "ENV_INFERENCE_API_NOVA_ACT_API_KEY" "Nova Act API Key (optional)" ".inferenceApi.novaActApiKey"
     
     echo ""
     log_success "Configuration updated"
@@ -143,12 +172,12 @@ configure_gateway() {
     echo "Configure MCP Gateway settings (press Enter to keep current/default values):"
     echo ""
     
-    prompt_for_config "CDK_GATEWAY_ENABLED" "Enable Gateway Stack (true/false)"
-    prompt_for_config "CDK_GATEWAY_API_TYPE" "API Type (REST/HTTP)"
-    prompt_for_config "CDK_GATEWAY_THROTTLE_RATE_LIMIT" "Throttle rate limit (requests/second)"
-    prompt_for_config "CDK_GATEWAY_THROTTLE_BURST_LIMIT" "Throttle burst limit"
-    prompt_for_config "CDK_GATEWAY_ENABLE_WAF" "Enable WAF protection (true/false)"
-    prompt_for_config "CDK_GATEWAY_LOG_LEVEL" "Log level (INFO, DEBUG, ERROR)"
+    prompt_for_config "CDK_GATEWAY_ENABLED" "Enable Gateway Stack (true/false)" ".gateway.enabled"
+    prompt_for_config "CDK_GATEWAY_API_TYPE" "API Type (REST/HTTP)" ".gateway.apiType"
+    prompt_for_config "CDK_GATEWAY_THROTTLE_RATE_LIMIT" "Throttle rate limit (requests/second)" ".gateway.throttleRateLimit"
+    prompt_for_config "CDK_GATEWAY_THROTTLE_BURST_LIMIT" "Throttle burst limit" ".gateway.throttleBurstLimit"
+    prompt_for_config "CDK_GATEWAY_ENABLE_WAF" "Enable WAF protection (true/false)" ".gateway.enableWaf"
+    prompt_for_config "CDK_GATEWAY_LOG_LEVEL" "Log level (INFO, DEBUG, ERROR)" ".gateway.logLevel"
     
     echo ""
     log_success "Configuration updated"
@@ -161,12 +190,12 @@ configure_frontend() {
     echo "Configure Frontend (Angular + S3 + CloudFront) settings (press Enter to keep current/default values):"
     echo ""
     
-    prompt_for_config "CDK_FRONTEND_ENABLED" "Enable Frontend Stack (true/false)"
-    prompt_for_config "CDK_FRONTEND_DOMAIN_NAME" "Custom domain name (optional)"
-    prompt_for_config "CDK_FRONTEND_ENABLE_ROUTE53" "Enable Route53 integration (true/false)"
-    prompt_for_config "CDK_FRONTEND_CERTIFICATE_ARN" "ACM Certificate ARN (optional)"
-    prompt_for_config "CDK_FRONTEND_BUCKET_NAME" "S3 bucket name (optional, auto-generated if empty)"
-    prompt_for_config "CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS" "CloudFront price class (PriceClass_100/PriceClass_200/PriceClass_All)"
+    prompt_for_config "CDK_FRONTEND_ENABLED" "Enable Frontend Stack (true/false)" ".frontend.enabled"
+    prompt_for_config "CDK_FRONTEND_DOMAIN_NAME" "Custom domain name (optional)" ".frontend.domainName"
+    prompt_for_config "CDK_FRONTEND_ENABLE_ROUTE53" "Enable Route53 integration (true/false)" ".frontend.enableRoute53"
+    prompt_for_config "CDK_FRONTEND_CERTIFICATE_ARN" "ACM Certificate ARN (optional)" ".frontend.certificateArn"
+    prompt_for_config "CDK_FRONTEND_BUCKET_NAME" "S3 bucket name (optional, auto-generated if empty)" ".frontend.bucketName"
+    prompt_for_config "CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS" "CloudFront price class (PriceClass_100/PriceClass_200/PriceClass_All)" ".frontend.cloudFrontPriceClass"
     
     echo ""
     log_success "Configuration updated"
