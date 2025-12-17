@@ -60,7 +60,7 @@ fi
 log_info "Checking Gateway status..."
 
 set +e
-GATEWAY_INFO=$(aws bedrock-agentcore get-gateway \
+GATEWAY_INFO=$(aws bedrock-agentcore-control get-gateway \
     --gateway-identifier "${GATEWAY_ID}" \
     --region "${CDK_AWS_REGION}" \
     --output json 2>&1)
@@ -95,7 +95,7 @@ echo "${GATEWAY_INFO}" | jq '{
 log_info "Listing Gateway Targets (tools)..."
 
 set +e
-TARGETS=$(aws bedrock-agentcore list-gateway-targets \
+TARGETS=$(aws bedrock-agentcore-control list-gateway-targets \
     --gateway-identifier "${GATEWAY_ID}" \
     --region "${CDK_AWS_REGION}" \
     --output json 2>&1)
