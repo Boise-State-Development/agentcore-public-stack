@@ -112,7 +112,24 @@ main() {
             --context projectPrefix="${CDK_PROJECT_PREFIX}" \
             --context awsAccount="${CDK_AWS_ACCOUNT}" \
             --context awsRegion="${CDK_AWS_REGION}" \
-            --context inferenceApi="{\"enableAuthentication\":\"${ENABLE_AUTHENTICATION}\",\"logLevel\":\"${LOG_LEVEL}\",\"uploadDir\":\"${UPLOAD_DIR}\",\"outputDir\":\"${OUTPUT_DIR}\",\"generatedImagesDir\":\"${GENERATED_IMAGES_DIR}\",\"apiUrl\":\"${API_URL}\",\"frontendUrl\":\"${FRONTEND_URL}\",\"corsOrigins\":\"${CORS_ORIGINS}\",\"tavilyApiKey\":\"${TAVILY_API_KEY}\",\"novaActApiKey\":\"${NOVA_ACT_API_KEY}\"}" \
+            --context vpcCidr="${CDK_VPC_CIDR}" \
+            --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
+            --context inferenceApi.enabled="${CDK_INFERENCE_API_ENABLED:-true}" \
+            --context inferenceApi.cpu="${CDK_INFERENCE_API_CPU:-1024}" \
+            --context inferenceApi.memory="${CDK_INFERENCE_API_MEMORY:-2048}" \
+            --context inferenceApi.desiredCount="${CDK_INFERENCE_API_DESIRED_COUNT:-1}" \
+            --context inferenceApi.maxCapacity="${CDK_INFERENCE_API_MAX_CAPACITY:-5}" \
+            --context inferenceApi.enableGpu="${CDK_INFERENCE_API_ENABLE_GPU:-false}" \
+            --context inferenceApi.enableAuthentication="${ENABLE_AUTHENTICATION:-true}" \
+            --context inferenceApi.logLevel="${LOG_LEVEL:-INFO}" \
+            --context inferenceApi.uploadDir="${UPLOAD_DIR:-uploads}" \
+            --context inferenceApi.outputDir="${OUTPUT_DIR:-output}" \
+            --context inferenceApi.generatedImagesDir="${GENERATED_IMAGES_DIR:-generated_images}" \
+            --context inferenceApi.apiUrl="${API_URL:-}" \
+            --context inferenceApi.frontendUrl="${FRONTEND_URL:-}" \
+            --context inferenceApi.corsOrigins="${CORS_ORIGINS:-}" \
+            --context inferenceApi.tavilyApiKey="${TAVILY_API_KEY:-}" \
+            --context inferenceApi.novaActApiKey="${NOVA_ACT_API_KEY:-}" \
             --outputs-file "${PROJECT_ROOT}/cdk-outputs-inference-api.json"
     fi
     

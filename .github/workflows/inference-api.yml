@@ -42,6 +42,13 @@ env:
   AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Inference API Stack Configuration
+  CDK_INFERENCE_API_ENABLED: ${{ vars.CDK_INFERENCE_API_ENABLED || 'true' }}
+  CDK_INFERENCE_API_CPU: ${{ vars.CDK_INFERENCE_API_CPU || '1024' }}
+  CDK_INFERENCE_API_MEMORY: ${{ vars.CDK_INFERENCE_API_MEMORY || '2048' }}
+  CDK_INFERENCE_API_DESIRED_COUNT: ${{ vars.CDK_INFERENCE_API_DESIRED_COUNT || '1' }}
+  CDK_INFERENCE_API_MAX_CAPACITY: ${{ vars.CDK_INFERENCE_API_MAX_CAPACITY || '5' }}
+  CDK_INFERENCE_API_ENABLE_GPU: ${{ vars.CDK_INFERENCE_API_ENABLE_GPU || 'false' }}
   # Build and Deploy Configuration
   CDK_REQUIRE_APPROVAL: never
   # Application Configuration - from GitHub Variables

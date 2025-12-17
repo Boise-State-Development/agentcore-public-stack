@@ -88,6 +88,12 @@ else
         --context awsRegion="${CDK_AWS_REGION}" \
         --context awsAccount="${CDK_AWS_ACCOUNT}" \
         --context environment="${CDK_ENVIRONMENT}" \
+        --context gateway.enabled="${CDK_GATEWAY_ENABLED:-true}" \
+        --context gateway.apiType="${CDK_GATEWAY_API_TYPE:-HTTP}" \
+        --context gateway.throttleRateLimit="${CDK_GATEWAY_THROTTLE_RATE_LIMIT:-10000}" \
+        --context gateway.throttleBurstLimit="${CDK_GATEWAY_THROTTLE_BURST_LIMIT:-5000}" \
+        --context gateway.enableWaf="${CDK_GATEWAY_ENABLE_WAF:-false}" \
+        --context gateway.logLevel="${CDK_GATEWAY_LOG_LEVEL:-INFO}" \
         --require-approval never \
         || {
         log_error "CDK deployment failed"

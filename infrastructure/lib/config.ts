@@ -116,12 +116,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enableRds: false,
     },
     inferenceApi: {
-      enabled: true,
-      cpu: 1024,
-      memory: 2048,
-      desiredCount: 1,
-      maxCapacity: 5,
-      enableGpu: false,
+      enabled: parseBooleanEnv(process.env.CDK_INFERENCE_API_ENABLED) ?? scope.node.tryGetContext('inferenceApi')?.enabled ?? true,
+      cpu: parseIntEnv(process.env.CDK_INFERENCE_API_CPU) || scope.node.tryGetContext('inferenceApi')?.cpu || 1024,
+      memory: parseIntEnv(process.env.CDK_INFERENCE_API_MEMORY) || scope.node.tryGetContext('inferenceApi')?.memory || 2048,
+      desiredCount: parseIntEnv(process.env.CDK_INFERENCE_API_DESIRED_COUNT) ?? scope.node.tryGetContext('inferenceApi')?.desiredCount ?? 1,
+      maxCapacity: parseIntEnv(process.env.CDK_INFERENCE_API_MAX_CAPACITY) || scope.node.tryGetContext('inferenceApi')?.maxCapacity || 5,
+      enableGpu: parseBooleanEnv(process.env.CDK_INFERENCE_API_ENABLE_GPU) ?? scope.node.tryGetContext('inferenceApi')?.enableGpu ?? false,
       imageTag: scope.node.tryGetContext('imageTag') || '',
       // Environment variables from GitHub Secrets/Variables with context fallback
       enableAuthentication: process.env.ENABLE_AUTHENTICATION || scope.node.tryGetContext('inferenceApi')?.enableAuthentication || 'true',
