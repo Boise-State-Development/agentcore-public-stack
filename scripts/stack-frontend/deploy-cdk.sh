@@ -82,21 +82,6 @@ if [ -d "cdk.out" ] && [ -f "cdk.out/FrontendStack.template.json" ]; then
     CDK_APP="cdk.out/"
 else
     log_info "No pre-synthesized template found. CDK will synthesize during deployment."
-    
-    # Build context arguments
-    CONTEXT_ARGS="--context environment=${DEPLOY_ENVIRONMENT}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context projectPrefix=${CDK_PROJECT_PREFIX}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context awsAccount=${CDK_AWS_ACCOUNT}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context awsRegion=${CDK_AWS_REGION}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context vpcCidr=${CDK_VPC_CIDR}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context infrastructureHostedZoneDomain=${CDK_HOSTED_ZONE_DOMAIN}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.domainName=${CDK_FRONTEND_DOMAIN_NAME}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.enableRoute53=${CDK_FRONTEND_ENABLE_ROUTE53}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.certificateArn=${CDK_FRONTEND_CERTIFICATE_ARN}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.bucketName=${CDK_FRONTEND_BUCKET_NAME}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.enabled=${CDK_FRONTEND_ENABLED}"
-    CONTEXT_ARGS="${CONTEXT_ARGS} --context frontend.cloudFrontPriceClass=${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS}"
-    
     CDK_APP=""
 fi
 
@@ -118,7 +103,18 @@ else
     # Deploy with context parameters (will synthesize first)
     cdk deploy FrontendStack \
         --require-approval ${REQUIRE_APPROVAL} \
-        ${CONTEXT_ARGS} \
+        --context environment="${DEPLOY_ENVIRONMENT}" \
+        --context projectPrefix="${CDK_PROJECT_PREFIX}" \
+        --context awsAccount="${CDK_AWS_ACCOUNT}" \
+        --context awsRegion="${CDK_AWS_REGION}" \
+        --context vpcCidr="${CDK_VPC_CIDR}" \
+        --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
+        --context frontend.domainName="${CDK_FRONTEND_DOMAIN_NAME}" \
+        --context frontend.enableRoute53="${CDK_FRONTEND_ENABLE_ROUTE53}" \
+        --context frontend.certificateArn="${CDK_FRONTEND_CERTIFICATE_ARN}" \
+        --context frontend.bucketName="${CDK_FRONTEND_BUCKET_NAME}" \
+        --context frontend.enabled="${CDK_FRONTEND_ENABLED}" \
+        --context frontend.cloudFrontPriceClass="${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS}" \
         --verbose
 fi
 
