@@ -31,16 +31,16 @@ on:
         default: 'false'
 
 env:
-  CDK_AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
   # CDK Configuration - from GitHub Variables
-  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX || 'agentcore' }}
-  CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR || '10.0.0.0/16' }}
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
   CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
-  CDK_APP_API_ENABLED: ${{ vars.CDK_APP_API_ENABLED || 'true' }}
-  CDK_APP_API_CPU: ${{ vars.CDK_APP_API_CPU || '512' }}
-  CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY || '1024' }}
-  CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT || '1' }}
-  CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY || '10' }}
+  CDK_APP_API_ENABLED: ${{ vars.CDK_APP_API_ENABLED }}
+  CDK_APP_API_CPU: ${{ vars.CDK_APP_API_CPU }}
+  CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
+  CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
+  CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
   # AWS Authentication

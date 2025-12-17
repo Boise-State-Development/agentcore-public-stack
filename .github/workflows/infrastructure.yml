@@ -37,10 +37,10 @@ on:
         default: 'false'
 
 env:
-  CDK_AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
   # CDK Configuration - from GitHub Variables
-  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX || 'agentcore' }}
-  CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR || '10.0.0.0/16' }}
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
   CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}

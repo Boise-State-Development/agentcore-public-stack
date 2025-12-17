@@ -33,9 +33,9 @@ on:
         default: 'false'
 
 env:
-  CDK_AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+  CDK_AWS_REGION: ${{ vars.AWS_REGION }}
   # CDK Configuration - from GitHub Variables
-  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX || 'agentcore' }}
+  CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
   # AWS Authentication
@@ -43,26 +43,26 @@ env:
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   # Inference API Stack Configuration
-  CDK_INFERENCE_API_ENABLED: ${{ vars.CDK_INFERENCE_API_ENABLED || 'true' }}
-  CDK_INFERENCE_API_CPU: ${{ vars.CDK_INFERENCE_API_CPU || '1024' }}
-  CDK_INFERENCE_API_MEMORY: ${{ vars.CDK_INFERENCE_API_MEMORY || '2048' }}
-  CDK_INFERENCE_API_DESIRED_COUNT: ${{ vars.CDK_INFERENCE_API_DESIRED_COUNT || '1' }}
-  CDK_INFERENCE_API_MAX_CAPACITY: ${{ vars.CDK_INFERENCE_API_MAX_CAPACITY || '5' }}
-  CDK_INFERENCE_API_ENABLE_GPU: ${{ vars.CDK_INFERENCE_API_ENABLE_GPU || 'false' }}
+  CDK_INFERENCE_API_ENABLED: ${{ vars.CDK_INFERENCE_API_ENABLED }}
+  CDK_INFERENCE_API_CPU: ${{ vars.CDK_INFERENCE_API_CPU }}
+  CDK_INFERENCE_API_MEMORY: ${{ vars.CDK_INFERENCE_API_MEMORY }}
+  CDK_INFERENCE_API_DESIRED_COUNT: ${{ vars.CDK_INFERENCE_API_DESIRED_COUNT }}
+  CDK_INFERENCE_API_MAX_CAPACITY: ${{ vars.CDK_INFERENCE_API_MAX_CAPACITY }}
+  CDK_INFERENCE_API_ENABLE_GPU: ${{ vars.CDK_INFERENCE_API_ENABLE_GPU }}
   # Build and Deploy Configuration
   CDK_REQUIRE_APPROVAL: never
   # Application Configuration - from GitHub Variables
-  ENABLE_AUTHENTICATION: ${{ vars.ENABLE_AUTHENTICATION || 'true' }}
-  LOG_LEVEL: ${{ vars.LOG_LEVEL || 'INFO' }}
-  UPLOAD_DIR: ${{ vars.UPLOAD_DIR || 'uploads' }}
-  OUTPUT_DIR: ${{ vars.OUTPUT_DIR || 'output' }}
-  GENERATED_IMAGES_DIR: ${{ vars.GENERATED_IMAGES_DIR || 'generated_images' }}
-  API_URL: ${{ vars.API_URL || '' }}
-  FRONTEND_URL: ${{ vars.FRONTEND_URL || '' }}
-  CORS_ORIGINS: ${{ vars.CORS_ORIGINS || '' }}
+  ENABLE_AUTHENTICATION: ${{ vars.ENABLE_AUTHENTICATION }}
+  LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+  UPLOAD_DIR: ${{ vars.UPLOAD_DIR }}
+  OUTPUT_DIR: ${{ vars.OUTPUT_DIR }}
+  GENERATED_IMAGES_DIR: ${{ vars.GENERATED_IMAGES_DIR }}
+  API_URL: ${{ vars.API_URL }}
+  FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+  CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
   # API Keys - from GitHub Secrets
-  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY || '' }}
-  NOVA_ACT_API_KEY: ${{ secrets.NOVA_ACT_API_KEY || '' }}
+  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+  NOVA_ACT_API_KEY: ${{ secrets.NOVA_ACT_API_KEY }}
 
 # Ensure only one deployment runs at a time
 concurrency:
