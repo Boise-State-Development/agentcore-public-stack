@@ -421,7 +421,6 @@ aws ssm put-parameter \
 ---
 
 ## Testing Strategy
-
 ### CDK Test Limitations
 **Important**: `cdk diff` has limited validation scope:
 - ✅ **Can detect**: TypeScript errors, missing CDK properties, template syntax errors
