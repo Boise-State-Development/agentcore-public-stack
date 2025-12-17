@@ -63,6 +63,41 @@ Every job that executes CDK commands must include an "Install system dependencie
 
 ## Gotchas & Workarounds
 
+### CDK Diff Cannot Catch Service-Level Validation Errors
+
+**Problem**: `cdk diff` in test-cdk job successfully passes, but deployment fails with validation errors like "HYBRID is not a valid enum value" or "ERROR is not a valid enum value".
+
+**Root Cause**: 
+- `cdk diff` only validates CDK synthesis and CloudFormation template structure
+- Service-specific constraints (enum values, property combinations, etc.) are only validated when CloudFormation attempts to create a change set during actual deployment
+- The message "Could not create a change set, will base the diff on template differences" means CDK fell back to template-only comparison without AWS service validation
+
+**What test-cdk CAN catch**:
+- TypeScript compilation errors
+- Missing required CDK properties
+- CloudFormation template syntax errors
+- Type mismatches in CDK constructs
+
+**What test-cdk CANNOT catch**:
+- Invalid enum values for AWS service properties (e.g., `exceptionLevel: 'ERROR'` when only `'DEBUG'` is supported)
+- Service-specific validation rules
+- AWS service limits
+- Runtime resource conflicts
+
+**Solution**: Accept this as a CDK limitation. Service-level validation only happens at deploy time. Best practices:
+1. Carefully read AWS CDK documentation for service-specific properties
+2. Check CloudFormation/CDK docs for valid enum values before implementing
+3. Test deployments in dev environment first
+4. When deployment fails with validation errors, fix and redeploy
+
+**Alternative Considered**: Using `cdk deploy --no-execute` in test job to create actual change sets - rejected because:
+- Requires AWS credentials in test job (security concern)
+- Slower than template-only diff
+- Creates/deletes change sets unnecessarily
+- Doesn't align with other stack test patterns
+
+---
+
 ### Missing log_success Function in Scripts
 
 **Problem**: Gateway stack scripts failed with "log_success: command not found" error during execution.

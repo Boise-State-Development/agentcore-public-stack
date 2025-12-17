@@ -42,8 +42,7 @@ export class GatewayStack extends cdk.Stack {
     // Google Custom Search Credentials Secret - Create with placeholder values
     // Format: {"api_key": "YOUR_KEY", "search_engine_id": "YOUR_ID"}
     // Users should update this secret with real credentials after deployment
-    const googleCredentialsSecret = new secretsmanager.Secret(this, 'GoogleCredentials', {
-      secretName: `${config.projectPrefix}/mcp/google-credentials`,
+    const googleCredentialsSecret = new secretsmanager.Secret(this, 'GoogleCredentials', {      
       description: 'Google Custom Search API credentials (update with real values)',
       secretObjectValue: {
         api_key: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_GOOGLE_API_KEY'),
