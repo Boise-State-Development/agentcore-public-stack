@@ -15,6 +15,10 @@ log_success() {
     echo -e "\033[0;32m✓ $1\033[0m"
 }
 
+log_warning() {
+    echo -e "\033[1;33m⚠ $1\033[0m"
+}
+
 log_info "Deploying Gateway Stack..."
 
 # ============================================================
