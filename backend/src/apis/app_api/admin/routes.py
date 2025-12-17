@@ -609,3 +609,9 @@ async def delete_managed_model_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting enabled model: {str(e)}"
         )
+
+
+# ========== Include Quota Management Subrouter ==========
+from .quota.routes import router as quota_router
+
+router.include_router(quota_router)
