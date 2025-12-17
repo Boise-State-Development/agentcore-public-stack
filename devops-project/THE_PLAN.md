@@ -262,28 +262,121 @@ All logic resides here. CI/CD pipelines merely call these scripts.
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 4 verified and approved to proceed to Phase 5
 
-### Phase 5: Gateway & MCP Stack
-**Goal**: API Gateway / Entry point
+### Phase 5: AgentCore Gateway & MCP Stack
+**Goal**: Deploy AWS Bedrock AgentCore Gateway with Lambda-based MCP tools for research and analysis
 
-#### CDK Infrastructure
-- [ ] **Create GatewayStack File**: Create `infrastructure/lib/gateway-stack.ts`.
-- [ ] **Define API Gateway**: Create REST API or HTTP API Gateway with custom domain (if configured).
-- [ ] **Define Gateway Integrations**: Set up integrations to App API and Inference API ALB/services.
-- [ ] **Define CORS Configuration**: Configure CORS based on frontend URL from config.
-- [ ] **Define WAF Rules**: Add AWS WAF web ACL for API Gateway (optional, based on config).
-- [ ] **Export Gateway URL**: Store API Gateway URL in SSM Parameter Store at `/${projectPrefix}/gateway/url`.
-- [ ] **Add CloudFormation Outputs**: Export API Gateway ID and endpoint URL.
+**Reference Architecture**: Based on [aws-samples/sample-strands-agent-with-agentcore](https://github.com/aws-samples/sample-strands-agent-with-agentcore/tree/main/agent-blueprint/agentcore-gateway-stack)
+
+**Stack Components**: Single unified stack deploying Gateway + IAM + Lambda + Gateway Targets
+
+#### Lambda Functions (MCP Tools)
+**Note**: Simplified approach - create initial Lambda function placeholders that will be populated with custom tools later
+
+- [ ] **Create Lambda Functions Directory**: Set up `backend/lambda-functions/` for MCP tool implementations.
+- [ ] **Create Placeholder Lambda**: Create `backend/lambda-functions/placeholder-tool/lambda_function.py` with basic MCP response structure.
+- [ ] **Create Requirements File**: Create `backend/lambda-functions/placeholder-tool/requirements.txt` for Python dependencies.
+
+#### CDK Infrastructure - IAM & Secrets
+- [ ] **Create GatewayStack File**: Create `infrastructure/lib/gateway-stack.ts` as single unified stack.
+- [ ] **Define Secrets Manager Placeholders**: Import existing secrets for API keys (optional, based on tools deployed):
+  - `/${projectPrefix}/mcp/tool-api-key` (placeholder pattern for future tool API keys)
+- [ ] **Define Lambda Execution Role**: Create role with:
+  - CloudWatch Logs permissions (`logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`)
+  - Secrets Manager read permissions (`secretsmanager:GetSecretValue`)
+  - Managed policy: `service-role/AWSLambdaBasicExecutionRole`
+- [ ] **Define Gateway Execution Role**: Create role for AgentCore Gateway with:
+  - Lambda invocation permissions (`lambda:InvokeFunction`)
+  - CloudWatch Logs permissions for Gateway logs
+  - Service principal: `bedrock-agentcore.amazonaws.com`
+
+#### CDK Infrastructure - Lambda Functions
+- [ ] **Define Lambda Functions**: Create Lambda functions using CDK `Code.fromAsset()`:
+  - Runtime: `PYTHON_3_13`
+  - Architecture: `ARM_64`
+  - Handler: `lambda_function.lambda_handler`
+  - Code location: `Code.fromAsset('backend/lambda-functions/placeholder-tool')` (CDK handles ZIP creation and upload)
+  - Environment variables: `LOG_LEVEL`, tool-specific config, `CDK_PROJECT_PREFIX`
+  - Timeout: Configurable per function (60-300 seconds)
+  - Memory: Configurable per function (512-1024 MB)
+  - Role: Lambda execution role from IAM section
+- [ ] **Add Lambda Permissions**: Grant Gateway permission to invoke Lambda functions via `addPermission()`.
+- [ ] **Create CloudWatch Log Groups**: Create log groups for each Lambda function with 1-week retention.
+
+#### CDK Infrastructure - AgentCore Gateway
+- [ ] **Define AgentCore Gateway**: Create `CfnGateway` with:
+  - Name: `${projectPrefix}-mcp-gateway`
+  - Description: MCP Gateway for custom tools
+  - Role: Gateway execution role
+  - Authorization type: `AWS_IAM` (SigV4 authentication)
+  - Protocol type: `MCP`
+  - Exception level: `DEBUG` for dev, `ERROR` for prod
+  - MCP protocol configuration: Default settings
+- [ ] **Store Gateway URL in SSM**: Write Gateway URL to `/${projectPrefix}/gateway/url`.
+- [ ] **Store Gateway ID in SSM**: Write Gateway ID to `/${projectPrefix}/gateway/id`.
+- [ ] **Add Gateway Outputs**: Export Gateway ARN, URL, ID, and status.
+
+#### CDK Infrastructure - Gateway Targets
+**Note**: Gateway Targets connect Lambda functions to the Gateway as MCP tools
+
+- [ ] **Define Gateway Targets**: For each Lambda function, create `CfnGatewayTarget` with:
+  - Name: Tool name (e.g., `placeholder-tool`)
+  - Gateway identifier: Reference to Gateway
+  - Description: Tool purpose
+  - Credential provider: `GATEWAY_IAM_ROLE`
+  - Target configuration: MCP Lambda target with:
+    - Lambda ARN
+    - Tool schema: `inputSchema` defining tool parameters (JSON Schema format)
+- [ ] **Add Target Outputs**: Export total number of targets and summary.
 
 #### Build & Deploy Scripts
 - [ ] **Create Scripts Directory**: Set up `scripts/stack-gateway/`.
-- [ ] **Script: Deploy Infrastructure**: Create `scripts/stack-gateway/deploy.sh` to deploy CDK stack.
+- [ ] **Script: Install Dependencies**: Create `scripts/stack-gateway/install.sh` to install CDK and Python dependencies.
+- [ ] **Script: Build CDK**: Create `scripts/stack-gateway/build-cdk.sh` to compile TypeScript CDK code.
+- [ ] **Script: Synthesize Stack**: Create `scripts/stack-gateway/synth.sh` to synthesize CloudFormation with all context parameters.
+- [ ] **Script: Test CDK**: Create `scripts/stack-gateway/test-cdk.sh` to validate with `cdk diff`.
+- [ ] **Script: Deploy Stack**: Create `scripts/stack-gateway/deploy.sh` to:
+  - Check for pre-synthesized templates in `cdk.out/`
+  - Deploy stack with explicit context parameters (CDK handles Lambda packaging automatically)
+  - Validate Gateway is accessible after deployment
+  - Output usage instructions for Runtime integration
+- [ ] **Script: Test Gateway**: Create `scripts/stack-gateway/test.sh` to validate Gateway connectivity and list tools.
 
-#### CI/CD Pipeline
-- [ ] **Create Workflow File**: Create `.github/workflows/gateway.yml`.
-- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on `infrastructure/lib/gateway-stack.ts` changes.
-- [ ] **Add Dependency Installation Step**: Call `scripts/common/install-deps.sh`.
-- [ ] **Add Deploy Step**: Call `scripts/stack-gateway/deploy.sh`.
-- [ ] **Configure AWS Credentials**: Use GitHub OIDC or AWS credentials from secrets.
+#### Integration with Inference API Stack (Phase 4)
+- [ ] **Update Runtime Execution Role**: Add Gateway invoke permissions to Inference API Runtime:
+  - `bedrock-agentcore:InvokeGateway`
+  - `bedrock-agentcore:GetGateway`
+  - `bedrock-agentcore:ListGateways`
+  - Resources: `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*`
+- [ ] **Add Gateway URL to Runtime Environment**: Pass Gateway URL to AgentCore Runtime via SSM parameter lookup.
+- [ ] **Update Agent Code**: Integrate Gateway client in `backend/src/apis/inference_api/` to invoke tools with SigV4 authentication.
+
+#### CI/CD Pipeline (9-Job Modular Pattern)
+- [ ] **Create Workflow File**: Create `.github/workflows/gateway.yml` using standard 9-job pattern:
+  - **Job 1: install** - Install and cache CDK/Python dependencies
+  - **Job 2: build-cdk** - Compile TypeScript CDK code
+  - **Job 3: synth-cdk** - Synthesize CloudFormation templates, upload as artifact
+  - **Job 4: test-cdk** - Validate templates with `cdk diff`
+  - **Job 5: test-lambda** - Run Python unit tests for Lambda functions (if any)
+  - **Job 6: deploy-stack** - Deploy CDK stack (CDK automatically packages Lambda functions)
+  - **Job 7: test-gateway** - Validate Gateway connectivity and list tools
+- [ ] **Configure Path Triggers**: Set `paths` filter to trigger on:
+  - `infrastructure/lib/gateway-stack.ts`
+  - `backend/lambda-functions/**`
+  - `scripts/stack-gateway/**`
+  - `.github/workflows/gateway.yml`
+- [ ] **Configure Environment Variables**: Use same pattern as other stacks (`CDK_AWS_REGION`, `CDK_PROJECT_PREFIX`, etc.)
+- [ ] **Configure AWS Credentials**: Use composite action `./.github/actions/configure-aws-credentials` with OIDC fallback
+- [ ] **Add Concurrency Control**: Use `concurrency: { group: gateway-${{ github.ref }}, cancel-in-progress: false }`
+
+#### Documentation & Testing
+- [ ] **Update README**: Document Gateway stack in main README.md with architecture diagram.
+- [ ] **Create Gateway Usage Guide**: Add section to README documenting how to:
+  - Add new Lambda-based MCP tools (create directory, implement handler, update CDK stack)
+  - Set API keys in Secrets Manager (if needed for tools)
+  - Test individual Lambda functions locally
+  - Test Gateway connectivity via AWS CLI
+  - Integrate Gateway with AgentCore Runtime (SigV4 authentication pattern)
+  - Debug Lambda function issues via CloudWatch Logs
 
 **🔒 HUMAN APPROVAL REQUIRED**
 - [ ] [HUMAN] Phase 5 verified and approved to proceed to Phase 6
