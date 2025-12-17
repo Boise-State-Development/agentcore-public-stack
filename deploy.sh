@@ -68,7 +68,7 @@ debug_log() {
 prompt_for_config() {
     local var_name=$1
     local prompt_text=$2
-    local current_value="${!var_name}"
+    local current_value="${!var_name:-}"
     
     if [ -n "$current_value" ]; then
         read -p "${prompt_text} [${current_value}]: " user_input
