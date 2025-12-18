@@ -27,6 +27,7 @@ main() {
     
     # Change to backend directory
     cd "${BACKEND_DIR}"
+    log_info "Working directory: $(pwd)"
     
     # Check if pytest is installed
     if ! python3 -m pytest --version &> /dev/null; then
@@ -44,6 +45,20 @@ main() {
     if [ -d "tests" ]; then
         log_info "Running tests from tests/ directory..."
         log_info "PYTHONPATH: ${PYTHONPATH}"
+        
+        # Verify src directory exists
+        if [ ! -d "${BACKEND_DIR}/src" ]; then
+            log_error "src directory not found at ${BACKEND_DIR}/src"
+            exit 1
+        fi
+        
+        # Verify conftest.py exists
+        if [ ! -f "${BACKEND_DIR}/tests/conftest.py" ]; then
+            log_error "conftest.py not found at ${BACKEND_DIR}/tests/conftest.py"
+            exit 1
+        fi
+        
+        # Run pytest - conftest.py will handle sys.path setup
         python3 -m pytest tests/ \
             -v \
             --tb=short \
