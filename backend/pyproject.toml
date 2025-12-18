@@ -81,5 +81,6 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
+# pythonpath is relative to the directory where pytest is run (backend/)
 pythonpath = ["src"]
 testpaths = ["tests"]
