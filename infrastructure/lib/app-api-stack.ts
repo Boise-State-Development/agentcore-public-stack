@@ -281,6 +281,92 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // ============================================================
+    // Cost Tracking Tables
+    // ============================================================
+
+    // SessionsMetadata Table - Message-level metadata for cost tracking
+    const sessionsMetadataTable = new dynamodb.Table(this, 'SessionsMetadataTable', {
+      tableName: getResourceName(config, 'sessions-metadata'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // GSI1: UserTimestampIndex - Query messages by user and time range
+    sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'UserTimestampIndex',
+      partitionKey: {
+        name: 'GSI1PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI1SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // UserCostSummary Table - Pre-aggregated cost summaries for fast quota checks
+    const userCostSummaryTable = new dynamodb.Table(this, 'UserCostSummaryTable', {
+      tableName: getResourceName(config, 'user-cost-summary'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // Store cost tracking table names in SSM
+    new ssm.StringParameter(this, 'SessionsMetadataTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/sessions-metadata-table-name`,
+      stringValue: sessionsMetadataTable.tableName,
+      description: 'SessionsMetadata table name for message-level cost tracking',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'SessionsMetadataTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/sessions-metadata-table-arn`,
+      stringValue: sessionsMetadataTable.tableArn,
+      description: 'SessionsMetadata table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserCostSummaryTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/user-cost-summary-table-name`,
+      stringValue: userCostSummaryTable.tableName,
+      description: 'UserCostSummary table name for aggregated cost summaries',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserCostSummaryTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/user-cost-summary-table-arn`,
+      stringValue: userCostSummaryTable.tableArn,
+      description: 'UserCostSummary table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
     // OIDC State Management Table
     // ============================================================
 
@@ -410,6 +496,8 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_EVENTS_TABLE: quotaEventsTable.tableName,
         DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTable.tableName,
         DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTable.tableName,
+        DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTable.tableName,
+        DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTable.tableName,
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -443,6 +531,10 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for managed models table
     managedModelsTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for cost tracking tables
+    sessionsMetadataTable.grantReadWriteData(taskDefinition.taskRole);
+    userCostSummaryTable.grantReadWriteData(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -553,6 +645,18 @@ export class AppApiStack extends cdk.Stack {
       value: managedModelsTable.tableName,
       description: 'Managed models table name',
       exportName: `${config.projectPrefix}-ManagedModelsTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'SessionsMetadataTableName', {
+      value: sessionsMetadataTable.tableName,
+      description: 'SessionsMetadata table name for cost tracking',
+      exportName: `${config.projectPrefix}-SessionsMetadataTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'UserCostSummaryTableName', {
+      value: userCostSummaryTable.tableName,
+      description: 'UserCostSummary table name for cost aggregation',
+      exportName: `${config.projectPrefix}-UserCostSummaryTableName`,
     });
   }
 }
