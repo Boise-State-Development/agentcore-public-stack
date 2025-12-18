@@ -67,6 +67,15 @@ main() {
         # Export PYTHONPATH to ensure src is on the path
         export PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}"
         
+        # Verify that imports work
+        log_info "Verifying Python imports..."
+        if ! python3 -c "import sys; sys.path.insert(0, '${BACKEND_DIR}/src'); from agents.strands_agent.quota.checker import QuotaChecker; print('✓ Imports working')" 2>&1; then
+            log_error "Import verification failed! Checking dependencies..."
+            python3 -c "import sys; sys.path.insert(0, '${BACKEND_DIR}/src'); import agents" 2>&1 || true
+            log_error "Tests cannot run without working imports"
+            exit 1
+        fi
+        
         # Run pytest
         log_info "Running pytest with PYTHONPATH=${PYTHONPATH}"
         python3 -m pytest tests/ \
