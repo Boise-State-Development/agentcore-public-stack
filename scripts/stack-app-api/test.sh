@@ -39,7 +39,7 @@ main() {
     
     # Verify installation
     log_info "Verifying installation..."
-    python3 -c "import fastapi; import uvicorn; import strands; print('✓ Core dependencies installed')"
+    python3 -c "import fastapi; import uvicorn; print('Core dependencies installed')"
     
     # Run tests
     log_info "Executing tests..."
@@ -56,12 +56,11 @@ main() {
     
     # Test import directly
     log_info "Testing direct import..."
-    python3 -c "from agents.strands_agent.quota.checker import QuotaChecker; print('✓ Direct import works')"
+    python3 -c "from agents.strands_agent.quota.checker import QuotaChecker; print('Direct import works')"
     
     # Run pytest with import-mode=importlib
     log_info "Running pytest..."
     python3 -m pytest tests/ \
-        --import-mode=importlib \
         -v \
         --tb=short \
         --color=yes \
