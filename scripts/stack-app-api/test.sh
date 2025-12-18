@@ -60,6 +60,34 @@ main() {
             exit 1
         fi
         
+        # Debug: Check what Python can see
+        log_info "Debugging Python import paths..."
+        PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}" python3 -c "
+import sys
+print('Python sys.path:')
+for p in sys.path:
+    print(f'  {p}')
+print()
+print('Checking if agents module exists:')
+import os
+agents_path = '${BACKEND_DIR}/src/agents'
+print(f'  Path exists: {os.path.exists(agents_path)}')
+if os.path.exists(agents_path):
+    print(f'  Contents: {os.listdir(agents_path)}')
+    quota_path = '${BACKEND_DIR}/src/agents/strands_agent/quota'
+    if os.path.exists(quota_path):
+        print(f'  Quota contents: {os.listdir(quota_path)}')
+print()
+print('Attempting import:')
+try:
+    from agents.strands_agent.quota.checker import QuotaChecker
+    print('  SUCCESS: Import worked!')
+except Exception as e:
+    print(f'  FAILED: {e}')
+    import traceback
+    traceback.print_exc()
+"
+        
         # Run pytest with explicit PYTHONPATH
         # Must set it inline with the command to ensure it's available during collection
         log_info "PYTHONPATH: ${BACKEND_DIR}/src"
