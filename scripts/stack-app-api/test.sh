@@ -38,13 +38,9 @@ main() {
     # Run tests
     log_info "Executing tests..."
     
-    # Set PYTHONPATH to include src directory
-    export PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}"
-    
     # Run pytest with coverage if tests directory exists
     if [ -d "tests" ]; then
         log_info "Running tests from tests/ directory..."
-        log_info "PYTHONPATH: ${PYTHONPATH}"
         
         # Verify src directory exists
         if [ ! -d "${BACKEND_DIR}/src" ]; then
@@ -58,8 +54,16 @@ main() {
             exit 1
         fi
         
-        # Run pytest - conftest.py will handle sys.path setup
-        python3 -m pytest tests/ \
+        # Verify the quota modules exist
+        if [ ! -f "${BACKEND_DIR}/src/agents/strands_agent/quota/checker.py" ]; then
+            log_error "Quota checker module not found"
+            exit 1
+        fi
+        
+        # Run pytest with explicit PYTHONPATH
+        # Must set it inline with the command to ensure it's available during collection
+        log_info "PYTHONPATH: ${BACKEND_DIR}/src"
+        PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}" python3 -m pytest tests/ \
             -v \
             --tb=short \
             --color=yes \
