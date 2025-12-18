@@ -33,7 +33,7 @@ source ../venv/bin/activate  # On Windows: ..\venv\Scripts\activate
 pip install -r requirements.txt
 
 # Verify quota module imports
-python -c "from agentcore.quota import QuotaTier, QuotaResolver; print('✅ Quota module loaded')"
+python -c "from agents.strands_agent.quota import QuotaTier, QuotaResolver; print('✅ Quota module loaded')"
 ```
 
 **Expected Output:**
@@ -617,8 +617,8 @@ python
 ```python
 import asyncio
 from apis.shared.auth.models import User
-from agentcore.quota.repository import QuotaRepository
-from agentcore.quota.resolver import QuotaResolver
+from agents.strands_agent.quota.repository import QuotaRepository
+from agents.strands_agent.quota.resolver import QuotaResolver
 
 # Create repository and resolver
 repo = QuotaRepository(
@@ -690,8 +690,8 @@ print("\n✅ All quota resolution tests passed!")
 **Note:** This requires the cost tracking system to be set up. Skip if not available.
 
 ```python
-from agentcore.quota.checker import QuotaChecker
-from agentcore.quota.event_recorder import QuotaEventRecorder
+from agents.strands_agent.quota.checker import QuotaChecker
+from agents.strands_agent.quota.event_recorder import QuotaEventRecorder
 from apis.app_api.costs.aggregator import CostAggregator
 
 # Create checker

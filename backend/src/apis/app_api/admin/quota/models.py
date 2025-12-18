@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Literal
-from agentcore.quota.models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType
+from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType
 
 
 # ========== Tier Models ==========

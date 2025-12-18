@@ -988,9 +988,9 @@ from typing import List, Optional
 import logging
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
-from agentcore.quota.repository import QuotaRepository
-from agentcore.quota.resolver import QuotaResolver
-from agentcore.quota.models import QuotaTier, QuotaAssignment
+from agents.strands_agent.quota.repository import QuotaRepository
+from agents.strands_agent.quota.resolver import QuotaResolver
+from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment
 from api.costs.service import CostAggregator
 from .service import QuotaAdminService
 from .models import (
@@ -1381,9 +1381,9 @@ cdk diff QuotaStack-dev
 ```python
 import pytest
 from datetime import datetime
-from agentcore.quota.resolver import QuotaResolver
-from agentcore.quota.repository import QuotaRepository
-from agentcore.quota.models import QuotaTier, QuotaAssignment, QuotaAssignmentType
+from agents.strands_agent.quota.resolver import QuotaResolver
+from agents.strands_agent.quota.repository import QuotaRepository
+from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment, QuotaAssignmentType
 from apis.shared.auth.models import User
 
 @pytest.fixture
@@ -1528,8 +1528,8 @@ async def test_cache_hit(resolver, mock_repository):
 import pytest
 import boto3
 from moto import mock_dynamodb
-from agentcore.quota.repository import QuotaRepository
-from agentcore.quota.models import QuotaTier, QuotaAssignment, QuotaAssignmentType
+from agents.strands_agent.quota.repository import QuotaRepository
+from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment, QuotaAssignmentType
 
 @pytest.fixture
 def dynamodb():
@@ -1765,8 +1765,8 @@ curl -X POST http://localhost:8000/api/admin/quota/assignments \
 ```python
 # Test quota resolution in Python console
 from apis.shared.auth.models import User
-from agentcore.quota.repository import QuotaRepository
-from agentcore.quota.resolver import QuotaResolver
+from agents.strands_agent.quota.repository import QuotaRepository
+from agents.strands_agent.quota.resolver import QuotaResolver
 
 user = User(user_id="test123", email="test@example.com", roles=[])
 repo = QuotaRepository()
@@ -1780,7 +1780,7 @@ print(f"Matched by: {resolved.matched_by}")
 #### 4. Test Hard Limit Blocking
 
 ```python
-from agentcore.quota.checker import QuotaChecker
+from agents.strands_agent.quota.checker import QuotaChecker
 from api.costs.service import CostAggregator
 
 # Assume user has exceeded quota

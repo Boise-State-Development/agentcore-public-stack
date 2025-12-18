@@ -9,6 +9,7 @@ separation of concerns across specialized modules:
 - tools: Tool registry, filtering, and gateway integration
 - multimodal: Image and document content handling
 - streaming: Response streaming coordination
+- quota: Usage quota management and enforcement
 - utils: Shared utilities (timezone, global state)
 
 Main entry point:
@@ -32,6 +33,18 @@ from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
 from .multimodal import PromptBuilder, ImageHandler, DocumentHandler, FileSanitizer
 from .streaming import StreamCoordinator
+from .quota import (
+    QuotaTier,
+    QuotaAssignment,
+    QuotaAssignmentType,
+    QuotaEvent,
+    QuotaCheckResult,
+    ResolvedQuota,
+    QuotaRepository,
+    QuotaResolver,
+    QuotaChecker,
+    QuotaEventRecorder,
+)
 from .utils import get_current_date_pacific, get_global_stream_processor
 
 __version__ = "1.0.0"
@@ -61,6 +74,18 @@ __all__ = [
 
     # Streaming
     "StreamCoordinator",
+
+    # Quota management
+    "QuotaTier",
+    "QuotaAssignment",
+    "QuotaAssignmentType",
+    "QuotaEvent",
+    "QuotaCheckResult",
+    "ResolvedQuota",
+    "QuotaRepository",
+    "QuotaResolver",
+    "QuotaChecker",
+    "QuotaEventRecorder",
 
     # Utils
     "get_current_date_pacific",
