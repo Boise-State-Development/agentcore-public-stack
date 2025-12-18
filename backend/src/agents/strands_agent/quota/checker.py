@@ -72,7 +72,7 @@ class QuotaChecker:
                 user_id=user.user_id,
                 period=period
             )
-            current_usage = summary.totalCost
+            current_usage = summary.total_cost
         except Exception as e:
             logger.error(f"Error getting cost summary for user {user.user_id}: {e}")
             # On error, allow request but log warning

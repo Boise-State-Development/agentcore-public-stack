@@ -100,6 +100,8 @@ class QuotaEvent(BaseModel):
 
 class QuotaCheckResult(BaseModel):
     """Result of quota check"""
+    model_config = ConfigDict(populate_by_name=True)
+    
     allowed: bool
     message: str
     tier: Optional[QuotaTier] = None
@@ -111,6 +113,8 @@ class QuotaCheckResult(BaseModel):
 
 class ResolvedQuota(BaseModel):
     """Resolved quota information for a user"""
+    model_config = ConfigDict(populate_by_name=True)
+    
     user_id: str = Field(..., alias="userId")
     tier: QuotaTier
     matched_by: str = Field(
