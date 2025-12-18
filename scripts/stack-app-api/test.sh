@@ -64,8 +64,11 @@ main() {
             exit 1
         fi
         
+        # Export PYTHONPATH to ensure src is on the path
+        export PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}"
+        
         # Run pytest
-        log_info "Running pytest..."
+        log_info "Running pytest with PYTHONPATH=${PYTHONPATH}"
         python3 -m pytest tests/ \
             -v \
             --tb=short \
