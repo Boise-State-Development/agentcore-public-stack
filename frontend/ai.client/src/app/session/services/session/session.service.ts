@@ -88,6 +88,13 @@ export class SessionService {
   private sessionsParams = signal<ListSessionsParams>({});
 
   /**
+   * Signal to control when the sessions resource should load.
+   * Set to true when the user is authenticated or authentication is disabled.
+   * This prevents the resource from loading before authentication is ready.
+   */
+  private sessionsRequest = signal<boolean>(false);
+
+  /**
    * Signal to hold the local sessions cache.
    * This allows us to optimistically update the UI without refetching from the API.
    */
@@ -108,46 +115,57 @@ export class SessionService {
 
   /**
    * Reactive resource for fetching sessions.
-   * 
-   * This resource automatically refetches when `sessionsParams` signal changes
+   *
+   * This resource automatically refetches when `sessionsParams` or `sessionsRequest` signals change
    * because Angular's resource API tracks signals read within the loader function.
    * Provides reactive signals for data, loading state, and errors.
-   * 
+   *
    * The resource ensures the user is authenticated before making the HTTP request.
    * If the token is expired, it will attempt to refresh it automatically.
-   * 
+   *
+   * The resource will not load until `enableSessionsLoading()` is called, which should be done
+   * after authentication is ready or when authentication is disabled.
+   *
    * Returns SessionsListResponse which includes both the sessions array and pagination token.
-   * 
+   *
    * Benefits of Angular's resource API:
    * - Automatic refetch when tracked signals change
    * - Built-in request cancellation if loader is called again before completion
    * - Seamless integration with Angular's reactivity system
-   * 
+   *
    * @example
    * ```typescript
+   * // Enable loading (typically done after authentication)
+   * sessionService.enableSessionsLoading();
+   *
    * // Access data (may be undefined initially)
    * const response = sessionService.sessionsResource.value();
    * const sessions = response?.sessions;
    * const nextToken = response?.next_token;
-   * 
+   *
    * // Check loading state
    * const isLoading = sessionService.sessionsResource.isPending();
-   * 
+   *
    * // Handle errors
    * const error = sessionService.sessionsResource.error();
-   * 
+   *
    * // Update pagination to trigger refetch
    * sessionService.updateSessionsParams({ limit: 50 });
-   * 
+   *
    * // Get next page
    * sessionService.updateSessionsParams({ limit: 50, next_token: nextToken });
-   * 
+   *
    * // Manually refetch
    * sessionService.sessionsResource.refetch();
    * ```
    */
   readonly sessionsResource = resource({
     loader: async () => {
+      // Don't load until explicitly enabled
+      if (!this.sessionsRequest()) {
+        return null;
+      }
+
       // Read params signal to make resource reactive to pagination changes
       const params = this.sessionsParams();
 
@@ -167,8 +185,8 @@ export class SessionService {
     const apiResponse = this.sessionsResource.value();
     const localCache = this.localSessionsCache();
 
-    if (!apiResponse) {
-      // Resource hasn't loaded yet, return cached sessions only
+    if (!apiResponse || apiResponse === null) {
+      // Resource hasn't loaded yet or is disabled, return cached sessions only
       return {
         sessions: localCache,
         next_token: null
@@ -185,9 +203,32 @@ export class SessionService {
   });
 
   /**
+   * Enables the sessions resource to start loading.
+   * This should be called after authentication is ready or when authentication is disabled.
+   * Once enabled, the resource will automatically fetch sessions and refetch when signals change.
+   *
+   * @example
+   * ```typescript
+   * // In a component or guard after user logs in
+   * sessionService.enableSessionsLoading();
+   * ```
+   */
+  enableSessionsLoading(): void {
+    this.sessionsRequest.set(true);
+  }
+
+  /**
+   * Disables the sessions resource from loading.
+   * Useful when the user logs out or when you want to prevent unnecessary API calls.
+   */
+  disableSessionsLoading(): void {
+    this.sessionsRequest.set(false);
+  }
+
+  /**
    * Updates the pagination parameters for the sessions resource.
    * This will automatically trigger a refetch of the resource.
-   * 
+   *
    * @param params - New pagination parameters
    */
   updateSessionsParams(params: Partial<ListSessionsParams>): void {
@@ -607,6 +648,26 @@ export class SessionService {
   }
 
   constructor() {
+    // Enable sessions loading if authentication is disabled or user is already authenticated
+    // This prevents the resource from loading before authentication is ready
+    if (!this.authService.isAuthenticationEnabled() || this.authService.isAuthenticated()) {
+      this.enableSessionsLoading();
+    }
+
+    // Listen for authentication state changes
+    if (typeof window !== 'undefined') {
+      // Listen for token-stored events (user logged in)
+      window.addEventListener('token-stored', () => {
+        this.enableSessionsLoading();
+      });
+
+      // Listen for token-cleared events (user logged out)
+      window.addEventListener('token-cleared', () => {
+        this.disableSessionsLoading();
+        this.clearSessionCache();
+      });
+    }
+
     // Effect to trigger resource reload when session ID changes
     effect(() => {
       const id = this.sessionMetadataId();

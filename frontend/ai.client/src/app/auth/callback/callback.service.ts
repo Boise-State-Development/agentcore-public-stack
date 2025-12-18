@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../auth.service';
 import { UserService } from '../user.service';
+import { SessionService } from '../../session/services/session/session.service';
 import { environment } from '../../../environments/environment';
 export interface TokenExchangeRequest {
   code: string;
@@ -26,6 +27,7 @@ export class CallbackService {
   private http = inject(HttpClient);
   private authService = inject(AuthService);
   private userService = inject(UserService);
+  private sessionService = inject(SessionService);
 
   async exchangeCodeForTokens(code: string, state: string, redirectUri?: string): Promise<TokenExchangeResponse> {
     // Retrieve stored state token from sessionStorage for CSRF validation
@@ -62,6 +64,9 @@ export class CallbackService {
 
       // Refresh user data from new token
       this.userService.refreshUser();
+
+      // Enable sessions loading now that user is authenticated
+      this.sessionService.enableSessionsLoading();
 
       // Clear state token after successful exchange
       this.authService.clearStoredState();
