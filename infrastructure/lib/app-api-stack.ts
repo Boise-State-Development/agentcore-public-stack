@@ -148,7 +148,134 @@ export class AppApiStack extends cdk.Stack {
       'Allow traffic from ALB to App API tasks'
     );
 
-    
+    // ============================================================
+    // Quota Management Tables
+    // ============================================================
+
+    // UserQuotas Table
+    const userQuotasTable = new dynamodb.Table(this, 'UserQuotasTable', {
+      tableName: getResourceName(config, 'user-quotas'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // GSI1: AssignmentTypeIndex - Query assignments by type, sorted by priority
+    userQuotasTable.addGlobalSecondaryIndex({
+      indexName: 'AssignmentTypeIndex',
+      partitionKey: {
+        name: 'GSI1PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI1SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI2: UserAssignmentIndex - Query direct user assignments (O(1) lookup)
+    userQuotasTable.addGlobalSecondaryIndex({
+      indexName: 'UserAssignmentIndex',
+      partitionKey: {
+        name: 'GSI2PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI2SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI3: RoleAssignmentIndex - Query role-based assignments, sorted by priority
+    userQuotasTable.addGlobalSecondaryIndex({
+      indexName: 'RoleAssignmentIndex',
+      partitionKey: {
+        name: 'GSI3PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI3SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // QuotaEvents Table
+    const quotaEventsTable = new dynamodb.Table(this, 'QuotaEventsTable', {
+      tableName: getResourceName(config, 'quota-events'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // GSI5: TierEventIndex - Query events by tier for analytics
+    quotaEventsTable.addGlobalSecondaryIndex({
+      indexName: 'TierEventIndex',
+      partitionKey: {
+        name: 'GSI5PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI5SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Store quota table names in SSM
+    new ssm.StringParameter(this, 'UserQuotasTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/quota/user-quotas-table-name`,
+      stringValue: userQuotasTable.tableName,
+      description: 'UserQuotas table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserQuotasTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/quota/user-quotas-table-arn`,
+      stringValue: userQuotasTable.tableArn,
+      description: 'UserQuotas table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'QuotaEventsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/quota/quota-events-table-name`,
+      stringValue: quotaEventsTable.tableName,
+      description: 'QuotaEvents table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'QuotaEventsTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/quota/quota-events-table-arn`,
+      stringValue: quotaEventsTable.tableArn,
+      description: 'QuotaEvents table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+
     // // ============================================================
     // // Database Layer (Optional - controlled by config.appApi.databaseType)
     // // ============================================================
@@ -360,6 +487,10 @@ export class AppApiStack extends cdk.Stack {
       // This is a placeholder - actual permissions will be granted via IAM policy
     }
 
+    // Grant permissions for quota management tables
+    userQuotasTable.grantReadWriteData(taskDefinition.taskRole);
+    quotaEventsTable.grantReadWriteData(taskDefinition.taskRole);
+
     // ============================================================
     // Target Group
     // ============================================================
@@ -445,6 +576,18 @@ export class AppApiStack extends cdk.Stack {
       value: taskDefinition.taskDefinitionArn,
       description: 'Task Definition ARN',
       exportName: `${config.projectPrefix}-AppApiTaskDefinitionArn`,
+    });
+
+    new cdk.CfnOutput(this, 'UserQuotasTableName', {
+      value: userQuotasTable.tableName,
+      description: 'UserQuotas table name',
+      exportName: `${config.projectPrefix}-UserQuotasTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'QuotaEventsTableName', {
+      value: quotaEventsTable.tableName,
+      description: 'QuotaEvents table name',
+      exportName: `${config.projectPrefix}-QuotaEventsTableName`,
     });
   }
 }
