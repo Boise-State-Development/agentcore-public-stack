@@ -18,6 +18,9 @@
           "options": {
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
+            "optimization": false,
+            "extractLicenses": false,
+            "sourceMap": true,
             "assets": [
               {
                 "glob": "**/*",
@@ -53,7 +56,13 @@
                   "maximumError": "5MB"
                 }
               ],
-              "outputHashing": "all"
+              "outputHashing": "all",
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.production.ts"
+                }
+              ]
             },
             "development": {
               "optimization": false,
@@ -66,11 +75,13 @@
                 }
               ]
             }
-          },
-          "defaultConfiguration": "production"
+          }
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "buildTarget": "ai.client:build"
+          },
           "configurations": {
             "production": {
               "buildTarget": "ai.client:build:production"
@@ -78,8 +89,7 @@
             "development": {
               "buildTarget": "ai.client:build:development"
             }
-          },
-          "defaultConfiguration": "development"
+          }
         },
         "test": {
           "builder": "@angular/build:unit-test"
