@@ -34,8 +34,13 @@ main() {
     
     log_info "Testing Docker image: ${IMAGE_NAME}"
     
-    # Start container in background
-    CONTAINER_ID=$(docker run -d -p 8000:8000 "${IMAGE_NAME}")
+    # Start container in background with mock AWS credentials
+    # These are needed for boto3 initialization even though we're not using AWS services
+    CONTAINER_ID=$(docker run -d -p 8000:8000 \
+        -e AWS_DEFAULT_REGION=us-east-1 \
+        -e AWS_ACCESS_KEY_ID=testing \
+        -e AWS_SECRET_ACCESS_KEY=testing \
+        "${IMAGE_NAME}")
     log_info "Container ID: ${CONTAINER_ID}"
     
     # Wait for container to be healthy
