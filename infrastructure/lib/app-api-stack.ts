@@ -318,7 +318,57 @@ export class AppApiStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // Managed Models Table
+    // ============================================================
 
+    // ManagedModels Table - Model management and pricing data
+    const managedModelsTable = new dynamodb.Table(this, 'ManagedModelsTable', {
+      tableName: getResourceName(config, 'managed-models'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // GSI1: ModelIdIndex - Query by modelId for duplicate checking
+    managedModelsTable.addGlobalSecondaryIndex({
+      indexName: 'ModelIdIndex',
+      partitionKey: {
+        name: 'GSI1PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI1SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Store managed models table name in SSM
+    new ssm.StringParameter(this, 'ManagedModelsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/admin/managed-models-table-name`,
+      stringValue: managedModelsTable.tableName,
+      description: 'Managed models table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'ManagedModelsTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/admin/managed-models-table-arn`,
+      stringValue: managedModelsTable.tableArn,
+      description: 'Managed models table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
     // ============================================================
     // ECS Task Definition
@@ -359,6 +409,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_QUOTA_TABLE: userQuotasTable.tableName,
         DYNAMODB_EVENTS_TABLE: quotaEventsTable.tableName,
         DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTable.tableName,
+        DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTable.tableName,
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -389,6 +440,9 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for OIDC state table
     oidcStateTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for managed models table
+    managedModelsTable.grantReadWriteData(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -493,6 +547,12 @@ export class AppApiStack extends cdk.Stack {
       value: oidcStateTable.tableName,
       description: 'OIDC state table name',
       exportName: `${config.projectPrefix}-OidcStateTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'ManagedModelsTableName', {
+      value: managedModelsTable.tableName,
+      description: 'Managed models table name',
+      exportName: `${config.projectPrefix}-ManagedModelsTableName`,
     });
   }
 }
