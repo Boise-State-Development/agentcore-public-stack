@@ -214,7 +214,14 @@ export class SessionService {
    * ```
    */
   enableSessionsLoading(): void {
+    const wasDisabled = !this.sessionsRequest();
     this.sessionsRequest.set(true);
+
+    // If we're transitioning from disabled to enabled, trigger a reload
+    // This ensures the resource fetches data immediately after authentication
+    if (wasDisabled) {
+      this.sessionsResource.reload();
+    }
   }
 
   /**
