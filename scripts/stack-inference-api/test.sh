@@ -27,24 +27,30 @@ main() {
     
     # Change to backend directory
     cd "${BACKEND_DIR}"
+    log_info "Working directory: $(pwd)"
     
-    # Check if pytest is installed
+    # Check if pytest is installed (should be from cache or install step)
     if ! python3 -m pytest --version &> /dev/null; then
-        log_info "pytest not found, installing..."
+        log_info "pytest not found, installing test dependencies..."
         python3 -m pip install pytest pytest-asyncio pytest-cov
     fi
     
     # Run tests
     log_info "Executing tests..."
     
-    # Set PYTHONPATH to include src directory
-    export PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}"
-    
     # Run pytest with coverage if tests directory exists
     if [ -d "tests" ]; then
         log_info "Running tests from tests/ directory..."
-        log_info "PYTHONPATH: ${PYTHONPATH}"
-        python3 -m pytest tests/ \
+        
+        # Verify src directory exists
+        if [ ! -d "${BACKEND_DIR}/src" ]; then
+            log_error "src directory not found at ${BACKEND_DIR}/src"
+            exit 1
+        fi
+        
+        # Run pytest with explicit PYTHONPATH
+        log_info "Running pytest..."
+        PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}" python3 -m pytest tests/ \
             -v \
             --tb=short \
             --color=yes \
