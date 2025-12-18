@@ -42,7 +42,7 @@ aws dynamodb create-table \
 
 2. Set environment variable:
 ```bash
-export OIDC_STATE_TABLE_NAME=oidc-state-store
+export DYNAMODB_OIDC_STATE_TABLE_NAME=oidc-state-store
 ```
 
 **Table Schema:**
@@ -62,7 +62,7 @@ For local development or single-instance deployments.
 - ⚠️ State is lost on server restart
 
 **Usage:**
-- Automatically used when `OIDC_STATE_TABLE_NAME` is not set
+- Automatically used when `DYNAMODB_OIDC_STATE_TABLE_NAME` is not set
 - Logs a warning about distributed deployment limitations
 
 ## Configuration
@@ -71,12 +71,12 @@ The state store is automatically selected based on environment:
 
 ```python
 # DynamoDB (production)
-export OIDC_STATE_TABLE_NAME=oidc-state-store
+export DYNAMODB_OIDC_STATE_TABLE_NAME=oidc-state-store
 export AWS_REGION=us-west-2
 export AWS_PROFILE=dev-ai  # Optional
 
 # In-memory (development)
-# Just don't set OIDC_STATE_TABLE_NAME
+# Just don't set DYNAMODB_OIDC_STATE_TABLE_NAME
 ```
 
 ## Security Features

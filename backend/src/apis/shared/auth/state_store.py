@@ -110,7 +110,7 @@ class DynamoDBStateStore(StateStore):
                 "boto3 is required for DynamoDBStateStore. Install with: pip install boto3"
             )
         
-        self.table_name = table_name or os.getenv('OIDC_STATE_TABLE_NAME', 'oidc-state-store')
+        self.table_name = table_name or os.getenv('DYNAMODB_OIDC_STATE_TABLE_NAME', 'oidc-state-store')
         self.region = region or os.getenv('AWS_REGION', os.getenv('AWS_DEFAULT_REGION', 'us-west-2'))
         
         # Determine AWS profile
@@ -226,7 +226,7 @@ def create_state_store() -> StateStore:
         StateStore instance (DynamoDB if configured, otherwise in-memory)
     """
     # Check if DynamoDB table name is configured
-    table_name = os.getenv('OIDC_STATE_TABLE_NAME')
+    table_name = os.getenv('DYNAMODB_OIDC_STATE_TABLE_NAME')
     
     if table_name:
         try:
@@ -239,7 +239,7 @@ def create_state_store() -> StateStore:
             return InMemoryStateStore()
     else:
         logger.info(
-            "OIDC_STATE_TABLE_NAME not set. Using in-memory state storage. "
+            "DYNAMODB_OIDC_STATE_TABLE_NAME not set. Using in-memory state storage. "
             "This will not work in distributed deployments."
         )
         return InMemoryStateStore()

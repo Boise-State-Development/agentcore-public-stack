@@ -280,8 +280,45 @@ export class AppApiStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // OIDC State Management Table
+    // ============================================================
 
-    
+    // OidcState Table - Distributed state storage for OIDC authentication
+    const oidcStateTable = new dynamodb.Table(this, 'OidcStateTable', {
+      tableName: getResourceName(config, 'oidc-state'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // Store OIDC state table name in SSM
+    new ssm.StringParameter(this, 'OidcStateTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/auth/oidc-state-table-name`,
+      stringValue: oidcStateTable.tableName,
+      description: 'OIDC state table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'OidcStateTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/auth/oidc-state-table-arn`,
+      stringValue: oidcStateTable.tableArn,
+      description: 'OIDC state table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+
 
     // ============================================================
     // ECS Task Definition
@@ -321,6 +358,7 @@ export class AppApiStack extends cdk.Stack {
         PROJECT_PREFIX: config.projectPrefix,
         DYNAMODB_QUOTA_TABLE: userQuotasTable.tableName,
         DYNAMODB_EVENTS_TABLE: quotaEventsTable.tableName,
+        DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTable.tableName,
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -348,6 +386,9 @@ export class AppApiStack extends cdk.Stack {
     // Grant permissions for quota management tables
     userQuotasTable.grantReadWriteData(taskDefinition.taskRole);
     quotaEventsTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for OIDC state table
+    oidcStateTable.grantReadWriteData(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -446,6 +487,12 @@ export class AppApiStack extends cdk.Stack {
       value: quotaEventsTable.tableName,
       description: 'QuotaEvents table name',
       exportName: `${config.projectPrefix}-QuotaEventsTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'OidcStateTableName', {
+      value: oidcStateTable.tableName,
+      description: 'OIDC state table name',
+      exportName: `${config.projectPrefix}-OidcStateTableName`,
     });
   }
 }
