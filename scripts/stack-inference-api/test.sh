@@ -31,7 +31,7 @@ main() {
     
     # Install project in editable mode (dependencies should be cached)
     log_info "Installing project in editable mode..."
-    python3 -m pip install -e . --no-deps
+    python3 -m pip install -e ".[agentcore,dev]" --quiet
     
     # Check if pytest is installed (should be from cache or install step)
     if ! python3 -m pytest --version &> /dev/null; then

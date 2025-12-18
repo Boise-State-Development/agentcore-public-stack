@@ -56,7 +56,7 @@ main() {
     
     # Install the package and its dependencies
     log_info "Installing dependencies from pyproject.toml..."
-    python3 -m pip install -e .
+    python3 -m pip install -e ".[agentcore,dev]"
     
     # Verify installation
     log_info "Verifying installation..."
