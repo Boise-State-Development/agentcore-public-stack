@@ -54,6 +54,11 @@ main() {
     export PYTHONPATH="${BACKEND_DIR}/src:${PYTHONPATH:-}"
     log_info "PYTHONPATH=${PYTHONPATH}"
     
+    # Set dummy AWS credentials for tests
+    export AWS_DEFAULT_REGION=us-east-1
+    export AWS_ACCESS_KEY_ID=testing
+    export AWS_SECRET_ACCESS_KEY=testing
+    
     # Test import directly
     log_info "Testing direct import..."
     python3 -c "from agents.strands_agent.quota.checker import QuotaChecker; print('Direct import works')"
