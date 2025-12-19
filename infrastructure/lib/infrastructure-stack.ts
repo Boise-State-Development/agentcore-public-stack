@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -167,21 +168,66 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    // Create default HTTP listener
-    this.albListener = this.alb.addListener('HttpListener', {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultAction: elbv2.ListenerAction.fixedResponse(404, {
-        contentType: 'text/plain',
-        messageBody: 'Not Found - No matching route',
-      }),
-    });
+    // ============================================================
+    // HTTPS Listener (if certificate provided)
+    // ============================================================
+    if (config.certificateArn) {
+      // Import certificate from ARN
+      const certificate = acm.Certificate.fromCertificateArn(
+        this,
+        'Certificate',
+        config.certificateArn
+      );
 
-    // Export ALB Listener ARN to SSM
+      // Create HTTPS listener
+      const httpsListener = this.alb.addListener('HttpsListener', {
+        port: 443,
+        protocol: elbv2.ApplicationProtocol.HTTPS,
+        certificates: [certificate],
+        defaultAction: elbv2.ListenerAction.fixedResponse(404, {
+          contentType: 'text/plain',
+          messageBody: 'Not Found - No matching route',
+        }),
+      });
+
+      // Export HTTPS Listener ARN to SSM
+      new ssm.StringParameter(this, 'AlbHttpsListenerArnParameter', {
+        parameterName: `/${config.projectPrefix}/network/alb-https-listener-arn`,
+        stringValue: httpsListener.listenerArn,
+        description: 'Application Load Balancer HTTPS Listener ARN',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+
+      // HTTP listener redirects to HTTPS
+      this.albListener = this.alb.addListener('HttpListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultAction: elbv2.ListenerAction.redirect({
+          protocol: 'HTTPS',
+          port: '443',
+          permanent: true,
+        }),
+      });
+
+      // Use HTTPS listener as primary for backend services
+      this.albListener = httpsListener;
+    } else {
+      // Create default HTTP listener (no certificate)
+      this.albListener = this.alb.addListener('HttpListener', {
+        port: 80,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        defaultAction: elbv2.ListenerAction.fixedResponse(404, {
+          contentType: 'text/plain',
+          messageBody: 'Not Found - No matching route',
+        }),
+      });
+    }
+
+    // Export ALB Listener ARN to SSM (primary listener for backend services)
     new ssm.StringParameter(this, 'AlbListenerArnParameter', {
       parameterName: `/${config.projectPrefix}/network/alb-listener-arn`,
       stringValue: this.albListener.listenerArn,
-      description: 'Application Load Balancer HTTP Listener ARN',
+      description: 'Application Load Balancer Primary Listener ARN (HTTPS if cert provided, HTTP otherwise)',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -253,6 +299,7 @@ export class InfrastructureStack extends cdk.Stack {
       // ============================================================
       if (config.albSubdomain) {
         const albRecordName = `${config.albSubdomain}.${config.infrastructureHostedZoneDomain}`;
+        const protocol = config.certificateArn ? 'https' : 'http';
         
         const albARecord = new route53.ARecord(this, 'AlbARecord', {
           zone: hostedZone,
@@ -263,25 +310,30 @@ export class InfrastructureStack extends cdk.Stack {
           comment: `A record for ALB - points ${albRecordName} to load balancer`,
         });
 
-        // Export ALB URL to SSM
+        // Export ALB URL to SSM (with correct protocol)
         new ssm.StringParameter(this, 'AlbUrlParameter', {
           parameterName: `/${config.projectPrefix}/network/alb-url`,
-          stringValue: `http://${albRecordName}`,
+          stringValue: `${protocol}://${albRecordName}`,
           description: 'Application Load Balancer Custom URL',
           tier: ssm.ParameterTier.STANDARD,
         });
 
         // CloudFormation Output for ALB URL
         new cdk.CfnOutput(this, 'AlbUrl', {
-          value: `http://${albRecordName}`,
-          description: 'Application Load Balancer Custom URL',
+          value: `${protocol}://${albRecordName}`,
+          description: `Application Load Balancer Custom URL (${protocol.toUpperCase()})`,
           exportName: `${config.projectPrefix}-alb-url`,
         });
 
-        // Output with HTTPS placeholder (will work once certificate is added)
-        new cdk.CfnOutput(this, 'AlbUrlHttps', {
-          value: `https://${albRecordName}`,
-          description: 'Application Load Balancer HTTPS URL (requires certificate setup)',
+        // Additional HTTPS URL output when certificate is provided
+        if (config.certificateArn) {
+          new cdk.CfnOutput(this, 'AlbUrlHttps', {
+            value: `https://${albRecordName}`,
+            description: 'Application Load Balancer HTTPS URL (HTTP redirects here)',
+            exportName: `${config.projectPrefix}-alb-url-https`,
+          });
+        }
+      }
           exportName: `${config.projectPrefix}-alb-url-https`,
         });
       }

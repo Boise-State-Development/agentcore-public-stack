@@ -62,6 +62,7 @@ else
         --context vpcCidr="${CDK_VPC_CIDR}" \
         --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
         --context albSubdomain="${CDK_ALB_SUBDOMAIN}" \
+        --context certificateArn="${CDK_CERTIFICATE_ARN}" \
         --require-approval never \
         --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
 fi

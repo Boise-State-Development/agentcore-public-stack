@@ -8,6 +8,7 @@ export interface AppConfig {
   vpcCidr: string;  
   infrastructureHostedZoneDomain?: string;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
+  certificateArn?: string; // ACM certificate ARN for HTTPS on ALB
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
@@ -99,6 +100,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     vpcCidr: scope.node.tryGetContext('vpcCidr'),    
     infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
+    certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
     frontend: {
       domainName: process.env.CDK_FRONTEND_DOMAIN_NAME || scope.node.tryGetContext('frontend').domainName,
       enableRoute53: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLE_ROUTE53) ?? scope.node.tryGetContext('frontend').enableRoute53,

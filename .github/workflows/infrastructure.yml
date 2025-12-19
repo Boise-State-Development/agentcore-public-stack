@@ -45,6 +45,7 @@ env:
   CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
+  CDK_CERTIFICATE_ARN: ${{ secrets.CDK_CERTIFICATE_ARN }}
   # AWS Authentication
   AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
