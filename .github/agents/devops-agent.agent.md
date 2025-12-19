@@ -559,20 +559,6 @@ stackName: `${config.projectPrefix}-${StackName}Stack`
 
 ---
 
-## Pre-Flight Checklist (Each Phase)
-- [ ] Review lessons from previous phases
-- [ ] Verify all GitHub Secrets/Variables configured
-- [ ] Check for dependency updates and breaking changes
-- [ ] Create composite actions for repeated patterns
-- [ ] Test scripts locally before committing
-- [ ] Use explicit context flags in CDK commands
-- [ ] Implement proper error handling with meaningful messages
-- [ ] Add SSM parameters for cross-stack references
-- [ ] Test deployment in dev environment first
-- [ ] Verify stack names follow naming convention
-- [ ] Commit all lock files
----
-
 ## Key Takeaways
 
 1. **Defensive Programming**: Anticipate failures, provide detailed errors, make config explicit
