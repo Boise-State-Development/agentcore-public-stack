@@ -19,11 +19,8 @@ export class ToolUseComponent {
   /** The content block containing tool use data */
   toolUse = input.required<ContentBlock>();
 
-  /** Whether the JSON input section is expanded */
-  isInputExpanded = signal(false);
-
-  /** Whether the result section is expanded */
-  isResultExpanded = signal(true);
+  /** Whether the details section is expanded (both input and output) */
+  isDetailsExpanded = signal(false);
 
   /** Extract tool use data from the content block */
   toolUseData = computed(() => {
@@ -126,21 +123,8 @@ export class ToolUseComponent {
     return `data:image/${item.image.format};base64,${item.image.data}`;
   }
 
-  /** Toggle the input expanded state */
-  toggleInputExpanded(): void {
-    this.isInputExpanded.update((expanded) => !expanded);
+  /** Toggle the details expanded state */
+  toggleDetailsExpanded(): void {
+    this.isDetailsExpanded.update((expanded) => !expanded);
   }
-
-  /** Toggle the result expanded state */
-  toggleResultExpanded(): void {
-    this.isResultExpanded.update((expanded) => !expanded);
-  }
-
-  /** For backwards compatibility */
-  toggleExpanded(): void {
-    this.toggleInputExpanded();
-  }
-
-  /** Alias for backwards compatibility */
-  isExpanded = this.isInputExpanded;
 }

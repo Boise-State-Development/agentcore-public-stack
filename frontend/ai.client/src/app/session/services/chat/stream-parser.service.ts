@@ -3,8 +3,6 @@ import { Injectable, signal, computed, inject } from '@angular/core';
 import {
   Message,
   ContentBlock,
-  TextContentBlock,
-  ToolUseContentBlock,
   MessageStartEvent,
   ContentBlockStartEvent,
   ContentBlockDeltaEvent,

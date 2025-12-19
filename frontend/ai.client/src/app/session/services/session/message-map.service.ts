@@ -209,10 +209,13 @@ export class MessageMapService {
     // Create a map of toolUseId -> tool result for quick lookup
     const toolResultMap = new Map<string, { content: any[]; status: 'success' | 'error' }>();
 
-    // First pass: collect all tool results
+    // First pass: collect all tool results from user messages
+    // Note: Tool results are now embedded in toolUse.result, but we still check
+    // for legacy toolResult blocks for backwards compatibility
     for (const message of messages) {
       if (message.role === 'user') {
         for (const contentBlock of message.content) {
+          // Check for legacy toolResult blocks (deprecated format)
           if (contentBlock.type === 'toolResult' && contentBlock.toolResult) {
             const toolResult = contentBlock.toolResult as any;
             const toolUseId = toolResult.toolUseId;

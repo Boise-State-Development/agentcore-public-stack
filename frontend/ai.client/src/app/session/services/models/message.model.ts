@@ -44,7 +44,7 @@ export interface ContentBlock {
   text?: string | null;
   /** Tool use information (if type is toolUse) - now includes result */
   toolUse?: ToolUseData | Record<string, unknown> | null;
-  /** Tool execution result (if type is toolResult) - deprecated, use toolUse.result instead */
+  /** Tool execution result (if type is toolResult) - deprecated, use toolUse.result instead. Kept for backwards compatibility with API responses. */
   toolResult?: Record<string, unknown> | null;
   /** Image content (if type is image) */
   image?: Record<string, unknown> | null;
@@ -87,36 +87,6 @@ export function isToolUseContentBlock(block: ContentBlock): block is ContentBloc
   return (block.type === 'toolUse' || block.type === 'tool_use') && block.toolUse !== null && block.toolUse !== undefined;
 }
 
-/**
- * Type guard to check if a content block is a tool result block
- */
-export function isToolResultContentBlock(block: ContentBlock): block is ContentBlock & { type: 'toolResult' | 'tool_result'; toolResult: Record<string, unknown> } {
-  return (block.type === 'toolResult' || block.type === 'tool_result') && block.toolResult !== null && block.toolResult !== undefined;
-}
-
-// ============================================================================
-// Legacy Type Aliases (for backward compatibility with streaming)
-// ============================================================================
-
-/**
- * @deprecated Use ContentBlock instead. This is kept for backward compatibility with streaming code.
- */
-export type TextContentBlock = ContentBlock & { type: 'text'; text: string };
-
-/**
- * @deprecated Use ContentBlock instead. This is kept for backward compatibility with streaming code.
- */
-export type ToolUseContentBlock = ContentBlock & { type: 'toolUse' | 'tool_use'; toolUse: Record<string, unknown> };
-
-/**
- * @deprecated Use ContentBlock instead. This is kept for backward compatibility with streaming code.
- */
-export type ToolResultContentBlock = ContentBlock & { type: 'toolResult' | 'tool_result'; toolResult: Record<string, unknown> };
-
-/**
- * @deprecated Use ContentBlock instead. This is kept for backward compatibility.
- */
-export type ContentBlockType = 'text' | 'tool_use' | 'tool_result' | 'toolUse' | 'toolResult';
 
 // ============================================================================
 // SSE Event Types
@@ -138,7 +108,7 @@ export interface MessageStartEvent {
 export interface ContentBlockStartEvent {
   contentBlockIndex: number;
   /** Type is optional - defaults to 'text' if not specified */
-  type?: ContentBlockType;
+  type?: 'text' | 'tool_use' | 'tool_result' | 'toolUse' | 'toolResult';
   toolUse?: {
     toolUseId: string;
     name: string;
@@ -156,7 +126,7 @@ export interface ContentBlockStartEvent {
 export interface ContentBlockDeltaEvent {
   contentBlockIndex: number;
   /** Type is optional - can be inferred from text/input fields */
-  type?: ContentBlockType;
+  type?: 'text' | 'tool_use' | 'tool_result' | 'toolUse' | 'toolResult';
   text?: string;
   input?: string;
 }
