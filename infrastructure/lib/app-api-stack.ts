@@ -557,12 +557,13 @@ export class AppApiStack extends cdk.Stack {
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 
-    // Add listener rule for App API (root path)
+    // Add listener rule for App API (all traffic)
+    // Since this is the only target, route all HTTPS traffic to this target group
     albListener.addTargetGroups('AppApiTargetGroupAttachment', {
       targetGroups: [targetGroup],
       priority: 1,
       conditions: [
-        elbv2.ListenerCondition.pathPatterns(['/api/*', '/health']),
+        elbv2.ListenerCondition.pathPatterns(['/*']),
       ],
     });
 
