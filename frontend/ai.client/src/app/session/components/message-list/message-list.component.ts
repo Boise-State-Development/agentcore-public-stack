@@ -4,10 +4,11 @@ import { Message } from '../../services/models/message.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
 import { MessageMetadataBadgesComponent } from './components/message-metadata-badges.component';
+import { ThinkingDotsComponent } from '../../../components/thinking-dots.component';
 
 @Component({
   selector: 'app-message-list',
-  imports: [UserMessageComponent, AssistantMessageComponent, MessageMetadataBadgesComponent],
+  imports: [UserMessageComponent, AssistantMessageComponent, MessageMetadataBadgesComponent, ThinkingDotsComponent],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
 })
@@ -21,6 +22,7 @@ export class MessageListComponent implements OnDestroy {
   private readonly RESIZE_DEBOUNCE_MS = 150;
 
   messages = input.required<Message[]>();
+  isChatLoading = input<boolean>(false);
 
   // Calculate the spacer height dynamically
   // This creates space at the bottom so user messages can scroll to the top

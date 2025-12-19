@@ -71,7 +71,7 @@
     <!-- Loading State -->
     @if (isLoading()) {
       <div class="flex items-center justify-center py-12">
-        <app-loading />
+        <app-thinking-dots [label]="'Loading models...'" />
       </div>
     }
 

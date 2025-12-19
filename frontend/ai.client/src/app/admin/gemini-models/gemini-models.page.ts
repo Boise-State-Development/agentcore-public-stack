@@ -3,13 +3,13 @@ import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
 import { GeminiModelsService } from './services/gemini-models.service';
-import { LoadingComponent } from '../../components/loading.component';
 import { GeminiModelSummary } from './models/gemini-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
+import { ThinkingDotsComponent } from '../../components/thinking-dots.component';
 
 @Component({
   selector: 'app-gemini-models-page',
-  imports: [FormsModule, LoadingComponent, DecimalPipe],
+  imports: [FormsModule, ThinkingDotsComponent, DecimalPipe],
   templateUrl: './gemini-models.page.html',
   styleUrl: './gemini-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

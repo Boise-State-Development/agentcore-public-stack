@@ -2,13 +2,13 @@ import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@a
 import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { OpenAIModelsService } from './services/openai-models.service';
-import { LoadingComponent } from '../../components/loading.component';
 import { OpenAIModelSummary } from './models/openai-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
+import { ThinkingDotsComponent } from '../../components/thinking-dots.component';
 
 @Component({
   selector: 'app-openai-models-page',
-  imports: [FormsModule, LoadingComponent],
+  imports: [FormsModule, ThinkingDotsComponent],
   templateUrl: './openai-models.page.html',
   styleUrl: './openai-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,

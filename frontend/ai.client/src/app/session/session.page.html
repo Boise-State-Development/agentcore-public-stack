@@ -21,17 +21,10 @@
           </details> -->
           <!-- Your component content -->
           <div>
-              <app-message-list [messages]="messages()" />
+              <app-message-list [messages]="messages()" [isChatLoading]="isChatLoading()" />
           </div>
 
       }
-    
-    <!-- Loading indicator -->
-    @if (isChatLoading()) {
-        <div class="flex justify-start items-center py-8">
-            Loading animation goes here...
-        </div>
-    }
 
     @if(hasMessages()) {
         <!-- Footer (fixed, content scrolls underneath) -->

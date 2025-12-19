@@ -2,13 +2,13 @@ import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@a
 import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { BedrockModelsService } from './services/bedrock-models.service';
-import { LoadingComponent } from '../../components/loading.component';
 import { FoundationModelSummary } from './models/bedrock-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
+import { ThinkingDotsComponent } from '../../components/thinking-dots.component';
 
 @Component({
   selector: 'app-bedrock-models-page',
-  imports: [FormsModule, LoadingComponent],
+  imports: [FormsModule, ThinkingDotsComponent],
   templateUrl: './bedrock-models.page.html',
   styleUrl: './bedrock-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
