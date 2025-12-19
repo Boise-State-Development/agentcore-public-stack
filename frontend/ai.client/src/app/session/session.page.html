@@ -5,9 +5,7 @@
           <div class="w-full max-w-3xl animate-fade-in">
               <!-- <img src="/img/logo-light.png" alt="Logo" class="w-35"> -->
             <div class="mb-8 text-center">
-              <h1 class="text-4xl/tight font-semibold text-gray-900 dark:text-gray-100">
-                How can I help you today?
-              </h1>
+              <app-animated-text [text]="greetingMessage()" [speed]="50" />
             </div>
             <app-chat-input
               (messageSubmitted)="onMessageSubmitted($event)"

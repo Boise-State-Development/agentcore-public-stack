@@ -8,16 +8,29 @@ import { Message } from './services/models/message.model';
 import { ChatInputComponent } from './components/chat-input/chat-input.component';
 import { SessionService } from './services/session/session.service';
 import { ChatStateService } from './services/chat/chat-state.service';
+import { AnimatedTextComponent } from '../components/animated-text';
 
 @Component({
   selector: 'app-session-page',
-  imports: [ChatInputComponent, MessageListComponent ],
+  imports: [ChatInputComponent, MessageListComponent, AnimatedTextComponent],
   templateUrl: './session.page.html',
   styleUrl: './session.page.css',
 })
 export class ConversationPage implements OnDestroy {
   messages: Signal<Message[]> = signal([]);
   sessionId = signal<string | null>(null);
+
+  // Greeting messages to randomly display
+  private greetingMessages = [
+    'How can I help you today?',
+    'What would you like to know?',
+    'Ready to assist you!',
+    'What can I do for you?',
+    'Let\'s get started!',
+  ];
+
+  // Select a random greeting message on component initialization
+  greetingMessage = signal(this.getRandomGreeting());
 
   private route = inject(ActivatedRoute);
   private sessionService = inject(SessionService);
@@ -76,5 +89,10 @@ export class ConversationPage implements OnDestroy {
   onFileAttached(file: File) {
     console.log('File attached:', file);
     // Handle file attachment logic here
+  }
+
+  private getRandomGreeting(): string {
+    const randomIndex = Math.floor(Math.random() * this.greetingMessages.length);
+    return this.greetingMessages[randomIndex];
   }
 }
