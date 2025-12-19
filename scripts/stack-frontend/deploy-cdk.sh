@@ -124,15 +124,6 @@ DEPLOY_EXIT_CODE=$?
 if [ ${DEPLOY_EXIT_CODE} -eq 0 ]; then
     log_info "FrontendStack deployed successfully!"
     
-    # Display stack outputs
-    log_info "Retrieving stack outputs..."
-    cdk deploy FrontendStack --outputs-file "${CDK_DIR}/frontend-outputs.json" || true
-    
-    if [ -f "${CDK_DIR}/frontend-outputs.json" ]; then
-        log_info "Stack outputs saved to: frontend-outputs.json"
-        cat "${CDK_DIR}/frontend-outputs.json"
-    fi
-    
     # Retrieve key outputs from CloudFormation
     log_info "Key resources deployed:"
     aws cloudformation describe-stacks \
