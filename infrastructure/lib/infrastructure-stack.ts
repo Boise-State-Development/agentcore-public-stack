@@ -169,7 +169,7 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // ============================================================
-    // HTTPS Listener (if certificate provided)
+    // ALB Listeners (HTTP and optional HTTPS)
     // ============================================================
     if (config.certificateArn) {
       // Import certificate from ARN
@@ -179,8 +179,8 @@ export class InfrastructureStack extends cdk.Stack {
         config.certificateArn
       );
 
-      // Create HTTPS listener
-      const httpsListener = this.alb.addListener('HttpsListener', {
+      // Create HTTPS listener - this is where backend services attach
+      this.albListener = this.alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [certificate],
@@ -193,13 +193,13 @@ export class InfrastructureStack extends cdk.Stack {
       // Export HTTPS Listener ARN to SSM
       new ssm.StringParameter(this, 'AlbHttpsListenerArnParameter', {
         parameterName: `/${config.projectPrefix}/network/alb-https-listener-arn`,
-        stringValue: httpsListener.listenerArn,
+        stringValue: this.albListener.listenerArn,
         description: 'Application Load Balancer HTTPS Listener ARN',
         tier: ssm.ParameterTier.STANDARD,
       });
 
-      // HTTP listener redirects to HTTPS
-      this.albListener = this.alb.addListener('HttpListener', {
+      // HTTP listener only redirects to HTTPS (no target groups here)
+      const httpRedirectListener = this.alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
         defaultAction: elbv2.ListenerAction.redirect({
@@ -208,9 +208,6 @@ export class InfrastructureStack extends cdk.Stack {
           permanent: true,
         }),
       });
-
-      // Use HTTPS listener as primary for backend services
-      this.albListener = httpsListener;
     } else {
       // Create default HTTP listener (no certificate)
       this.albListener = this.alb.addListener('HttpListener', {
