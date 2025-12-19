@@ -42,6 +42,7 @@ env:
   CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
   CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
   CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
+  CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
   # AWS Authentication

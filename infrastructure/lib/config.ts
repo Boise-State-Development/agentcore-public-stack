@@ -7,6 +7,7 @@ export interface AppConfig {
   awsRegion: string;
   vpcCidr: string;  
   infrastructureHostedZoneDomain?: string;
+  albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
@@ -97,6 +98,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     awsRegion,
     vpcCidr: scope.node.tryGetContext('vpcCidr'),    
     infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
+    albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
     frontend: {
       domainName: process.env.CDK_FRONTEND_DOMAIN_NAME || scope.node.tryGetContext('frontend').domainName,
       enableRoute53: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLE_ROUTE53) ?? scope.node.tryGetContext('frontend').enableRoute53,

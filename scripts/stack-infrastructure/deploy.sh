@@ -61,6 +61,7 @@ else
         --context awsRegion="${CDK_AWS_REGION}" \
         --context vpcCidr="${CDK_VPC_CIDR}" \
         --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
+        --context albSubdomain="${CDK_ALB_SUBDOMAIN}" \
         --require-approval never \
         --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
 fi

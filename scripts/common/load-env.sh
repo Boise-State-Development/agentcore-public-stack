@@ -93,6 +93,10 @@ build_cdk_context_params() {
         context_params="${context_params} --context infrastructureHostedZoneDomain=\"${CDK_HOSTED_ZONE_DOMAIN}\""
     fi
     
+    if [ -n "${CDK_ALB_SUBDOMAIN:-}" ]; then
+        context_params="${context_params} --context albSubdomain=\"${CDK_ALB_SUBDOMAIN}\""
+    fi
+    
     # App API optional parameters
     if [ -n "${CDK_APP_API_ENABLED:-}" ]; then
         context_params="${context_params} --context appApi.enabled=\"${CDK_APP_API_ENABLED}\""
@@ -215,6 +219,7 @@ export CDK_AWS_REGION="${CDK_AWS_REGION:-$(get_json_value "awsRegion" "${CONTEXT
 export CDK_PROJECT_PREFIX="${CDK_PROJECT_PREFIX:-$(get_json_value "projectPrefix" "${CONTEXT_FILE}")}"
 export CDK_VPC_CIDR="${CDK_VPC_CIDR:-$(get_json_value "vpcCidr" "${CONTEXT_FILE}")}"
 export CDK_HOSTED_ZONE_DOMAIN="${CDK_HOSTED_ZONE_DOMAIN:-$(get_json_value "infrastructureHostedZoneDomain" "${CONTEXT_FILE}")}"
+export CDK_ALB_SUBDOMAIN="${CDK_ALB_SUBDOMAIN:-$(get_json_value "albSubdomain" "${CONTEXT_FILE}")}"
 
 # AWS Account - try multiple sources (env vars take precedence)
 CDK_CONTEXT_ACCOUNT=$(get_json_value "awsAccount" "${CONTEXT_FILE}")
@@ -266,6 +271,10 @@ log_info "  VPC CIDR:       ${CDK_VPC_CIDR}"
 
 if [ -n "${CDK_HOSTED_ZONE_DOMAIN:-}" ]; then
     log_info "  Hosted Zone:    ${CDK_HOSTED_ZONE_DOMAIN}"
+fi
+
+if [ -n "${CDK_ALB_SUBDOMAIN:-}" ]; then
+    log_info "  ALB Subdomain:  ${CDK_ALB_SUBDOMAIN}.${CDK_HOSTED_ZONE_DOMAIN}"
 fi
 
 # Check AWS credentials

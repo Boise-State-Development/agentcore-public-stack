@@ -3,6 +3,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, applyStandardTags } from './config';
@@ -246,6 +247,44 @@ export class InfrastructureStack extends cdk.Stack {
         description: 'Route53 Hosted Zone Name Servers',
         exportName: `${config.projectPrefix}-hosted-zone-ns`,
       });
+
+      // ============================================================
+      // Route53 A Record for ALB (Optional)
+      // ============================================================
+      if (config.albSubdomain) {
+        const albRecordName = `${config.albSubdomain}.${config.infrastructureHostedZoneDomain}`;
+        
+        const albARecord = new route53.ARecord(this, 'AlbARecord', {
+          zone: hostedZone,
+          recordName: config.albSubdomain,
+          target: route53.RecordTarget.fromAlias(
+            new route53Targets.LoadBalancerTarget(this.alb)
+          ),
+          comment: `A record for ALB - points ${albRecordName} to load balancer`,
+        });
+
+        // Export ALB URL to SSM
+        new ssm.StringParameter(this, 'AlbUrlParameter', {
+          parameterName: `/${config.projectPrefix}/network/alb-url`,
+          stringValue: `http://${albRecordName}`,
+          description: 'Application Load Balancer Custom URL',
+          tier: ssm.ParameterTier.STANDARD,
+        });
+
+        // CloudFormation Output for ALB URL
+        new cdk.CfnOutput(this, 'AlbUrl', {
+          value: `http://${albRecordName}`,
+          description: 'Application Load Balancer Custom URL',
+          exportName: `${config.projectPrefix}-alb-url`,
+        });
+
+        // Output with HTTPS placeholder (will work once certificate is added)
+        new cdk.CfnOutput(this, 'AlbUrlHttps', {
+          value: `https://${albRecordName}`,
+          description: 'Application Load Balancer HTTPS URL (requires certificate setup)',
+          exportName: `${config.projectPrefix}-alb-url-https`,
+        });
+      }
     }
 
     // ============================================================

@@ -43,6 +43,7 @@ cdk synth InfrastructureStack \
     --context awsRegion="${CDK_AWS_REGION}" \
     --context vpcCidr="${CDK_VPC_CIDR}" \
     --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
+    --context albSubdomain="${CDK_ALB_SUBDOMAIN}" \
     --output "${PROJECT_ROOT}/infrastructure/cdk.out"
 
 log_success "Infrastructure Stack CloudFormation template synthesized successfully"
