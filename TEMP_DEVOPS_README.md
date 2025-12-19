@@ -95,8 +95,176 @@ Follow these rules when adding or modifying stacks to ensure stability and maint
 * **Workflow**: Add/update `.github/workflows/<stack>.yml` so it only calls scripts (no inline logic).
 * **Context discipline**: Keep context flags consistent between `synth.sh` and `deploy.sh` for the same stack.
 
-### F. Repo-Specific Gotchas (Read Before You Lose Time)
+### F. Adding New Configuration Properties
+
+When adding a new configuration value that flows from GitHub Actions through to CDK stacks, follow this 7-step pattern:
+
+#### Step 1: Add to TypeScript Config Interface
+
+**File**: `infrastructure/lib/config.ts`
+
+Add the property to `AppConfig` (or relevant sub-interface):
+
+```typescript
+export interface AppConfig {
+  // ... existing properties
+  certificateArn?: string; // ACM certificate ARN for HTTPS on ALB
+}
+```
+
+#### Step 2: Load from Environment/Context
+
+**File**: `infrastructure/lib/config.ts` (in `loadConfig` function)
+
+Add environment variable and context fallback:
+
+```typescript
+const config: AppConfig = {
+  // ... existing properties
+  certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
+};
+```
+
+**Naming Convention**: Use `CDK_` prefix for CDK-specific config, `ENV_` for runtime container environment variables.
+
+#### Step 3: Use in CDK Stack
+
+**File**: `infrastructure/lib/<stack-name>-stack.ts`
+
+Access via the config object:
+
+```typescript
+if (config.certificateArn) {
+  const certificate = acm.Certificate.fromCertificateArn(
+    this,
+    'Certificate',
+    config.certificateArn
+  );
+  // Use certificate...
+}
+```
+
+#### Step 4: Add to load-env.sh
+
+**File**: `scripts/common/load-env.sh`
+
+Add three things:
+
+**a) Export the variable** (priority: env var > context file):
+```bash
+export CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-$(get_json_value "certificateArn" "${CONTEXT_FILE}")}"
+```
+
+**b) Add to context parameters function** (if optional):
+```bash
+if [ -n "${CDK_CERTIFICATE_ARN:-}" ]; then
+    context_params="${context_params} --context certificateArn=\"${CDK_CERTIFICATE_ARN}\""
+fi
+```
+
+**c) Display in config output** (optional):
+```bash
+if [ -n "${CDK_CERTIFICATE_ARN:-}" ]; then
+    log_info "  Certificate:    ${CDK_CERTIFICATE_ARN:0:50}..."
+fi
+```
+
+#### Step 5: Update Stack Scripts
+
+**Files**: `scripts/stack-<name>/synth.sh` and `scripts/stack-<name>/deploy.sh`
+
+Add context parameter to both scripts (must match exactly):
+
+```bash
+cdk synth StackName \
+    --context certificateArn="${CDK_CERTIFICATE_ARN}" \
+    # ... other context params
+```
+
+```bash
+cdk deploy StackName \
+    --context certificateArn="${CDK_CERTIFICATE_ARN}" \
+    # ... other context params
+```
+
+**Critical**: Context parameters must be **identical** in both `synth.sh` and `deploy.sh`.
+
+#### Step 6: Add to GitHub Workflow
+
+**File**: `.github/workflows/<stack>.yml`
+
+Add to the `env:` section at workflow level:
+
+- **Secrets** (sensitive data): Use `secrets.`
+- **Variables** (non-sensitive config): Use `vars.`
+
+```yaml
+env:
+  # CDK Configuration - from GitHub Variables
+  CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
+  
+  # CDK Secrets - from GitHub Secrets
+  CDK_CERTIFICATE_ARN: ${{ secrets.CDK_CERTIFICATE_ARN }}
+```
+
+**When to use Secrets vs Variables:**
+- **Secrets**: API keys, passwords, certificate ARNs, AWS credentials
+- **Variables**: Project names, regions, non-sensitive config
+
+#### Step 7: Set in GitHub Repository
+
+**For Variables** (Settings → Secrets and variables → Actions → Variables):
+```
+CDK_ALB_SUBDOMAIN = api
+```
+
+**For Secrets** (Settings → Secrets and variables → Actions → Secrets):
+```
+CDK_CERTIFICATE_ARN = arn:aws:acm:us-east-1:123456789012:certificate/...
+```
+
+---
+
+### Example: Certificate ARN Flow
+
+Here's how `CDK_CERTIFICATE_ARN` flows through the system:
+
+```
+GitHub Secret (CDK_CERTIFICATE_ARN)
+        ↓
+.github/workflows/infrastructure.yml (env section)
+        ↓
+scripts/common/load-env.sh (export CDK_CERTIFICATE_ARN)
+        ↓
+scripts/stack-infrastructure/synth.sh (--context certificateArn)
+        ↓
+infrastructure/lib/config.ts (loadConfig function)
+        ↓
+infrastructure/lib/infrastructure-stack.ts (config.certificateArn)
+        ↓
+AWS CloudFormation Template (Certificate resource)
+```
+
+### Checklist for New Properties
+
+- [ ] Add to `config.ts` interface
+- [ ] Load from env/context in `config.ts` `loadConfig()`
+- [ ] Use in CDK stack TypeScript file
+- [ ] Export in `load-env.sh`
+- [ ] Add to context params in `load-env.sh` (if applicable)
+- [ ] Update `synth.sh` with context flag
+- [ ] Update `deploy.sh` with context flag (must match synth.sh)
+- [ ] Add to workflow YAML `env:` section
+- [ ] Set GitHub Secret or Variable
+- [ ] Test locally with environment variable
+- [ ] Test in CI/CD pipeline
+
+---
+
+### G. Repo-Specific Gotchas (Read Before You Lose Time)
 
 * **Token-safe imports**: Use `Vpc.fromVpcAttributes()` (not `fromLookup()`) when importing VPC details that come from SSM tokens.
 * **AgentCore CLI**: Use `aws bedrock-agentcore-control ...` for Gateway control-plane calls; gateway target lists are under `.items[]`.
 * **SSM overwrite**: `aws ssm put-parameter --overwrite` cannot be used with `--tags` for an existing parameter.
+* **Context parameter mismatch**: If `synth.sh` and `deploy.sh` have different context parameters, deployment may use wrong values or fail validation.
+* **Empty context values**: CDK context doesn't support `--context key=""` for empty strings; omit the flag entirely for optional parameters.
