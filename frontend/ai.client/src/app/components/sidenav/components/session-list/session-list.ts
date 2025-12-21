@@ -1,11 +1,14 @@
 import { Component, inject, ChangeDetectionStrategy, computed } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroChatBubbleLeftRight } from '@ng-icons/heroicons/outline';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SessionMetadata } from '../../../../session/services/models/session-metadata.model';
 
 @Component({
   selector: 'app-session-list',
-  imports: [RouterLink, RouterLinkActive],
+  imports: [RouterLink, RouterLinkActive, NgIcon],
+  providers: [provideIcons({ heroChatBubbleLeftRight })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
