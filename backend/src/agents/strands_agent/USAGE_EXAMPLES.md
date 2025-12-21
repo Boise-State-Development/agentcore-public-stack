@@ -261,7 +261,7 @@ import os
 from agents.strands_agent import StrandsAgent
 
 # Set environment for cloud mode
-os.environ['MEMORY_ID'] = 'your-memory-id'
+os.environ['AGENTCORE_MEMORY_ID'] = 'your-memory-id'
 os.environ['AWS_REGION'] = 'us-west-2'
 
 # Agent will automatically use AgentCore Memory
@@ -281,7 +281,7 @@ async for event in agent.stream_async("What were we discussing last time?"):
 ```python
 from agents.strands_agent import StrandsAgent
 
-# No MEMORY_ID set - automatically uses file-based storage
+# No AGENTCORE_MEMORY_ID set - automatically uses file-based storage
 agent = StrandsAgent(
     session_id="local-session",
     enabled_tools=["calculator"]

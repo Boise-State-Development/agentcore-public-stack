@@ -37,7 +37,7 @@ class SessionFactory:
         Returns:
             Session manager instance (TurnBasedSessionManager or LocalSessionBuffer)
         """
-        memory_id = os.environ.get('MEMORY_ID')
+        memory_id = os.environ.get('AGENTCORE_MEMORY_ID')
         aws_region = os.environ.get('AWS_REGION', 'us-west-2')
 
         if memory_id and AGENTCORE_MEMORY_AVAILABLE:
@@ -151,4 +151,4 @@ class SessionFactory:
         Returns:
             bool: True if AgentCore Memory is available and configured
         """
-        return bool(os.environ.get('MEMORY_ID') and AGENTCORE_MEMORY_AVAILABLE)
+        return bool(os.environ.get('AGENTCORE_MEMORY_ID') and AGENTCORE_MEMORY_AVAILABLE)

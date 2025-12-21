@@ -219,11 +219,11 @@ async def get_messages_from_cloud(
     Returns:
         MessagesListResponse with paginated conversation history
     """
-    memory_id = os.environ.get('MEMORY_ID')
+    memory_id = os.environ.get('AGENTCORE_MEMORY_ID')
     aws_region = os.environ.get('AWS_REGION', 'us-west-2')
 
     if not memory_id:
-        raise ValueError("MEMORY_ID environment variable not set")
+        raise ValueError("AGENTCORE_MEMORY_ID environment variable not set")
 
     # Create AgentCore Memory config
     config = AgentCoreMemoryConfig(
@@ -426,9 +426,9 @@ async def get_messages(
     Returns:
         MessagesListResponse with paginated conversation history
     """
-    memory_id = os.environ.get('MEMORY_ID')
+    memory_id = os.environ.get('AGENTCORE_MEMORY_ID')
 
-    # Use cloud if MEMORY_ID is set and library is available
+    # Use cloud if AGENTCORE_MEMORY_ID is set and library is available
     if memory_id and AGENTCORE_MEMORY_AVAILABLE:
         logger.info(f"Using AgentCore Memory for session {session_id}")
         return await get_messages_from_cloud(session_id, user_id, limit, next_token)

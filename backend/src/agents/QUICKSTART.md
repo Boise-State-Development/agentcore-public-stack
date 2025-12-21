@@ -137,7 +137,7 @@ agent = StrandsAgent(
 
 ### Cloud Mode (AgentCore Memory)
 ```bash
-export MEMORY_ID="your-memory-id"
+export AGENTCORE_MEMORY_ID="your-memory-id"
 export AWS_REGION="us-west-2"
 ```
 

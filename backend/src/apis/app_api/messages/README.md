@@ -105,12 +105,12 @@ curl -X GET "http://localhost:8000/sessions/your-session-id/messages?limit=20" \
 
 The service automatically selects the appropriate storage backend:
 
-1. **AgentCore Memory (Cloud)**: When `MEMORY_ID` environment variable is set
+1. **AgentCore Memory (Cloud)**: When `AGENTCORE_MEMORY_ID` environment variable is set
    - Uses AWS Bedrock AgentCore Memory service
    - Persistent, multi-session storage
    - Supports user preferences and facts across sessions
 
-2. **Local File Storage (Development)**: When `MEMORY_ID` is not set
+2. **Local File Storage (Development)**: When `AGENTCORE_MEMORY_ID` is not set
    - Uses FileSessionManager with local directory structure
    - Stored in `backend/src/sessions/` directory
    - Structure: `sessions/session_{session_id}/agents/agent_default/messages/message_N.json`
