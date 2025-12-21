@@ -218,6 +218,20 @@ export class AppApiStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // GSI4: UserOverrideIndex - Query active overrides by user, sorted by expiry
+    userQuotasTable.addGlobalSecondaryIndex({
+      indexName: 'UserOverrideIndex',
+      partitionKey: {
+        name: 'GSI4PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI4SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // QuotaEvents Table
     const quotaEventsTable = new dynamodb.Table(this, 'QuotaEventsTable', {
       tableName: getResourceName(config, 'quota-events'),

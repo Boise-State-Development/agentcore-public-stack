@@ -1,0 +1,217 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8 flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Quota Events</h1>
+        <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+          Monitor warnings, blocks, resets, and override applications
+        </p>
+      </div>
+      @if (events().length > 0) {
+        <button
+          (click)="exportToCSV()"
+          class="inline-flex items-center gap-2 rounded-sm bg-green-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-green-700 focus:outline-hidden focus:ring-3 focus:ring-green-500/50 dark:bg-green-500 dark:hover:bg-green-600"
+        >
+          <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Export CSV
+        </button>
+      }
+    </div>
+
+    <!-- Error Display -->
+    @if (error()) {
+      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <p class="text-sm/6 text-red-800 dark:text-red-300">{{ error() }}</p>
+      </div>
+    }
+
+    <!-- Filters Section -->
+    <div class="mb-6 rounded-sm border border-gray-200 bg-gray-50 p-6 dark:border-gray-700 dark:bg-gray-800">
+      <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Filters</h2>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <!-- User ID Filter -->
+        <div>
+          <label for="userId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            User ID
+          </label>
+          <input
+            type="text"
+            id="userId"
+            [(ngModel)]="userIdFilter"
+            placeholder="Filter by user..."
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+
+        <!-- Tier Filter -->
+        <div>
+          <label for="tier" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Tier
+          </label>
+          <select
+            id="tier"
+            [(ngModel)]="tierIdFilter"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Tiers</option>
+            @for (tier of tiers(); track tier.tierId) {
+              <option [value]="tier.tierId">{{ tier.tierName }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Event Type Filter -->
+        <div>
+          <label for="eventType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Event Type
+          </label>
+          <select
+            id="eventType"
+            [(ngModel)]="eventTypeFilter"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">All Types</option>
+            @for (type of eventTypes; track type.value) {
+              <option [value]="type.value">{{ type.label }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Limit Filter -->
+        <div>
+          <label for="limit" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Limit
+          </label>
+          <select
+            id="limit"
+            [(ngModel)]="limitFilter"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+          >
+            <option [value]="25">25 events</option>
+            <option [value]="50">50 events</option>
+            <option [value]="100">100 events</option>
+            <option [value]="250">250 events</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Filter Actions -->
+      <div class="mt-4 flex gap-3">
+        <button
+          (click)="loadEvents()"
+          [disabled]="loading()"
+          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          @if (loading()) {
+            <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Loading...
+          } @else {
+            Apply Filters
+          }
+        </button>
+        @if (hasActiveFilters()) {
+          <button
+            (click)="resetFilters()"
+            class="rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Reset Filters
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Results Header -->
+    <div class="mb-4 flex items-center justify-between">
+      <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+        Showing {{ events().length }} event{{ events().length !== 1 ? 's' : '' }}
+      </p>
+    </div>
+
+    <!-- Events List -->
+    @if (loading()) {
+      <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+        <p class="text-base/7 text-gray-500 dark:text-gray-400">Loading events...</p>
+      </div>
+    } @else if (events().length === 0) {
+      <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+        <p class="text-base/7 text-gray-500 dark:text-gray-400">
+          No events found matching the current filters.
+        </p>
+      </div>
+    } @else {
+      <div class="space-y-3">
+        @for (event of events(); track event.eventId) {
+          <div class="rounded-sm border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <!-- Event Header -->
+                <div class="flex items-center gap-3">
+                  <span [class]="'inline-flex items-center rounded-sm px-2 py-1 text-xs/5 font-medium ' + getEventTypeBadgeClasses(event.eventType)">
+                    {{ event.eventType }}
+                  </span>
+                  <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                    User: {{ event.userId }}
+                  </span>
+                  <span class="text-sm/6 text-gray-600 dark:text-gray-400">
+                    Tier: {{ getTierName(event.tierId) }}
+                  </span>
+                </div>
+
+                <!-- Event Details -->
+                <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">Usage</p>
+                    <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {{ formatCurrency(event.currentUsage) }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">Limit</p>
+                    <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {{ formatCurrency(event.quotaLimit) }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">Percentage</p>
+                    <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {{ event.percentageUsed | number:'1.1-1' }}%
+                    </p>
+                  </div>
+                </div>
+
+                <!-- Metadata (if available) -->
+                @if (event.metadata && Object.keys(event.metadata).length > 0) {
+                  <div class="mt-2">
+                    <details class="text-xs/5">
+                      <summary class="cursor-pointer text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200">
+                        View metadata
+                      </summary>
+                      <pre class="mt-2 overflow-x-auto rounded-xs bg-gray-50 p-2 text-xs/5 text-gray-900 dark:bg-gray-900 dark:text-gray-100">{{ event.metadata | json }}</pre>
+                    </details>
+                  </div>
+                }
+              </div>
+
+              <!-- Timestamp -->
+              <div class="ml-4 shrink-0 text-right">
+                <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                  {{ event.timestamp | date:'short' }}
+                </p>
+                <p class="mt-1 font-mono text-xs/5 text-gray-500 dark:text-gray-500">
+                  {{ event.eventId.substring(0, 8) }}...
+                </p>
+              </div>
+            </div>
+          </div>
+        }
+      </div>
+    }
+  </div>
+</div>

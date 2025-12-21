@@ -1,0 +1,241 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Quota Inspector</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        Debug and inspect quota resolution for individual users
+      </p>
+    </div>
+
+    <!-- Search Section -->
+    <div class="mb-6 rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+      <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Search User</h2>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label for="userId" class="sr-only">User ID</label>
+          <input
+            type="text"
+            id="userId"
+            [(ngModel)]="userIdInput"
+            (keyup.enter)="searchUser()"
+            placeholder="Enter user ID or email..."
+            class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+        <button
+          (click)="searchUser()"
+          [disabled]="isLoading() || !userIdInput()"
+          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          @if (isLoading()) {
+            <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Searching...
+          } @else {
+            <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            Search
+          }
+        </button>
+        @if (quotaInfo()) {
+          <button
+            (click)="clearSearch()"
+            class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+          >
+            Clear
+          </button>
+        }
+      </div>
+    </div>
+
+    <!-- Error Display -->
+    @if (error()) {
+      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <p class="text-sm/6 text-red-800 dark:text-red-300">{{ error() }}</p>
+      </div>
+    }
+
+    <!-- Quota Info Display -->
+    @if (quotaInfo(); as info) {
+      <div class="space-y-6">
+        <!-- User Info -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">User Information</h2>
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">User ID</h4>
+              <p class="mt-1 font-mono text-sm/6 text-gray-900 dark:text-white">{{ info.userId }}</p>
+            </div>
+            <div>
+              <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Email</h4>
+              <p class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ info.email || 'N/A' }}</p>
+            </div>
+            @if (info.roles.length > 0) {
+              <div class="md:col-span-2">
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Roles</h4>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  @for (role of info.roles; track role) {
+                    <span class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 font-medium text-purple-800 dark:bg-purple-900/50 dark:text-purple-300">
+                      {{ role }}
+                    </span>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+
+        <!-- Quota Resolution -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Quota Resolution</h2>
+
+          @if (info.tier) {
+            <div class="space-y-4">
+              <!-- Matched By -->
+              <div class="rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+                <p class="text-sm/6 font-medium text-blue-900 dark:text-blue-200">
+                  Resolved via: <span class="font-bold">{{ getMatchedByDisplay(info.matchedBy) }}</span>
+                </p>
+              </div>
+
+              <!-- Tier Info -->
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Tier Name</h4>
+                  <p class="mt-1 text-base/7 font-semibold text-gray-900 dark:text-white">{{ info.tier.tierName }}</p>
+                </div>
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly Limit</h4>
+                  <p class="mt-1 text-base/7 font-semibold text-gray-900 dark:text-white">
+                    {{ formatCurrency(info.tier.monthlyCostLimit) }}
+                  </p>
+                </div>
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Soft Limit</h4>
+                  <p class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ info.tier.softLimitPercentage }}%</p>
+                </div>
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Action on Limit</h4>
+                  <p class="mt-1">
+                    @if (info.tier.actionOnLimit === 'block') {
+                      <span class="inline-flex items-center rounded-sm bg-red-100 px-2 py-1 text-xs/5 font-medium text-red-800 dark:bg-red-900/50 dark:text-red-300">
+                        Block Requests
+                      </span>
+                    } @else {
+                      <span class="inline-flex items-center rounded-sm bg-yellow-100 px-2 py-1 text-xs/5 font-medium text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300">
+                        Warn Only
+                      </span>
+                    }
+                  </p>
+                </div>
+              </div>
+
+              <!-- Override Info (if applicable) -->
+              @if (info.override) {
+                <div class="mt-4 rounded-sm border border-purple-200 bg-purple-50 p-4 dark:border-purple-800 dark:bg-purple-900/20">
+                  <h4 class="font-medium text-purple-900 dark:text-purple-200">Active Override</h4>
+                  <p class="mt-2 text-sm/6 text-purple-800 dark:text-purple-300">
+                    Type: <span class="font-semibold">{{ info.override.overrideType }}</span>
+                  </p>
+                  <p class="text-xs/5 text-purple-700 dark:text-purple-400">
+                    Valid until: {{ info.override.validUntil | date:'short' }}
+                  </p>
+                </div>
+              }
+            </div>
+          } @else {
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">No tier assigned to this user</p>
+          }
+        </div>
+
+        <!-- Usage Meter -->
+        <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="mb-4 text-lg/7 font-semibold text-gray-900 dark:text-white">Current Usage</h2>
+
+          <div class="space-y-4">
+            <!-- Current Period -->
+            <div>
+              <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Current Period</h4>
+              <p class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ info.currentPeriod }}</p>
+            </div>
+
+            <!-- Usage Stats -->
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Used</h4>
+                <p class="mt-1 text-xl/7 font-bold text-gray-900 dark:text-white">
+                  {{ formatCurrency(info.currentUsage) }}
+                </p>
+              </div>
+              @if (info.quotaLimit) {
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Limit</h4>
+                  <p class="mt-1 text-xl/7 font-bold text-gray-900 dark:text-white">
+                    {{ formatCurrency(info.quotaLimit) }}
+                  </p>
+                </div>
+                <div>
+                  <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Remaining</h4>
+                  <p class="mt-1 text-xl/7 font-bold text-gray-900 dark:text-white">
+                    {{ formatCurrency(remaining()) }}
+                  </p>
+                </div>
+              }
+            </div>
+
+            <!-- Progress Bar -->
+            <div>
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Usage Progress</h4>
+                <span [class]="'inline-flex items-center rounded-sm px-2 py-1 text-xs/5 font-medium ' + getWarningBadgeClasses()">
+                  {{ percentageUsed() | number:'1.1-1' }}%
+                </span>
+              </div>
+              <div class="h-4 w-full rounded-sm bg-gray-200 dark:bg-gray-700">
+                <div
+                  [class]="'h-4 rounded-sm transition-all ' + getProgressBarClasses()"
+                  [style.width.%]="percentageUsed()"
+                ></div>
+              </div>
+              <div class="mt-2 flex justify-between text-xs/5 text-gray-600 dark:text-gray-400">
+                <span>0%</span>
+                <span>50%</span>
+                <span>100%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Blocks -->
+        @if (info.recentBlocks > 0) {
+          <div class="rounded-sm border border-red-200 bg-red-50 p-6 dark:border-red-800 dark:bg-red-900/20">
+            <h2 class="mb-2 text-lg/7 font-semibold text-red-900 dark:text-red-200">Recent Blocks</h2>
+            <p class="text-sm/6 text-red-800 dark:text-red-300">
+              This user has been blocked <span class="font-bold">{{ info.recentBlocks }} time(s)</span>
+              @if (info.lastBlockTime) {
+                <span class="block mt-1 text-xs/5">Last block: {{ info.lastBlockTime | date:'short' }}</span>
+              }
+            </p>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Empty State -->
+    @if (!quotaInfo() && !error() && !isLoading()) {
+      <div class="rounded-sm border border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+        <svg class="mx-auto size-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <p class="mt-4 text-base/7 text-gray-500 dark:text-gray-400">
+          Enter a user ID above to inspect their quota configuration
+        </p>
+      </div>
+    }
+  </div>
+</div>

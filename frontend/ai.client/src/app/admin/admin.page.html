@@ -1,0 +1,79 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        Manage AI models, quotas, and system configuration
+      </p>
+    </div>
+
+    <!-- Feature Grid -->
+    <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+      @for (feature of features; track feature.route; let i = $index) {
+        <a
+          [routerLink]="feature.route"
+          class="group relative flex flex-col gap-4 rounded-sm border border-gray-200 bg-white p-6 transition-all hover:border-blue-300 hover:shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:hover:border-blue-700"
+        >
+          <!-- Icon -->
+          <div class="flex items-start">
+            <div [class]="'flex size-16 items-center justify-center rounded-sm border border-gray-300 dark:border-gray-600 ' + getIconBackgroundClasses(i)">
+              <ng-icon
+                [name]="feature.icon"
+                size="32"
+                [class]="getIconColorClasses(i)"
+              />
+            </div>
+          </div>
+
+          <!-- Content -->
+          <div class="flex-1">
+            <h3 class="text-lg/7 font-semibold text-gray-900 group-hover:text-blue-600 dark:text-white dark:group-hover:text-blue-400">
+              {{ feature.title }}
+            </h3>
+            <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+              {{ feature.description }}
+            </p>
+          </div>
+
+          <!-- Arrow indicator -->
+          <div class="flex items-center text-sm/6 font-medium text-blue-600 dark:text-blue-400">
+            <span>Open</span>
+            <svg class="ml-2 size-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </div>
+        </a>
+      }
+    </div>
+
+    <!-- Info Section -->
+    <div class="mt-8 rounded-sm border border-blue-200 bg-blue-50 p-6 dark:border-blue-800 dark:bg-blue-900/20">
+      <h2 class="text-lg/7 font-semibold text-blue-900 dark:text-blue-200">About Admin Features</h2>
+      <div class="mt-3 space-y-2 text-sm/6 text-blue-800 dark:text-blue-300">
+        <p>
+          <strong>Model Management:</strong> Configure which AI models are available to users. Control access by role and set pricing information.
+        </p>
+        <p>
+          <strong>Quota Management:</strong> Comprehensive quota system with tiered limits, role-based assignments, email domain matching, temporary overrides, and detailed monitoring.
+        </p>
+      </div>
+    </div>
+
+    <!-- Quick Stats (Optional - can be expanded later) -->
+    <!-- <div class="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h3 class="text-sm/6 font-medium text-gray-600 dark:text-gray-400">Active Models</h3>
+        <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">12</p>
+      </div>
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h3 class="text-sm/6 font-medium text-gray-600 dark:text-gray-400">Quota Tiers</h3>
+        <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">5</p>
+      </div>
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h3 class="text-sm/6 font-medium text-gray-600 dark:text-gray-400">Active Overrides</h3>
+        <p class="mt-2 text-3xl/9 font-bold text-gray-900 dark:text-white">3</p>
+      </div>
+    </div> -->
+  </div>
+</div>

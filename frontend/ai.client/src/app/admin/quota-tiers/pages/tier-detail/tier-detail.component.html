@@ -1,0 +1,283 @@
+<div class="min-h-dvh bg-gray-100 dark:bg-gray-900">
+  <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Page Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">{{ pageTitle() }}</h1>
+      <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
+        @if (isEditMode()) {
+          Update tier configuration, limits, and soft limit behavior
+        } @else {
+          Create a new quota tier with cost limits and soft limit settings
+        }
+      </p>
+    </div>
+
+    <!-- Error Display -->
+    @if (error()) {
+      <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <p class="text-sm/6 text-red-800 dark:text-red-300">{{ error() }}</p>
+      </div>
+    }
+
+    <!-- Form -->
+    <form [formGroup]="tierForm" (ngSubmit)="onSubmit()" class="space-y-8">
+      <!-- Basic Information Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-lg/7 font-semibold text-gray-900 dark:text-white">Basic Information</h2>
+
+        <div class="space-y-6">
+          <!-- Tier ID -->
+          <div>
+            <label for="tierId" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Tier ID <span class="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              id="tierId"
+              formControlName="tierId"
+              placeholder="e.g., free-tier, premium"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:disabled:bg-gray-800"
+            />
+            @if (tierForm.controls.tierId.invalid && tierForm.controls.tierId.touched) {
+              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+                @if (tierForm.controls.tierId.errors?.['required']) {
+                  Tier ID is required
+                } @else if (tierForm.controls.tierId.errors?.['pattern']) {
+                  Tier ID can only contain lowercase letters, numbers, hyphens, and underscores
+                }
+              </p>
+            }
+            @if (isEditMode()) {
+              <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">Tier ID cannot be changed after creation</p>
+            } @else {
+              <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">Use lowercase letters, numbers, hyphens, and underscores only</p>
+            }
+          </div>
+
+          <!-- Tier Name -->
+          <div>
+            <label for="tierName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Tier Name <span class="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              id="tierName"
+              formControlName="tierName"
+              placeholder="e.g., Free Tier, Premium"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            />
+            @if (tierForm.controls.tierName.invalid && tierForm.controls.tierName.touched) {
+              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">Tier name is required</p>
+            }
+          </div>
+
+          <!-- Description -->
+          <div>
+            <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Description
+            </label>
+            <textarea
+              id="description"
+              formControlName="description"
+              rows="3"
+              placeholder="Optional description of this tier..."
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            ></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cost Limits Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-lg/7 font-semibold text-gray-900 dark:text-white">Cost Limits</h2>
+
+        <div class="space-y-6">
+          <!-- Period Type -->
+          <div>
+            <label for="periodType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Period Type <span class="text-red-500">*</span>
+            </label>
+            <select
+              id="periodType"
+              formControlName="periodType"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            >
+              <option value="monthly">Monthly</option>
+              <option value="daily">Daily</option>
+            </select>
+          </div>
+
+          <!-- Monthly Cost Limit -->
+          <div>
+            <label for="monthlyCostLimit" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Monthly Cost Limit (USD) <span class="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              id="monthlyCostLimit"
+              formControlName="monthlyCostLimit"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            />
+            @if (tierForm.controls.monthlyCostLimit.invalid && tierForm.controls.monthlyCostLimit.touched) {
+              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+                @if (tierForm.controls.monthlyCostLimit.errors?.['required']) {
+                  Monthly cost limit is required
+                } @else if (tierForm.controls.monthlyCostLimit.errors?.['min']) {
+                  Monthly cost limit must be 0 or greater
+                }
+              </p>
+            }
+          </div>
+
+          <!-- Daily Cost Limit (Optional) -->
+          <div>
+            <label for="dailyCostLimit" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Daily Cost Limit (USD) <span class="text-gray-500 text-xs/5">(Optional)</span>
+            </label>
+            <input
+              type="number"
+              id="dailyCostLimit"
+              formControlName="dailyCostLimit"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            />
+            @if (tierForm.controls.dailyCostLimit.invalid && tierForm.controls.dailyCostLimit.touched) {
+              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">Daily cost limit must be 0 or greater</p>
+            }
+            <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">Leave empty if you don't need a daily limit</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Soft Limit & Action Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-lg/7 font-semibold text-gray-900 dark:text-white">Soft Limit & Action</h2>
+
+        <div class="space-y-6">
+          <!-- Soft Limit Percentage -->
+          <div>
+            <label for="softLimitPercentage" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Soft Limit Percentage <span class="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              id="softLimitPercentage"
+              formControlName="softLimitPercentage"
+              min="0"
+              max="100"
+              step="1"
+              placeholder="80"
+              class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+            />
+            @if (tierForm.controls.softLimitPercentage.invalid && tierForm.controls.softLimitPercentage.touched) {
+              <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+                @if (tierForm.controls.softLimitPercentage.errors?.['required']) {
+                  Soft limit percentage is required
+                } @else {
+                  Soft limit percentage must be between 0 and 100
+                }
+              </p>
+            }
+            <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+              Users will receive a warning when they reach this percentage of their quota (default: 80%)
+            </p>
+          </div>
+
+          <!-- Action on Limit -->
+          <div>
+            <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Action on Limit <span class="text-red-500">*</span>
+            </label>
+            <div class="mt-3 space-y-3">
+              <label class="flex items-center">
+                <input
+                  type="radio"
+                  formControlName="actionOnLimit"
+                  value="block"
+                  class="size-4 border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                />
+                <span class="ml-3">
+                  <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Block Requests</span>
+                  <span class="block text-sm/6 text-gray-600 dark:text-gray-400">
+                    Prevent users from making requests when they reach 100% of their quota
+                  </span>
+                </span>
+              </label>
+              <label class="flex items-center">
+                <input
+                  type="radio"
+                  formControlName="actionOnLimit"
+                  value="warn"
+                  class="size-4 border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                />
+                <span class="ml-3">
+                  <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Warn Only</span>
+                  <span class="block text-sm/6 text-gray-600 dark:text-gray-400">
+                    Allow requests even at 100%, but record warning events
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status Section -->
+      <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <h2 class="mb-6 text-lg/7 font-semibold text-gray-900 dark:text-white">Status</h2>
+
+        <div>
+          <label class="flex items-center">
+            <input
+              type="checkbox"
+              formControlName="enabled"
+              class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <span class="ml-3">
+              <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Enable this tier</span>
+              <span class="block text-sm/6 text-gray-600 dark:text-gray-400">
+                Disabled tiers will not be used for quota enforcement
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Form Actions -->
+      <div class="flex justify-end gap-3">
+        <button
+          type="button"
+          (click)="onCancel()"
+          [disabled]="isSubmitting()"
+          class="rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          [disabled]="tierForm.invalid || isSubmitting()"
+          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          @if (isSubmitting()) {
+            <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Saving...
+          } @else {
+            @if (isEditMode()) {
+              Update Tier
+            } @else {
+              Create Tier
+            }
+          }
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

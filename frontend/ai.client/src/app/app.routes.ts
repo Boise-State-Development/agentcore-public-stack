@@ -23,6 +23,11 @@ export const routes: Routes = [
         loadComponent: () => import('./auth/callback/callback.page').then(m => m.CallbackPage),
     },
     {
+        path: 'admin',
+        loadComponent: () => import('./admin/admin.page').then(m => m.AdminPage),
+        canActivate: [adminGuard],
+    },
+    {
         path: 'admin/bedrock/models',
         loadComponent: () => import('./admin/bedrock-models/bedrock-models.page').then(m => m.BedrockModelsPage),
         canActivate: [adminGuard],
@@ -56,5 +61,10 @@ export const routes: Routes = [
         path: 'costs',
         loadComponent: () => import('./costs/cost-dashboard.page').then(m => m.CostDashboardPage),
         canActivate: [authGuard],
+    },
+    {
+        path: 'admin/quota',
+        loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
+        canActivate: [adminGuard],
     }
 ];

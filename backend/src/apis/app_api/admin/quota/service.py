@@ -343,3 +343,123 @@ class QuotaAdminService:
             recent_blocks=recent_blocks,
             last_block_time=last_block_time
         )
+
+    # ========== Quota Overrides ==========
+
+    async def create_override(self, override_data, admin_user: User):
+        """Create a new quota override"""
+        from agents.strands_agent.quota.models import QuotaOverride
+        import uuid
+
+        override_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + 'Z'
+
+        override = QuotaOverride(
+            override_id=override_id,
+            user_id=override_data.user_id,
+            override_type=override_data.override_type,
+            monthly_cost_limit=override_data.monthly_cost_limit,
+            daily_cost_limit=override_data.daily_cost_limit,
+            valid_from=override_data.valid_from,
+            valid_until=override_data.valid_until,
+            reason=override_data.reason,
+            created_by=admin_user.email,
+            created_at=now,
+            enabled=True
+        )
+
+        created = await self.repository.create_override(override)
+        logger.info(f"Created override {override_id} for user {override_data.user_id}")
+
+        # Invalidate cache for this user
+        self.resolver.invalidate_cache(user_id=override_data.user_id)
+
+        return created
+
+    async def get_override(self, override_id: str):
+        """Get override by ID"""
+        return await self.repository.get_override(override_id)
+
+    async def list_overrides(self, user_id: Optional[str] = None, active_only: bool = False):
+        """List overrides with optional filters"""
+        return await self.repository.list_overrides(
+            user_id=user_id,
+            active_only=active_only
+        )
+
+    async def update_override(self, override_id: str, updates):
+        """Update an override"""
+        # Build updates dict from Pydantic model
+        updates_dict = updates.model_dump(exclude_unset=True, by_alias=True)
+
+        if not updates_dict:
+            return await self.repository.get_override(override_id)
+
+        # Get existing override to invalidate cache
+        existing = await self.repository.get_override(override_id)
+        if not existing:
+            return None
+
+        updated = await self.repository.update_override(override_id, updates_dict)
+
+        if updated:
+            logger.info(f"Updated override {override_id}")
+            # Invalidate cache for affected user
+            self.resolver.invalidate_cache(user_id=existing.user_id)
+
+        return updated
+
+    async def delete_override(self, override_id: str) -> bool:
+        """Delete an override"""
+        # Get existing override to invalidate cache
+        existing = await self.repository.get_override(override_id)
+        if not existing:
+            return False
+
+        success = await self.repository.delete_override(override_id)
+
+        if success:
+            logger.info(f"Deleted override {override_id}")
+            # Invalidate cache for affected user
+            self.resolver.invalidate_cache(user_id=existing.user_id)
+
+        return success
+
+    # ========== Quota Events ==========
+
+    async def get_events(
+        self,
+        user_id: Optional[str] = None,
+        tier_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        limit: int = 50
+    ):
+        """
+        Get quota events with filters.
+
+        Note: Current implementation only supports filtering by user_id or tier_id.
+        Multi-filter support requires additional GSI or filtering logic.
+        """
+        if user_id:
+            # Filter by user
+            events = await self.repository.get_user_events(
+                user_id=user_id,
+                limit=limit
+            )
+        elif tier_id:
+            # Filter by tier
+            events = await self.repository.get_tier_events(
+                tier_id=tier_id,
+                limit=limit
+            )
+        else:
+            # No filter - not efficient, return empty for now
+            # TODO: Add pagination/cursor support for all events
+            logger.warning("get_events called without user_id or tier_id filter")
+            events = []
+
+        # Apply event_type filter in memory if specified
+        if event_type and events:
+            events = [e for e in events if e.event_type == event_type]
+
+        return events[:limit]

@@ -6,10 +6,9 @@ import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroChevronDown,
-  heroCpuChip,
-  heroPencilSquare,
   heroCurrencyDollar,
-  heroArrowRightOnRectangle
+  heroArrowRightOnRectangle,
+  heroCommandLine
 } from '@ng-icons/heroicons/outline';
 
 export interface User {
@@ -25,10 +24,9 @@ export interface User {
   providers: [
     provideIcons({
       heroChevronDown,
-      heroCpuChip,
-      heroPencilSquare,
       heroCurrencyDollar,
-      heroArrowRightOnRectangle
+      heroArrowRightOnRectangle,
+      heroCommandLine
     })
   ],
   template: `
@@ -93,45 +91,19 @@ export interface User {
 
             <!-- Menu items -->
             <div class="py-1">
-              <!-- Admin-only menu items -->
+              <!-- Admin Dashboard (admin only) -->
               @if (isAdmin()) {
                 <a
                   cdkMenuItem
-                  routerLink="/admin/bedrock/models"
+                  routerLink="/admin"
                   class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
                   role="menuitem"
                 >
                   <ng-icon
-                    name="heroCpuChip"
+                    name="heroCommandLine"
                     class="size-5 text-gray-400 dark:text-gray-500"
                   />
-                  <span>Bedrock Models</span>
-                </a>
-
-                <a
-                  cdkMenuItem
-                  routerLink="/admin/gemini/models"
-                  class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                  role="menuitem"
-                >
-                  <ng-icon
-                    name="heroCpuChip"
-                    class="size-5 text-gray-400 dark:text-gray-500"
-                  />
-                  <span>Gemini Models</span>
-                </a>
-
-                <a
-                  cdkMenuItem
-                  routerLink="/admin/manage-models"
-                  class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                  role="menuitem"
-                >
-                  <ng-icon
-                    name="heroPencilSquare"
-                    class="size-5 text-gray-400 dark:text-gray-500"
-                  />
-                  <span>Manage Models</span>
+                  <span>Admin Dashboard</span>
                 </a>
               }
 

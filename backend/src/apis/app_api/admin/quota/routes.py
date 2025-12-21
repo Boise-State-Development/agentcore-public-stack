@@ -7,14 +7,16 @@ from apis.shared.auth import User, require_admin
 from apis.app_api.costs.aggregator import CostAggregator
 from agents.strands_agent.quota.repository import QuotaRepository
 from agents.strands_agent.quota.resolver import QuotaResolver
-from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment
+from agents.strands_agent.quota.models import QuotaTier, QuotaAssignment, QuotaOverride, QuotaEvent
 from .service import QuotaAdminService
 from .models import (
     QuotaTierCreate,
     QuotaTierUpdate,
     QuotaAssignmentCreate,
     QuotaAssignmentUpdate,
-    UserQuotaInfo
+    UserQuotaInfo,
+    QuotaOverrideCreate,
+    QuotaOverrideUpdate
 )
 
 logger = logging.getLogger(__name__)
@@ -430,4 +432,219 @@ async def get_user_quota_info(
         return info
     except Exception as e:
         logger.error(f"Error getting user quota info: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ========== Quota Overrides ==========
+
+@router.post("/overrides", response_model=QuotaOverride, status_code=status.HTTP_201_CREATED)
+async def create_override(
+    override_data: QuotaOverrideCreate,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    Create a new quota override (admin only).
+
+    Overrides provide temporary quota exceptions for specific users.
+    They take priority over all other quota assignments.
+
+    Args:
+        override_data: Override configuration
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Returns:
+        Created quota override
+
+    Raises:
+        HTTPException:
+            - 400 if validation fails
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+    """
+    logger.info(f"Admin {admin_user.email} creating override for user {override_data.user_id}")
+
+    try:
+        override = await service.create_override(override_data, admin_user)
+        return override
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating override: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/overrides", response_model=List[QuotaOverride])
+async def list_overrides(
+    user_id: Optional[str] = None,
+    active_only: bool = False,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    List quota overrides (admin only).
+
+    Args:
+        user_id: Filter by user ID (optional)
+        active_only: Only return currently active overrides
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Returns:
+        List of quota overrides
+    """
+    logger.info(f"Admin {admin_user.email} listing overrides (user_id={user_id}, active_only={active_only})")
+
+    try:
+        overrides = await service.list_overrides(
+            user_id=user_id,
+            active_only=active_only
+        )
+        return overrides
+    except Exception as e:
+        logger.error(f"Error listing overrides: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/overrides/{override_id}", response_model=QuotaOverride)
+async def get_override(
+    override_id: str,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    Get quota override by ID (admin only).
+
+    Args:
+        override_id: Override identifier
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Returns:
+        Quota override
+
+    Raises:
+        HTTPException: 404 if override not found
+    """
+    logger.info(f"Admin {admin_user.email} getting override {override_id}")
+
+    try:
+        override = await service.get_override(override_id)
+        if not override:
+            raise HTTPException(status_code=404, detail=f"Override {override_id} not found")
+        return override
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting override: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.patch("/overrides/{override_id}", response_model=QuotaOverride)
+async def update_override(
+    override_id: str,
+    updates: QuotaOverrideUpdate,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    Update quota override (admin only).
+
+    Args:
+        override_id: Override identifier
+        updates: Fields to update
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Returns:
+        Updated quota override
+
+    Raises:
+        HTTPException: 404 if override not found
+    """
+    logger.info(f"Admin {admin_user.email} updating override {override_id}")
+
+    try:
+        override = await service.update_override(override_id, updates)
+        if not override:
+            raise HTTPException(status_code=404, detail=f"Override {override_id} not found")
+        return override
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating override: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.delete("/overrides/{override_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_override(
+    override_id: str,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    Delete quota override (admin only).
+
+    Args:
+        override_id: Override identifier
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Raises:
+        HTTPException: 404 if override not found
+    """
+    logger.info(f"Admin {admin_user.email} deleting override {override_id}")
+
+    try:
+        success = await service.delete_override(override_id)
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Override {override_id} not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting override: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ========== Quota Events ==========
+
+@router.get("/events", response_model=List[QuotaEvent])
+async def get_events(
+    user_id: Optional[str] = None,
+    tier_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = 50,
+    admin_user: User = Depends(require_admin),
+    service: QuotaAdminService = Depends(get_quota_service)
+):
+    """
+    Get quota events with filters (admin only).
+
+    Args:
+        user_id: Filter by user ID (optional)
+        tier_id: Filter by tier ID (optional)
+        event_type: Filter by event type (warning, block, reset, override_applied)
+        limit: Maximum number of events to return (default: 50)
+        admin_user: Authenticated admin user
+        service: Quota admin service
+
+    Returns:
+        List of quota events
+    """
+    logger.info(
+        f"Admin {admin_user.email} getting events "
+        f"(user_id={user_id}, tier_id={tier_id}, type={event_type})"
+    )
+
+    try:
+        events = await service.get_events(
+            user_id=user_id,
+            tier_id=tier_id,
+            event_type=event_type,
+            limit=limit
+        )
+        return events
+    except Exception as e:
+        logger.error(f"Error getting events: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
