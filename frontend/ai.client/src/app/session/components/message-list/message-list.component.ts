@@ -5,10 +5,11 @@ import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
 import { MessageMetadataBadgesComponent } from './components/message-metadata-badges.component';
 import { ThinkingDotsComponent } from '../../../components/thinking-dots.component';
+import { JsonPipe } from '@angular/common';
 
 @Component({
   selector: 'app-message-list',
-  imports: [UserMessageComponent, AssistantMessageComponent, MessageMetadataBadgesComponent, ThinkingDotsComponent],
+  imports: [UserMessageComponent, AssistantMessageComponent, MessageMetadataBadgesComponent, ThinkingDotsComponent, JsonPipe],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
 })

@@ -152,7 +152,7 @@ if os.getenv('ENVIRONMENT', 'development') == 'development':
 
 # Import routers
 #from health.health import router as health_router
-from .chat.routes import router as agentcore_router
+from apis.inference_api.chat.routes import router as agentcore_router
 # Include routers
 #app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
@@ -180,7 +180,7 @@ if os.path.exists(generated_images_dir):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "apis.inference_api.main:app",
         host="0.0.0.0",
         port=8001,
         reload=True,

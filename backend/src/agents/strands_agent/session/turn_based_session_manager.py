@@ -1,7 +1,15 @@
 """
-Turn-based Session Manager Wrapper
-Buffers messages within a turn and writes to AgentCore Memory only once per turn.
-Reduces API calls by 75% (4 calls → 1 call per turn).
+Session Manager Wrapper for AgentCore Memory
+
+This wrapper provides:
+1. Message count tracking (avoids eventual consistency issues with AgentCore Memory)
+2. Proper hook registration (ensures our callbacks are used, not the base manager's)
+3. Session cancellation support
+
+IMPORTANT: This wrapper does NOT buffer or merge messages. Each message is persisted
+individually to AgentCore Memory with its correct role. The Converse API requires
+messages to maintain their individual roles (user, assistant) - merging them breaks
+conversation reconstruction.
 """
 
 import logging
@@ -14,160 +22,46 @@ logger = logging.getLogger(__name__)
 
 class TurnBasedSessionManager:
     """
-    Wrapper around AgentCoreMemorySessionManager that buffers messages
-    within a turn and writes them as a single merged message.
+    Wrapper around AgentCoreMemorySessionManager that provides:
+    - Message count tracking (initialized once at startup to avoid eventual consistency issues)
+    - Proper hook registration (intercepts MessageAddedEvent to track count)
+    - Session cancellation support
 
-    A "turn" consists of:
-    1. User message
-    2. Assistant response (text + toolUse)
-    3. Tool results (toolResult)
-
-    Instead of creating 3-4 events, we create 1 merged event per turn.
+    NOTE: Despite the name, this class no longer performs turn-based buffering/merging.
+    Messages are passed through to the base manager individually to preserve correct
+    role attribution required by the Converse API.
     """
 
     def __init__(
         self,
         agentcore_memory_config: AgentCoreMemoryConfig,
         region_name: str = "us-west-2",
-        batch_size: int = 5,  # Flush every N messages to prevent data loss
-        max_buffer_size: int = 20  # Maximum buffer size before forced flush
+        batch_size: int = 5,  # Kept for backward compatibility, not used
+        max_buffer_size: int = 20  # Kept for backward compatibility, not used
     ):
         self.base_manager = AgentCoreMemorySessionManager(
             agentcore_memory_config=agentcore_memory_config,
             region_name=region_name
         )
 
-        # Turn buffer
-        self.pending_messages: List[Dict[str, Any]] = []
-        self.last_message_role: Optional[str] = None
-        self.batch_size = batch_size
-        self.max_buffer_size = max_buffer_size
         self.cancelled = False  # Flag to stop accepting new messages
-        
+
         # Message count tracking to avoid eventual consistency issues
         # Initialize by querying AgentCore Memory once at startup
         self.message_count: int = self._initialize_message_count()
 
         logger.info(
             f"✅ TurnBasedSessionManager initialized "
-            f"(buffering enabled, batch_size={batch_size}, max_buffer_size={max_buffer_size}, "
-            f"initial_message_count={self.message_count})"
+            f"(pass-through mode, initial_message_count={self.message_count})"
         )
-
-    def _should_flush_turn(self, message: Dict[str, Any]) -> bool:
-        """
-        Determine if we should flush the current turn.
-
-        Flush when:
-        1. New user message arrives (previous turn is complete)
-        2. Assistant message has only text (no toolUse) - turn is complete
-        """
-        role = message.get("role", "")
-        content = message.get("content", [])
-
-        # Case 1: New user message starts a new turn
-        if role == "user" and self.last_message_role == "assistant":
-            return True
-
-        # Case 2: Assistant message with no toolUse means turn is complete
-        if role == "assistant":
-            has_tool_use = any(
-                isinstance(item, dict) and "toolUse" in item
-                for item in content
-            )
-            if not has_tool_use:
-                return True
-
-        return False
-
-    def _merge_turn_messages(self) -> Optional[Dict[str, Any]]:
-        """
-        Merge all messages in the current turn into a single message.
-
-        Returns:
-            Merged message with all content blocks combined, preserving message_id from first message
-        """
-        if not self.pending_messages:
-            return None
-
-        # If only 1 message, return as-is
-        if len(self.pending_messages) == 1:
-            return self.pending_messages[0]
-
-        # Merge all content blocks
-        merged_content = []
-        merged_role = self.pending_messages[0].get("role", "assistant")
-
-        for msg in self.pending_messages:
-            content = msg.get("content", [])
-            if isinstance(content, list):
-                merged_content.extend(content)
-
-        merged_message = {
-            "role": merged_role,
-            "content": merged_content
-        }
-
-        return merged_message
-
-    def _flush_turn(self) -> Optional[int]:
-        """
-        Flush pending messages as a single merged message to AgentCore Memory
-
-        Returns:
-            Sequence number (0-based) of the flushed message, or None if nothing was flushed
-        """
-        if not self.pending_messages:
-            return None
-
-        merged_message = self._merge_turn_messages()
-        if merged_message:
-            # Write merged message to AgentCore Memory
-            logger.info(f"💾 Flushing turn: {len(self.pending_messages)} messages → 1 merged event")
-
-            # Call base manager's create_message directly to persist
-            # We need to convert to SessionMessage format first
-            from strands.types.session import SessionMessage
-            from strands.types.content import Message
-
-            # Convert merged message to Message type for base manager
-            strands_message: Message = {
-                "role": merged_message["role"],
-                "content": merged_message["content"]
-            }
-
-            # Create a SessionMessage and persist it
-            session_message = SessionMessage.from_message(strands_message, 0)
-            self.base_manager.create_message(
-                self.base_manager.config.session_id,
-                "default",  # agent_id (not used in AgentCore Memory)
-                session_message
-            )
-
-            # Increment message count (we just flushed one message)
-            self.message_count += 1
-            
-            # Get sequence number (0-based) from updated count
-            sequence_number = self._get_latest_message_sequence()
-            
-            logger.info(f"💾 Flushed message → message_count: {self.message_count}, sequence_number: {sequence_number}")
-
-            # Clear buffer
-            self.pending_messages = []
-
-            return sequence_number
-
-        # Clear buffer even if no message was created
-        self.pending_messages = []
-        return None
 
     def _initialize_message_count(self) -> int:
         """
         Initialize message count by querying AgentCore Memory once at startup.
-        
+
         This avoids eventual consistency issues during active streaming by only
         querying at initialization when we're not racing with concurrent writes.
-        
+
         Returns:
             Initial message count (0 if session is new or if query fails)
         """
@@ -183,71 +77,30 @@ class TurnBasedSessionManager:
             logger.warning(f"Failed to initialize message count from AgentCore Memory: {e}, defaulting to 0")
             return 0
 
-    def _get_latest_message_sequence(self) -> Optional[int]:
+    def flush(self) -> Optional[int]:
         """
-        Get the sequence number of the most recently stored message.
-        
-        Uses internally tracked count instead of querying AgentCore Memory to avoid
-        eventual consistency issues (newly created messages aren't immediately visible).
+        Flush is now a no-op since we don't buffer messages.
+        Returns the current message count - 1 (0-based index of last message).
 
         Returns:
-            Sequence number (0-based) or None if no messages have been flushed
+            Message ID of the last message, or None if no messages exist
         """
         if self.message_count > 0:
-            # Return 0-based sequence: count - 1
             return self.message_count - 1
         return None
 
-    def add_message(self, message: Dict[str, Any]):
-        """
-        Add a message to the turn buffer.
-        Automatically flushes when turn is complete, batch size is reached,
-        or max buffer size is exceeded.
-        """
-        role = message.get("role", "")
-
-        # Safety check: enforce max buffer size to prevent unbounded growth
-        if len(self.pending_messages) >= self.max_buffer_size:
-            logger.warning(
-                f"⚠️ Max buffer size ({self.max_buffer_size}) reached! "
-                f"Force flushing to prevent memory issues"
-            )
-            self._flush_turn()
-
-        # Check if we should flush previous turn
-        if self._should_flush_turn(message):
-            self._flush_turn()
-
-        # Add message to buffer
-        self.pending_messages.append(message)
-        self.last_message_role = role
-
-        logger.debug(f"📝 Buffered message (role={role}, total={len(self.pending_messages)})")
-
-        # Periodic flush: if buffer reaches batch_size, flush to prevent data loss
-        if len(self.pending_messages) >= self.batch_size:
-            logger.info(f"⏰ Batch size ({self.batch_size}) reached, flushing buffer")
-            self._flush_turn()
-
-    def flush(self) -> Optional[int]:
-        """
-        Force flush any pending messages (e.g., at end of stream)
-
-        Returns:
-            Message ID of the flushed message, or None if nothing was flushed
-        """
-        return self._flush_turn()
-
     def append_message(self, message, agent, **kwargs):
         """
-        Override append_message to buffer messages instead of immediately persisting.
+        Pass message through to base manager and track message count.
 
-        This is the key method that Strands framework calls to persist messages.
-        We intercept it to implement turn-based buffering.
+        This intercepts the Strands framework's append_message call to:
+        1. Check if session is cancelled
+        2. Increment our message count (for tracking without querying AgentCore Memory)
+        3. Delegate actual persistence to the base manager
 
         Args:
             message: Message from Strands framework
-            agent: Agent instance (not used in buffering)
+            agent: Agent instance
             **kwargs: Additional arguments
         """
         # If cancelled, don't accept new messages
@@ -255,19 +108,64 @@ class TurnBasedSessionManager:
             logger.warning(f"🚫 Session cancelled, ignoring message (role={message.get('role')})")
             return
 
-        from strands.types.session import SessionMessage
+        # Delegate to base manager for actual persistence
+        self.base_manager.append_message(message, agent, **kwargs)
 
-        # Convert Message to dict format for buffering
-        # No need for message_id here - it will be computed from session_id + sequence when loading
-        message_dict = {
-            "role": message.get("role"),
-            "content": message.get("content", [])
-        }
+        # Increment our message count
+        self.message_count += 1
 
-        # Add to buffer and check if we should flush
-        self.add_message(message_dict)
+        role = message.get("role", "unknown")
+        logger.debug(f"📝 Message persisted (role={role}, total_count={self.message_count})")
 
-        logger.debug(f"🔄 Intercepted append_message (role={message_dict['role']}, buffered={len(self.pending_messages)})")
+    def register_hooks(self, registry, **kwargs):
+        """
+        Register hooks with the Strands Agent framework.
+
+        CRITICAL: This method MUST be defined on the wrapper class to prevent
+        the base manager from registering its own hooks. If we delegate to
+        base_manager.register_hooks(), the base manager will register callbacks
+        that point to ITS append_message method, bypassing our message count tracking.
+
+        We register OUR append_message as the callback for MessageAddedEvent.
+        Our append_message delegates to the base manager but also tracks the count.
+
+        Args:
+            registry: HookRegistry from Strands framework
+            **kwargs: Additional arguments
+        """
+        from strands.hooks import (
+            AgentInitializedEvent,
+            MessageAddedEvent,
+            AfterInvocationEvent
+        )
+
+        logger.info("🔗 TurnBasedSessionManager registering hooks (intercepting MessageAddedEvent for count tracking)")
+
+        # Register initialization hook - delegate to base manager
+        registry.add_callback(
+            AgentInitializedEvent,
+            lambda event: self.base_manager.initialize(event.agent)
+        )
+
+        # Register message added hook - use OUR append_message (for count tracking)
+        # Our append_message delegates to base_manager.append_message but also increments count
+        registry.add_callback(
+            MessageAddedEvent,
+            lambda event: self.append_message(event.message, event.agent)
+        )
+
+        # Register sync hooks - delegate to base manager
+        registry.add_callback(
+            MessageAddedEvent,
+            lambda event: self.base_manager.sync_agent(event.agent)
+        )
+
+        registry.add_callback(
+            AfterInvocationEvent,
+            lambda event: self.base_manager.sync_agent(event.agent)
+        )
+
+        logger.info("✅ TurnBasedSessionManager hooks registered successfully")
 
     # Delegate all other methods to base manager
     def __getattr__(self, name):
