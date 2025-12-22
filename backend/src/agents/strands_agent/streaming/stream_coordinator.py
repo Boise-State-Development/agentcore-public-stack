@@ -66,6 +66,11 @@ class StreamCoordinator:
             "usage": {},
             "metrics": {}
         }
+        
+        # Track individual metadata per assistant message during streaming
+        # Key: assistant_message_index (0, 1, 2...), Value: metadata dict
+        per_message_metadata = []
+        current_assistant_message_index = -1  # Track which assistant message we're on
 
         try:
             # Get raw agent stream
@@ -73,6 +78,32 @@ class StreamCoordinator:
 
             # Process through new stream processor and format as SSE
             async for event in process_agent_stream(agent_stream):
+                # Track when new assistant messages start (to associate metadata with them)
+                if event.get("type") == "message_start":
+                    role = event.get("data", {}).get("role")
+                    if role == "assistant":
+                        current_assistant_message_index += 1
+                        per_message_metadata.append({
+                            "usage": {},
+                            "metrics": {},
+                            "first_token_time": None
+                        })
+                
+                # Track individual metadata events (per assistant message)
+                if event.get("type") == "metadata":
+                    event_data = event.get("data", {})
+                    if current_assistant_message_index >= 0:
+                        # Associate this metadata with the current assistant message
+                        if "usage" in event_data:
+                            per_message_metadata[current_assistant_message_index]["usage"].update(event_data["usage"])
+                        if "metrics" in event_data:
+                            per_message_metadata[current_assistant_message_index]["metrics"].update(event_data["metrics"])
+                    # Also accumulate for backward compatibility
+                    if "usage" in event_data:
+                        accumulated_metadata["usage"].update(event_data["usage"])
+                    if "metrics" in event_data:
+                        accumulated_metadata["metrics"].update(event_data["metrics"])
+                
                 # Collect metadata_summary event (don't send to client as-is)
                 if event.get("type") == "metadata_summary":
                     event_data = event.get("data", {})
@@ -82,6 +113,9 @@ class StreamCoordinator:
                         accumulated_metadata["metrics"].update(event_data["metrics"])
                     if "first_token_time" in event_data:
                         first_token_time = event_data["first_token_time"]
+                        # Associate first_token_time with first assistant message if we have one
+                        if per_message_metadata and per_message_metadata[0]["first_token_time"] is None:
+                            per_message_metadata[0]["first_token_time"] = first_token_time
                     # Don't yield this event to the client (will send final metadata before done)
                     continue
                 
@@ -128,30 +162,115 @@ class StreamCoordinator:
             stream_end_time = time.time()
 
             # Flush buffered messages (turn-based session manager)
-            # This returns the message ID of the flushed message (may be None due to eventual consistency)
+            # Returns the message ID of the flushed message (0-based sequence number)
+            # Note: TurnBasedSessionManager now tracks message count internally to avoid
+            # eventual consistency issues with AgentCore Memory
             message_id = self._flush_session(session_manager)
+            
+            logger.info(f"💾 Flush returned message_id: {message_id}")
 
             # Always update session metadata (for last_model, message_count, etc.)
-            # even if message_id is None (which happens due to AgentCore Memory eventual consistency)
-            await self._update_session_metadata(
+            # Returns actual_message_count (1-based turn number)
+            actual_message_count = await self._update_session_metadata(
                 session_id=session_id,
                 user_id=user_id,
-                message_id=message_id,  # May be None
+                message_id=message_id,  # May be None on very first message
                 agent=strands_agent_wrapper  # Use wrapper instead of internal agent
             )
 
-            # Store message-level metadata only if we have usage/timing data AND a valid message_id
-            if message_id is not None and (accumulated_metadata.get("usage") or first_token_time):
-                await self._store_message_metadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    message_id=message_id,
-                    accumulated_metadata=accumulated_metadata,
-                    stream_start_time=stream_start_time,
-                    stream_end_time=stream_end_time,
-                    first_token_time=first_token_time,
-                    agent=strands_agent_wrapper  # Use wrapper instead of internal agent
-                )
+            # Fallback: If message_id is None (buffer was already flushed), query AgentCore Memory
+            # and find NEW assistant messages created during THIS stream only
+            assistant_message_ids = []
+            messages_before_stream = 0
+            
+            if message_id is None:
+                # Query AgentCore Memory to get actual message count and identify NEW assistant messages
+                try:
+                    messages = session_manager.base_manager.list_messages(
+                        session_id,
+                        "default"
+                    ) if hasattr(session_manager, 'base_manager') else session_manager.list_messages(session_id, "default")
+                    
+                    actual_message_count_from_memory = len(messages) if messages else 0
+                    
+                    # CRITICAL: Determine how many messages existed BEFORE this stream started
+                    # Use the internal message_count from TurnBasedSessionManager which was initialized
+                    # at the start of this session (before any messages from this stream were flushed)
+                    if hasattr(session_manager, 'message_count'):
+                        # TurnBasedSessionManager tracks initial count (before this stream)
+                        # After flush, it increments by 1, so we need the value BEFORE increment
+                        # The turn counter actual_message_count tells us current turn number
+                        # Calculate: messages_before = current_memory_count - messages_added_this_turn
+                        # Since we're in turn N, and each turn can add multiple messages
+                        # We need to find message indices that are >= the count before this stream started
+                        
+                        # Get the count of messages that existed at session manager init
+                        initial_count = session_manager.message_count
+                        
+                        # But message_count was already incremented during _flush_turn
+                        # So we need to go back: actual_message_count tells us current turn (1-based)
+                        # Before this stream: actual_message_count - 1 turns had completed
+                        # We need to find how many messages existed before this stream
+                        
+                        # Simple strategy: Query metadata storage to see which messages already have metadata
+                        # Only store for messages that DON'T have metadata yet
+                        from apis.app_api.sessions.services.metadata import get_all_message_metadata
+                        existing_metadata = await get_all_message_metadata(session_id, user_id)
+                        existing_message_ids = set(existing_metadata.keys())
+                    
+                    # Identify NEW assistant messages (those without existing metadata)
+                    if messages and actual_message_count_from_memory > 0:
+                        for idx, msg in enumerate(messages):
+                            role = None
+                            if hasattr(msg, 'message'):
+                                role = msg.message.get('role') if hasattr(msg.message, 'get') else getattr(msg.message, 'role', None)
+                            elif hasattr(msg, 'role'):
+                                role = msg.role
+                            
+                            # Only include assistant messages that DON'T already have metadata
+                            if role == 'assistant' and str(idx) not in existing_message_ids:
+                                assistant_message_ids.append(idx)
+                        
+                        # For backward compatibility, set message_id to the last NEW assistant message
+                        message_id = assistant_message_ids[-1] if assistant_message_ids else actual_message_count_from_memory - 1
+                        logger.info(f"🔄 Found {len(assistant_message_ids)} NEW assistant messages (without metadata): {assistant_message_ids}")
+                    else:
+                        # Fallback to turn counter if query fails
+                        message_id = actual_message_count - 1 if actual_message_count else 0
+                        logger.warning(f"⚠️ No messages in AgentCore Memory, using turn counter fallback: {message_id}")
+                except Exception as e:
+                    logger.error(f"Failed to query AgentCore Memory for message count: {e}", exc_info=True)
+                    # Fallback to turn counter
+                    message_id = actual_message_count - 1 if actual_message_count else 0
+                    logger.info(f"🔄 Using fallback message_id from turn counter: {message_id}")
+
+            # Store message-level metadata for assistant messages created during this stream
+            # Use individual per-message metadata if we tracked it, otherwise fallback to accumulated
+            message_ids_to_store = assistant_message_ids if assistant_message_ids else ([message_id] if message_id is not None else [])
+            
+            if message_ids_to_store:
+                for idx, msg_id in enumerate(message_ids_to_store):
+                    # Use individual metadata if we have it, otherwise use accumulated
+                    if idx < len(per_message_metadata) and per_message_metadata[idx].get("usage"):
+                        metadata_for_message = per_message_metadata[idx]
+                        first_token_for_message = metadata_for_message.get("first_token_time") or (first_token_time if idx == 0 else None)
+                    else:
+                        # Fallback to accumulated metadata (backward compatibility)
+                        metadata_for_message = accumulated_metadata
+                        first_token_for_message = first_token_time
+                    
+                    logger.info(f"📊 Storing message metadata for message_id={msg_id} (index {idx})")
+                    await self._store_message_metadata(
+                        session_id=session_id,
+                        user_id=user_id,
+                        message_id=msg_id,
+                        accumulated_metadata=metadata_for_message,
+                        stream_start_time=stream_start_time,
+                        stream_end_time=stream_end_time,
+                        first_token_time=first_token_for_message,
+                        agent=strands_agent_wrapper  # Use wrapper instead of internal agent
+                    )
+                logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages")
 
         except Exception as e:
             # Handle errors with emergency flush
@@ -727,7 +846,11 @@ class StreamCoordinator:
             )
 
             logger.info(f"✅ Updated session metadata - last_model: {metadata.preferences.last_model if metadata.preferences else 'None'}, message_count: {metadata.message_count}")
+            
+            # Return message count for use as a fallback message_id
+            return metadata.message_count
 
         except Exception as e:
             logger.error(f"Failed to update session metadata: {e}", exc_info=True)
             # Don't raise - metadata failures shouldn't break streaming
+            return None

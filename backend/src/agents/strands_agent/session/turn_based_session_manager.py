@@ -43,10 +43,15 @@ class TurnBasedSessionManager:
         self.batch_size = batch_size
         self.max_buffer_size = max_buffer_size
         self.cancelled = False  # Flag to stop accepting new messages
+        
+        # Message count tracking to avoid eventual consistency issues
+        # Initialize by querying AgentCore Memory once at startup
+        self.message_count: int = self._initialize_message_count()
 
         logger.info(
             f"✅ TurnBasedSessionManager initialized "
-            f"(buffering enabled, batch_size={batch_size}, max_buffer_size={max_buffer_size})"
+            f"(buffering enabled, batch_size={batch_size}, max_buffer_size={max_buffer_size}, "
+            f"initial_message_count={self.message_count})"
         )
 
     def _should_flush_turn(self, message: Dict[str, Any]) -> bool:
@@ -139,8 +144,13 @@ class TurnBasedSessionManager:
                 session_message
             )
 
-            # Get sequence number (0-based) from message count
+            # Increment message count (we just flushed one message)
+            self.message_count += 1
+            
+            # Get sequence number (0-based) from updated count
             sequence_number = self._get_latest_message_sequence()
+            
+            logger.info(f"💾 Flushed message → message_count: {self.message_count}, sequence_number: {sequence_number}")
 
             # Clear buffer
             self.pending_messages = []
@@ -151,28 +161,41 @@ class TurnBasedSessionManager:
         self.pending_messages = []
         return None
 
-    def _get_latest_message_sequence(self) -> Optional[int]:
+    def _initialize_message_count(self) -> int:
         """
-        Get the sequence number of the most recently stored message
-
-        For AgentCore Memory, we count the total messages in the session
-        and return 0-based index (count - 1).
-
+        Initialize message count by querying AgentCore Memory once at startup.
+        
+        This avoids eventual consistency issues during active streaming by only
+        querying at initialization when we're not racing with concurrent writes.
+        
         Returns:
-            Sequence number (0-based) or None if unavailable
+            Initial message count (0 if session is new or if query fails)
         """
         try:
-            # Get all messages from the session
             messages = self.base_manager.list_messages(
                 self.base_manager.config.session_id,
                 "default"  # agent_id
             )
-            if messages:
-                # Return 0-based sequence: count - 1
-                return len(messages) - 1
+            initial_count = len(messages) if messages else 0
+            logger.info(f"📊 Initialized message count from AgentCore Memory: {initial_count}")
+            return initial_count
         except Exception as e:
-            logger.error(f"Failed to get latest message sequence: {e}")
+            logger.warning(f"Failed to initialize message count from AgentCore Memory: {e}, defaulting to 0")
+            return 0
 
+    def _get_latest_message_sequence(self) -> Optional[int]:
+        """
+        Get the sequence number of the most recently stored message.
+        
+        Uses internally tracked count instead of querying AgentCore Memory to avoid
+        eventual consistency issues (newly created messages aren't immediately visible).
+
+        Returns:
+            Sequence number (0-based) or None if no messages have been flushed
+        """
+        if self.message_count > 0:
+            # Return 0-based sequence: count - 1
+            return self.message_count - 1
         return None
 
     def add_message(self, message: Dict[str, Any]):

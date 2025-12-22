@@ -12,7 +12,7 @@ import logging
 import json
 import os
 import base64
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict
 from pathlib import Path
 from decimal import Decimal
 
@@ -166,37 +166,53 @@ async def _store_message_metadata_cloud(
         message_metadata: MessageMetadata to store
         table_name: DynamoDB table name from DYNAMODB_SESSIONS_METADATA_TABLE_NAME env var
 
-    Note:
-        Implementation depends on your DynamoDB schema.
-        This is a placeholder showing the general approach.
-
-    TODO: Implement based on your DynamoDB schema
-    Example schema:
-        PK: CONVERSATION#{session_id}
-        SK: MESSAGE#{message_id}
-        metadata: { latency: {...}, tokenUsage: {...} }
+    Schema:
+        PK: USER#{user_id}
+        SK: SESSION#{session_id}#MSG#{message_id:05d}
     """
     try:
-        # TODO: Implement DynamoDB update
-        # Example pseudocode:
-        # dynamodb = boto3.resource('dynamodb')
-        # table = dynamodb.Table(table_name)
-        # table.update_item(
-        #     Key={
-        #         'PK': f'CONVERSATION#{session_id}',
-        #         'SK': f'MESSAGE#{message_id}'
-        #     },
-        #     UpdateExpression='SET metadata = :metadata',
-        #     ExpressionAttributeValues={
-        #         ':metadata': message_metadata.model_dump(by_alias=True, exclude_none=True)
-        #     }
-        # )
+        import boto3
+        from datetime import datetime, timezone, timedelta
 
-        logger.info(f"💾 Would store message metadata in DynamoDB table {table_name}")
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
+
+        # Prepare item for DynamoDB
+        metadata_dict = message_metadata.model_dump(by_alias=True, exclude_none=True)
+
+        # Convert floats to Decimal for DynamoDB compatibility
+        metadata_decimal = _convert_floats_to_decimal(metadata_dict)
+
+        # Extract timestamp for GSI
+        timestamp = metadata_dict.get("attribution", {}).get("timestamp", datetime.now(timezone.utc).isoformat())
+
+        # Calculate TTL (365 days from now, matching AgentCore Memory retention)
+        ttl = int((datetime.now(timezone.utc) + timedelta(days=365)).timestamp())
+
+        # Build item
+        item = {
+            "PK": f"USER#{user_id}",
+            "SK": f"SESSION#{session_id}#MSG#{message_id:05d}",
+            "userId": user_id,
+            "sessionId": session_id,
+            "messageId": message_id,
+            "timestamp": timestamp,
+            "ttl": ttl,
+            **metadata_decimal
+        }
+
+        # Add GSI attributes for time-range queries
+        item["GSI1PK"] = f"USER#{user_id}"
+        item["GSI1SK"] = timestamp
+
+        # Store in DynamoDB
+        table.put_item(Item=item)
+
+        logger.info(f"💾 Stored message metadata in DynamoDB table {table_name}")
         logger.info(f"   Session: {session_id}, Message: {message_id}")
 
     except Exception as e:
-        logger.error(f"Failed to store message metadata in DynamoDB: {e}")
+        logger.error(f"Failed to store message metadata in DynamoDB: {e}", exc_info=True)
         # Don't raise - metadata storage failures shouldn't break the app
 
 
@@ -416,6 +432,91 @@ async def get_session_metadata(session_id: str, user_id: str) -> Optional[Sessio
         )
     else:
         return await _get_session_metadata_local(session_id=session_id)
+
+
+async def get_all_message_metadata(session_id: str, user_id: str) -> Dict[str, Any]:
+    """
+    Retrieve all message metadata for a session.
+    
+    In cloud mode, queries the DynamoDB table for all records matching the 
+    session_id prefix in the sort key.
+    
+    In local mode, reads the message-metadata.json file.
+    
+    Returns:
+        Dictionary mapping message_id (str) to metadata dict
+    """
+    sessions_metadata_table = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+
+    if sessions_metadata_table:
+        return await _get_all_message_metadata_cloud(session_id, user_id, sessions_metadata_table)
+    else:
+        return await _get_all_message_metadata_local(session_id)
+
+
+async def _get_all_message_metadata_local(session_id: str) -> Dict[str, Any]:
+    """Retrieve all message metadata from local file storage"""
+    from apis.app_api.storage.paths import get_message_metadata_path
+    metadata_file = get_message_metadata_path(session_id)
+    if not metadata_file.exists():
+        return {}
+    try:
+        with open(metadata_file, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to read local message metadata index: {e}")
+        return {}
+
+
+async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_name: str) -> Dict[str, Any]:
+    """Retrieve all message metadata from DynamoDB"""
+    try:
+        import boto3
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(table_name)
+        
+        logger.info(f"🔍 Querying metadata table {table_name} for session {session_id}")
+        
+        # Query all message metadata for this session
+        # PK: USER#{user_id}
+        # SK starts with SESSION#{session_id}#MSG#
+        response = table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+            ExpressionAttributeValues={
+                ":pk": f"USER#{user_id}",
+                ":sk_prefix": f"SESSION#{session_id}#MSG#"
+            }
+        )
+        
+        items = response.get("Items", [])
+        metadata_index = {}
+        
+        logger.info(f"📦 DynamoDB returned {len(items)} metadata items")
+        
+        for item in items:
+            # Convert Decimal to float
+            item_float = _convert_decimal_to_float(item)
+            
+            # Extract message_id as integer (DynamoDB returns Decimal, convert to int then str)
+            # Must convert to int first to avoid "0.0" -> "0" mismatch
+            message_id_raw = item_float.get("messageId")
+            message_id = str(int(message_id_raw)) if isinstance(message_id_raw, (int, float)) else str(message_id_raw)
+            
+            logger.debug(f"Processing metadata for message_id={message_id}, SK={item_float.get('SK')}")
+            
+            # Remove DynamoDB-specific keys and top-level fields not needed in metadata dict
+            for key in ["PK", "SK", "GSI1PK", "GSI1SK", "ttl", "userId", "sessionId", "messageId", "timestamp"]:
+                item_float.pop(key, None)
+                
+            metadata_index[message_id] = item_float
+            
+        logger.info(f"📂 Retrieved {len(metadata_index)} message metadata items from DynamoDB")
+        logger.info(f"📋 Metadata keys: {sorted(metadata_index.keys())}")
+        return metadata_index
+        
+    except Exception as e:
+        logger.error(f"Failed to query all message metadata from DynamoDB: {e}", exc_info=True)
+        return {}
 
 
 async def _get_session_metadata_local(session_id: str) -> Optional[SessionMetadata]:

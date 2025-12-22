@@ -256,36 +256,52 @@ async def get_messages_from_cloud(
     logger.info(f"Retrieving messages from AgentCore Memory - Session: {session_id}, User: {user_id}")
 
     try:
-        # Get messages from session
-        # The session manager uses the base manager's list_messages method
-        messages_raw = session_manager.list_messages(session_id, agent_id="default")
+        # Fetch messages and metadata in parallel for better performance
+        import asyncio
+        
+        async def fetch_messages():
+            """Fetch messages from AgentCore Memory (runs in thread pool since it's sync)"""
+            return await asyncio.to_thread(
+                session_manager.list_messages,
+                session_id,
+                "default"
+            )
+        
+        async def fetch_metadata():
+            """Fetch metadata from DynamoDB"""
+            from apis.app_api.sessions.services.metadata import get_all_message_metadata
+            return await get_all_message_metadata(session_id, user_id)
+        
+        # Run both fetches in parallel
+        messages_raw, metadata_index = await asyncio.gather(
+            fetch_messages(),
+            fetch_metadata()
+        )
 
         logger.info(f"AgentCore Memory returned {len(messages_raw) if messages_raw else 0} raw messages")
+        logger.info(f"Metadata index contains {len(metadata_index)} entries")
+        logger.info(f"🔑 Metadata index keys: {sorted(metadata_index.keys())}")
 
         # Convert to our Message model
         messages = []
         if messages_raw:
+            # DO NOT SORT - AgentCore Memory returns messages in chronological order
+            # The enumerated index matches the stored sequence number (message_id)
             for idx, msg in enumerate(messages_raw):
                 try:
-                    # Debug log the message structure
-                    logger.info(f"Message {idx}: type={type(msg)}, hasattr message={hasattr(msg, 'message')}")
-                    if hasattr(msg, 'message'):
-                        inner = getattr(msg, 'message')
-                        logger.info(f"  Inner message: type={type(inner)}, hasattr role={hasattr(inner, 'role')}, hasattr content={hasattr(inner, 'content')}")
-                        if hasattr(inner, 'content'):
-                            content = getattr(inner, 'content')
-                            logger.info(f"  Content: type={type(content)}, len={len(content) if isinstance(content, list) else 'N/A'}")
+                    # Metadata join: use index as message_id (0-based sequence)
+                    metadata = metadata_index.get(str(idx))
+                    if metadata:
+                        logger.info(f"🔗 Joined metadata for message {idx}")
+                    else:
+                        logger.warning(f"⚠️ No metadata found for message {idx}")
 
-                    messages.append(_convert_message(msg))
+                    messages.append(_convert_message(msg, metadata=metadata))
                 except Exception as e:
                     logger.error(f"Error converting message {idx}: {e}", exc_info=True)
                     continue
 
-        # Sort messages by timestamp to ensure consistent ordering
-        # This allows us to use array index as the message sequence number
-        messages.sort(key=lambda msg: msg.timestamp or "")
-
-        logger.info(f"Retrieved {len(messages)} messages from AgentCore Memory")
+        logger.info(f"Retrieved {len(messages)} messages from AgentCore Memory with metadata")
 
         # Apply pagination
         paginated_messages, next_page_token = _apply_pagination(messages, limit, next_token)
