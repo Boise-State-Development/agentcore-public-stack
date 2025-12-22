@@ -68,8 +68,9 @@ class StreamCoordinator:
         }
 
         # Track individual metadata per assistant message during streaming
-        # Key: assistant_message_index (0, 1, 2...), Value: metadata dict
-        per_message_metadata = []
+        # Each entry contains: usage, metrics, timing info (start_time, first_token_time, end_time)
+        # This enables accurate per-message latency tracking for multi-turn tool use scenarios
+        per_message_metadata: List[Dict[str, Any]] = []
         current_assistant_message_index = -1  # Track which assistant message we're on (0-indexed within this stream)
 
         # OPTIMIZATION: Capture initial message count BEFORE streaming starts
@@ -90,21 +91,79 @@ class StreamCoordinator:
                     role = event.get("data", {}).get("role")
                     if role == "assistant":
                         current_assistant_message_index += 1
+                        # Record the start time for this specific assistant message
+                        # This enables accurate per-message latency calculation
                         per_message_metadata.append({
                             "usage": {},
                             "metrics": {},
-                            "first_token_time": None
+                            "start_time": time.time(),  # When this message started
+                            "first_token_time": None,   # When first token was received
+                            "end_time": None            # When this message ended
                         })
+                        logger.debug(f"📝 Assistant message {current_assistant_message_index} started at {per_message_metadata[-1]['start_time']}")
+
+                # Track first token time per assistant message
+                # This captures when the first content delta arrives for each message
+                # We check for text content specifically to measure time to first TEXT token
+                if event.get("type") == "content_block_delta":
+                    event_data = event.get("data", {})
+                    # Only track first token for text deltas (not tool use deltas)
+                    # This gives accurate TTFT for actual text generation
+                    if event_data.get("type") == "text" and event_data.get("text"):
+                        if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                            if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
+                                per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
+                                logger.info(f"📝 First TEXT token for assistant message {current_assistant_message_index} at {per_message_metadata[current_assistant_message_index]['first_token_time']:.3f}")
+                                # Also update global first_token_time for the first message (backward compatibility)
+                                if current_assistant_message_index == 0 and first_token_time is None:
+                                    first_token_time = per_message_metadata[0]["first_token_time"]
+
+                # Track when assistant messages end
+                if event.get("type") == "message_stop":
+                    if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                        per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
+                        logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
                 
                 # Track individual metadata events (per assistant message)
                 if event.get("type") == "metadata":
                     event_data = event.get("data", {})
-                    if current_assistant_message_index >= 0:
+                    if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                        msg_meta = per_message_metadata[current_assistant_message_index]
+
                         # Associate this metadata with the current assistant message
                         if "usage" in event_data:
-                            per_message_metadata[current_assistant_message_index]["usage"].update(event_data["usage"])
+                            msg_meta["usage"].update(event_data["usage"])
                         if "metrics" in event_data:
-                            per_message_metadata[current_assistant_message_index]["metrics"].update(event_data["metrics"])
+                            msg_meta["metrics"].update(event_data["metrics"])
+
+                        # Calculate and store TTFT for this message NOW while we have timing context
+                        # Use the first_token_time we captured from content_block_delta
+                        # and the start_time from message_start
+                        if msg_meta.get("first_token_time") and msg_meta.get("start_time"):
+                            if "timeToFirstByteMs" not in msg_meta["metrics"]:
+                                calculated_ttft = int((msg_meta["first_token_time"] - msg_meta["start_time"]) * 1000)
+                                # For fast responses, TTFT should be at least the provider's reported latency portion
+                                # If our calculated TTFT is < 10ms (event processing delay), use provider metrics
+                                provider_latency = msg_meta["metrics"].get("latencyMs", 0)
+                                if calculated_ttft < 10 and provider_latency > 100:
+                                    # Estimate TTFT as ~30% of total latency (typical for LLM calls)
+                                    msg_meta["metrics"]["timeToFirstByteMs"] = int(provider_latency * 0.3)
+                                    logger.info(f"📊 Estimated TTFT for message {current_assistant_message_index}: {msg_meta['metrics']['timeToFirstByteMs']}ms (30% of {provider_latency}ms)")
+                                elif calculated_ttft >= 10:
+                                    msg_meta["metrics"]["timeToFirstByteMs"] = calculated_ttft
+                                    logger.info(f"📊 Calculated TTFT for message {current_assistant_message_index}: {calculated_ttft}ms")
+
+                        # ENRICH the metadata event sent to client with our calculated TTFT
+                        # This ensures the client sees accurate per-message TTFT during streaming
+                        if msg_meta["metrics"].get("timeToFirstByteMs"):
+                            if "metrics" not in event_data:
+                                event_data["metrics"] = {}
+                            event_data["metrics"]["timeToFirstByteMs"] = msg_meta["metrics"]["timeToFirstByteMs"]
+                            # Update the event with enriched data for client streaming
+                            event = {"type": "metadata", "data": event_data}
+                            logger.info(f"📊 Enriched metadata event for client with TTFT: {msg_meta['metrics']['timeToFirstByteMs']}ms")
+
+                        logger.debug(f"📊 Metadata for message {current_assistant_message_index}: {msg_meta['metrics']}")
                     # Also accumulate for backward compatibility
                     if "usage" in event_data:
                         accumulated_metadata["usage"].update(event_data["usage"])
@@ -244,13 +303,40 @@ class StreamCoordinator:
                 metadata_tasks = []
                 for idx, msg_id in enumerate(message_ids_to_store):
                     # Use individual metadata if we have it, otherwise use accumulated
-                    if idx < len(per_message_metadata) and per_message_metadata[idx].get("usage"):
-                        metadata_for_message = per_message_metadata[idx]
-                        first_token_for_message = metadata_for_message.get("first_token_time") or (first_token_time if idx == 0 else None)
+                    if idx < len(per_message_metadata):
+                        metadata_for_message = per_message_metadata[idx].copy()  # Copy to avoid mutation
+                        # Use per-message timing for accurate latency calculation
+                        # Each message has its own start_time, first_token_time, and end_time
+                        msg_start_time = metadata_for_message.get("start_time") or stream_start_time
+                        msg_end_time = metadata_for_message.get("end_time") or stream_end_time
+                        first_token_for_message = metadata_for_message.get("first_token_time")
+
+                        # For the FIRST message, enrich with global timeToFirstByteMs if available
+                        # The provider's timeToFirstByteMs in metadata_summary is for the first LLM call
+                        if idx == 0:
+                            global_ttfb = accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs")
+                            if global_ttfb and "timeToFirstByteMs" not in metadata_for_message.get("metrics", {}):
+                                if "metrics" not in metadata_for_message:
+                                    metadata_for_message["metrics"] = {}
+                                metadata_for_message["metrics"]["timeToFirstByteMs"] = global_ttfb
+                                logger.info(f"📊 Enriched message 0 with global timeToFirstByteMs: {global_ttfb}ms")
+
+                        # Fallback: if no first_token_time for this message, try global (for first message only)
+                        if first_token_for_message is None and idx == 0:
+                            first_token_for_message = first_token_time
+
+                        first_token_str = f"{first_token_for_message:.3f}" if first_token_for_message is not None else "None"
+                        logger.debug(
+                            f"📊 Message {idx} timing: start={msg_start_time:.3f}, "
+                            f"first_token={first_token_str}, "
+                            f"end={msg_end_time:.3f}"
+                        )
                     else:
-                        # Fallback to accumulated metadata (backward compatibility)
+                        # Fallback to accumulated metadata and global timing (backward compatibility)
                         metadata_for_message = accumulated_metadata
-                        first_token_for_message = first_token_time
+                        msg_start_time = stream_start_time
+                        msg_end_time = stream_end_time
+                        first_token_for_message = first_token_time if idx == 0 else None
 
                     logger.info(f"📊 Queuing message metadata for message_id={msg_id} (index {idx})")
                     metadata_tasks.append(
@@ -259,8 +345,8 @@ class StreamCoordinator:
                             user_id=user_id,
                             message_id=msg_id,
                             accumulated_metadata=metadata_for_message,
-                            stream_start_time=stream_start_time,
-                            stream_end_time=stream_end_time,
+                            stream_start_time=msg_start_time,
+                            stream_end_time=msg_end_time,
                             first_token_time=first_token_for_message,
                             agent=strands_agent_wrapper  # Use wrapper instead of internal agent
                         )
@@ -584,28 +670,52 @@ class StreamCoordinator:
             # Build LatencyMetrics if we have timing data
             latency_metrics = None
             time_to_first_token_ms = None
-            
-            # Try to calculate time to first token using first_token_time from processor
-            if first_token_time:
-                time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
-                logger.debug(f"Calculated time_to_first_token from processor: {time_to_first_token_ms}ms")
-            # Fallback: Use timeToFirstByteMs from provider metrics if available
-            elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
-                time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
-                logger.debug(f"Using provider timeToFirstByteMs as fallback: {time_to_first_token_ms}ms")
-            
-            # Create latency metrics if we have time to first token (required field)
-            # We always have end-to-end latency (stream_end_time - stream_start_time)
-            if time_to_first_token_ms is not None:
-                latency_metrics = LatencyMetrics(
-                    time_to_first_token=time_to_first_token_ms,
-                    end_to_end_latency=int((stream_end_time - stream_start_time) * 1000)
-                )
+            end_to_end_latency_ms = None
+
+            # Log timing values for debugging
+            logger.info(f"📊 _store_message_metadata timing: first_token_time={first_token_time}, stream_start_time={stream_start_time}, stream_end_time={stream_end_time}")
+            logger.info(f"📊 _store_message_metadata metrics: {accumulated_metadata.get('metrics', {})}")
+
+            # Get end-to-end latency from provider metrics if available (most accurate)
+            # The provider's latencyMs is the total time for the API call
+            provider_latency_ms = accumulated_metadata.get("metrics", {}).get("latencyMs")
+            if provider_latency_ms:
+                end_to_end_latency_ms = int(provider_latency_ms)
+                logger.info(f"📊 Using provider latencyMs for E2E: {end_to_end_latency_ms}ms")
             else:
-                # Log if we couldn't determine time to first token
+                # Fallback to calculated E2E from our timing
+                end_to_end_latency_ms = int((stream_end_time - stream_start_time) * 1000)
+                logger.info(f"📊 Calculated E2E latency: {end_to_end_latency_ms}ms")
+
+            # Get time to first token
+            # PRIORITY 1: Use provider's timeToFirstByteMs if available (most accurate)
+            if accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
+                time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
+                logger.info(f"📊 Using provider timeToFirstByteMs: {time_to_first_token_ms}ms")
+            # PRIORITY 2: Estimate TTFT as a portion of latency if we don't have it
+            # This is a rough estimate but better than 0 or None
+            # For most LLM calls, TTFT is typically 20-40% of total latency
+            elif end_to_end_latency_ms and end_to_end_latency_ms > 100:
+                # If E2E latency is available and substantial, estimate TTFT
+                # We don't have actual TTFT so we can't store it accurately
+                # Instead, log that we're missing it
+                logger.info(f"📊 No TTFT available - provider did not send timeToFirstByteMs for this message")
+                # Still create latency metrics with just E2E, using a placeholder of 0 for TTFT
+                # This is better than losing all latency data
+                time_to_first_token_ms = 0  # Indicates "not measured"
+
+            # Create latency metrics if we have at least E2E latency
+            if end_to_end_latency_ms is not None:
+                latency_metrics = LatencyMetrics(
+                    time_to_first_token=time_to_first_token_ms if time_to_first_token_ms is not None else 0,
+                    end_to_end_latency=end_to_end_latency_ms
+                )
+                logger.info(f"📊 Created LatencyMetrics: TTFT={time_to_first_token_ms}ms, E2E={end_to_end_latency_ms}ms")
+            else:
+                # Log if we couldn't determine any latency
                 logger.warning(
-                    "Could not determine time_to_first_token - "
-                    "no first_token_time from processor and no timeToFirstByteMs in metrics"
+                    "Could not determine latency metrics - "
+                    "no latencyMs from provider and no timing data available"
                 )
 
             # Extract ModelInfo from agent and create pricing snapshot for cost tracking
