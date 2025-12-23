@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import AsyncGenerator, Optional, Any, Union, List, Dict
 
 from .stream_processor import process_agent_stream
-from apis.shared.errors import StreamErrorEvent, ErrorCode
+from apis.shared.errors import StreamErrorEvent, ErrorCode, ConversationalErrorEvent, build_conversational_error_event
 
 logger = logging.getLogger(__name__)
 
@@ -189,14 +189,14 @@ class StreamCoordinator:
                 if event.get("type") == "done":
                     # Calculate end-to-end latency
                     stream_end_time = time.time()
-                    
+
                     # Calculate time to first token for client display
                     time_to_first_token_ms = None
                     if first_token_time:
                         time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
                     elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
                         time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
-                    
+
                     # Send final metadata event to client with calculated TTFT
                     # This ensures the client receives the final metadata with accurate TTFT calculation
                     if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics") or time_to_first_token_ms:
@@ -204,21 +204,91 @@ class StreamCoordinator:
                             "usage": accumulated_metadata.get("usage", {}),
                             "metrics": {}
                         }
-                        
+
                         # Include provider metrics if available
                         if accumulated_metadata.get("metrics"):
                             final_metadata["metrics"].update(accumulated_metadata["metrics"])
-                        
+
                         # Add calculated time to first token (overrides provider value if we calculated it)
                         if time_to_first_token_ms is not None:
                             final_metadata["metrics"]["timeToFirstByteMs"] = time_to_first_token_ms
-                        
+
                         # Add end-to-end latency to metrics for consistency
                         final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
-                        
+
                         # Send final metadata event to client (before done event)
                         final_metadata_event = {"type": "metadata", "data": final_metadata}
                         yield self._format_sse_event(final_metadata_event)
+
+                # Intercept legacy "error" events from stream_processor and convert to conversational format
+                # This ensures errors appear as assistant messages in the chat UI
+                if event.get("type") == "error":
+                    error_data = event.get("data", {})
+                    error_message = error_data.get("error", "An error occurred")
+                    error_detail = error_data.get("detail", "")
+                    error_code_str = error_data.get("code", "stream_error")
+
+                    # Map string code to ErrorCode enum
+                    try:
+                        error_code = ErrorCode(error_code_str)
+                    except ValueError:
+                        error_code = ErrorCode.STREAM_ERROR
+
+                    # Create a synthetic exception for build_conversational_error_event
+                    synthetic_error = Exception(f"{error_message}: {error_detail}" if error_detail else error_message)
+
+                    # Build conversational error event
+                    conv_error_event = build_conversational_error_event(
+                        code=error_code,
+                        error=synthetic_error,
+                        session_id=session_id,
+                        recoverable=error_data.get("recoverable", False)
+                    )
+
+                    # Emit message events so error appears in chat
+                    yield f"event: message_start\ndata: {{\"role\": \"assistant\"}}\n\n"
+                    yield f"event: content_block_start\ndata: {{\"contentBlockIndex\": 0, \"type\": \"text\"}}\n\n"
+                    yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': conv_error_event.message})}\n\n"
+                    yield f"event: content_block_stop\ndata: {{\"contentBlockIndex\": 0}}\n\n"
+                    yield f"event: message_stop\ndata: {{\"stopReason\": \"error\"}}\n\n"
+                    yield conv_error_event.to_sse_format()
+                    yield "event: done\ndata: {}\n\n"
+
+                    # Persist error messages to session
+                    try:
+                        from strands.types.session import SessionMessage
+                        from agents.strands_agent.session.session_factory import SessionFactory
+
+                        persist_session_manager = SessionFactory.create_session_manager(
+                            session_id=session_id,
+                            user_id=user_id,
+                            caching_enabled=False
+                        )
+
+                        # Extract user text from prompt (can be string or ContentBlock list)
+                        if isinstance(prompt, str):
+                            user_text = prompt
+                        else:
+                            # Extract text from ContentBlock list
+                            user_text = " ".join(
+                                block.get("text", "") for block in prompt
+                                if isinstance(block, dict) and "text" in block
+                            )
+
+                        user_msg = {"role": "user", "content": [{"text": user_text}]}
+                        assistant_msg = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
+
+                        if hasattr(persist_session_manager, 'base_manager') and hasattr(persist_session_manager.base_manager, 'create_message'):
+                            user_session_msg = SessionMessage.from_message(user_msg, 0)
+                            assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                            persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
+                            persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
+                            logger.info(f"💾 Saved intercepted error messages to session {session_id}")
+                    except Exception as persist_error:
+                        logger.error(f"Failed to persist intercepted error to session: {persist_error}")
+
+                    # Skip the original error event and exit the loop - we've handled the error
+                    return
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -372,8 +442,55 @@ class StreamCoordinator:
             # Emergency flush: save buffered messages before losing them
             self._emergency_flush(session_manager)
 
-            # Send error event to client
-            yield self._create_error_event(str(e))
+            # Stream error as conversational assistant message for better UX
+            error_event = build_conversational_error_event(
+                code=ErrorCode.STREAM_ERROR,
+                error=e,
+                session_id=session_id,
+                recoverable=True
+            )
+
+            # Emit message events so error appears in chat
+            yield f"event: message_start\ndata: {{\"role\": \"assistant\"}}\n\n"
+            yield f"event: content_block_start\ndata: {{\"contentBlockIndex\": 0, \"type\": \"text\"}}\n\n"
+            yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': error_event.message})}\n\n"
+            yield f"event: content_block_stop\ndata: {{\"contentBlockIndex\": 0}}\n\n"
+            yield f"event: message_stop\ndata: {{\"stopReason\": \"error\"}}\n\n"
+            yield error_event.to_sse_format()
+            yield "event: done\ndata: {}\n\n"
+
+            # Persist error messages to session
+            try:
+                from strands.types.session import SessionMessage
+                from agents.strands_agent.session.session_factory import SessionFactory
+
+                persist_session_manager = SessionFactory.create_session_manager(
+                    session_id=session_id,
+                    user_id=user_id,
+                    caching_enabled=False
+                )
+
+                # Extract user text from prompt (can be string or ContentBlock list)
+                if isinstance(prompt, str):
+                    user_text = prompt
+                else:
+                    # Extract text from ContentBlock list
+                    user_text = " ".join(
+                        block.get("text", "") for block in prompt
+                        if isinstance(block, dict) and "text" in block
+                    )
+
+                user_msg = {"role": "user", "content": [{"text": user_text}]}
+                assistant_msg = {"role": "assistant", "content": [{"text": error_event.message}]}
+
+                if hasattr(persist_session_manager, 'base_manager') and hasattr(persist_session_manager.base_manager, 'create_message'):
+                    user_session_msg = SessionMessage.from_message(user_msg, 0)
+                    assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                    persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
+                    persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
+                    logger.info(f"💾 Saved stream error messages to session {session_id}")
+            except Exception as persist_error:
+                logger.error(f"Failed to persist stream error to session: {persist_error}")
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """

@@ -41,13 +41,26 @@ export interface ErrorDetail {
 }
 
 /**
- * Stream error event matching backend StreamErrorEvent
+ * Stream error event matching backend StreamErrorEvent (legacy)
  */
 export interface StreamErrorEvent {
   error: string;
   code: ErrorCode;
   detail?: string;
   recoverable: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Conversational stream error event matching backend ConversationalErrorEvent.
+ * This is sent when errors are streamed as assistant messages for better UX.
+ */
+export interface ConversationalStreamError {
+  type: 'stream_error';
+  code: ErrorCode;
+  message: string;  // Markdown-formatted message (already displayed as assistant message)
+  recoverable: boolean;
+  retry_after?: number;  // Snake case to match backend Pydantic model
   metadata?: Record<string, unknown>;
 }
 
@@ -128,7 +141,7 @@ export class ErrorService {
   }
 
   /**
-   * Handle SSE stream error event
+   * Handle SSE stream error event (legacy)
    */
   handleStreamError(errorEvent: StreamErrorEvent): ErrorMessage {
     const errorMessage = this.createErrorMessage(
@@ -146,6 +159,35 @@ export class ErrorService {
 
     this.addErrorMessage(errorMessage);
     return errorMessage;
+  }
+
+  /**
+   * Handle conversational stream error event.
+   *
+   * Note: The error message is already displayed as an assistant message in the chat,
+   * so we don't need to show it again. This method is for tracking error state
+   * and potentially enabling retry functionality.
+   */
+  handleConversationalStreamError(errorEvent: ConversationalStreamError): void {
+    // Store the error state for potential retry functionality
+    const errorMessage: ErrorMessage = {
+      id: this.generateErrorId(),
+      title: this.getErrorTitle(errorEvent.code),
+      message: 'An error occurred during processing', // Brief summary, full message is in chat
+      detail: errorEvent.message,
+      code: errorEvent.code,
+      timestamp: new Date(),
+      dismissible: true,
+    };
+
+    // Only store it, don't display as toast (message is already in chat)
+    this.lastErrorSignal.set(errorMessage);
+
+    // If there's a retry delay, we could use it for auto-retry logic
+    if (errorEvent.retry_after) {
+      // Future: implement auto-retry with delay
+      console.log(`Error is recoverable, retry after ${errorEvent.retry_after}s`);
+    }
   }
 
   /**

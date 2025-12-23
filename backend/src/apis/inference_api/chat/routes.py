@@ -10,24 +10,115 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 import logging
-from typing import AsyncGenerator
+import json
+from typing import AsyncGenerator, Union
+from datetime import datetime, timezone
 
 from .models import InvocationRequest
 from .service import get_agent
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
-from apis.shared.errors import ErrorCode, create_error_response
+from apis.shared.errors import (
+    ErrorCode,
+    create_error_response,
+    ConversationalErrorEvent,
+    build_conversational_error_event,
+)
 from apis.shared.quota import (
     get_quota_checker,
     is_quota_enforcement_enabled,
-    build_quota_exceeded_response,
+    build_quota_exceeded_event,
     build_quota_warning_event,
+    QuotaExceededEvent,
 )
+from agents.strands_agent.session.session_factory import SessionFactory
 
 logger = logging.getLogger(__name__)
 
 # Router with no prefix - endpoints will be at root level
 router = APIRouter(tags=["agentcore-runtime"])
+
+
+# ============================================================
+# Helper Functions for Streaming Error/Status Messages
+# ============================================================
+
+async def stream_conversational_message(
+    message: str,
+    stop_reason: str,
+    metadata_event: Union[QuotaExceededEvent, ConversationalErrorEvent, None],
+    session_id: str,
+    user_id: str,
+    user_input: str
+) -> AsyncGenerator[str, None]:
+    """Stream a message as an assistant response with optional metadata event.
+
+    This helper function creates a proper SSE stream that appears as an
+    assistant message in the chat UI and persists to session history.
+
+    Args:
+        message: The markdown message to display
+        stop_reason: Reason for stopping (e.g., 'quota_exceeded', 'error')
+        metadata_event: Optional event with additional metadata for UI
+        session_id: Session ID for persistence
+        user_id: User ID for persistence
+        user_input: The user's original message to save
+    """
+    # Emit message_start event (assistant response)
+    yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
+
+    # Emit content_block_start for text
+    yield f"event: content_block_start\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text'})}\n\n"
+
+    # Emit the message as text delta
+    yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': message})}\n\n"
+
+    # Emit content_block_stop
+    yield f"event: content_block_stop\ndata: {json.dumps({'contentBlockIndex': 0})}\n\n"
+
+    # Emit message_stop
+    yield f"event: message_stop\ndata: {json.dumps({'stopReason': stop_reason})}\n\n"
+
+    # Emit the metadata event with full details for UI handling
+    if metadata_event:
+        yield metadata_event.to_sse_format()
+
+    # Emit done event
+    yield "event: done\ndata: {}\n\n"
+
+    # Save messages to session for persistence
+    try:
+        from strands.types.session import SessionMessage
+
+        session_manager = SessionFactory.create_session_manager(
+            session_id=session_id,
+            user_id=user_id,
+            caching_enabled=False
+        )
+
+        # Save user message
+        user_message = {
+            "role": "user",
+            "content": [{"text": user_input}]
+        }
+
+        # Save assistant message
+        assistant_message = {
+            "role": "assistant",
+            "content": [{"text": message}]
+        }
+
+        # Use base_manager's create_message for persistence (AgentCore Memory)
+        if hasattr(session_manager, 'base_manager') and hasattr(session_manager.base_manager, 'create_message'):
+            user_session_msg = SessionMessage.from_message(user_message, 0)
+            assistant_session_msg = SessionMessage.from_message(assistant_message, 1)
+
+            session_manager.base_manager.create_message(session_id, "default", user_session_msg)
+            session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
+            logger.info(f"💾 Saved {stop_reason} messages to session {session_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to save {stop_reason} messages to session: {e}", exc_info=True)
 
 
 # ============================================================
@@ -54,7 +145,7 @@ async def invocations(
 
     Quota enforcement (when enabled via ENABLE_QUOTA_ENFORCEMENT=true):
     - Checks user quota before processing
-    - Returns 429 if quota exceeded
+    - Streams quota_exceeded as assistant message if quota exceeded (better UX)
     - Injects quota_warning event into stream if approaching limit
     """
     input_data = request
@@ -72,6 +163,7 @@ async def invocations(
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
+    quota_exceeded_event = None
     if is_quota_enforcement_enabled():
         try:
             quota_checker = get_quota_checker()
@@ -81,24 +173,37 @@ async def invocations(
             )
 
             if not quota_result.allowed:
-                # Quota exceeded - return 429
+                # Quota exceeded - stream as SSE instead of 429 for better UX
                 logger.warning(f"Quota exceeded for user {user_id}: {quota_result.message}")
-                response = build_quota_exceeded_response(quota_result)
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=response.model_dump(by_alias=True)
-                )
+                quota_exceeded_event = build_quota_exceeded_event(quota_result)
+            else:
+                # Check for warning level
+                quota_warning_event = build_quota_warning_event(quota_result)
+                if quota_warning_event:
+                    logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
 
-            # Check for warning level
-            quota_warning_event = build_quota_warning_event(quota_result)
-            if quota_warning_event:
-                logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
-
-        except HTTPException:
-            raise
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
             logger.error(f"Error checking quota for user {user_id}: {e}", exc_info=True)
+
+    # If quota exceeded, stream the quota exceeded message instead of agent response
+    if quota_exceeded_event:
+        return StreamingResponse(
+            stream_conversational_message(
+                message=quota_exceeded_event.message,
+                stop_reason="quota_exceeded",
+                metadata_event=quota_exceeded_event,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                user_input=input_data.message
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Session-ID": input_data.session_id
+            }
+        )
 
     try:
         # Get agent instance with user-specific configuration
@@ -147,16 +252,30 @@ async def invocations(
         # Re-raise HTTP exceptions as-is (e.g., from auth)
         raise
     except Exception as e:
+        # Stream error as a conversational assistant message for better UX
         logger.error(f"Error in invocations: {e}", exc_info=True)
-        error_detail = create_error_response(
+
+        error_event = build_conversational_error_event(
             code=ErrorCode.AGENT_ERROR,
-            message="Agent processing failed",
-            detail=str(e),
-            status_code=500,
-            metadata={"session_id": input_data.session_id}
+            error=e,
+            session_id=input_data.session_id,
+            recoverable=True
         )
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail
+
+        return StreamingResponse(
+            stream_conversational_message(
+                message=error_event.message,
+                stop_reason="error",
+                metadata_event=error_event,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                user_input=input_data.message
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Session-ID": input_data.session_id
+            }
         )
 

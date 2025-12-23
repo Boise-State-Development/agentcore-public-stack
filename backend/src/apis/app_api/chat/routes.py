@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 import logging
 import asyncio
+import json
+from typing import AsyncGenerator
 
 # Import models and services from inference_api (shared code)
 from apis.inference_api.chat.models import (
@@ -20,15 +22,22 @@ from apis.inference_api.chat.models import (
     GenerateTitleResponse
 )
 from apis.inference_api.chat.service import get_agent, generate_conversation_title
+from apis.inference_api.chat.routes import stream_conversational_message
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
-from apis.shared.errors import StreamErrorEvent, ErrorCode
+from apis.shared.errors import (
+    StreamErrorEvent,
+    ErrorCode,
+    ConversationalErrorEvent,
+    build_conversational_error_event,
+)
 from apis.shared.quota import (
     get_quota_checker,
     is_quota_enforcement_enabled,
-    build_quota_exceeded_response,
+    build_quota_exceeded_event,
     build_quota_warning_event,
 )
+from agents.strands_agent.session.session_factory import SessionFactory
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +112,7 @@ async def chat_stream(
 
     Quota enforcement (when enabled via ENABLE_QUOTA_ENFORCEMENT=true):
     - Checks user quota before processing
-    - Returns 429 if quota exceeded
+    - Streams quota_exceeded as assistant message if quota exceeded (better UX)
     - Injects quota_warning event into stream if approaching limit
     """
     user_id = current_user.user_id
@@ -111,6 +120,7 @@ async def chat_stream(
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
+    quota_exceeded_event = None
     if is_quota_enforcement_enabled():
         try:
             quota_checker = get_quota_checker()
@@ -120,24 +130,37 @@ async def chat_stream(
             )
 
             if not quota_result.allowed:
-                # Quota exceeded - return 429
+                # Quota exceeded - stream as SSE instead of 429 for better UX
                 logger.warning(f"Quota exceeded for user {user_id}: {quota_result.message}")
-                response = build_quota_exceeded_response(quota_result)
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=response.model_dump(by_alias=True)
-                )
+                quota_exceeded_event = build_quota_exceeded_event(quota_result)
+            else:
+                # Check for warning level
+                quota_warning_event = build_quota_warning_event(quota_result)
+                if quota_warning_event:
+                    logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
 
-            # Check for warning level
-            quota_warning_event = build_quota_warning_event(quota_result)
-            if quota_warning_event:
-                logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
-
-        except HTTPException:
-            raise
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
             logger.error(f"Error checking quota for user {user_id}: {e}", exc_info=True)
+
+    # If quota exceeded, stream the quota exceeded message instead of agent response
+    if quota_exceeded_event:
+        return StreamingResponse(
+            stream_conversational_message(
+                message=quota_exceeded_event.message,
+                stop_reason="quota_exceeded",
+                metadata_event=quota_exceeded_event,
+                session_id=request.session_id,
+                user_id=user_id,
+                user_input=request.message
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "X-Session-ID": request.session_id
+            }
+        )
 
     try:
         # Get agent instance (with or without tool filtering)
@@ -161,20 +184,52 @@ async def chat_stream(
                         yield event
 
             except asyncio.TimeoutError:
-                # Stream exceeded timeout - send structured error and cleanup
+                # Stream exceeded timeout - send as conversational message
                 logger.error(
                     f"⏱️ Stream timeout ({STREAM_TIMEOUT_SECONDS}s) for session {request.session_id}"
                 )
 
-                # Send structured timeout error event to client
-                error_event = StreamErrorEvent(
-                    error=f"Stream timeout - request exceeded {STREAM_TIMEOUT_SECONDS // 60} minutes",
+                # Build conversational timeout error
+                timeout_error = Exception(f"Stream processing time exceeded {STREAM_TIMEOUT_SECONDS} seconds")
+                error_event = build_conversational_error_event(
                     code=ErrorCode.TIMEOUT,
-                    detail=f"Stream processing time exceeded {STREAM_TIMEOUT_SECONDS} seconds",
-                    recoverable=True,
-                    metadata={"session_id": request.session_id, "timeout_seconds": STREAM_TIMEOUT_SECONDS}
+                    error=timeout_error,
+                    session_id=request.session_id,
+                    recoverable=True
                 )
+
+                # Stream timeout error as assistant message
+                yield f"event: message_start\ndata: {{\"role\": \"assistant\"}}\n\n"
+                yield f"event: content_block_start\ndata: {{\"contentBlockIndex\": 0, \"type\": \"text\"}}\n\n"
+                yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': error_event.message})}\n\n"
+
+                yield f"event: content_block_stop\ndata: {{\"contentBlockIndex\": 0}}\n\n"
+                yield f"event: message_stop\ndata: {{\"stopReason\": \"error\"}}\n\n"
                 yield error_event.to_sse_format()
+                yield "event: done\ndata: {}\n\n"
+
+                # Persist timeout error to session
+                try:
+                    from strands.types.session import SessionMessage
+                    session_manager = SessionFactory.create_session_manager(
+                        session_id=request.session_id,
+                        user_id=user_id,
+                        caching_enabled=False
+                    )
+
+                    user_msg = {"role": "user", "content": [{"text": request.message}]}
+                    assistant_msg = {"role": "assistant", "content": [{"text": error_event.message}]}
+
+                    if hasattr(session_manager, 'base_manager') and hasattr(session_manager.base_manager, 'create_message'):
+                        user_session_msg = SessionMessage.from_message(user_msg, 0)
+                        assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                        session_manager.base_manager.create_message(request.session_id, "default", user_session_msg)
+                        session_manager.base_manager.create_message(request.session_id, "default", assistant_session_msg)
+                        logger.info(f"💾 Saved timeout error messages to session {request.session_id}")
+                except Exception as persist_error:
+                    logger.error(f"Failed to persist timeout error to session: {persist_error}")
+
+                return
 
             except asyncio.CancelledError:
                 # Client disconnected (e.g., stop button clicked)
@@ -198,19 +253,50 @@ async def chat_stream(
                 raise
 
             except Exception as e:
-                # Log unexpected errors and send to client
+                # Log unexpected errors and send to client as conversational message
                 logger.error(f"Error during streaming for session {request.session_id}: {e}", exc_info=True)
 
-                # Send structured error event to client
-                error_event = StreamErrorEvent(
-                    error="An unexpected error occurred during streaming",
+                # Build conversational error for better UX
+                error_event = build_conversational_error_event(
                     code=ErrorCode.STREAM_ERROR,
-                    detail=str(e),
-                    recoverable=False,
-                    metadata={"session_id": request.session_id}
+                    error=e,
+                    session_id=request.session_id,
+                    recoverable=True
                 )
+
+                # Stream error as assistant message
+                yield f"event: message_start\ndata: {{\"role\": \"assistant\"}}\n\n"
+                yield f"event: content_block_start\ndata: {{\"contentBlockIndex\": 0, \"type\": \"text\"}}\n\n"
+                yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': error_event.message})}\n\n"
+
+                yield f"event: content_block_stop\ndata: {{\"contentBlockIndex\": 0}}\n\n"
+                yield f"event: message_stop\ndata: {{\"stopReason\": \"error\"}}\n\n"
                 yield error_event.to_sse_format()
-                raise
+                yield "event: done\ndata: {}\n\n"
+
+                # Persist error messages to session
+                try:
+                    from strands.types.session import SessionMessage
+                    session_manager = SessionFactory.create_session_manager(
+                        session_id=request.session_id,
+                        user_id=user_id,
+                        caching_enabled=False
+                    )
+
+                    user_msg = {"role": "user", "content": [{"text": request.message}]}
+                    assistant_msg = {"role": "assistant", "content": [{"text": error_event.message}]}
+
+                    if hasattr(session_manager, 'base_manager') and hasattr(session_manager.base_manager, 'create_message'):
+                        user_session_msg = SessionMessage.from_message(user_msg, 0)
+                        assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                        session_manager.base_manager.create_message(request.session_id, "default", user_session_msg)
+                        session_manager.base_manager.create_message(request.session_id, "default", assistant_session_msg)
+                        logger.info(f"💾 Saved stream error messages to session {request.session_id}")
+                except Exception as persist_error:
+                    logger.error(f"Failed to persist stream error to session: {persist_error}")
+
+                # Don't re-raise - we've handled the error gracefully
+                return
 
             finally:
                 # Cleanup: Flush buffered messages and close stream iterator
@@ -244,25 +330,30 @@ async def chat_stream(
         # Re-raise HTTP exceptions as-is (e.g., from auth)
         raise
     except Exception as e:
+        # Stream error as a conversational assistant message for better UX
         logger.error(f"Error in chat_stream: {e}", exc_info=True)
 
-        async def error_generator():
-            # Send structured error event
-            error_event = StreamErrorEvent(
-                error="Failed to initialize chat stream",
-                code=ErrorCode.STREAM_ERROR,
-                detail=str(e),
-                recoverable=False,
-                metadata={"session_id": request.session_id}
-            )
-            yield error_event.to_sse_format()
+        error_event = build_conversational_error_event(
+            code=ErrorCode.STREAM_ERROR,
+            error=e,
+            session_id=request.session_id,
+            recoverable=True
+        )
 
         return StreamingResponse(
-            error_generator(),
+            stream_conversational_message(
+                message=error_event.message,
+                stop_reason="error",
+                metadata_event=error_event,
+                session_id=request.session_id,
+                user_id=user_id,
+                user_input=request.message
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no"
+                "X-Accel-Buffering": "no",
+                "X-Session-ID": request.session_id
             }
         )
 

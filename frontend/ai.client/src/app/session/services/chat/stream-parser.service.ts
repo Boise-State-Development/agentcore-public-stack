@@ -13,8 +13,8 @@ import {
 import { MetadataEvent } from '../models/content-types';
 import { ChatStateService } from './chat-state.service';
 import { v4 as uuidv4 } from 'uuid';
-import { ErrorService, StreamErrorEvent } from '../../../services/error/error.service';
-import { QuotaWarningService, QuotaWarning } from '../../../services/quota/quota-warning.service';
+import { ErrorService, StreamErrorEvent, ConversationalStreamError } from '../../../services/error/error.service';
+import { QuotaWarningService, QuotaWarning, QuotaExceeded } from '../../../services/quota/quota-warning.service';
 
 /**
  * Internal representation of a message being built from stream events.
@@ -564,6 +564,14 @@ export class StreamParserService {
 
         case 'quota_warning':
           this.handleQuotaWarning(data);
+          break;
+
+        case 'quota_exceeded':
+          this.handleQuotaExceeded(data);
+          break;
+
+        case 'stream_error':
+          this.handleStreamErrorEvent(data);
           break;
 
         default:
@@ -1123,6 +1131,55 @@ export class StreamParserService {
 
     // Delegate to QuotaWarningService
     this.quotaWarningService.setWarning(warningData as QuotaWarning);
+  }
+
+  /**
+   * Handle quota_exceeded events from the SSE stream.
+   * These are sent when user has exceeded their quota limit.
+   * The message is already displayed as an assistant response, but this
+   * event provides additional metadata for UI enhancements.
+   */
+  private handleQuotaExceeded(data: unknown): void {
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+
+    const exceededData = data as Partial<QuotaExceeded>;
+
+    // Validate required fields
+    if (exceededData.type !== 'quota_exceeded' ||
+        typeof exceededData.currentUsage !== 'number' ||
+        typeof exceededData.quotaLimit !== 'number' ||
+        typeof exceededData.percentageUsed !== 'number') {
+      return;
+    }
+
+    // Delegate to QuotaWarningService
+    this.quotaWarningService.setQuotaExceeded(exceededData as QuotaExceeded);
+  }
+
+  /**
+   * Handle stream_error events from the SSE stream.
+   * These are conversational errors that are already displayed as assistant messages.
+   * The error message appears in the chat, so we only track state for potential retry.
+   */
+  private handleStreamErrorEvent(data: unknown): void {
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+
+    const errorData = data as Partial<ConversationalStreamError>;
+
+    // Validate required fields
+    if (errorData.type !== 'stream_error' ||
+        !errorData.code ||
+        typeof errorData.message !== 'string' ||
+        typeof errorData.recoverable !== 'boolean') {
+      return;
+    }
+
+    // Delegate to ErrorService - it will track state without showing duplicate toast
+    this.errorService.handleConversationalStreamError(errorData as ConversationalStreamError);
   }
 
   /**

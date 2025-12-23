@@ -118,6 +118,30 @@ class QuotaWarningEvent(BaseModel):
         return f"event: quota_warning\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
 
 
+class QuotaExceededEvent(BaseModel):
+    """SSE event for quota exceeded (hard limit reached).
+
+    This is sent as a stream response instead of a 429 HTTP error to provide
+    a better user experience - the message appears in the chat as an assistant
+    response and is persisted to the session history.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "quota_exceeded"
+    current_usage: float = Field(..., alias="currentUsage", description="Current usage in dollars")
+    quota_limit: float = Field(..., alias="quotaLimit", description="Quota limit in dollars")
+    percentage_used: float = Field(..., alias="percentageUsed", description="Percentage of quota used")
+    period_type: str = Field(..., alias="periodType", description="Quota period (monthly/daily)")
+    tier_name: Optional[str] = Field(None, alias="tierName", description="Name of the quota tier")
+    reset_info: str = Field(..., alias="resetInfo", description="When quota resets")
+    message: str = Field(..., description="User-friendly message to display as assistant response")
+
+    def to_sse_format(self) -> str:
+        """Convert to SSE event format"""
+        import json
+        return f"event: quota_exceeded\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
+
+
 def build_quota_exceeded_response(result: QuotaCheckResult) -> QuotaExceededResponse:
     """Build a 429 response from a QuotaCheckResult"""
     from datetime import datetime
@@ -160,4 +184,59 @@ def build_quota_warning_event(result: QuotaCheckResult) -> Optional[QuotaWarning
         percentageUsed=float(result.percentage_used),
         remaining=float(result.remaining) if result.remaining else 0.0,
         message=f"You have used {result.warning_level} of your quota (${float(result.current_usage):.2f} / ${float(result.quota_limit):.2f})"
+    )
+
+
+def build_quota_exceeded_event(result: QuotaCheckResult) -> QuotaExceededEvent:
+    """Build a quota exceeded SSE event from a QuotaCheckResult.
+
+    This creates an event that will be streamed to the client and displayed
+    as an assistant message in the chat, providing a better UX than a 429 error.
+    """
+    from datetime import datetime
+
+    # Calculate reset info
+    now = datetime.utcnow()
+    period_type = result.tier.period_type if result.tier else "monthly"
+
+    if period_type == "daily":
+        reset_info = "Your quota resets at midnight UTC."
+    else:
+        # Monthly - calculate days until end of month
+        if now.month == 12:
+            next_month = datetime(now.year + 1, 1, 1)
+        else:
+            next_month = datetime(now.year, now.month + 1, 1)
+        days_remaining = (next_month - now).days
+        reset_info = f"Your quota resets in {days_remaining} day(s)."
+
+    # Build user-friendly message with markdown styling
+    current = float(result.current_usage)
+    limit = float(result.quota_limit) if result.quota_limit else 0.0
+    tier_name = result.tier.tier_name if result.tier else "your plan"
+    percentage = int(result.percentage_used)
+
+    message = f"""I apologize, but you've reached your usage limit for **{tier_name}**.
+
+**Current Usage**
+| Metric | Value |
+|--------|-------|
+| Used | **${current:.2f}** |
+| Limit | ${limit:.2f} |
+| Usage | {percentage}% |
+
+**What's Next?**
+- {reset_info}
+- If you need additional capacity, please contact your administrator.
+
+I'm here to help once your quota resets!"""
+
+    return QuotaExceededEvent(
+        currentUsage=current,
+        quotaLimit=limit,
+        percentageUsed=float(result.percentage_used),
+        periodType=period_type,
+        tierName=result.tier.tier_name if result.tier else None,
+        resetInfo=reset_info,
+        message=message
     )

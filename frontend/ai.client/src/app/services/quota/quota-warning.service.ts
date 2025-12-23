@@ -14,10 +14,26 @@ export interface QuotaWarning {
 }
 
 /**
- * Service for managing quota warning state
+ * Interface representing a quota exceeded event from the SSE stream.
+ * This is sent when the user has exceeded their usage limit and the
+ * response is streamed as an assistant message for better UX.
+ */
+export interface QuotaExceeded {
+  type: 'quota_exceeded';
+  currentUsage: number;
+  quotaLimit: number;
+  percentageUsed: number;
+  periodType: string;  // 'monthly' or 'daily'
+  tierName?: string;
+  resetInfo: string;
+  message: string;
+}
+
+/**
+ * Service for managing quota warning and quota exceeded state
  *
- * Handles quota warnings received from the SSE stream and exposes
- * reactive signals for UI components to display warnings.
+ * Handles quota warnings and quota exceeded events received from the SSE stream
+ * and exposes reactive signals for UI components to display appropriate feedback.
  */
 @Injectable({
   providedIn: 'root'
@@ -25,6 +41,9 @@ export interface QuotaWarning {
 export class QuotaWarningService {
   /** The current active quota warning, null if no warning */
   private activeWarningSignal = signal<QuotaWarning | null>(null);
+
+  /** The current quota exceeded state, null if not exceeded */
+  private quotaExceededSignal = signal<QuotaExceeded | null>(null);
 
   /** Timestamp when the warning was received */
   private warningTimestampSignal = signal<Date | null>(null);
@@ -39,13 +58,24 @@ export class QuotaWarningService {
   /** The active quota warning */
   readonly activeWarning = this.activeWarningSignal.asReadonly();
 
+  /** The quota exceeded state */
+  readonly quotaExceeded = this.quotaExceededSignal.asReadonly();
+
   /** Whether there's a visible warning to show */
   readonly hasVisibleWarning = computed(() => {
     return this.activeWarningSignal() !== null && !this.isDismissedSignal();
   });
 
+  /** Whether quota has been exceeded (for UI to show special styling) */
+  readonly isQuotaExceeded = computed(() => {
+    return this.quotaExceededSignal() !== null;
+  });
+
   /** Warning severity level for styling */
-  readonly severity = computed<'warning' | 'critical' | null>(() => {
+  readonly severity = computed<'warning' | 'critical' | 'exceeded' | null>(() => {
+    // Quota exceeded takes precedence
+    if (this.quotaExceededSignal()) return 'exceeded';
+
     const warning = this.activeWarningSignal();
     if (!warning) return null;
 
@@ -55,6 +85,14 @@ export class QuotaWarningService {
 
   /** Formatted usage display (e.g., "$8.00 / $10.00") */
   readonly formattedUsage = computed(() => {
+    // Check quota exceeded first
+    const exceeded = this.quotaExceededSignal();
+    if (exceeded) {
+      const current = exceeded.currentUsage.toFixed(2);
+      const limit = exceeded.quotaLimit.toFixed(2);
+      return `$${current} / $${limit}`;
+    }
+
     const warning = this.activeWarningSignal();
     if (!warning) return '';
 
@@ -69,6 +107,12 @@ export class QuotaWarningService {
     if (!warning) return '';
 
     return `$${warning.remaining.toFixed(2)}`;
+  });
+
+  /** Reset info for quota exceeded */
+  readonly resetInfo = computed(() => {
+    const exceeded = this.quotaExceededSignal();
+    return exceeded?.resetInfo ?? '';
   });
 
   // =========================================================================
@@ -106,6 +150,32 @@ export class QuotaWarningService {
     this.activeWarningSignal.set(null);
     this.warningTimestampSignal.set(null);
     this.isDismissedSignal.set(false);
+  }
+
+  /**
+   * Set quota exceeded state from the SSE stream
+   *
+   * @param exceeded - The quota exceeded event data
+   */
+  setQuotaExceeded(exceeded: QuotaExceeded): void {
+    this.quotaExceededSignal.set(exceeded);
+    // Also clear any active warning since we're now at exceeded state
+    this.activeWarningSignal.set(null);
+  }
+
+  /**
+   * Clear quota exceeded state (e.g., after quota resets or on new session)
+   */
+  clearQuotaExceeded(): void {
+    this.quotaExceededSignal.set(null);
+  }
+
+  /**
+   * Clear all quota state (warnings and exceeded)
+   */
+  clearAll(): void {
+    this.clearWarning();
+    this.clearQuotaExceeded();
   }
 
   /**
