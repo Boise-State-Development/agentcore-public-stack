@@ -87,17 +87,18 @@ class QuotaChecker:
             )
 
         # Determine limit based on period type
+        # Convert to float for consistent arithmetic with current_usage
         if tier.period_type == "daily" and tier.daily_cost_limit is not None:
-            limit = tier.daily_cost_limit
+            limit = float(tier.daily_cost_limit)
         else:
-            limit = tier.monthly_cost_limit
+            limit = float(tier.monthly_cost_limit)
 
         percentage_used = (current_usage / limit * 100) if limit > 0 else 0
-        remaining = max(0, limit - current_usage)
+        remaining = max(0.0, limit - current_usage)
 
         # Determine warning level
         warning_level = "none"
-        soft_limit_percentage = tier.soft_limit_percentage
+        soft_limit_percentage = float(tier.soft_limit_percentage)
 
         if percentage_used >= 90:
             warning_level = "90%"

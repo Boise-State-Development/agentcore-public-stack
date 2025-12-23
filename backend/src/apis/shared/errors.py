@@ -16,6 +16,7 @@ class ErrorCode(str, Enum):
     CONFLICT = "conflict"
     VALIDATION_ERROR = "validation_error"
     RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
+    QUOTA_EXCEEDED = "quota_exceeded"
 
     # Server errors (5xx)
     INTERNAL_ERROR = "internal_error"

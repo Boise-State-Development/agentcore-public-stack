@@ -7,7 +7,7 @@ AgentCore Runtime API clean. These endpoints handle:
 - Multimodal chat input
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 import logging
 import asyncio
@@ -23,6 +23,12 @@ from apis.inference_api.chat.service import get_agent, generate_conversation_tit
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
 from apis.shared.errors import StreamErrorEvent, ErrorCode
+from apis.shared.quota import (
+    get_quota_checker,
+    is_quota_enforcement_enabled,
+    build_quota_exceeded_response,
+    build_quota_warning_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +100,44 @@ async def chat_stream(
     Legacy chat stream endpoint (for backward compatibility)
     Uses default tools (all available) if enabled_tools not specified
     Uses the authenticated user's ID from the JWT token.
+
+    Quota enforcement (when enabled via ENABLE_QUOTA_ENFORCEMENT=true):
+    - Checks user quota before processing
+    - Returns 429 if quota exceeded
+    - Injects quota_warning event into stream if approaching limit
     """
     user_id = current_user.user_id
     logger.info(f"Legacy chat request - Session: {request.session_id}, User: {user_id}, Message: {request.message[:50]}...")
+
+    # Check quota if enforcement is enabled
+    quota_warning_event = None
+    if is_quota_enforcement_enabled():
+        try:
+            quota_checker = get_quota_checker()
+            quota_result = await quota_checker.check_quota(
+                user=current_user,
+                session_id=request.session_id
+            )
+
+            if not quota_result.allowed:
+                # Quota exceeded - return 429
+                logger.warning(f"Quota exceeded for user {user_id}: {quota_result.message}")
+                response = build_quota_exceeded_response(quota_result)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=response.model_dump(by_alias=True)
+                )
+
+            # Check for warning level
+            quota_warning_event = build_quota_warning_event(quota_result)
+            if quota_warning_event:
+                logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Log error but don't block request - fail open for quota errors
+            logger.error(f"Error checking quota for user {user_id}: {e}", exc_info=True)
 
     try:
         # Get agent instance (with or without tool filtering)
@@ -108,6 +149,9 @@ async def chat_stream(
 
         # Wrap stream to ensure flush on disconnect and prevent further processing
         async def stream_with_cleanup():
+            # Yield quota warning event first if applicable
+            if quota_warning_event:
+                yield quota_warning_event.to_sse_format()
             stream_iterator = agent.stream_async(request.message, session_id=request.session_id)
 
             try:

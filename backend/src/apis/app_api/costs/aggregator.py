@@ -1,8 +1,8 @@
 """Cost aggregator service for user cost summaries and reporting"""
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, Tuple
 from decimal import Decimal
 
 from .models import UserCostSummary, ModelCostSummary, CostBreakdown
@@ -12,10 +12,64 @@ logger = logging.getLogger(__name__)
 
 
 class CostAggregator:
-    """Aggregate costs across sessions and time periods"""
+    """Aggregate costs across sessions and time periods.
 
-    def __init__(self):
+    Includes short-lived caching (30 seconds) for quota enforcement
+    to reduce DynamoDB calls during burst usage patterns.
+    """
+
+    def __init__(self, cache_ttl_seconds: int = 30):
         self.storage = get_metadata_storage()
+        self.cache_ttl = cache_ttl_seconds
+        # Cache: {cache_key: (UserCostSummary, cached_at)}
+        self._cache: Dict[str, Tuple[UserCostSummary, datetime]] = {}
+
+    def _get_cache_key(self, user_id: str, period: str) -> str:
+        """Generate cache key for user+period"""
+        return f"{user_id}:{period}"
+
+    def _get_cached(self, user_id: str, period: str) -> Optional[UserCostSummary]:
+        """Get cached summary if valid"""
+        cache_key = self._get_cache_key(user_id, period)
+        if cache_key in self._cache:
+            summary, cached_at = self._cache[cache_key]
+            if datetime.utcnow() - cached_at < timedelta(seconds=self.cache_ttl):
+                logger.debug(f"Cost summary cache hit for user {user_id}, period {period}")
+                return summary
+            else:
+                # Expired, remove from cache
+                del self._cache[cache_key]
+        return None
+
+    def _set_cached(self, user_id: str, period: str, summary: UserCostSummary) -> None:
+        """Cache a summary"""
+        cache_key = self._get_cache_key(user_id, period)
+        self._cache[cache_key] = (summary, datetime.utcnow())
+        logger.debug(f"Cost summary cached for user {user_id}, period {period}")
+
+    def invalidate_cache(self, user_id: Optional[str] = None, period: Optional[str] = None) -> None:
+        """Invalidate cache for specific user/period or all entries.
+
+        Call this after costs are updated (e.g., after a message completes).
+        """
+        if user_id and period:
+            cache_key = self._get_cache_key(user_id, period)
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+                logger.debug(f"Invalidated cost cache for {user_id}:{period}")
+        elif user_id:
+            # Remove all entries for this user
+            keys_to_remove = [k for k in self._cache.keys() if k.startswith(f"{user_id}:")]
+            for key in keys_to_remove:
+                del self._cache[key]
+            if keys_to_remove:
+                logger.debug(f"Invalidated {len(keys_to_remove)} cost cache entries for user {user_id}")
+        else:
+            # Clear entire cache
+            count = len(self._cache)
+            self._cache.clear()
+            if count:
+                logger.debug(f"Invalidated entire cost cache ({count} entries)")
 
     async def get_user_cost_summary(
         self,
@@ -26,6 +80,8 @@ class CostAggregator:
         Get aggregated cost summary for a user (fast path using pre-aggregated data)
 
         This method queries the UserCostSummary table for O(1) performance.
+        Results are cached for 30 seconds to reduce DynamoDB calls during
+        burst usage patterns (e.g., quota checks on every message).
 
         Args:
             user_id: User identifier
@@ -34,12 +90,20 @@ class CostAggregator:
         Returns:
             UserCostSummary with pre-aggregated costs
         """
+        # Check cache first
+        cached = self._get_cached(user_id, period)
+        if cached is not None:
+            return cached
+
         # Get pre-aggregated summary from storage
         summary = await self.storage.get_user_cost_summary(user_id, period)
 
         if not summary:
             # No data for this period, return empty summary
-            return self._create_empty_summary(user_id, period)
+            # Cache empty summaries too to avoid repeated DB lookups
+            empty_summary = self._create_empty_summary(user_id, period)
+            self._set_cached(user_id, period, empty_summary)
+            return empty_summary
 
         # Extract cache token totals
         total_cache_read = summary.get("totalCacheReadTokens", 0)
@@ -49,7 +113,7 @@ class CostAggregator:
         cache_savings = float(summary.get("cacheSavings", 0.0))
 
         # Convert to UserCostSummary model
-        return UserCostSummary(
+        result = UserCostSummary(
             userId=user_id,
             periodStart=summary["periodStart"],
             periodEnd=summary["periodEnd"],
@@ -62,6 +126,10 @@ class CostAggregator:
             totalCacheWriteTokens=total_cache_write,
             totalCacheSavings=cache_savings
         )
+
+        # Cache the result
+        self._set_cached(user_id, period, result)
+        return result
 
     async def get_detailed_cost_report(
         self,
