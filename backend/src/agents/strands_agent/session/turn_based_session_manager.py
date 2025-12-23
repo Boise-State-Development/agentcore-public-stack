@@ -165,7 +165,15 @@ class TurnBasedSessionManager:
             lambda event: self.base_manager.sync_agent(event.agent)
         )
 
-        logger.info("✅ TurnBasedSessionManager hooks registered successfully")
+        # CRITICAL: Register retrieve_customer_context hook for long-term memory retrieval
+        # This queries the configured namespaces (preferences, facts) and injects
+        # relevant memories as <user_context> into the conversation when a user message is added
+        registry.add_callback(
+            MessageAddedEvent,
+            lambda event: self.base_manager.retrieve_customer_context(event)
+        )
+
+        logger.info("✅ TurnBasedSessionManager hooks registered successfully (including LTM retrieval)")
 
     # Delegate all other methods to base manager
     def __getattr__(self, name):

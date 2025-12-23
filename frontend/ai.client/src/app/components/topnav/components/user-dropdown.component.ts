@@ -8,7 +8,8 @@ import {
   heroChevronDown,
   heroCurrencyDollar,
   heroArrowRightOnRectangle,
-  heroCommandLine
+  heroCommandLine,
+  heroSparkles
 } from '@ng-icons/heroicons/outline';
 
 export interface User {
@@ -26,7 +27,8 @@ export interface User {
       heroChevronDown,
       heroCurrencyDollar,
       heroArrowRightOnRectangle,
-      heroCommandLine
+      heroCommandLine,
+      heroSparkles
     })
   ],
   template: `
@@ -119,6 +121,20 @@ export interface User {
                   class="size-5 text-gray-400 dark:text-gray-500"
                 />
                 <span>Cost Dashboard</span>
+              </a>
+
+              <!-- Memories (available to all users) -->
+              <a
+                cdkMenuItem
+                routerLink="/memories"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroSparkles"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span>Memories</span>
               </a>
 
               <button

@@ -83,6 +83,7 @@ from apis.app_api.admin.routes import router as admin_router
 from apis.app_api.models.routes import router as models_router
 from apis.app_api.costs.routes import router as costs_router
 from apis.app_api.chat.routes import router as chat_router
+from apis.app_api.memory.routes import router as memory_router
 
 # Include routers
 app.include_router(health_router)
@@ -92,6 +93,7 @@ app.include_router(admin_router)
 app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
+app.include_router(memory_router)  # AgentCore Memory access endpoints
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

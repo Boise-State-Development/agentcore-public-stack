@@ -63,6 +63,11 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'memories',
+        loadComponent: () => import('./memory/memory-dashboard.page').then(m => m.MemoryDashboardPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'admin/quota',
         loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
         canActivate: [adminGuard],

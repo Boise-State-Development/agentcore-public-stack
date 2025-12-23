@@ -4,7 +4,8 @@ Session manager factory for selecting appropriate session storage
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Dict, Tuple
+from functools import lru_cache
 
 from agents.strands_agent.session.memory_config import load_memory_config
 
@@ -14,9 +15,55 @@ logger = logging.getLogger(__name__)
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
     from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+    from bedrock_agentcore.memory import MemoryClient
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
+
+
+@lru_cache(maxsize=1)
+def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Discover the actual strategy IDs from the configured memory strategies.
+
+    AgentCore Memory stores memories in strategy-specific namespaces:
+    /strategies/{strategyId}/actors/{actorId}
+
+    This function queries the memory to find the actual strategy IDs.
+
+    Args:
+        memory_id: AgentCore Memory ID
+        region: AWS region
+
+    Returns:
+        Tuple of (semantic_strategy_id, preference_strategy_id)
+    """
+    if not AGENTCORE_MEMORY_AVAILABLE:
+        return None, None
+
+    try:
+        client = MemoryClient(region_name=region)
+        strategies = client.get_memory_strategies(memory_id=memory_id)
+
+        semantic_id = None
+        preference_id = None
+
+        for strategy in strategies:
+            strategy_type = strategy.get('type') or strategy.get('memoryStrategyType')
+            strategy_id = strategy.get('strategyId') or strategy.get('memoryStrategyId')
+
+            if strategy_type == 'SEMANTIC':
+                semantic_id = strategy_id
+                logger.info(f"  📚 Found SEMANTIC strategy: {semantic_id}")
+            elif strategy_type == 'USER_PREFERENCE':
+                preference_id = strategy_id
+                logger.info(f"  ⚙️ Found USER_PREFERENCE strategy: {preference_id}")
+
+        return semantic_id, preference_id
+
+    except Exception as e:
+        logger.error(f"Failed to discover memory strategies: {e}", exc_info=True)
+        return None, None
 
 
 class SessionFactory:
@@ -86,18 +133,41 @@ class SessionFactory:
         logger.info(f"   • Memory ID: {memory_id}")
         logger.info(f"   • Region: {aws_region}")
 
-        # Configure AgentCore Memory with user preferences and facts retrieval
+        # Discover actual strategy IDs from the memory configuration
+        semantic_id, preference_id = _discover_strategy_ids(memory_id, aws_region)
+
+        # Build retrieval config using the correct namespace patterns
+        # AgentCore stores memories in: /strategies/{strategyId}/actors/{actorId}
+        retrieval_config: Dict[str, RetrievalConfig] = {}
+
+        if preference_id:
+            # User preferences (e.g., coding style, response length preferences)
+            preference_namespace = f"/strategies/{preference_id}/actors/{{actorId}}"
+            retrieval_config[preference_namespace] = RetrievalConfig(
+                top_k=5,
+                relevance_score=0.5
+            )
+            logger.info(f"   • Preferences namespace: {preference_namespace}")
+
+        if semantic_id:
+            # Semantic facts (e.g., user's name, project details, learned information)
+            facts_namespace = f"/strategies/{semantic_id}/actors/{{actorId}}"
+            retrieval_config[facts_namespace] = RetrievalConfig(
+                top_k=10,
+                relevance_score=0.3
+            )
+            logger.info(f"   • Facts namespace: {facts_namespace}")
+
+        if not retrieval_config:
+            logger.warning("⚠️ No memory strategies found - long-term memory retrieval disabled")
+
+        # Configure AgentCore Memory with dynamically discovered namespaces
         agentcore_memory_config = AgentCoreMemoryConfig(
             memory_id=memory_id,
             session_id=session_id,
             actor_id=user_id,
             enable_prompt_caching=caching_enabled,
-            retrieval_config={
-                # User-specific preferences (e.g., coding style, language preference)
-                f"/preferences/{user_id}": RetrievalConfig(top_k=5, relevance_score=0.7),
-                # User-specific facts (e.g., learned information)
-                f"/facts/{user_id}": RetrievalConfig(top_k=10, relevance_score=0.3),
-            }
+            retrieval_config=retrieval_config
         )
 
         # Create Turn-based Session Manager (reduces API calls by 75%)
@@ -110,7 +180,7 @@ class SessionFactory:
         logger.info(f"   • Session: {session_id}, User: {user_id}")
         logger.info(f"   • Storage: AWS-managed DynamoDB")
         logger.info(f"   • Short-term memory: Conversation history (90 days retention)")
-        logger.info(f"   • Long-term memory: User preferences and facts across sessions")
+        logger.info(f"   • Long-term memory: {'Enabled' if retrieval_config else 'Disabled'} ({len(retrieval_config)} namespaces)")
 
         return session_manager
 
