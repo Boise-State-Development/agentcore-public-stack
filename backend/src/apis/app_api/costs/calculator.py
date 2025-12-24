@@ -50,17 +50,18 @@ class CostCalculator:
             # breakdown.cacheWriteCost = 0.000375
             ```
         """
-        # Extract token counts (default to 0 if not present)
-        input_tokens = usage.get("inputTokens", 0)
-        output_tokens = usage.get("outputTokens", 0)
-        cache_read_tokens = usage.get("cacheReadInputTokens", 0)
-        cache_write_tokens = usage.get("cacheWriteInputTokens", 0)
+        # Extract token counts (default to 0 if not present or None)
+        input_tokens = usage.get("inputTokens") or 0
+        output_tokens = usage.get("outputTokens") or 0
+        cache_read_tokens = usage.get("cacheReadInputTokens") or 0
+        cache_write_tokens = usage.get("cacheWriteInputTokens") or 0
 
-        # Extract pricing (default to 0 if not present)
-        input_price = pricing.get("inputPricePerMtok", 0.0)
-        output_price = pricing.get("outputPricePerMtok", 0.0)
-        cache_read_price = pricing.get("cacheReadPricePerMtok", 0.0)
-        cache_write_price = pricing.get("cacheWritePricePerMtok", 0.0)
+        # Extract pricing (default to 0 if not present or None)
+        # Note: dict.get() with default only handles missing keys, not None values
+        input_price = pricing.get("inputPricePerMtok") or 0.0
+        output_price = pricing.get("outputPricePerMtok") or 0.0
+        cache_read_price = pricing.get("cacheReadPricePerMtok") or 0.0
+        cache_write_price = pricing.get("cacheWritePricePerMtok") or 0.0
 
         # Important: When cache tokens are present, they are NOT included in inputTokens
         # The model returns:
@@ -115,8 +116,13 @@ class CostCalculator:
             # savings = 0.00054 (200/1M * (3.0 - 0.30))
             ```
         """
-        if cache_read_tokens == 0:
+        # Handle None or zero values safely
+        if not cache_read_tokens or cache_read_tokens == 0:
             return 0.0
+
+        # Default None prices to 0 to prevent TypeError
+        input_price = input_price or 0.0
+        cache_read_price = cache_read_price or 0.0
 
         standard_cost = (cache_read_tokens / 1_000_000) * input_price
         cache_cost = (cache_read_tokens / 1_000_000) * cache_read_price
@@ -126,7 +132,7 @@ class CostCalculator:
     @staticmethod
     def validate_pricing(pricing: Dict[str, float]) -> bool:
         """
-        Validate that pricing dictionary contains required fields
+        Validate that pricing dictionary contains required fields with non-None values
 
         Args:
             pricing: Pricing dictionary to validate
@@ -135,12 +141,15 @@ class CostCalculator:
             True if valid, False otherwise
         """
         required_fields = ["inputPricePerMtok", "outputPricePerMtok"]
-        return all(field in pricing for field in required_fields)
+        return all(
+            field in pricing and pricing[field] is not None
+            for field in required_fields
+        )
 
     @staticmethod
     def validate_usage(usage: Dict[str, int]) -> bool:
         """
-        Validate that usage dictionary contains required fields
+        Validate that usage dictionary contains required fields with non-None values
 
         Args:
             usage: Usage dictionary to validate
@@ -149,4 +158,7 @@ class CostCalculator:
             True if valid, False otherwise
         """
         required_fields = ["inputTokens", "outputTokens"]
-        return all(field in usage for field in required_fields)
+        return all(
+            field in usage and usage[field] is not None
+            for field in required_fields
+        )

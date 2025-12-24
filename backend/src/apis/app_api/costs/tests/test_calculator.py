@@ -282,3 +282,79 @@ class TestCostCalculator:
         assert total_cost == pytest.approx(0.093, rel=1e-6)
         assert breakdown.cache_read_cost == 0.0
         assert breakdown.cache_write_cost == 0.0
+
+    def test_calculate_message_cost_with_none_values_in_pricing(self):
+        """Test cost calculation handles None values in pricing dict (regression test)"""
+        # This tests the bug where dict.get() returns None if key exists with None value
+        usage = {
+            "inputTokens": 1000,
+            "outputTokens": 500
+        }
+        pricing = {
+            "inputPricePerMtok": None,  # Explicit None value
+            "outputPricePerMtok": 15.0,
+            "cacheReadPricePerMtok": None,
+            "cacheWritePricePerMtok": None
+        }
+
+        # Should not raise TypeError: unsupported operand type(s) for *: 'float' and 'NoneType'
+        total_cost, breakdown = CostCalculator.calculate_message_cost(usage, pricing)
+
+        # Input price is None, so input cost should be 0
+        # Output: 500/1M * $15 = $0.0075
+        assert total_cost == pytest.approx(0.0075, rel=1e-6)
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == pytest.approx(0.0075, rel=1e-6)
+
+    def test_calculate_message_cost_with_none_values_in_usage(self):
+        """Test cost calculation handles None values in usage dict"""
+        usage = {
+            "inputTokens": None,  # Explicit None value
+            "outputTokens": 500,
+            "cacheReadInputTokens": None,
+            "cacheWriteInputTokens": None
+        }
+        pricing = {
+            "inputPricePerMtok": 3.0,
+            "outputPricePerMtok": 15.0
+        }
+
+        # Should not raise TypeError
+        total_cost, breakdown = CostCalculator.calculate_message_cost(usage, pricing)
+
+        # Input tokens is None, so input cost should be 0
+        # Output: 500/1M * $15 = $0.0075
+        assert total_cost == pytest.approx(0.0075, rel=1e-6)
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == pytest.approx(0.0075, rel=1e-6)
+
+    def test_calculate_cache_savings_with_none_prices(self):
+        """Test cache savings calculation handles None prices"""
+        # Should not raise TypeError
+        savings = CostCalculator.calculate_cache_savings(
+            cache_read_tokens=200,
+            input_price=None,
+            cache_read_price=None
+        )
+
+        assert savings == 0.0
+
+    def test_validate_pricing_with_none_values(self):
+        """Test pricing validation correctly rejects None values"""
+        pricing = {
+            "inputPricePerMtok": None,  # Explicit None value
+            "outputPricePerMtok": 15.0
+        }
+
+        # Should be invalid because inputPricePerMtok is None
+        assert CostCalculator.validate_pricing(pricing) is False
+
+    def test_validate_usage_with_none_values(self):
+        """Test usage validation correctly rejects None values"""
+        usage = {
+            "inputTokens": 1000,
+            "outputTokens": None  # Explicit None value
+        }
+
+        # Should be invalid because outputTokens is None
+        assert CostCalculator.validate_usage(usage) is False

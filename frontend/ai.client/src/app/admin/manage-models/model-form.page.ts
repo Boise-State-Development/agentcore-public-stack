@@ -65,7 +65,7 @@ export class ModelFormPage implements OnInit {
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     isReasoningModel: this.fb.control(false, { nonNullable: true }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
-    supportsCaching: this.fb.control(true, { nonNullable: true }),
+    supportsCaching: this.fb.control(false, { nonNullable: true }),
   });
 
   readonly pageTitle = computed(() => this.isEditMode() ? 'Edit Model' : 'Add Model');
@@ -84,6 +84,16 @@ export class ModelFormPage implements OnInit {
     if (queryParams['modelId']) {
       this.prefillFromQueryParams(queryParams);
     }
+
+    // Clear cache pricing when supportsCaching is toggled off
+    this.modelForm.controls.supportsCaching.valueChanges.subscribe(supportsCaching => {
+      if (!supportsCaching) {
+        this.modelForm.patchValue({
+          cacheWritePricePerMillionTokens: null,
+          cacheReadPricePerMillionTokens: null,
+        });
+      }
+    });
   }
 
   /**
