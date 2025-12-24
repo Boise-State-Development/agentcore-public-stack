@@ -372,10 +372,11 @@ def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str,
 
     # messageStart: Beginning of a message
     # Contains role (typically "assistant")
-    # Reset block index when new message starts
+    # Reset block index and skipped blocks when new message starts
     if "messageStart" in inner_event:
         message_start = inner_event["messageStart"]
         current_block_index["index"] = 0  # Reset to 0 for new message
+        current_block_index["skipped_blocks"] = set()  # Clear skipped blocks for new message
         events.append(_create_event("message_start", {
             "role": message_start.get("role", "assistant")
         }))
@@ -442,6 +443,7 @@ def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str,
             if "text" in delta_obj:
                 delta_data["type"] = "text"
                 delta_data["text"] = delta_obj["text"]
+                events.append(_create_event("content_block_delta", delta_data))
 
             # Handle tool use input delta
             elif "toolUse" in delta_obj:
@@ -449,8 +451,16 @@ def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str,
                 delta_data["type"] = "tool_use"
                 if "input" in tool_use:
                     delta_data["input"] = tool_use["input"]
+                events.append(_create_event("content_block_delta", delta_data))
 
-        events.append(_create_event("content_block_delta", delta_data))
+            # Skip reasoningContent - handled by _handle_reasoning_events
+            # Don't emit content_block_delta for reasoning to avoid incomplete events
+            # Track skipped blocks so we also skip their content_block_stop
+            elif "reasoningContent" in delta_obj:
+                # Initialize skipped_blocks set if not present
+                if "skipped_blocks" not in current_block_index:
+                    current_block_index["skipped_blocks"] = set()
+                current_block_index["skipped_blocks"].add(block_index)
 
     # contentBlockStop: End of a content block
     # Contains contentBlockIndex
@@ -465,9 +475,15 @@ def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str,
             # Provider didn't send index, use our tracked index
             block_index = current_block_index.get("index", 0)
 
-        events.append(_create_event("content_block_stop", {
-            "contentBlockIndex": block_index
-        }))
+        # Skip content_block_stop for reasoning blocks (which we skipped in delta)
+        skipped_blocks = current_block_index.get("skipped_blocks", set())
+        if block_index in skipped_blocks:
+            # Don't emit stop event for skipped reasoning blocks
+            pass
+        else:
+            events.append(_create_event("content_block_stop", {
+                "contentBlockIndex": block_index
+            }))
 
         # Increment block index for next block (when provider doesn't send it)
         # Only increment if provider didn't send index (they manage their own)

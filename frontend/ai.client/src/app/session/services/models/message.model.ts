@@ -18,6 +18,20 @@ export interface ToolResultContent {
 }
 
 /**
+ * Reasoning content structure (extended thinking from Claude 3.7+, GPT, etc.)
+ * Matches the Bedrock Converse API ReasoningContentBlock format
+ */
+export interface ReasoningContentData {
+  reasoningText?: {
+    text: string;
+    /** Signature for verification (required for subsequent Bedrock API calls) */
+    signature?: string;
+  };
+  /** Encrypted reasoning content for trust and safety */
+  redactedContent?: string;
+}
+
+/**
  * Tool use data structure
  */
 export interface ToolUseData {
@@ -38,7 +52,7 @@ export interface ToolUseData {
  * Matches the backend MessageContent model.
  */
 export interface ContentBlock {
-  /** Content type (text, toolUse, toolResult, image, document, etc.) */
+  /** Content type (text, toolUse, toolResult, image, document, reasoningContent, etc.) */
   type: string;
   /** Text content (if type is text) */
   text?: string | null;
@@ -50,6 +64,8 @@ export interface ContentBlock {
   image?: Record<string, unknown> | null;
   /** Document content (if type is document) */
   document?: Record<string, unknown> | null;
+  /** Reasoning content (if type is reasoningContent) - extended thinking from Claude 3.7+, GPT, etc. */
+  reasoningContent?: ReasoningContentData | null;
 }
 
 /**
@@ -85,6 +101,13 @@ export function isTextContentBlock(block: ContentBlock): block is ContentBlock &
  */
 export function isToolUseContentBlock(block: ContentBlock): block is ContentBlock & { type: 'toolUse' | 'tool_use'; toolUse: Record<string, unknown> } {
   return (block.type === 'toolUse' || block.type === 'tool_use') && block.toolUse !== null && block.toolUse !== undefined;
+}
+
+/**
+ * Type guard to check if a content block is a reasoning content block
+ */
+export function isReasoningContentBlock(block: ContentBlock): block is ContentBlock & { type: 'reasoningContent'; reasoningContent: ReasoningContentData } {
+  return block.type === 'reasoningContent' && block.reasoningContent !== null && block.reasoningContent !== undefined;
 }
 
 

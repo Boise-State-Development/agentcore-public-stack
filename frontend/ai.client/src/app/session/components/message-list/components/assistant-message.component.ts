@@ -6,15 +6,21 @@ import {
 import { Message } from '../../../services/models/message.model';
 import { MarkdownComponent } from 'ngx-markdown';
 import { ToolUseComponent } from './tool-use';
+import { ReasoningContentComponent } from './reasoning-content';
 
 @Component({
     selector: 'app-assistant-message',
     changeDetection: ChangeDetectionStrategy.OnPush,
-    imports: [MarkdownComponent, ToolUseComponent],
+    imports: [MarkdownComponent, ToolUseComponent, ReasoningContentComponent],
     template: `
         <div class="block-container">
             @for (block of message().content; track $index) {
-                @if (block.type === 'text' && block.text) {
+                @if (block.type === 'reasoningContent' && block.reasoningContent) {
+                    <div class="message-block reasoning-block" [style.animation-delay]="($index * 0.1) + 's'">
+                        <app-reasoning-content class="flex w-full justify-start" [contentBlock]="block"></app-reasoning-content>
+                    </div>
+                }
+                @else if (block.type === 'text' && block.text) {
                     <div class="message-block text-block" [style.animation-delay]="($index * 0.1) + 's'">
                         <div class="flex w-full justify-start">
                             <markdown clipboard mermaid katex [data]="block.text"></markdown>
@@ -55,6 +61,10 @@ import { ToolUseComponent } from './tool-use';
     }
 
     .tool-use-block {
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .reasoning-block {
       animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 

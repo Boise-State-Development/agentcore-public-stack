@@ -5,16 +5,27 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class MessageContent(BaseModel):
-    """Individual content block in a message"""
+    """Individual content block in a message
+
+    Supports all Bedrock Converse API content types including:
+    - text: Plain text content
+    - toolUse: Tool/function call
+    - toolResult: Result from tool execution
+    - image: Image content
+    - document: Document content
+    - reasoningContent: Chain-of-thought reasoning (Claude extended thinking, etc.)
+    """
     model_config = ConfigDict(populate_by_name=True)
 
-    type: str = Field(..., description="Content type (text, toolUse, toolResult, etc.)")
+    type: str = Field(..., description="Content type (text, toolUse, toolResult, reasoningContent, etc.)")
     text: Optional[str] = Field(None, description="Text content")
     # Add other fields as needed for different content types
     tool_use: Optional[Dict[str, Any]] = Field(None, alias="toolUse")
     tool_result: Optional[Dict[str, Any]] = Field(None, alias="toolResult")
     image: Optional[Dict[str, Any]] = Field(None)
     document: Optional[Dict[str, Any]] = Field(None)
+    # Reasoning content for models that support extended thinking (Claude 3.7+, etc.)
+    reasoning_content: Optional[Dict[str, Any]] = Field(None, alias="reasoningContent")
 
 
 class LatencyMetrics(BaseModel):

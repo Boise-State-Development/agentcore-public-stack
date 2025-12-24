@@ -30,13 +30,15 @@ interface MessageBuilder {
 
 interface ContentBlockBuilder {
   index: number;
-  type: 'text' | 'toolUse' | 'tool_use'; // Support both formats for compatibility
+  type: 'text' | 'toolUse' | 'tool_use' | 'reasoningContent'; // Support both formats for compatibility
   // For text blocks
   textChunks: string[];
   // For tool_use blocks
   toolUseId?: string;
   toolName?: string;
   inputChunks: string[];
+  // For reasoning content blocks
+  reasoningChunks: string[];
   // Tool result (merged into tool_use block)
   result?: {
     content: Array<{
@@ -562,6 +564,10 @@ export class StreamParserService {
           this.handleMetadata(data);
           break;
 
+        case 'reasoning':
+          this.handleReasoning(data);
+          break;
+
         case 'quota_warning':
           this.handleQuotaWarning(data);
           break;
@@ -692,6 +698,7 @@ export class StreamParserService {
         type: blockType,
         textChunks: [],
         inputChunks: [],
+        reasoningChunks: [],
         toolUseId: eventData.toolUse?.toolUseId,
         toolName: eventData.toolUse?.name,
         isComplete: false
@@ -757,6 +764,7 @@ export class StreamParserService {
           type: inferredType,
           textChunks: [],
           inputChunks: [],
+          reasoningChunks: [],
           isComplete: false
         };
       }
@@ -1093,21 +1101,104 @@ export class StreamParserService {
 
       return;
     }
-    
+
     const metadataData = data as MetadataEvent;
-    
+
     // Validate that at least usage or metrics is present
     if (!metadataData.usage && !metadataData.metrics) {
 
       return;
     }
-    
+
     // Update metadata signal
     this.metadataSignal.set(metadataData);
-    
+
     // Update the last completed message with metadata if it doesn't have it yet
     this.updateLastCompletedMessageWithMetadata();
 
+  }
+
+  /**
+   * Handle reasoning events from the SSE stream.
+   * These contain chain-of-thought reasoning text from models like Claude 3.7+ or GPT.
+   *
+   * The reasoning events are separate from content_block_delta events and need
+   * to be accumulated into a reasoningContent block.
+   */
+  private handleReasoning(data: unknown): void {
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+
+    const reasoningData = data as { reasoningText?: string };
+
+    // Skip empty reasoning events (some are just markers)
+    if (!reasoningData.reasoningText) {
+      return;
+    }
+
+    // Ensure we have an active message builder
+    const currentBuilder = this.currentMessageBuilder();
+    if (!currentBuilder) {
+      // Create a new message builder if one doesn't exist
+      // This handles edge cases where reasoning arrives before message_start
+      return;
+    }
+
+    this.currentMessageBuilder.update(builder => {
+      if (!builder) {
+        return builder;
+      }
+
+      // Find or create the reasoning content block
+      // We use a special index (-1) to track reasoning separately, then
+      // insert it at the correct position when building the final message
+      // Actually, looking at the SSE events, reasoning has contentBlockIndex from the backend
+      // But since we're skipping content_block_delta for reasoning, we need to track it ourselves
+
+      // Find existing reasoning block or create one
+      let reasoningBlock: ContentBlockBuilder | undefined;
+      let reasoningIndex: number = -1;
+
+      for (const [index, block] of builder.contentBlocks.entries()) {
+        if (block.type === 'reasoningContent') {
+          reasoningBlock = block;
+          reasoningIndex = index;
+          break;
+        }
+      }
+
+      // If no reasoning block exists, create one
+      // Use the next available index
+      if (!reasoningBlock) {
+        const maxIndex = Math.max(-1, ...Array.from(builder.contentBlocks.keys()));
+        reasoningIndex = maxIndex + 1;
+
+        // Check if we need to insert at position 0 (reasoning typically comes first)
+        // But we need to be careful not to conflict with existing blocks
+        // For simplicity, we'll just use a high index and rely on sorting later
+        reasoningBlock = {
+          index: reasoningIndex,
+          type: 'reasoningContent',
+          textChunks: [],
+          inputChunks: [],
+          reasoningChunks: [],
+          isComplete: false
+        };
+      }
+
+      // Append the reasoning text
+      reasoningBlock.reasoningChunks.push(reasoningData.reasoningText!);
+
+      // Create new Map reference to trigger reactivity
+      const newBlocks = new Map(builder.contentBlocks);
+      newBlocks.set(reasoningIndex, { ...reasoningBlock });
+
+      return {
+        ...builder,
+        contentBlocks: newBlocks
+      };
+    });
   }
 
   /**
@@ -1311,6 +1402,21 @@ export class StreamParserService {
    * Convert a ContentBlockBuilder to the final ContentBlock format.
    */
   private buildContentBlock(builder: ContentBlockBuilder): ContentBlock {
+    // Handle reasoning content blocks
+    if (builder.type === 'reasoningContent') {
+      const reasoningText = builder.reasoningChunks.join('');
+      return {
+        type: 'reasoningContent',
+        reasoningContent: {
+          reasoningText: {
+            text: reasoningText
+            // Note: signature is not available during streaming, only from saved messages
+          }
+        }
+      } as ContentBlock;
+    }
+
+    // Handle tool use blocks
     if (builder.type === 'tool_use' || builder.type === 'toolUse') {
       const inputStr = builder.inputChunks.join('');
       let parsedInput: Record<string, unknown> = {};
@@ -1362,6 +1468,7 @@ export class StreamParserService {
       } as ContentBlock;
     }
 
+    // Handle text blocks (default)
     return {
       type: 'text',
       text: builder.textChunks.join('')

@@ -26,7 +26,16 @@ except ImportError:
 
 
 def _convert_content_block(content_item: Any) -> MessageContent:
-    """Convert a content block to MessageContent model"""
+    """Convert a content block to MessageContent model
+
+    Handles all Bedrock Converse API content types:
+    - text: Plain text content
+    - toolUse: Tool/function call
+    - toolResult: Result from tool execution
+    - image: Image content
+    - document: Document content
+    - reasoningContent: Chain-of-thought reasoning (Claude extended thinking, GPT reasoning, etc.)
+    """
     # Handle different content types
     if isinstance(content_item, dict):
         content_type = None
@@ -35,6 +44,7 @@ def _convert_content_block(content_item: Any) -> MessageContent:
         tool_result = None
         image = None
         document = None
+        reasoning_content = None
 
         # Determine content type
         if "text" in content_item:
@@ -52,8 +62,15 @@ def _convert_content_block(content_item: Any) -> MessageContent:
         elif "document" in content_item:
             content_type = "document"
             document = content_item["document"]
+        elif "reasoningContent" in content_item:
+            # Handle reasoning content (extended thinking from Claude 3.7+, GPT, etc.)
+            # Preserve the full structure including reasoningText and signature
+            content_type = "reasoningContent"
+            reasoning_content = content_item["reasoningContent"]
         else:
-            # Unknown type, default to text
+            # Unknown type - log warning and preserve as-is
+            # Don't stringify, just store as text with a note
+            logger.warning(f"Unknown content block type with keys: {list(content_item.keys())}")
             content_type = "text"
             text = str(content_item)
 
@@ -63,7 +80,8 @@ def _convert_content_block(content_item: Any) -> MessageContent:
             tool_use=tool_use,
             tool_result=tool_result,
             image=image,
-            document=document
+            document=document,
+            reasoning_content=reasoning_content
         )
     else:
         # Handle non-dict content (shouldn't happen but be defensive)
