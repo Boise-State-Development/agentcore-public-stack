@@ -1,48 +1,38 @@
-
-<div class="relative pb-30 max-w-[720px] mx-auto px-4 py-6">
-    @if (!hasMessages()) {
-        <div class="flex items-center justify-center px-4 pt-40">
-          <div class="w-full max-w-3xl animate-fade-in">
-            <div class="mb-8 flex items-center justify-center gap-4">
-              <img 
-                src="/img/logo-light.png" 
-                alt="Logo" 
-                class="size-14 shrink-0 dark:hidden">
-              <img 
-                src="/img/logo-dark.png" 
-                alt="Logo" 
-                class="hidden size-14 shrink-0 dark:block">
-              <div>
-                <app-animated-text [text]="greetingMessage()" [speed]="50" />
-              </div>
-            </div>
-            <app-chat-input
-              (messageSubmitted)="onMessageSubmitted($event)"
-              (fileAttached)="onFileAttached($event)">
-            </app-chat-input>
-          </div>
+@if (!hasMessages()) {
+  <div class="empty-state-background fixed inset-0 lg:left-72 flex items-center justify-center">
+    <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
+      <div class="mb-8 flex items-center justify-center gap-4 relative">
+        <img
+          src="/img/logo-light.png"
+          alt="Logo"
+          class="size-14 shrink-0 dark:hidden">
+        <img
+          src="/img/logo-dark.png"
+          alt="Logo"
+          class="hidden size-14 shrink-0 dark:block">
+        <div>
+          <app-animated-text [text]="greetingMessage()" [speed]="50" />
         </div>
-      } @else {
-          <!-- Debug: Show JSON -->
-          <!-- <details class="rounded-sm border border-gray-300 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800">
-              <summary class="cursor-pointer text-sm font-semibold">Debug: View Session JSON</summary>
-              <pre class="mt-2 overflow-x-auto text-xs">{{ sessionConversation() | json }}</pre>
-          </details> -->
-          <!-- Your component content -->
-          <div>
-              <app-message-list [messages]="messages()" [isChatLoading]="isChatLoading()" />
-          </div>
-
-      }
-
-    @if(hasMessages()) {
-        <!-- Footer (fixed, content scrolls underneath) -->
-        <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72 animate-fade-in">
-            <div class="max-w-[720px] mx-auto px-4">
-                <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
-            </div>
-        </div>
-    }
+      </div>
+      <div class="relative">
+        <app-chat-input
+          (messageSubmitted)="onMessageSubmitted($event)"
+          (fileAttached)="onFileAttached($event)">
+        </app-chat-input>
+      </div>
+    </div>
+  </div>
+} @else {
+  <div class="relative pb-30 max-w-[720px] mx-auto px-4 py-6">
+    <div>
+      <app-message-list [messages]="messages()" [isChatLoading]="isChatLoading()" />
+    </div>
   </div>
 
-
+  <!-- Footer (fixed, content scrolls underneath) -->
+  <div class="pb-4 fixed bottom-0 left-0 right-0 lg:left-72 animate-fade-in">
+    <div class="max-w-[720px] mx-auto px-4">
+      <app-chat-input (messageSubmitted)="onMessageSubmitted($event)" (fileAttached)="onFileAttached($event)"></app-chat-input>
+    </div>
+  </div>
+}
