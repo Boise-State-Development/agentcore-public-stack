@@ -22,8 +22,8 @@ import { ReasoningContentComponent } from './reasoning-content';
                 }
                 @else if (block.type === 'text' && block.text) {
                     <div class="message-block text-block" [style.animation-delay]="($index * 0.1) + 's'">
-                        <div class="flex w-full justify-start">
-                            <markdown clipboard mermaid katex [data]="block.text"></markdown>
+                        <div class="flex min-w-0 w-full justify-start">
+                            <markdown class="min-w-0 max-w-full overflow-hidden" clipboard mermaid katex [data]="block.text"></markdown>
                         </div>
                     </div>
                 }
@@ -48,12 +48,14 @@ import { ReasoningContentComponent } from './reasoning-content';
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
+      min-width: 0;
     }
 
     .message-block {
       animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
       opacity: 0;
       transform: translateY(12px);
+      min-width: 0;
     }
 
     .text-block {

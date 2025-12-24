@@ -23,8 +23,8 @@
     </div>
   </div>
 } @else {
-  <div class="relative pb-30 max-w-[720px] mx-auto px-4 py-6">
-    <div>
+  <div class="relative pb-30 max-w-[720px] mx-auto px-4 py-6 min-w-0">
+    <div class="min-w-0">
       <app-message-list [messages]="messages()" [isChatLoading]="isChatLoading()" />
     </div>
   </div>

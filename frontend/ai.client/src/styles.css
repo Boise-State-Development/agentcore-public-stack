@@ -148,6 +148,7 @@
         margin-bottom: 1rem;
         font-size: 0.875rem;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        max-width: 100%;
     }
 
     pre code {
