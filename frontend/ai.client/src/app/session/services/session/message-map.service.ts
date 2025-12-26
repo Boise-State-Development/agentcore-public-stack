@@ -15,21 +15,41 @@ export class MessageMapService {
   private messageMap = signal<MessageMap>({});
   private activeStreamSessionId = signal<string | null>(null);
 
+  /**
+   * Tracks which session is currently loading messages from the API.
+   * Used to show skeleton loading state when navigating to a session.
+   */
+  private _isLoadingSession = signal<string | null>(null);
+
+  /**
+   * Public readonly signal indicating the session ID currently loading,
+   * or null if no session is loading.
+   */
+  readonly isLoadingSession = this._isLoadingSession.asReadonly();
+
+  /**
+   * Set the loading session state.
+   * Call this before loadMessagesForSession to show skeleton immediately on route change.
+   */
+  setLoadingSession(sessionId: string | null): void {
+    this._isLoadingSession.set(sessionId);
+  }
+
   private streamParser = inject(StreamParserService);
   private sessionService = inject(SessionService);
-  
+
   constructor() {
     // Reactive effect: automatically sync streaming messages to the message map
     effect(() => {
       const sessionId = this.activeStreamSessionId();
       const streamMessages = this.streamParser.allMessages();
-      
+
       if (sessionId && streamMessages.length > 0) {
         this.syncStreamingMessages(sessionId, streamMessages);
       }
     });
   }
-  
+
   /**
    * Start streaming for a session.
    * Call this before beginning to parse SSE events.
@@ -52,7 +72,7 @@ export class MessageMapService {
       }));
     }
   }
-  
+
   /**
    * End streaming for the current session.
    * Finalizes messages and clears streaming state.
@@ -66,10 +86,10 @@ export class MessageMapService {
         this.syncStreamingMessages(sessionId, finalMessages);
       }
     }
-    
+
     this.activeStreamSessionId.set(null);
   }
-  
+
   /**
    * Get the messages signal for a session.
    */
@@ -78,16 +98,16 @@ export class MessageMapService {
     if (existing) {
       return existing;
     }
-    
+
     const newSignal = signal<Message[]>([]);
     this.messageMap.update(map => ({
       ...map,
       [sessionId]: newSignal
     }));
-    
+
     return newSignal;
   }
-  
+
   /**
    * Add a user message to a session (before streaming begins).
    * Generates a predictable message ID based on session ID and message count.
@@ -120,7 +140,7 @@ export class MessageMapService {
 
     return message;
   }
-  
+
   /**
    * Sync streaming messages to the message map.
    * Handles the case where we're appending to existing messages.
@@ -129,7 +149,7 @@ export class MessageMapService {
   private syncStreamingMessages(sessionId: string, streamMessages: Message[]): void {
     const sessionSignal = this.messageMap()[sessionId];
     if (!sessionSignal) return;
-    
+
     sessionSignal.update(existingMessages => {
       // Find the index of the last user message
       let lastUserMessageIndex = -1;
@@ -139,19 +159,19 @@ export class MessageMapService {
           break;
         }
       }
-      
+
       // If no user message found, just return the stream messages
       if (lastUserMessageIndex === -1) {
         return streamMessages;
       }
-      
+
       // Keep all messages up to and including the last user message
       // Then append the streaming messages (replacing any partial assistant messages after the last user message)
       const preservedMessages = existingMessages.slice(0, lastUserMessageIndex + 1);
       return [...preservedMessages, ...streamMessages];
     });
   }
-  
+
   /**
    * Load messages for a session from the API.
    * If messages already exist in the map, they won't be reloaded.
@@ -166,6 +186,9 @@ export class MessageMapService {
       // Messages already loaded, skip API call
       return;
     }
+
+    // Set loading state for this session
+    this._isLoadingSession.set(sessionId);
 
     try {
       // Fetch messages from the API
@@ -189,6 +212,9 @@ export class MessageMapService {
     } catch (error) {
       console.error('Failed to load messages for session:', sessionId, error);
       throw error;
+    } finally {
+      // Clear loading state
+      this._isLoadingSession.set(null);
     }
   }
 
