@@ -957,13 +957,27 @@ export class StreamParserService {
           }
 
           // Handle image content
+          // Supports both formats:
+          // - { format, source: { bytes/data } } - from Code Interpreter tool result
+          // - { format, data } - from ToolResultProcessor (SSE events)
           if ('image' in item && item.image) {
             const image = item.image;
-            if (image.source && image.source.data) {
+            let imageData: string | undefined;
+
+            // Check for source.data or source.bytes pattern
+            if (image.source) {
+              imageData = image.source.data || image.source.bytes;
+            }
+            // Check for direct data pattern (from ToolResultProcessor)
+            if (!imageData && image.data) {
+              imageData = image.data;
+            }
+
+            if (imageData) {
               resultContent.push({
                 image: {
                   format: image.format || 'png',
-                  data: image.source.data
+                  data: imageData
                 }
               });
             }

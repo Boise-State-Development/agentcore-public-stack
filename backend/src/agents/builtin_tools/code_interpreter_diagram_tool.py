@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 def _get_code_interpreter_id() -> Optional[str]:
     """Get Custom Code Interpreter ID from environment or Parameter Store"""
     # 1. Check environment variable (set by AgentCore Runtime)
-    code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
+    code_interpreter_id = os.getenv('AGENTCORE_CODE_INTERPRETER_ID')
     if code_interpreter_id:
-        logger.info(f"Found CODE_INTERPRETER_ID in environment: {code_interpreter_id}")
+        logger.info(f"Found AGENTCORE_CODE_INTERPRETER_ID in environment: {code_interpreter_id}")
         return code_interpreter_id
 
     # 2. Try Parameter Store (for local development or alternative configuration)

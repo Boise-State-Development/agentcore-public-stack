@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     memory_arn = os.getenv('MEMORY_ARN')
     memory_id = os.getenv('AGENTCORE_MEMORY_ID')
     browser_id = os.getenv('BROWSER_ID')
-    code_interpreter_id = os.getenv('CODE_INTERPRETER_ID')
+    code_interpreter_id = os.getenv('AGENTCORE_CODE_INTERPRETER_ID')
 
     if memory_arn:
         logger.info(f"AgentCore Memory ARN: {memory_arn}")

@@ -25,6 +25,67 @@ except ImportError:
     logger.info("AgentCore Memory not available - will use local file storage")
 
 
+def _ensure_image_base64(image_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure image data has base64 encoding instead of raw bytes
+
+    Handles image content from tool results where bytes may be raw.
+    Converts to base64 string for JSON serialization.
+    """
+    if not image_data:
+        return image_data
+
+    # Check for source.bytes pattern (from Code Interpreter tool)
+    source = image_data.get("source", {})
+    if isinstance(source, dict) and "bytes" in source:
+        raw_bytes = source["bytes"]
+        if isinstance(raw_bytes, bytes):
+            # Convert raw bytes to base64 string
+            encoded = base64.b64encode(raw_bytes).decode('utf-8')
+            return {
+                "format": image_data.get("format", "png"),
+                "data": encoded
+            }
+        elif isinstance(raw_bytes, str):
+            # Already a string (possibly base64), use as-is
+            return {
+                "format": image_data.get("format", "png"),
+                "data": raw_bytes
+            }
+
+    # Check if already in frontend format (format + data)
+    if "data" in image_data and "format" in image_data:
+        return image_data
+
+    return image_data
+
+
+def _process_tool_result_content(tool_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Process tool result content to ensure images are base64 encoded
+
+    Tool results can contain nested image content that needs conversion.
+    """
+    if not tool_result:
+        return tool_result
+
+    content = tool_result.get("content", [])
+    if not isinstance(content, list):
+        return tool_result
+
+    processed_content = []
+    for item in content:
+        if isinstance(item, dict) and "image" in item:
+            # Process nested image in tool result
+            processed_item = dict(item)
+            processed_item["image"] = _ensure_image_base64(item["image"])
+            processed_content.append(processed_item)
+        else:
+            processed_content.append(item)
+
+    result = dict(tool_result)
+    result["content"] = processed_content
+    return result
+
+
 def _convert_content_block(content_item: Any) -> MessageContent:
     """Convert a content block to MessageContent model
 
@@ -55,10 +116,12 @@ def _convert_content_block(content_item: Any) -> MessageContent:
             tool_use = content_item["toolUse"]
         elif "toolResult" in content_item:
             content_type = "toolResult"
-            tool_result = content_item["toolResult"]
+            # Process tool result to ensure images are base64 encoded
+            tool_result = _process_tool_result_content(content_item["toolResult"])
         elif "image" in content_item:
             content_type = "image"
-            image = content_item["image"]
+            # Ensure image is base64 encoded
+            image = _ensure_image_base64(content_item["image"])
         elif "document" in content_item:
             content_type = "document"
             document = content_item["document"]
