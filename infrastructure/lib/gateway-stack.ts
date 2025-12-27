@@ -14,18 +14,20 @@ export interface GatewayStackProps extends cdk.StackProps {
 
 /**
  * Gateway Stack - AWS Bedrock AgentCore Gateway with MCP Tools
- * 
+ *
  * This stack creates:
  * - AgentCore Gateway with MCP protocol and AWS_IAM authorization
  * - Lambda function for Google Custom Search (web & image search)
+ * - Lambda function for Brave Search (web, local, video, image, news, summarizer)
  * - Gateway Targets connecting Lambda to Gateway as MCP tools
  * - IAM roles with appropriate permissions
- * 
- * Note: Google API credentials must be created in Secrets Manager before first deployment.
+ *
+ * Note: API credentials must be created in Secrets Manager before first deployment.
  */
 export class GatewayStack extends cdk.Stack {
   public readonly gateway: agentcore.CfnGateway;
   public readonly googleSearchFunction: lambda.Function;
+  public readonly braveSearchFunction: lambda.Function;
 
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
@@ -42,13 +44,24 @@ export class GatewayStack extends cdk.Stack {
     // Google Custom Search Credentials Secret - Create with placeholder values
     // Format: {"api_key": "YOUR_KEY", "search_engine_id": "YOUR_ID"}
     // Users should update this secret with real credentials after deployment
-    const googleCredentialsSecret = new secretsmanager.Secret(this, 'GoogleCredentials', {      
+    const googleCredentialsSecret = new secretsmanager.Secret(this, 'GoogleCredentials', {
       description: 'Google Custom Search API credentials (update with real values)',
       secretObjectValue: {
         api_key: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_GOOGLE_API_KEY'),
         search_engine_id: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_SEARCH_ENGINE_ID'),
       },
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Preserve secret on stack deletion
+    });
+
+    // Brave Search Credentials Secret - Create with placeholder values
+    // Format: {"api_key": "YOUR_BRAVE_API_KEY"}
+    // Get API key from: https://api-dashboard.search.brave.com/app/keys
+    const braveCredentialsSecret = new secretsmanager.Secret(this, 'BraveCredentials', {
+      description: 'Brave Search API credentials (update with real values)',
+      secretObjectValue: {
+        api_key: cdk.SecretValue.unsafePlainText('REPLACE_WITH_YOUR_BRAVE_API_KEY'),
+      },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // ============================================================
@@ -74,6 +87,7 @@ export class GatewayStack extends cdk.Stack {
         actions: ['secretsmanager:GetSecretValue'],
         resources: [
           `${googleCredentialsSecret.secretArn}*`,
+          `${braveCredentialsSecret.secretArn}*`,
         ],
       })
     );
@@ -139,6 +153,23 @@ export class GatewayStack extends cdk.Stack {
         GOOGLE_CREDENTIALS_SECRET_NAME: googleCredentialsSecret.secretName,
         LOG_LEVEL: config.gateway.logLevel || 'INFO',
       },
+    });
+
+    // Brave Search Lambda Function
+    this.braveSearchFunction = new lambda.Function(this, 'BraveSearchFunction', {
+      functionName: getResourceName(config, 'mcp-brave-search'),
+      description: 'Brave Search for web, local, video, image, news, and summarizer',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'lambda_function.lambda_handler',
+      code: lambda.Code.fromAsset('../backend/lambda-functions/brave-search'),
+      role: lambdaRole,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+      environment: {
+        BRAVE_CREDENTIALS_SECRET_NAME: braveCredentialsSecret.secretName,
+        LOG_LEVEL: config.gateway.logLevel || 'INFO',
+      },
     });   
 
     // ============================================================
@@ -174,6 +205,12 @@ export class GatewayStack extends cdk.Stack {
 
     // Lambda Permission for Gateway to invoke
     this.googleSearchFunction.addPermission('GatewayPermission', {
+      principal: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: gatewayArn,
+    });
+
+    this.braveSearchFunction.addPermission('GatewayPermission', {
       principal: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       action: 'lambda:InvokeFunction',
       sourceArn: gatewayArn,
@@ -266,9 +303,327 @@ export class GatewayStack extends cdk.Stack {
     });
 
     // ============================================================
+    // Brave Search Gateway Targets
+    // ============================================================
+
+    // Brave Web Search Target
+    new agentcore.CfnGatewayTarget(this, 'BraveWebSearchTarget', {
+      name: 'brave-web-search',
+      gatewayIdentifier: gatewayId,
+      description: 'Comprehensive web search with rich result types',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_web_search',
+                  description:
+                    'Performs comprehensive web searches using Brave Search API. Returns rich results with titles, URLs, descriptions, and optional AI summaries.',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'Web search parameters',
+                    required: ['query'],
+                    properties: {
+                      query: {
+                        type: 'string',
+                        description: 'Search terms (max 400 chars, 50 words)',
+                      },
+                      country: {
+                        type: 'string',
+                        description: 'Country code for localized results (default: US)',
+                      },
+                      count: {
+                        type: 'number',
+                        description: 'Number of results (1-20, default: 10)',
+                      },
+                      freshness: {
+                        type: 'string',
+                        description: 'Time filter: pd (past day), pw (past week), pm (past month), py (past year)',
+                      },
+                      summary: {
+                        type: 'boolean',
+                        description: 'Enable summary key generation for AI summarization',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Brave Local Search Target
+    new agentcore.CfnGatewayTarget(this, 'BraveLocalSearchTarget', {
+      name: 'brave-local-search',
+      gatewayIdentifier: gatewayId,
+      description: 'Local business and place search with ratings and hours',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_local_search',
+                  description:
+                    'Searches for local businesses and places with detailed information including ratings, hours, and AI-generated descriptions. Requires Pro plan for full capabilities.',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'Local search parameters',
+                    required: ['query'],
+                    properties: {
+                      query: {
+                        type: 'string',
+                        description: 'Search terms including location (e.g., "coffee shops in Seattle")',
+                      },
+                      country: {
+                        type: 'string',
+                        description: 'Country code for localized results (default: US)',
+                      },
+                      count: {
+                        type: 'number',
+                        description: 'Number of results (1-20, default: 10)',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Brave Video Search Target
+    new agentcore.CfnGatewayTarget(this, 'BraveVideoSearchTarget', {
+      name: 'brave-video-search',
+      gatewayIdentifier: gatewayId,
+      description: 'Video search with metadata and thumbnails',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_video_search',
+                  description:
+                    'Searches for videos with comprehensive metadata including duration, views, creator info, and thumbnails.',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'Video search parameters',
+                    required: ['query'],
+                    properties: {
+                      query: {
+                        type: 'string',
+                        description: 'Search terms (max 400 chars, 50 words)',
+                      },
+                      country: {
+                        type: 'string',
+                        description: 'Country code for localized results (default: US)',
+                      },
+                      count: {
+                        type: 'number',
+                        description: 'Number of results (1-50, default: 20)',
+                      },
+                      freshness: {
+                        type: 'string',
+                        description: 'Time filter: pd (past day), pw (past week), pm (past month), py (past year)',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Brave Image Search Target
+    new agentcore.CfnGatewayTarget(this, 'BraveImageSearchTarget', {
+      name: 'brave-image-search',
+      gatewayIdentifier: gatewayId,
+      description: 'Image search with URLs and metadata',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_image_search',
+                  description:
+                    'Searches for images with URLs, thumbnails, and metadata. Returns image URLs (no base64 encoding).',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'Image search parameters',
+                    required: ['query'],
+                    properties: {
+                      query: {
+                        type: 'string',
+                        description: 'Search terms (max 400 chars, 50 words)',
+                      },
+                      country: {
+                        type: 'string',
+                        description: 'Country code for localized results (default: US)',
+                      },
+                      count: {
+                        type: 'number',
+                        description: 'Number of results (1-200, default: 50)',
+                      },
+                      safesearch: {
+                        type: 'string',
+                        description: 'Content filtering: off, strict (default: strict)',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Brave News Search Target
+    new agentcore.CfnGatewayTarget(this, 'BraveNewsSearchTarget', {
+      name: 'brave-news-search',
+      gatewayIdentifier: gatewayId,
+      description: 'Current news search with freshness controls',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_news_search',
+                  description:
+                    'Searches for current news articles with freshness controls and breaking news indicators.',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'News search parameters',
+                    required: ['query'],
+                    properties: {
+                      query: {
+                        type: 'string',
+                        description: 'Search terms (max 400 chars, 50 words)',
+                      },
+                      country: {
+                        type: 'string',
+                        description: 'Country code for localized results (default: US)',
+                      },
+                      count: {
+                        type: 'number',
+                        description: 'Number of results (1-50, default: 20)',
+                      },
+                      freshness: {
+                        type: 'string',
+                        description: 'Time filter: pd (past day, default), pw (past week), pm (past month)',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // Brave Summarizer Target
+    new agentcore.CfnGatewayTarget(this, 'BraveSummarizerTarget', {
+      name: 'brave-summarizer',
+      gatewayIdentifier: gatewayId,
+      description: 'AI-powered summaries from web search results',
+
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: 'GATEWAY_IAM_ROLE',
+        },
+      ],
+
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.braveSearchFunction.functionArn,
+            toolSchema: {
+              inlinePayload: [
+                {
+                  name: 'brave_summarizer',
+                  description:
+                    'Generates AI-powered summaries from web search results. First perform brave_web_search with summary=true, then use the returned summary key with this tool.',
+                  inputSchema: {
+                    type: 'object',
+                    description: 'Summarizer parameters',
+                    required: ['key'],
+                    properties: {
+                      key: {
+                        type: 'string',
+                        description: 'Summary key obtained from brave_web_search with summary=true',
+                      },
+                      entity_info: {
+                        type: 'boolean',
+                        description: 'Include entity information (default: false)',
+                      },
+                      inline_references: {
+                        type: 'boolean',
+                        description: 'Add source URL references inline (default: false)',
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    // ============================================================
     // SSM Parameters
     // ============================================================
-    
+
     new ssm.StringParameter(this, 'GatewayUrlParameter', {
       parameterName: `/${config.projectPrefix}/gateway/url`,
       stringValue: gatewayUrl,
@@ -310,14 +665,19 @@ export class GatewayStack extends cdk.Stack {
       description: 'Gateway Status',
     });
 
-    new cdk.CfnOutput(this, 'LambdaFunctionArn', {
+    new cdk.CfnOutput(this, 'GoogleLambdaArn', {
       value: this.googleSearchFunction.functionArn,
       description: 'Google Search Lambda Function ARN',
     });
 
+    new cdk.CfnOutput(this, 'BraveLambdaArn', {
+      value: this.braveSearchFunction.functionArn,
+      description: 'Brave Search Lambda Function ARN',
+    });
+
     new cdk.CfnOutput(this, 'TotalTargets', {
-      value: '2',
-      description: 'Total number of Gateway Targets (tools)',
+      value: '8',
+      description: 'Total number of Gateway Targets (2 Google + 6 Brave)',
     });
 
     new cdk.CfnOutput(this, 'UsageInstructions', {
@@ -325,15 +685,25 @@ export class GatewayStack extends cdk.Stack {
 Gateway URL: ${gatewayUrl}
 Authentication: AWS_IAM (SigV4)
 
-⚠️  IMPORTANT: Update Google API credentials before using search tools
+⚠️  IMPORTANT: Update API credentials before using search tools
+
+1. Google Search credentials:
   aws secretsmanager put-secret-value \\
     --secret-id ${googleCredentialsSecret.secretName} \\
     --secret-string '{"api_key":"YOUR_API_KEY","search_engine_id":"YOUR_ENGINE_ID"}' \\
     --region ${this.region}
 
-Get API credentials from:
+  Get credentials from:
   - API Key: https://console.cloud.google.com/apis/credentials
   - Search Engine ID: https://programmablesearchengine.google.com/
+
+2. Brave Search credentials:
+  aws secretsmanager put-secret-value \\
+    --secret-id ${braveCredentialsSecret.secretName} \\
+    --secret-string '{"api_key":"YOUR_BRAVE_API_KEY"}' \\
+    --region ${this.region}
+
+  Get API key from: https://api-dashboard.search.brave.com/app/keys
 
 To test Gateway connectivity:
   aws bedrock-agentcore invoke-gateway \\
