@@ -88,7 +88,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
                   @if (isSelected(model)) {
                     <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
                   } @else if (sessionService.hasCurrentSession()) {
-                    <span class="shrink-0 rounded-full border border-tertiary-500 px-2 py-0.5 text-xs font-medium text-tertiary-600 dark:border-tertiary-400 dark:text-tertiary-400">New chat</span>
+                    <span class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400">New chat</span>
                   }
                 </button>
               }
