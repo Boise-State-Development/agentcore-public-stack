@@ -1,13 +1,18 @@
-import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
+import { Router } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroCheck } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
+import { SessionService } from '../../session/services/session/session.service';
 import { ManagedModel } from '../../admin/manage-models/models/managed-model.model';
 
 @Component({
   selector: 'app-model-dropdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem],
+  imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem, NgIcon],
+  providers: [provideIcons({ heroCheck })],
   template: `
     <div class="relative">
       <button
@@ -64,18 +69,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
                   <span class="font-medium">{{ modelService.selectedModel()?.modelName || 'System Default' }}</span>
                   <span class="text-xs text-gray-500 dark:text-gray-400">Using backend default</span>
                 </div>
-                <svg
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  aria-hidden="true"
-                  class="size-5 text-primary-500"
-                >
-                  <path
-                    fill-rule="evenodd"
-                    d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
-                    clip-rule="evenodd"
-                  />
-                </svg>
+                <ng-icon name="heroCheck" class="size-5 text-primary-500 dark:text-slate-400" aria-hidden="true" />
               </button>
             } @else {
               @for (model of modelService.availableModels(); track model.modelId) {
@@ -86,24 +80,15 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
                   class="flex w-full items-center justify-between px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
                   role="menuitem"
                 >
-                  <div class="flex flex-col items-start">
-                    <span class="font-medium">{{ model.modelName }}</span>
-                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ model.providerName }}</span>
+                  <div class="min-w-0 text-left">
+                    <div class="truncate font-medium">{{ model.modelName }}</div>
+                    <div class="truncate text-xs text-gray-500 dark:text-gray-400">{{ model.providerName }}</div>
                   </div>
 
                   @if (isSelected(model)) {
-                    <svg
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                      aria-hidden="true"
-                      class="size-5 text-primary-500"
-                    >
-                      <path
-                        fill-rule="evenodd"
-                        d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
-                        clip-rule="evenodd"
-                      />
-                    </svg>
+                    <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                  } @else if (sessionService.hasCurrentSession()) {
+                    <span class="shrink-0 rounded-full border border-tertiary-500 px-2 py-0.5 text-xs font-medium text-tertiary-600 dark:border-tertiary-400 dark:text-tertiary-400">New chat</span>
                   }
                 </button>
               }
@@ -148,6 +133,8 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
 export class ModelDropdownComponent {
   // Inject services
   protected modelService = inject(ModelService);
+  protected sessionService = inject(SessionService);
+  private router = inject(Router);
 
   // Internal state
   protected menuOpen = false;
@@ -183,7 +170,13 @@ export class ModelDropdownComponent {
   }
 
   protected selectModel(model: ManagedModel): void {
-    this.modelService.setSelectedModel(model);
+    // If in an active session and selecting a different model, navigate to new chat
+    if (this.sessionService.hasCurrentSession() && !this.isSelected(model)) {
+      this.modelService.setSelectedModel(model);
+      this.router.navigate(['']);
+    } else {
+      this.modelService.setSelectedModel(model);
+    }
   }
 
   protected isSelected(model: ManagedModel): boolean {
