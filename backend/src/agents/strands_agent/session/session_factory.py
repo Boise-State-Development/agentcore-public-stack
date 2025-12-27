@@ -22,7 +22,7 @@ except ImportError:
 
 
 @lru_cache(maxsize=1)
-def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], Optional[str]]:
+def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Discover the actual strategy IDs from the configured memory strategies.
 
@@ -36,10 +36,10 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
         region: AWS region
 
     Returns:
-        Tuple of (semantic_strategy_id, preference_strategy_id)
+        Tuple of (semantic_strategy_id, preference_strategy_id, summary_strategy_id)
     """
     if not AGENTCORE_MEMORY_AVAILABLE:
-        return None, None
+        return None, None, None
 
     try:
         client = MemoryClient(region_name=region)
@@ -47,6 +47,7 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
 
         semantic_id = None
         preference_id = None
+        summary_id = None
 
         for strategy in strategies:
             strategy_type = strategy.get('type') or strategy.get('memoryStrategyType')
@@ -58,12 +59,15 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
             elif strategy_type == 'USER_PREFERENCE':
                 preference_id = strategy_id
                 logger.info(f"  ⚙️ Found USER_PREFERENCE strategy: {preference_id}")
+            elif strategy_type == 'SUMMARIZATION':
+                summary_id = strategy_id
+                logger.info(f"  📝 Found SUMMARIZATION strategy: {summary_id}")
 
-        return semantic_id, preference_id
+        return semantic_id, preference_id, summary_id
 
     except Exception as e:
         logger.error(f"Failed to discover memory strategies: {e}", exc_info=True)
-        return None, None
+        return None, None, None
 
 
 class SessionFactory:
@@ -134,7 +138,7 @@ class SessionFactory:
         logger.info(f"   • Region: {aws_region}")
 
         # Discover actual strategy IDs from the memory configuration
-        semantic_id, preference_id = _discover_strategy_ids(memory_id, aws_region)
+        semantic_id, preference_id, summary_id = _discover_strategy_ids(memory_id, aws_region)
 
         # Build retrieval config using the correct namespace patterns
         # AgentCore stores memories in: /strategies/{strategyId}/actors/{actorId}
@@ -157,6 +161,16 @@ class SessionFactory:
                 relevance_score=0.3
             )
             logger.info(f"   • Facts namespace: {facts_namespace}")
+
+        if summary_id:
+            # Session summaries (condensed conversation context for the current session)
+            # Note: Summary namespace includes sessionId since summaries are per-session
+            summary_namespace = f"/strategies/{summary_id}/actors/{{actorId}}/sessions/{{sessionId}}"
+            retrieval_config[summary_namespace] = RetrievalConfig(
+                top_k=5,
+                relevance_score=0.3
+            )
+            logger.info(f"   • Summary namespace: {summary_namespace}")
 
         if not retrieval_config:
             logger.warning("⚠️ No memory strategies found - long-term memory retrieval disabled")

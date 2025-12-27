@@ -41,7 +41,7 @@ def _get_memory_client() -> Optional[Any]:
 
 
 @lru_cache(maxsize=1)
-def _get_strategy_namespaces() -> Tuple[Optional[str], Optional[str]]:
+def _get_strategy_namespaces() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Get the actual namespace patterns from configured memory strategies.
 
@@ -51,11 +51,11 @@ def _get_strategy_namespaces() -> Tuple[Optional[str], Optional[str]]:
     This function discovers the actual strategy IDs to build correct namespaces.
 
     Returns:
-        Tuple of (semantic_strategy_id, preference_strategy_id)
+        Tuple of (semantic_strategy_id, preference_strategy_id, summary_strategy_id)
     """
     client = _get_memory_client()
     if not client:
-        return None, None
+        return None, None, None
 
     config = load_memory_config()
 
@@ -64,6 +64,7 @@ def _get_strategy_namespaces() -> Tuple[Optional[str], Optional[str]]:
 
         semantic_id = None
         preference_id = None
+        summary_id = None
 
         for strategy in strategies:
             strategy_type = strategy.get('type') or strategy.get('memoryStrategyType')
@@ -73,13 +74,15 @@ def _get_strategy_namespaces() -> Tuple[Optional[str], Optional[str]]:
                 semantic_id = strategy_id
             elif strategy_type == 'USER_PREFERENCE':
                 preference_id = strategy_id
+            elif strategy_type == 'SUMMARIZATION':
+                summary_id = strategy_id
 
-        logger.info(f"Discovered strategies - Semantic: {semantic_id}, Preference: {preference_id}")
-        return semantic_id, preference_id
+        logger.info(f"Discovered strategies - Semantic: {semantic_id}, Preference: {preference_id}, Summary: {summary_id}")
+        return semantic_id, preference_id, summary_id
 
     except Exception as e:
         logger.error(f"Failed to get memory strategies: {e}", exc_info=True)
-        return None, None
+        return None, None, None
 
 
 def _build_namespace(strategy_id: str, user_id: str) -> str:
@@ -135,7 +138,7 @@ async def get_user_preferences(
         return []
 
     config = load_memory_config()
-    _, preference_strategy_id = _get_strategy_namespaces()
+    _, preference_strategy_id, _ = _get_strategy_namespaces()
 
     if not preference_strategy_id:
         logger.warning("No USER_PREFERENCE strategy found")
@@ -180,7 +183,7 @@ async def get_user_facts(
         return []
 
     config = load_memory_config()
-    semantic_strategy_id, _ = _get_strategy_namespaces()
+    semantic_strategy_id, _, _ = _get_strategy_namespaces()
 
     if not semantic_strategy_id:
         logger.warning("No SEMANTIC strategy found")
@@ -201,6 +204,57 @@ async def get_user_facts(
         return [_extract_memory_content(m) for m in memories]
     except Exception as e:
         logger.error(f"Failed to retrieve facts: {e}", exc_info=True)
+        return []
+
+
+async def get_session_summaries(
+    user_id: str,
+    session_id: str,
+    query: Optional[str] = None,
+    top_k: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve session summaries from AgentCore Memory.
+
+    Session summaries are condensed representations of conversation content,
+    capturing key topics, decisions, and outcomes from a specific session.
+
+    Args:
+        user_id: User identifier
+        session_id: Session identifier
+        query: Optional search query for semantic matching
+        top_k: Number of results to return
+
+    Returns:
+        List of summary memory records
+    """
+    client = _get_memory_client()
+    if not client:
+        return []
+
+    config = load_memory_config()
+    _, _, summary_strategy_id = _get_strategy_namespaces()
+
+    if not summary_strategy_id:
+        logger.warning("No SUMMARY strategy found")
+        return []
+
+    # Summary namespace includes session_id since summaries are per-session
+    namespace = f"/strategies/{summary_strategy_id}/actors/{user_id}/sessions/{session_id}"
+    search_query = query or "conversation summary topics decisions"
+
+    try:
+        logger.info(f"Retrieving summaries for user {user_id}, session {session_id} from namespace {namespace}")
+        memories = client.retrieve_memories(
+            memory_id=config.memory_id,
+            namespace=namespace,
+            query=search_query,
+            top_k=top_k
+        )
+        logger.info(f"Retrieved {len(memories)} summary memories")
+        return [_extract_memory_content(m) for m in memories]
+    except Exception as e:
+        logger.error(f"Failed to retrieve summaries: {e}", exc_info=True)
         return []
 
 
@@ -227,7 +281,7 @@ async def search_memories(
         return []
 
     config = load_memory_config()
-    semantic_strategy_id, _ = _get_strategy_namespaces()
+    semantic_strategy_id, _, _ = _get_strategy_namespaces()
 
     # Default to semantic/facts namespace if not specified
     if namespace is None and semantic_strategy_id:
@@ -280,6 +334,7 @@ async def get_memory_strategies() -> List[Dict[str, Any]]:
 
 async def get_all_user_memories(
     user_id: str,
+    session_id: Optional[str] = None,
     top_k: int = 20
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -287,18 +342,26 @@ async def get_all_user_memories(
 
     Args:
         user_id: User identifier
+        session_id: Optional session identifier for retrieving session summaries
         top_k: Number of results per namespace
 
     Returns:
-        Dictionary with 'preferences' and 'facts' keys containing memory lists
+        Dictionary with 'preferences', 'facts', and optionally 'summaries' keys containing memory lists
     """
     preferences = await get_user_preferences(user_id, top_k=top_k)
     facts = await get_user_facts(user_id, top_k=top_k)
 
-    return {
+    result = {
         "preferences": preferences,
         "facts": facts
     }
+
+    # Include session summaries if session_id is provided
+    if session_id:
+        summaries = await get_session_summaries(user_id, session_id, top_k=top_k)
+        result["summaries"] = summaries
+
+    return result
 
 
 def is_memory_available() -> bool:
@@ -327,7 +390,7 @@ def get_memory_config_info() -> Dict[str, Any]:
     """
     try:
         config = load_memory_config()
-        semantic_id, preference_id = _get_strategy_namespaces()
+        semantic_id, preference_id, summary_id = _get_strategy_namespaces()
 
         return {
             "available": AGENTCORE_MEMORY_AVAILABLE and config.is_cloud_mode,
@@ -336,11 +399,13 @@ def get_memory_config_info() -> Dict[str, Any]:
             "region": config.region,
             "strategies": {
                 "semantic": semantic_id,
-                "preference": preference_id
+                "preference": preference_id,
+                "summary": summary_id
             },
             "namespaces": {
                 "preferences": f"/strategies/{preference_id}/actors/{{userId}}" if preference_id else None,
-                "facts": f"/strategies/{semantic_id}/actors/{{userId}}" if semantic_id else None
+                "facts": f"/strategies/{semantic_id}/actors/{{userId}}" if semantic_id else None,
+                "summaries": f"/strategies/{summary_id}/actors/{{userId}}/sessions/{{sessionId}}" if summary_id else None
             }
         }
     except Exception as e:

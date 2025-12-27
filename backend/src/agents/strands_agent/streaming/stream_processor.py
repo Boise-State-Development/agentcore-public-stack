@@ -37,6 +37,7 @@ ADDITIONAL ENHANCEMENTS:
 - Cache token metrics for prompt caching cost tracking
 """
 
+import base64
 import logging
 import time
 from datetime import datetime, date
@@ -111,11 +112,11 @@ def _serialize_object(obj: Any) -> Any:
     if isinstance(obj, Decimal):
         return str(obj)
 
-    # Handle bytes objects - convert to base64 or string representation
+    # Handle bytes objects - convert to base64 for binary data
     if isinstance(obj, bytes):
-        # For binary data, we could use base64, but for simplicity we'll use repr
-        # In production, you might want to use base64.b64encode(obj).decode('utf-8')
-        return obj.decode('utf-8', errors='replace')
+        # Use base64 encoding for binary data (images, etc.)
+        # This ensures binary content like PNG images can be safely JSON serialized
+        return base64.b64encode(obj).decode('utf-8')
 
     # Handle dictionaries - recursively serialize all values
     # This ensures nested objects are also serialized

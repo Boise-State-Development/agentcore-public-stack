@@ -18,6 +18,7 @@ from .models import (
 from .services.memory_service import (
     get_user_preferences,
     get_user_facts,
+    get_session_summaries,
     search_memories,
     get_memory_strategies,
     get_all_user_memories,
@@ -182,6 +183,77 @@ async def get_facts_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve facts: {str(e)}"
+        )
+
+
+@router.get("/summaries/{session_id}", response_model=MemoriesResponse, response_model_exclude_none=True)
+async def get_summaries_endpoint(
+    session_id: str,
+    query: Optional[str] = Query(None, description="Optional search query for semantic matching"),
+    top_k: int = Query(10, ge=1, le=50, alias="topK", description="Number of results to return"),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retrieve session summaries from AgentCore Memory.
+
+    Session summaries are condensed representations of conversation content,
+    capturing key topics, decisions, and outcomes from a specific session.
+    Unlike preferences and facts (which are per-user), summaries are per-session.
+
+    Example summaries:
+    - "User reported an issue with order #XYZ-123, agent initiated a replacement"
+    - "Discussed project architecture, decided on microservices approach"
+    - "Reviewed code changes, identified 3 bugs to fix"
+
+    Requires JWT authentication. Returns only summaries for the authenticated user.
+
+    Args:
+        session_id: The session identifier to retrieve summaries for
+        query: Optional search query for semantic matching
+        top_k: Number of results to return (1-50)
+
+    Returns:
+        MemoriesResponse with list of summary memories
+    """
+    user_id = current_user.user_id
+
+    logger.info(f"GET /memory/summaries/{session_id} - User: {user_id}, Query: {query}, TopK: {top_k}")
+
+    if not is_memory_available():
+        raise HTTPException(
+            status_code=503,
+            detail="AgentCore Memory is not available. Memory features require cloud mode with AGENTCORE_MEMORY_ID configured."
+        )
+
+    try:
+        memories = await get_session_summaries(user_id, session_id, query=query, top_k=top_k)
+
+        # Convert to MemoryRecord models
+        memory_records = []
+        for mem in memories:
+            record = MemoryRecord(
+                record_id=mem.get("record_id") or mem.get("recordId"),
+                content=mem.get("content") or mem.get("text") or str(mem),
+                namespace=f"/summaries/{user_id}/{session_id}",
+                relevance_score=mem.get("relevance_score") or mem.get("score"),
+                created_at=mem.get("created_at") or mem.get("createdAt"),
+                updated_at=mem.get("updated_at") or mem.get("updatedAt"),
+                metadata=mem.get("metadata")
+            )
+            memory_records.append(record)
+
+        return MemoriesResponse(
+            memories=memory_records,
+            namespace=f"/summaries/{user_id}/{session_id}",
+            query=query,
+            total_count=len(memory_records)
+        )
+
+    except Exception as e:
+        logger.error(f"Error retrieving summaries: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve summaries: {str(e)}"
         )
 
 
