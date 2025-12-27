@@ -248,7 +248,7 @@ html.dark .message-block {
 
 /* Ensure body has proper background for dark mode */
 body {
-    background-color: var(--color-gray-100);
+    background-color: var(--color-gray-50);
 }
 
 html.dark body {
