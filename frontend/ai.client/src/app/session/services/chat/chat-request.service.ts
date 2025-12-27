@@ -92,7 +92,7 @@ export class ChatRequestService {
       message,
       session_id,
       model_id: isDefaultModel ? null : selectedModel.modelId,
-      enabled_tools: ['calculator', 'fetch_url_content', 'generate_diagram_and_validate'],
+      enabled_tools: ['calculator', 'fetch_url_content', 'generate_diagram_and_validate', 'search_boise_state'],
       provider: isDefaultModel ? null : selectedModel.provider
     };
   }
