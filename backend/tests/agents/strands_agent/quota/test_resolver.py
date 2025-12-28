@@ -23,6 +23,7 @@ def mock_repository():
     repo.query_role_assignments = AsyncMock()
     repo.list_assignments_by_type = AsyncMock()
     repo.get_tier = AsyncMock()
+    repo.get_active_override = AsyncMock(return_value=None)  # Default: no override
     return repo
 
 
@@ -184,8 +185,8 @@ async def test_resolve_fallback_to_default(resolver, mock_repository, sample_use
     assert resolved.tier.tier_id == "basic"
     assert resolved.matched_by == "default_tier"
 
-    # Verify repository calls
-    mock_repository.list_assignments_by_type.assert_called_once_with(
+    # Verify repository calls - list_assignments_by_type is called for email_domain first, then default_tier
+    mock_repository.list_assignments_by_type.assert_any_call(
         assignment_type="default_tier",
         enabled_only=True
     )

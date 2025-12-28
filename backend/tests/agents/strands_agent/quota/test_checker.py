@@ -193,7 +193,7 @@ async def test_check_quota_exceeded(
     assert result.tier.tier_id == "premium"
     assert result.current_usage == 550.0
     assert result.quota_limit == 500.0
-    assert abs(result.percentage_used - 110.0) < 0.01  # Allow for floating point precision
+    assert abs(float(result.percentage_used) - 110.0) < 0.01  # Allow for floating point precision
     assert result.remaining == 0.0
 
     # Verify block event was recorded
