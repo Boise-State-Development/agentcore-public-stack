@@ -6,7 +6,7 @@ from typing import List, Optional
 
 class UserListItemResponse(BaseModel):
     """User item for list views."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     user_id: str = Field(..., alias="userId")
     email: str
@@ -22,7 +22,7 @@ class UserListItemResponse(BaseModel):
 
 class UserListResponse(BaseModel):
     """Paginated user list response."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     users: List[UserListItemResponse]
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
@@ -31,7 +31,7 @@ class UserListResponse(BaseModel):
 
 class QuotaStatusResponse(BaseModel):
     """User's current quota status."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     tier_id: Optional[str] = Field(None, alias="tierId")
     tier_name: Optional[str] = Field(None, alias="tierName")
@@ -46,7 +46,7 @@ class QuotaStatusResponse(BaseModel):
 
 class CostSummaryResponse(BaseModel):
     """User's current month cost summary."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     total_cost: float = Field(0.0, alias="totalCost")
     total_requests: int = Field(0, alias="totalRequests")
@@ -58,7 +58,7 @@ class CostSummaryResponse(BaseModel):
 
 class QuotaEventSummary(BaseModel):
     """Summary of a quota event."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     event_id: str = Field(..., alias="eventId")
     event_type: str = Field(..., alias="eventType")
@@ -68,7 +68,7 @@ class QuotaEventSummary(BaseModel):
 
 class UserProfileResponse(BaseModel):
     """Full user profile."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     user_id: str = Field(..., alias="userId")
     email: str
@@ -83,7 +83,7 @@ class UserProfileResponse(BaseModel):
 
 class UserDetailResponse(BaseModel):
     """Comprehensive user detail for admin view."""
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, by_alias=True)
 
     profile: UserProfileResponse
     cost_summary: CostSummaryResponse = Field(..., alias="costSummary")

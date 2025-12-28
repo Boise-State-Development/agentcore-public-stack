@@ -304,11 +304,18 @@ class UserRepository:
 
     def _item_to_list_item(self, item: dict) -> UserListItem:
         """Convert DynamoDB item to UserListItem."""
+        # GSI queries may not project lastLoginAt, but GSI2SK/GSI3SK contain the same value
+        last_login = (
+            item.get("lastLoginAt")
+            or item.get("GSI3SK")  # StatusLoginIndex sort key
+            or item.get("GSI2SK")  # EmailDomainIndex sort key
+            or item.get("createdAt", "")
+        )
         return UserListItem(
             user_id=item["userId"],
             email=item["email"],
             name=item.get("name", ""),
             status=item.get("status", "active"),
-            last_login_at=item.get("lastLoginAt", item.get("createdAt", "")),
+            last_login_at=last_login,
             email_domain=item.get("emailDomain")
         )
