@@ -520,6 +520,94 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // ============================================================
+    // Users Table (User Admin)
+    // ============================================================
+
+    // Users Table - User profiles synced from JWT for admin lookup
+    const usersTable = new dynamodb.Table(this, 'UsersTable', {
+      tableName: getResourceName(config, 'users'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // UserIdIndex - O(1) lookup by userId for admin deep links
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'UserIdIndex',
+      partitionKey: {
+        name: 'userId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // EmailIndex - O(1) lookup by email for search
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'EmailIndex',
+      partitionKey: {
+        name: 'email',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // EmailDomainIndex - Browse users by company/domain, sorted by last login
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'EmailDomainIndex',
+      partitionKey: {
+        name: 'GSI2PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI2SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.INCLUDE,
+      nonKeyAttributes: ['userId', 'email', 'name', 'status'],
+    });
+
+    // StatusLoginIndex - Browse users by status, sorted by last login
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'StatusLoginIndex',
+      partitionKey: {
+        name: 'GSI3PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI3SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.INCLUDE,
+      nonKeyAttributes: ['userId', 'email', 'name', 'emailDomain'],
+    });
+
+    // Store users table name in SSM
+    new ssm.StringParameter(this, 'UsersTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/users/users-table-name`,
+      stringValue: usersTable.tableName,
+      description: 'Users table name for admin user lookup',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UsersTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/users/users-table-arn`,
+      stringValue: usersTable.tableArn,
+      description: 'Users table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
     // ECS Task Definition
     // ============================================================
     // Note: ECR Repository is created automatically by the build pipeline
@@ -562,6 +650,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTable.tableName,
         DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTable.tableName,
         DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTable.tableName,
+        DYNAMODB_USERS_TABLE_NAME: usersTable.tableName,
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -600,6 +689,9 @@ export class AppApiStack extends cdk.Stack {
     sessionsMetadataTable.grantReadWriteData(taskDefinition.taskRole);
     userCostSummaryTable.grantReadWriteData(taskDefinition.taskRole);
     systemCostRollupTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for users table
+    usersTable.grantReadWriteData(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -729,6 +821,12 @@ export class AppApiStack extends cdk.Stack {
       value: systemCostRollupTable.tableName,
       description: 'SystemCostRollup table name for admin dashboard',
       exportName: `${config.projectPrefix}-SystemCostRollupTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'UsersTableName', {
+      value: usersTable.tableName,
+      description: 'Users table name for admin user lookup',
+      exportName: `${config.projectPrefix}-UsersTableName`,
     });
   }
 }
