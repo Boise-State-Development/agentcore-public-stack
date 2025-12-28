@@ -1,12 +1,20 @@
 """
 Cludo Search Tool - Strands Native
 Searches Boise State University information using the Cludo search API
+
+Supports advanced Cludo API features:
+- Pagination for multi-page results
+- Spelling corrections (FixedQuery)
+- Faceted search with category counts
+- Related searches for query refinement
+- Sorting by specific fields
+- Advanced filtering (value, range, date, exclusion)
 """
 
 import os
 import json
 import logging
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any, List, Literal, Union
 from strands import tool
 import httpx
 
@@ -27,21 +35,33 @@ MAX_RESULTS_BEFORE_TRUNCATION = 8
 async def query_cludo_api(
     query: str,
     operator: str = "or",
+    page: int = 1,
     page_size: int = 10,
-    filters: Optional[Dict[str, Any]] = None
+    sort: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    not_filters: Optional[Dict[str, Any]] = None,
+    range_filters: Optional[List[Dict[str, Any]]] = None,
+    enable_related_searches: bool = False,
+    enable_facet_filtering: bool = True,
 ) -> Dict[str, Any]:
     """
     Helper function for Cludo API requests
-    
+
     Args:
         query: Search query string
         operator: Query operator ('and' or 'or')
-        page_size: Number of results to return (1-100)
-        filters: Optional advanced filters for specific content types
-        
+        page: Page number for pagination (1-indexed)
+        page_size: Number of results per page (1-100)
+        sort: Field name to sort by (overrides default relevance ranking)
+        filters: Value filters applied during search (affects ranking and facets)
+        not_filters: Exclusion filters (documents matching these are excluded)
+        range_filters: Range filters for numeric/date fields
+        enable_related_searches: Include related search suggestions
+        enable_facet_filtering: Enable facet-level filtering
+
     Returns:
         API response data as dictionary
-        
+
     Raises:
         httpx.HTTPError: If the API request fails
     """
@@ -51,11 +71,27 @@ async def query_cludo_api(
     request_body: Dict[str, Any] = {
         "query": query,
         "operator": operator,
-        "pageSize": min(max(page_size, 1), 100),  # Ensure between 1 and 100
+        "page": max(page, 1),
+        "perPage": min(max(page_size, 1), 100),
+        "enableFacetFiltering": enable_facet_filtering,
+        "responseType": "JsonObject",
     }
 
+    if sort:
+        request_body["sort"] = sort
+
+    if enable_related_searches:
+        request_body["enableRelatedSearches"] = True
+
     if filters:
-        request_body.update(filters)
+        request_body["filters"] = filters
+
+    if not_filters:
+        request_body["notFilters"] = not_filters
+
+    if range_filters:
+        # Range filters format: [{"field": "Price", "min": 20, "max": 100}]
+        request_body["rangeFilters"] = range_filters
 
     headers = {
         "Authorization": f"SiteKey {CLUDO_SITE_KEY}",
@@ -79,38 +115,75 @@ async def query_cludo_api(
 async def search_boise_state(
     query: str,
     operator: Literal["and", "or"] = "or",
+    page: int = 1,
     page_size: int = 10,
-    filters: Optional[Dict[str, Any]] = None
+    sort: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    not_filters: Optional[Dict[str, Any]] = None,
+    include_facets: bool = False,
+    include_related_searches: bool = False,
 ) -> str:
     """
     Search for information from Boise State University using the official Cludo search engine.
     Use this tool to find specific institutional information, policies, programs, directories,
     and other official Boise State resources. Returns page titles, URLs, descriptions, and
     relevant context snippets. For detailed page content, use the "fetch_url_content" tool
-    with the URLs from search results. Supports advanced query operators and filtering.
+    with the URLs from search results.
 
     Args:
-        query: Search query for Boise State information (e.g., "business administration",
-               "campus map", "admissions requirements")
+        query: Search query for Boise State information. Supports advanced syntax:
+               - Phrases: "exact phrase" for exact matching
+               - Operators: AND, OR, NOT (e.g., "computer AND science")
+               - Wildcards: * for multiple chars, ? for single char (e.g., "comput*")
+               - Fuzzy: term~ for misspellings (e.g., "bussiness~")
+               - Boosting: term^2 to increase relevance weight
         operator: Query operator: "and" requires all terms to match, "or" allows any term
                   to match (default: "or")
-        page_size: Number of results to return (default: 10, max: 100)
-        filters: Optional advanced filters for specific Boise State content types or
-                 categories (e.g., {"Category": ["Programs", "Departments"]})
+        page: Page number for pagination, 1-indexed (default: 1). Use with page_size
+              to navigate through large result sets.
+        page_size: Number of results per page (default: 10, max: 100)
+        sort: Optional field name to sort results by (e.g., "Date", "Title").
+              Overrides default relevance-based ranking.
+        filters: Value filters to include specific content types or categories
+                 (e.g., {"Category": ["Programs", "Departments"]})
+        not_filters: Exclusion filters to exclude specific content types
+                     (e.g., {"Category": ["News"]})
+        include_facets: If True, includes available facets (categories) with counts
+                        for drilling down into results (default: False)
+        include_related_searches: If True, includes related search suggestions
+                                  to help refine the query (default: False)
 
     Returns:
-        JSON string containing search results with success status, query, result count,
-        and formatted results array with titles, URLs, descriptions, and highlights
+        JSON string containing:
+        - success: Boolean indicating if search succeeded
+        - query: The original search query
+        - spelling_suggestion: Suggested correction if query may have typos
+        - pagination: Current page, total pages, total results
+        - results: Array of formatted results with titles, URLs, descriptions, highlights
+        - facets: (if requested) Available categories with document counts
+        - related_searches: (if requested) Suggested related queries
 
     Examples:
         # Basic search
         search_boise_state("business administration")
 
-        # Search with AND operator
-        search_boise_state("computer science degree", operator="and")
+        # Paginated search - get page 2
+        search_boise_state("scholarships", page=2, page_size=10)
 
-        # Search with filters
-        search_boise_state("academic programs", filters={"Category": ["Programs"]})
+        # Search with fuzzy matching for misspellings
+        search_boise_state("admisions~")
+
+        # Search with exact phrase
+        search_boise_state('"computer science degree"')
+
+        # Get facets to see available categories
+        search_boise_state("programs", include_facets=True)
+
+        # Exclude news articles from results
+        search_boise_state("campus events", not_filters={"Category": ["News"]})
+
+        # Sort by date instead of relevance
+        search_boise_state("announcements", sort="Date")
     """
     try:
         if not CLUDO_SITE_KEY:
@@ -120,51 +193,73 @@ async def search_boise_state(
                 "query": query
             }, indent=2)
 
-        results = await query_cludo_api(query, operator, page_size, filters)
+        results = await query_cludo_api(
+            query=query,
+            operator=operator,
+            page=page,
+            page_size=page_size,
+            sort=sort,
+            filters=filters,
+            not_filters=not_filters,
+            enable_related_searches=include_related_searches,
+            enable_facet_filtering=include_facets,
+        )
+
+        # Extract total document count for pagination
+        total_documents = results.get("TotalDocument", 0)
+        total_pages = (total_documents + page_size - 1) // page_size if total_documents > 0 else 0
+
+        # Check for spelling correction suggestion
+        spelling_suggestion = results.get("FixedQuery")
 
         if not results.get("TypedDocuments"):
-            return json.dumps({
-                "success": False,
+            response_data: Dict[str, Any] = {
+                "success": True,
                 "query": query,
                 "result_count": 0,
                 "message": f'No Boise State information found matching "{query}". Try refining your search with different keywords or terms.',
                 "results": []
-            }, indent=2)
+            }
+            # Include spelling suggestion if available
+            if spelling_suggestion and spelling_suggestion != query:
+                response_data["spelling_suggestion"] = spelling_suggestion
+                response_data["message"] = f'No results found for "{query}". Did you mean: "{spelling_suggestion}"?'
+            return json.dumps(response_data, indent=2)
 
         typed_documents = results["TypedDocuments"]
-        
+
         # Limit results to prevent payload size issues
         max_results = min(len(typed_documents), page_size, MAX_RESULTS_BEFORE_TRUNCATION)
-        
+
         formatted_results = []
         for result in typed_documents[:max_results]:
             fields = result.get("Fields", {})
-            
+
             # Extract highlights for relevant context
             highlights = []
             if "Description" in fields and "Highlights" in fields["Description"]:
                 highlights = fields["Description"]["Highlights"]
             elif "Content" in fields and "Highlights" in fields["Content"]:
                 highlights = fields["Content"]["Highlights"]
-            
+
             # Clean highlights by removing HTML tags
             clean_highlights = ""
             if highlights:
                 clean_highlights = " ... ".join(highlights[:3])  # Get up to 3 highlight snippets
                 clean_highlights = clean_highlights.replace("<b>", "").replace("</b>", "")
-            
+
             # Get description or fall back to first content snippet
             description = ""
             if "Description" in fields and "Value" in fields["Description"]:
                 description = fields["Description"]["Value"]
             elif "Content" in fields and "Values" in fields["Content"] and fields["Content"]["Values"]:
                 description = fields["Content"]["Values"][0]
-            
+
             if not description:
                 description = "No description available"
             else:
                 description = description[:300]  # Limit description length
-            
+
             formatted_results.append({
                 "index": len(formatted_results) + 1,
                 "title": fields.get("Title", {}).get("Value", "Untitled"),
@@ -175,16 +270,55 @@ async def search_boise_state(
             })
 
         # Build JSON response
-        result_data = {
+        result_data: Dict[str, Any] = {
             "success": True,
             "query": query,
             "operator": operator,
-            "total_results": len(typed_documents),
-            "result_count": len(formatted_results),
+            "pagination": {
+                "current_page": page,
+                "total_pages": total_pages,
+                "total_results": total_documents,
+                "results_on_page": len(formatted_results),
+                "has_more": page < total_pages,
+            },
             "results": formatted_results,
             "source": "Cludo Search API - Official Boise State University Search Engine",
             "tip": "For more detailed information from any of these pages, use the 'fetch_url_content' tool with the page URL to retrieve the full content."
         }
+
+        # Include spelling suggestion if query was corrected
+        if spelling_suggestion and spelling_suggestion != query:
+            result_data["spelling_suggestion"] = spelling_suggestion
+
+        # Include facets if requested
+        if include_facets and results.get("Facets"):
+            facets_data = []
+            for facet in results["Facets"]:
+                facet_name = facet.get("Name", "Unknown")
+                facet_items = []
+                for item in facet.get("Items", [])[:10]:  # Limit to top 10 facet values
+                    facet_items.append({
+                        "value": item.get("Value", ""),
+                        "count": item.get("Count", 0),
+                    })
+                if facet_items:
+                    facets_data.append({
+                        "name": facet_name,
+                        "items": facet_items,
+                    })
+            if facets_data:
+                result_data["facets"] = facets_data
+
+        # Include related searches if requested
+        if include_related_searches and results.get("RelatedSearchDocuments"):
+            related = []
+            for rel in results["RelatedSearchDocuments"][:5]:  # Limit to 5 suggestions
+                if isinstance(rel, dict):
+                    related.append(rel.get("Query", rel.get("Title", "")))
+                elif isinstance(rel, str):
+                    related.append(rel)
+            if related:
+                result_data["related_searches"] = related
 
         # Convert to JSON string
         result_json = json.dumps(result_data, indent=2)
@@ -192,12 +326,13 @@ async def search_boise_state(
         # Check payload size and log warning if needed (but don't truncate JSON as it would break the format)
         if len(result_json) > MAX_BEDROCK_PAYLOAD_SIZE:
             logger.warning(
-                f"🚨 PAYLOAD SIZE WARNING - Cludo result JSON ({len(result_json)} chars) exceeds safe limit "
+                f"PAYLOAD SIZE WARNING - Cludo result JSON ({len(result_json)} chars) exceeds safe limit "
                 f"({MAX_BEDROCK_PAYLOAD_SIZE}). Consider reducing page_size parameter to prevent Bedrock errors."
             )
 
         logger.info(
-            f"Cludo search completed: Found {len(typed_documents)} results, returning {len(formatted_results)}"
+            f"Cludo search completed: query='{query}', page={page}/{total_pages}, "
+            f"found {total_documents} total, returning {len(formatted_results)}"
         )
 
         return result_json
