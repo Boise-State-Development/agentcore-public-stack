@@ -47,6 +47,15 @@ async def lifespan(app: FastAPI):
     os.makedirs(generated_images_dir, exist_ok=True)
     logger.info("Output directories ready")
 
+    # Seed system roles for RBAC
+    try:
+        from apis.shared.rbac import ensure_system_roles
+        await ensure_system_roles()
+        logger.info("RBAC system roles initialized")
+    except Exception as e:
+        logger.warning(f"Failed to seed RBAC system roles: {e}")
+        # Don't fail startup - roles can be seeded later
+
     yield  # Application is running
 
     # Shutdown

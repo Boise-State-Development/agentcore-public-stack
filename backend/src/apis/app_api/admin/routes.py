@@ -625,3 +625,8 @@ router.include_router(costs_router)
 from .users.routes import router as users_router
 
 router.include_router(users_router)
+
+# ========== Include Roles Admin Subrouter ==========
+from .roles.routes import router as roles_router
+
+router.include_router(roles_router)

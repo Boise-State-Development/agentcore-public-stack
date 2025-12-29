@@ -625,6 +625,91 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // ============================================================
+    // AppRoles Table (RBAC)
+    // ============================================================
+
+    // AppRoles Table - Role definitions and permission mappings
+    const appRolesTable = new dynamodb.Table(this, 'AppRolesTable', {
+      tableName: getResourceName(config, 'app-roles'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // GSI1: JwtRoleMappingIndex - Fast lookup: "Given JWT role X, what AppRoles apply?"
+    // This is the critical index for authorization performance
+    appRolesTable.addGlobalSecondaryIndex({
+      indexName: 'JwtRoleMappingIndex',
+      partitionKey: {
+        name: 'GSI1PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI1SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI2: ToolRoleMappingIndex - Reverse lookup: "What AppRoles grant access to tool X?"
+    // Used for bidirectional sync when updating tool permissions
+    appRolesTable.addGlobalSecondaryIndex({
+      indexName: 'ToolRoleMappingIndex',
+      partitionKey: {
+        name: 'GSI2PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI2SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.INCLUDE,
+      nonKeyAttributes: ['roleId', 'displayName', 'enabled'],
+    });
+
+    // GSI3: ModelRoleMappingIndex - Reverse lookup: "What AppRoles grant access to model X?"
+    // Used for bidirectional sync when updating model permissions
+    appRolesTable.addGlobalSecondaryIndex({
+      indexName: 'ModelRoleMappingIndex',
+      partitionKey: {
+        name: 'GSI3PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI3SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.INCLUDE,
+      nonKeyAttributes: ['roleId', 'displayName', 'enabled'],
+    });
+
+    // Store AppRoles table name in SSM
+    new ssm.StringParameter(this, 'AppRolesTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/rbac/app-roles-table-name`,
+      stringValue: appRolesTable.tableName,
+      description: 'AppRoles table name for RBAC',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'AppRolesTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/rbac/app-roles-table-arn`,
+      stringValue: appRolesTable.tableArn,
+      description: 'AppRoles table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
     // ECS Task Definition
     // ============================================================
     // Note: ECR Repository is created automatically by the build pipeline
@@ -668,6 +753,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTable.tableName,
         DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTable.tableName,
         DYNAMODB_USERS_TABLE_NAME: usersTable.tableName,
+        DYNAMODB_APP_ROLES_TABLE_NAME: appRolesTable.tableName,
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -709,6 +795,9 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for users table
     usersTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for AppRoles table
+    appRolesTable.grantReadWriteData(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -844,6 +933,12 @@ export class AppApiStack extends cdk.Stack {
       value: usersTable.tableName,
       description: 'Users table name for admin user lookup',
       exportName: `${config.projectPrefix}-UsersTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'AppRolesTableName', {
+      value: appRolesTable.tableName,
+      description: 'AppRoles table name for RBAC',
+      exportName: `${config.projectPrefix}-AppRolesTableName`,
     });
   }
 }
