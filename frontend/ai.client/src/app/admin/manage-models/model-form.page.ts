@@ -1,8 +1,9 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } from '@angular/forms';
-import { AVAILABLE_ROLES, AVAILABLE_PROVIDERS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
+import { AVAILABLE_PROVIDERS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
 import { ManagedModelsService } from './services/managed-models.service';
+import { AppRolesService } from '../roles/services/app-roles.service';
 
 interface ModelFormGroup {
   modelId: FormControl<string>;
@@ -13,6 +14,7 @@ interface ModelFormGroup {
   outputModalities: FormControl<string[]>;
   maxInputTokens: FormControl<number>;
   maxOutputTokens: FormControl<number>;
+  allowedAppRoles: FormControl<string[]>;
   availableToRoles: FormControl<string[]>;
   enabled: FormControl<boolean>;
   inputPricePerMillionTokens: FormControl<number>;
@@ -36,11 +38,15 @@ export class ModelFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private managedModelsService = inject(ManagedModelsService);
+  private appRolesService = inject(AppRolesService);
 
   // Available options for multi-select fields
-  readonly availableRoles = AVAILABLE_ROLES;
   readonly availableProviders = AVAILABLE_PROVIDERS;
   readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'EMBEDDING'];
+
+  // AppRoles from the API (reactive resource)
+  readonly rolesResource = this.appRolesService.rolesResource;
+  readonly availableAppRoles = computed(() => this.appRolesService.getEnabledRoles());
 
   // Form state
   readonly isEditMode = signal<boolean>(false);
@@ -57,7 +63,8 @@ export class ModelFormPage implements OnInit {
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     maxInputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
     maxOutputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
-    availableToRoles: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
+    allowedAppRoles: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
+    availableToRoles: this.fb.control<string[]>([], { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
@@ -113,7 +120,8 @@ export class ModelFormPage implements OnInit {
         outputModalities: model.outputModalities,
         maxInputTokens: model.maxInputTokens,
         maxOutputTokens: model.maxOutputTokens,
-        availableToRoles: model.availableToRoles,
+        allowedAppRoles: model.allowedAppRoles ?? [],
+        availableToRoles: model.availableToRoles ?? [],
         enabled: model.enabled,
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,

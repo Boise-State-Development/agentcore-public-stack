@@ -36,7 +36,9 @@ export interface ManagedModel {
   maxOutputTokens: number;
   /** Lifecycle status of the model (e.g., 'ACTIVE', 'LEGACY') */
   modelLifecycle?: string | null;
-  /** Roles that have access to this model */
+  /** AppRole IDs that have access to this model (preferred over availableToRoles) */
+  allowedAppRoles: string[];
+  /** @deprecated Legacy JWT role names - use allowedAppRoles instead */
   availableToRoles: string[];
   /** Whether the model is enabled for use */
   enabled: boolean;
@@ -84,7 +86,9 @@ export interface ManagedModelFormData {
   maxOutputTokens: number;
   /** Lifecycle status of the model */
   modelLifecycle?: string | null;
-  /** Roles that have access to this model */
+  /** AppRole IDs that have access to this model */
+  allowedAppRoles: string[];
+  /** @deprecated Legacy JWT role names - use allowedAppRoles instead */
   availableToRoles: string[];
   /** Whether the model is enabled for use */
   enabled: boolean;
@@ -105,7 +109,8 @@ export interface ManagedModelFormData {
 }
 
 /**
- * Available roles that can be assigned to models.
+ * @deprecated Use AppRoles from the /admin/roles API instead.
+ * These legacy JWT roles are kept for backward compatibility only.
  */
 export const AVAILABLE_ROLES = [
   'Admin',

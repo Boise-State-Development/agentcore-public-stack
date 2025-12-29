@@ -231,30 +231,47 @@
         <h2 class="mb-6 text-xl/8 font-semibold text-gray-900 dark:text-white">Access Control</h2>
 
         <div class="space-y-6">
-          <!-- Available to Roles -->
+          <!-- Allowed AppRoles -->
           <div>
             <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Available to Roles <span class="text-red-600">*</span>
+              Allowed Roles <span class="text-red-600">*</span>
             </label>
-            <div class="mt-2 flex flex-wrap gap-2">
-              @for (role of availableRoles; track role) {
-                <button
-                  type="button"
-                  (click)="toggleArrayValue('availableToRoles', role)"
-                  [class.bg-purple-600]="isSelected('availableToRoles', role)"
-                  [class.text-white]="isSelected('availableToRoles', role)"
-                  [class.bg-gray-100]="!isSelected('availableToRoles', role)"
-                  [class.text-gray-700]="!isSelected('availableToRoles', role)"
-                  [class.dark:bg-purple-500]="isSelected('availableToRoles', role)"
-                  [class.dark:bg-gray-700]="!isSelected('availableToRoles', role)"
-                  [class.dark:text-gray-300]="!isSelected('availableToRoles', role)"
-                  class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-purple-500/50"
-                >
-                  {{ role }}
-                </button>
+            <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              Select which application roles can access this model
+            </p>
+            @if (rolesResource.isLoading()) {
+              <div class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">Loading roles...</div>
+            } @else if (rolesResource.error()) {
+              <div class="mt-2 text-sm/6 text-red-600 dark:text-red-400">
+                Failed to load roles. Please refresh the page.
+              </div>
+            } @else {
+              <div class="mt-2 flex flex-wrap gap-2">
+                @for (role of availableAppRoles(); track role.roleId) {
+                  <button
+                    type="button"
+                    (click)="toggleArrayValue('allowedAppRoles', role.roleId)"
+                    [class.bg-purple-600]="isSelected('allowedAppRoles', role.roleId)"
+                    [class.text-white]="isSelected('allowedAppRoles', role.roleId)"
+                    [class.bg-gray-100]="!isSelected('allowedAppRoles', role.roleId)"
+                    [class.text-gray-700]="!isSelected('allowedAppRoles', role.roleId)"
+                    [class.dark:bg-purple-500]="isSelected('allowedAppRoles', role.roleId)"
+                    [class.dark:bg-gray-700]="!isSelected('allowedAppRoles', role.roleId)"
+                    [class.dark:text-gray-300]="!isSelected('allowedAppRoles', role.roleId)"
+                    class="rounded-sm px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus:outline-hidden focus:ring-3 focus:ring-purple-500/50"
+                    [title]="role.description"
+                  >
+                    {{ role.displayName }}
+                  </button>
+                }
+              </div>
+              @if (availableAppRoles().length === 0) {
+                <p class="mt-2 text-sm/6 text-amber-600 dark:text-amber-400">
+                  No roles configured. Please create roles in Admin &gt; Roles first.
+                </p>
               }
-            </div>
-            @if (modelForm.controls.availableToRoles.invalid && modelForm.controls.availableToRoles.touched) {
+            }
+            @if (modelForm.controls.allowedAppRoles.invalid && modelForm.controls.allowedAppRoles.touched) {
               <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Select at least one role</p>
             }
           </div>

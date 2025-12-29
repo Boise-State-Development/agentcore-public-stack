@@ -163,6 +163,7 @@ async def _create_managed_model_local(model_data: ManagedModelCreate) -> Managed
         output_modalities=model_data.output_modalities,
         max_input_tokens=model_data.max_input_tokens,
         max_output_tokens=model_data.max_output_tokens,
+        allowed_app_roles=model_data.allowed_app_roles,
         available_to_roles=model_data.available_to_roles,
         enabled=model_data.enabled,
         input_price_per_million_tokens=model_data.input_price_per_million_tokens,
@@ -242,6 +243,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         output_modalities=model_data.output_modalities,
         max_input_tokens=model_data.max_input_tokens,
         max_output_tokens=model_data.max_output_tokens,
+        allowed_app_roles=model_data.allowed_app_roles,
         available_to_roles=model_data.available_to_roles,
         enabled=model_data.enabled,
         input_price_per_million_tokens=model_data.input_price_per_million_tokens,
@@ -270,6 +272,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'outputModalities': model_data.output_modalities,
         'maxInputTokens': model_data.max_input_tokens,
         'maxOutputTokens': model_data.max_output_tokens,
+        'allowedAppRoles': model_data.allowed_app_roles,
         'availableToRoles': model_data.available_to_roles,
         'enabled': model_data.enabled,
         'inputPricePerMillionTokens': model_data.input_price_per_million_tokens,
@@ -395,10 +398,14 @@ async def _get_managed_model_cloud(model_id: str, table_name: str) -> Optional[M
 
 async def list_managed_models(user_roles: Optional[List[str]] = None) -> List[ManagedModel]:
     """
-    List managed models, optionally filtered by user roles
+    List managed models, optionally filtered by user roles (legacy JWT role check).
+
+    NOTE: This function uses legacy JWT role filtering. For new code, prefer using
+    ModelAccessService.filter_accessible_models() which supports both AppRoles
+    and legacy JWT roles.
 
     Args:
-        user_roles: List of user roles for filtering (None = admin view, all models)
+        user_roles: List of user JWT roles for filtering (None = admin view, all models)
 
     Returns:
         List of ManagedModel objects
@@ -410,7 +417,8 @@ async def list_managed_models(user_roles: Optional[List[str]] = None) -> List[Ma
     else:
         models = await _list_managed_models_local()
 
-    # Filter by user roles if provided
+    # Filter by user roles if provided (legacy JWT role check only)
+    # For hybrid AppRole + JWT role filtering, use ModelAccessService
     if user_roles is not None:
         models = [
             model for model in models
@@ -418,6 +426,24 @@ async def list_managed_models(user_roles: Optional[List[str]] = None) -> List[Ma
         ]
 
     return models
+
+
+async def list_all_managed_models() -> List[ManagedModel]:
+    """
+    List all managed models without any filtering.
+
+    This is the base function for admin views and for use with
+    ModelAccessService which handles access filtering separately.
+
+    Returns:
+        List of all ManagedModel objects
+    """
+    managed_models_table = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
+
+    if managed_models_table:
+        return await _list_managed_models_cloud(managed_models_table)
+    else:
+        return await _list_managed_models_local()
 
 
 async def _list_managed_models_local() -> List[ManagedModel]:

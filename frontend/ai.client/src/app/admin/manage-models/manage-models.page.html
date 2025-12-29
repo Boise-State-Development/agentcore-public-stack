@@ -159,14 +159,21 @@
 
             <!-- Model Details Grid -->
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <!-- Available to Roles -->
+              <!-- Allowed AppRoles -->
               <div>
-                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Available to Roles</h4>
+                <h4 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Allowed Roles</h4>
                 <div class="mt-2 flex flex-wrap gap-2">
-                  @for (role of model.availableToRoles; track role) {
-                    <span class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300">
-                      {{ role }}
-                    </span>
+                  @if (model.allowedAppRoles && model.allowedAppRoles.length > 0) {
+                    @for (roleId of model.allowedAppRoles; track roleId) {
+                      <span
+                        class="inline-flex items-center rounded-sm bg-purple-100 px-2 py-1 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                        [title]="roleId"
+                      >
+                        {{ getRoleDisplayName(roleId) }}
+                      </span>
+                    }
+                  } @else {
+                    <span class="text-xs/5 text-gray-500 dark:text-gray-400 italic">No roles assigned</span>
                   }
                 </div>
               </div>

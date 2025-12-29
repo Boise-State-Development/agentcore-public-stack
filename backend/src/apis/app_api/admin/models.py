@@ -116,7 +116,18 @@ class ManagedModelCreate(BaseModel):
     output_modalities: List[str] = Field(..., alias="outputModalities", min_length=1)
     max_input_tokens: int = Field(..., alias="maxInputTokens", ge=1)
     max_output_tokens: int = Field(..., alias="maxOutputTokens", ge=1)
-    available_to_roles: List[str] = Field(..., alias="availableToRoles", min_length=1)
+    # Access control: AppRoles (preferred) or legacy JWT roles
+    allowed_app_roles: List[str] = Field(
+        default_factory=list,
+        alias="allowedAppRoles",
+        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+    )
+    available_to_roles: List[str] = Field(
+        default_factory=list,
+        alias="availableToRoles",
+        description="[DEPRECATED] Legacy JWT role names. Use allowedAppRoles instead. "
+                    "During transition, access is granted if user matches EITHER field."
+    )
     enabled: bool = True
     input_price_per_million_tokens: float = Field(..., alias="inputPricePerMillionTokens", ge=0)
     output_price_per_million_tokens: float = Field(..., alias="outputPricePerMillionTokens", ge=0)
@@ -153,7 +164,17 @@ class ManagedModelUpdate(BaseModel):
     output_modalities: Optional[List[str]] = Field(None, alias="outputModalities")
     max_input_tokens: Optional[int] = Field(None, alias="maxInputTokens", ge=1)
     max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens", ge=1)
-    available_to_roles: Optional[List[str]] = Field(None, alias="availableToRoles")
+    # Access control: AppRoles (preferred) or legacy JWT roles
+    allowed_app_roles: Optional[List[str]] = Field(
+        None,
+        alias="allowedAppRoles",
+        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+    )
+    available_to_roles: Optional[List[str]] = Field(
+        None,
+        alias="availableToRoles",
+        description="[DEPRECATED] Legacy JWT role names. Use allowedAppRoles instead."
+    )
     enabled: Optional[bool] = None
     input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens", ge=0)
     output_price_per_million_tokens: Optional[float] = Field(None, alias="outputPricePerMillionTokens", ge=0)
@@ -191,7 +212,17 @@ class ManagedModel(BaseModel):
     output_modalities: List[str] = Field(..., alias="outputModalities")
     max_input_tokens: int = Field(..., alias="maxInputTokens")
     max_output_tokens: int = Field(..., alias="maxOutputTokens")
-    available_to_roles: List[str] = Field(..., alias="availableToRoles")
+    # Access control: AppRoles (preferred) or legacy JWT roles
+    allowed_app_roles: List[str] = Field(
+        default_factory=list,
+        alias="allowedAppRoles",
+        description="AppRole IDs that can access this model (preferred over availableToRoles)"
+    )
+    available_to_roles: List[str] = Field(
+        default_factory=list,
+        alias="availableToRoles",
+        description="[DEPRECATED] Legacy JWT role names. Use allowedAppRoles instead."
+    )
     enabled: bool
     input_price_per_million_tokens: float = Field(..., alias="inputPricePerMillionTokens")
     output_price_per_million_tokens: float = Field(..., alias="outputPricePerMillionTokens")

@@ -38,6 +38,11 @@ from apis.app_api.admin.services.managed_models import (
     update_managed_model,
     delete_managed_model,
 )
+from apis.app_api.admin.services.model_access import (
+    ModelAccessService,
+    get_model_access_service,
+)
+from apis.shared.rbac.system_admin import require_system_admin
 
 logger = logging.getLogger(__name__)
 
@@ -608,6 +613,89 @@ async def delete_managed_model_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting enabled model: {str(e)}"
+        )
+
+
+@router.post("/managed-models/{model_id}/sync-roles", response_model=ManagedModel)
+async def sync_model_roles(
+    model_id: str,
+    admin_user: User = Depends(require_system_admin),
+):
+    """
+    Sync a model's allowedAppRoles with the AppRole system.
+
+    This endpoint updates the model's allowedAppRoles based on which AppRoles
+    have this model in their granted_models list. It ensures bidirectional
+    consistency between models and roles.
+
+    Requires system administrator access.
+
+    Args:
+        model_id: Model identifier
+        admin_user: Authenticated system admin user (injected by dependency)
+
+    Returns:
+        ManagedModel: Updated model with synced allowedAppRoles
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks system admin role
+            - 404 if model not found
+            - 500 if server error
+    """
+    logger.info(f"Admin {admin_user.email} syncing roles for model: {model_id}")
+
+    try:
+        # Get the model
+        model = await get_managed_model(model_id)
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+
+        # Import here to avoid circular imports
+        from apis.shared.rbac.admin_service import get_app_role_admin_service
+
+        # Get all roles and find which ones grant access to this model
+        admin_service = get_app_role_admin_service()
+        all_roles = await admin_service.list_roles(enabled_only=False)
+
+        # Find roles that grant access to this model
+        granting_roles = []
+        for role in all_roles:
+            if model.model_id in role.granted_models:
+                granting_roles.append(role.role_id)
+            # Also check effective_permissions in case inheritance grants access
+            if role.effective_permissions and model.model_id in role.effective_permissions.models:
+                if role.role_id not in granting_roles:
+                    granting_roles.append(role.role_id)
+
+        # Update the model's allowed_app_roles
+        from apis.app_api.admin.models import ManagedModelUpdate
+        updates = ManagedModelUpdate(allowed_app_roles=granting_roles)
+        updated_model = await update_managed_model(model_id, updates)
+
+        if not updated_model:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update model after computing roles"
+            )
+
+        logger.info(
+            f"✅ Synced model {model_id}: allowedAppRoles = {granting_roles}"
+        )
+
+        return updated_model
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error syncing model roles: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error syncing model roles: {str(e)}"
         )
 
 

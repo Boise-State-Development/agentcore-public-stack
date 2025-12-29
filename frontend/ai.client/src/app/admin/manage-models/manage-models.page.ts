@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, signal, computed, inject } from '@a
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ManagedModelsService } from './services/managed-models.service';
+import { AppRolesService } from '../roles/services/app-roles.service';
 
 @Component({
   selector: 'app-manage-models-page',
@@ -12,6 +13,7 @@ import { ManagedModelsService } from './services/managed-models.service';
 })
 export class ManageModelsPage {
   private managedModelsService = inject(ManagedModelsService);
+  private appRolesService = inject(AppRolesService);
 
   // Search and filter signals
   searchQuery = signal<string>('');
@@ -81,5 +83,14 @@ export class ManageModelsPage {
         alert('Failed to delete model. Please try again.');
       }
     }
+  }
+
+  /**
+   * Get the display name for a role ID.
+   * Falls back to the role ID if not found.
+   */
+  getRoleDisplayName(roleId: string): string {
+    const role = this.appRolesService.getRoleById(roleId);
+    return role?.displayName ?? roleId;
   }
 }

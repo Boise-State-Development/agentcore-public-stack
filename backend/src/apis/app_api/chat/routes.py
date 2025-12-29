@@ -37,6 +37,7 @@ from apis.shared.quota import (
     build_quota_exceeded_event,
     build_quota_warning_event,
 )
+from apis.app_api.admin.services import get_tool_access_service
 from agents.strands_agent.session.session_factory import SessionFactory
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,10 @@ async def chat_stream(
     Uses default tools (all available) if enabled_tools not specified
     Uses the authenticated user's ID from the JWT token.
 
+    Tool authorization:
+    - Filters requested tools to only those the user is allowed to use via AppRoles
+    - If user has no tool permissions, agent runs without tools
+
     Quota enforcement (when enabled via ENABLE_QUOTA_ENFORCEMENT=true):
     - Checks user quota before processing
     - Streams quota_exceeded as assistant message if quota exceeded (better UX)
@@ -117,6 +122,21 @@ async def chat_stream(
     """
     user_id = current_user.user_id
     logger.info(f"Legacy chat request - Session: {request.session_id}, User: {user_id}, Message: {request.message[:50]}...")
+
+    # Filter tools based on user permissions (RBAC)
+    authorized_tools = request.enabled_tools
+    try:
+        tool_access_service = get_tool_access_service()
+        authorized_tools, denied_tools = await tool_access_service.check_access_and_filter(
+            user=current_user,
+            requested_tools=request.enabled_tools,
+            strict=False  # Don't fail, just filter
+        )
+        if denied_tools:
+            logger.info(f"Filtered out unauthorized tools for user {user_id}: {denied_tools}")
+    except Exception as e:
+        # Log error but don't block request - fail open for RBAC errors
+        logger.error(f"Error filtering tools for user {user_id}: {e}", exc_info=True)
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
@@ -167,7 +187,7 @@ async def chat_stream(
         agent = get_agent(
             session_id=request.session_id,
             user_id=user_id,
-            enabled_tools=request.enabled_tools  # May be None (use all tools)
+            enabled_tools=authorized_tools  # Filtered by RBAC (may be None for all allowed)
         )
 
         # Wrap stream to ensure flush on disconnect and prevent further processing

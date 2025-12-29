@@ -28,6 +28,7 @@ export class ModelService {
     outputModalities: ['TEXT'],
     maxInputTokens: 200000,
     maxOutputTokens: 4096,
+    allowedAppRoles: [],
     availableToRoles: [],
     enabled: true,
     inputPricePerMillionTokens: 0,
