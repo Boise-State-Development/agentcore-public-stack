@@ -7,7 +7,16 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Response, Backgrou
 from typing import Optional
 import logging
 from datetime import datetime
-from .models import UpdateSessionMetadataRequest, SessionMetadataResponse, SessionMetadata, SessionPreferences, SessionsListResponse
+from .models import (
+    UpdateSessionMetadataRequest,
+    SessionMetadataResponse,
+    SessionMetadata,
+    SessionPreferences,
+    SessionsListResponse,
+    BulkDeleteSessionsRequest,
+    BulkDeleteSessionsResponse,
+    BulkDeleteSessionResult
+)
 from apis.app_api.messages.models import MessagesListResponse
 from .services.messages import get_messages
 from .services.metadata import store_session_metadata, get_session_metadata, list_user_sessions
@@ -341,6 +350,108 @@ async def delete_session_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete session: {str(e)}"
+        )
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteSessionsResponse)
+async def bulk_delete_sessions_endpoint(
+    request: BulkDeleteSessionsRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Bulk delete multiple conversations.
+
+    Deletes up to 20 sessions at once. Each session is soft-deleted (moved from
+    S#ACTIVE# to S#DELETED# prefix) and conversation content is scheduled for
+    deletion from AgentCore Memory as a background task.
+
+    Cost records are preserved for billing and audit purposes.
+
+    The response includes detailed results for each session, allowing the client
+    to handle partial failures gracefully.
+
+    Requires JWT authentication. Users can only delete their own sessions.
+
+    Args:
+        request: BulkDeleteSessionsRequest with list of session IDs (max 20)
+        background_tasks: FastAPI BackgroundTasks for async cleanup
+        current_user: Authenticated user from JWT token (injected by dependency)
+
+    Returns:
+        BulkDeleteSessionsResponse with counts and individual results
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 422 if validation fails (empty list, >20 sessions)
+            - 500 if server error
+    """
+    user_id = current_user.user_id
+    session_ids = request.session_ids
+
+    logger.info(f"POST /sessions/bulk-delete - User: {user_id}, Count: {len(session_ids)}")
+
+    results = []
+    deleted_count = 0
+    failed_count = 0
+
+    try:
+        service = SessionService()
+
+        for session_id in session_ids:
+            try:
+                deleted = await service.delete_session(
+                    user_id=user_id,
+                    session_id=session_id
+                )
+
+                if deleted:
+                    # Queue AgentCore Memory cleanup as background task
+                    background_tasks.add_task(
+                        service.delete_agentcore_memory,
+                        session_id,
+                        user_id
+                    )
+                    results.append(BulkDeleteSessionResult(
+                        session_id=session_id,
+                        success=True,
+                        error=None
+                    ))
+                    deleted_count += 1
+                else:
+                    results.append(BulkDeleteSessionResult(
+                        session_id=session_id,
+                        success=False,
+                        error="Session not found"
+                    ))
+                    failed_count += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to delete session {session_id}: {e}")
+                results.append(BulkDeleteSessionResult(
+                    session_id=session_id,
+                    success=False,
+                    error=str(e)
+                ))
+                failed_count += 1
+
+        logger.info(
+            f"Bulk delete completed for user {user_id}: "
+            f"{deleted_count} deleted, {failed_count} failed"
+        )
+
+        return BulkDeleteSessionsResponse(
+            deleted_count=deleted_count,
+            failed_count=failed_count,
+            results=results
+        )
+
+    except Exception as e:
+        logger.error(f"Error in bulk delete sessions: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to bulk delete sessions: {str(e)}"
         )
 
 

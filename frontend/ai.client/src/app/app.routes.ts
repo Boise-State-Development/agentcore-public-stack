@@ -68,6 +68,11 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'manage-sessions',
+        loadComponent: () => import('./manage-sessions/manage-sessions.page').then(m => m.ManageSessionsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'admin/quota',
         loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
         canActivate: [adminGuard],

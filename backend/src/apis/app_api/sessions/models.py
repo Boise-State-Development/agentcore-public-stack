@@ -93,3 +93,34 @@ class SessionsListResponse(BaseModel):
 
     sessions: List[SessionMetadataResponse] = Field(..., description="List of sessions for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")
+
+
+class BulkDeleteSessionsRequest(BaseModel):
+    """Request body for bulk deleting sessions"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_ids: List[str] = Field(
+        ...,
+        alias="sessionIds",
+        description="List of session IDs to delete",
+        min_length=1,
+        max_length=20
+    )
+
+
+class BulkDeleteSessionResult(BaseModel):
+    """Result for a single session in bulk delete operation"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId", description="Session identifier")
+    success: bool = Field(..., description="Whether deletion was successful")
+    error: Optional[str] = Field(None, description="Error message if deletion failed")
+
+
+class BulkDeleteSessionsResponse(BaseModel):
+    """Response for bulk delete sessions operation"""
+    model_config = ConfigDict(populate_by_name=True)
+
+    deleted_count: int = Field(..., alias="deletedCount", description="Number of sessions successfully deleted")
+    failed_count: int = Field(..., alias="failedCount", description="Number of sessions that failed to delete")
+    results: List[BulkDeleteSessionResult] = Field(..., description="Individual results for each session")

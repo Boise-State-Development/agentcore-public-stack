@@ -25,7 +25,7 @@ export interface SessionsListResponse {
   /** List of sessions for the user */
   sessions: SessionMetadata[];
   /** Pagination token for retrieving the next page of results */
-  next_token: string | null;
+  nextToken: string | null;
 }
 
 /**
@@ -48,6 +48,38 @@ export interface GetMessagesParams {
   limit?: number;
   /** Pagination token for retrieving the next page of results */
   next_token?: string | null;
+}
+
+/**
+ * Request model for bulk deleting sessions.
+ */
+export interface BulkDeleteSessionsRequest {
+  /** List of session IDs to delete (max 20) */
+  sessionIds: string[];
+}
+
+/**
+ * Result for a single session in bulk delete operation.
+ */
+export interface BulkDeleteSessionResult {
+  /** Session identifier */
+  sessionId: string;
+  /** Whether deletion was successful */
+  success: boolean;
+  /** Error message if deletion failed */
+  error?: string;
+}
+
+/**
+ * Response model for bulk delete sessions operation.
+ */
+export interface BulkDeleteSessionsResponse {
+  /** Number of sessions successfully deleted */
+  deletedCount: number;
+  /** Number of sessions that failed to delete */
+  failedCount: number;
+  /** Individual results for each session */
+  results: BulkDeleteSessionResult[];
 }
 
 @Injectable({
@@ -189,7 +221,7 @@ export class SessionService {
       // Resource hasn't loaded yet or is disabled, return cached sessions only
       return {
         sessions: localCache,
-        next_token: null
+        nextToken: null
       };
     }
 
@@ -608,6 +640,84 @@ export class SessionService {
 
       // Trigger sessions resource reload to ensure UI is in sync with backend
       this.sessionsResource.reload();
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Bulk delete multiple sessions.
+   * Deletes up to 20 sessions at once. Sessions are soft-deleted and cost records
+   * are preserved for billing/audit purposes.
+   *
+   * @param sessionIds - Array of session IDs to delete (max 20)
+   * @returns Promise resolving to BulkDeleteSessionsResponse with individual results
+   * @throws Error if the API request fails
+   *
+   * @example
+   * ```typescript
+   * try {
+   *   const result = await sessionService.bulkDeleteSessions([
+   *     'session-1',
+   *     'session-2',
+   *     'session-3'
+   *   ]);
+   *   console.log(`Deleted ${result.deletedCount} sessions`);
+   *   if (result.failedCount > 0) {
+   *     console.warn(`Failed to delete ${result.failedCount} sessions`);
+   *   }
+   * } catch (error) {
+   *   console.error('Bulk delete failed:', error);
+   * }
+   * ```
+   */
+  async bulkDeleteSessions(sessionIds: string[]): Promise<BulkDeleteSessionsResponse> {
+    // Ensure user is authenticated before making the request
+    await this.authService.ensureAuthenticated();
+
+    try {
+      const response = await firstValueFrom(
+        this.http.post<BulkDeleteSessionsResponse>(
+          `${environment.appApiUrl}/sessions/bulk-delete`,
+          { sessionIds } as BulkDeleteSessionsRequest
+        )
+      );
+
+      // Remove successfully deleted sessions from new session IDs set
+      for (const result of response.results) {
+        if (result.success) {
+          this.newSessionIds.delete(result.sessionId);
+        }
+      }
+
+      // Optimistically remove successfully deleted sessions from local cache
+      const deletedIds = new Set(
+        response.results
+          .filter(r => r.success)
+          .map(r => r.sessionId)
+      );
+
+      this.localSessionsCache.update(sessions =>
+        sessions.filter(s => !deletedIds.has(s.sessionId))
+      );
+
+      // Clear current session if it was deleted
+      if (deletedIds.has(this.currentSession().sessionId)) {
+        this.currentSession.set({
+          sessionId: '',
+          userId: '',
+          title: '',
+          status: 'active',
+          createdAt: '',
+          lastMessageAt: '',
+          messageCount: 0
+        });
+      }
+
+      // Trigger sessions resource reload to ensure UI is in sync with backend
+      this.sessionsResource.reload();
+
+      return response;
     } catch (error) {
       throw error;
     }

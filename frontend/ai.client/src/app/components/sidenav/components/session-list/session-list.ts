@@ -58,7 +58,7 @@ export class SessionList {
    */
   readonly nextToken = computed(() => {
     const response = this.mergedSessionsResource();
-    return response?.next_token ?? null;
+    return response?.nextToken ?? null;
   });
 
   /**
