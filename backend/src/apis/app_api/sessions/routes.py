@@ -3,7 +3,7 @@
 Provides endpoints for managing session metadata.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Response
+from fastapi import APIRouter, HTTPException, Depends, Query, Response, BackgroundTasks
 from typing import Optional
 import logging
 from datetime import datetime
@@ -276,13 +276,15 @@ async def update_session_metadata_endpoint(
 @router.delete("/{session_id}", status_code=204)
 async def delete_session_endpoint(
     session_id: str,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user)
 ):
     """
     Delete a conversation.
 
     This soft-deletes the session metadata (moves from S#ACTIVE# to S#DELETED#
-    prefix) and schedules deletion of conversation content from AgentCore Memory.
+    prefix) and schedules deletion of conversation content from AgentCore Memory
+    as a background task (fire-and-forget).
 
     Cost records are preserved for billing and audit purposes - they are stored
     separately with C# SK prefix and are not affected by session deletion.
@@ -291,6 +293,7 @@ async def delete_session_endpoint(
 
     Args:
         session_id: Session identifier from URL path
+        background_tasks: FastAPI BackgroundTasks for async cleanup
         current_user: Authenticated user from JWT token (injected by dependency)
 
     Returns:
@@ -318,6 +321,14 @@ async def delete_session_endpoint(
                 status_code=404,
                 detail=f"Session not found: {session_id}"
             )
+
+        # Queue AgentCore Memory cleanup as background task (fire-and-forget)
+        # This doesn't block the response - cleanup happens after 204 is sent
+        background_tasks.add_task(
+            service.delete_agentcore_memory,
+            session_id,
+            user_id
+        )
 
         logger.info(f"Successfully deleted session {session_id} for user {user_id}")
 

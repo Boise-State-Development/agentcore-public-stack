@@ -272,9 +272,8 @@ class SessionService:
 
             logger.info(f"Soft-deleted session {session_id} for user {user_id}")
 
-            # Delete conversation content from AgentCore Memory (async, non-blocking)
-            # This removes actual messages but NOT the cost records
-            await self._delete_agentcore_memory(session_id, user_id)
+            # Note: AgentCore Memory cleanup is now handled via BackgroundTasks
+            # in the route handler for true fire-and-forget behavior
 
             return True
 
@@ -286,9 +285,9 @@ class SessionService:
             logger.error(f"Failed to delete session {session_id}: {e}", exc_info=True)
             return False
 
-    async def _delete_agentcore_memory(self, session_id: str, user_id: str) -> None:
+    def delete_agentcore_memory(self, session_id: str, user_id: str) -> None:
         """
-        Delete conversation content from AgentCore Memory.
+        Delete conversation content from AgentCore Memory (sync, for background tasks).
 
         This removes the actual messages from AgentCore Memory storage
         but does NOT affect cost records (which are stored separately
@@ -296,7 +295,7 @@ class SessionService:
 
         Uses boto3 bedrock-agentcore client to:
         1. List all events for the session
-        2. Delete events in parallel using ThreadPoolExecutor
+        2. Delete each event sequentially
 
         Note: AgentCore Memory doesn't have a bulk delete_session API.
         The bedrock-agent-runtime delete_session API is for a different service.
@@ -306,9 +305,9 @@ class SessionService:
             user_id: User identifier (actorId in AgentCore Memory)
 
         Note:
-            - This is a non-blocking, fire-and-forget operation
-            - Failures are logged but don't affect the session deletion
-            - Uses parallel deletion for performance (10 concurrent workers)
+            - Designed to run as a FastAPI BackgroundTask (fire-and-forget)
+            - Failures are logged but don't affect the session deletion response
+            - Sequential deletion is fine since this runs in the background
         """
         try:
             # Check if AgentCore Memory is available
@@ -324,19 +323,37 @@ class SessionService:
                 return
 
             import boto3
-            from concurrent.futures import ThreadPoolExecutor, as_completed
 
             client = boto3.client('bedrock-agentcore', region_name=config.region)
 
-            # List all events for this session
+            # List all events for this session with pagination (max 100 per request)
+            all_event_ids = []
+            next_token = None
+
             try:
-                events_response = client.list_events(
-                    memoryId=config.memory_id,
-                    actorId=user_id,
-                    sessionId=session_id,
-                    maxResults=1000  # Get all events
-                )
-                events = events_response.get('events', [])
+                while True:
+                    list_params = {
+                        'memoryId': config.memory_id,
+                        'actorId': user_id,
+                        'sessionId': session_id,
+                        'maxResults': 100  # API max is 100
+                    }
+                    if next_token:
+                        list_params['nextToken'] = next_token
+
+                    events_response = client.list_events(**list_params)
+                    events = events_response.get('events', [])
+
+                    # Extract event IDs from this page
+                    for event in events:
+                        if event.get('eventId'):
+                            all_event_ids.append(event['eventId'])
+
+                    # Check for more pages
+                    next_token = events_response.get('nextToken')
+                    if not next_token:
+                        break
+
             except client.exceptions.ResourceNotFoundException:
                 # Session doesn't exist in AgentCore Memory - nothing to delete
                 logger.debug(f"Session {session_id} not found in AgentCore Memory")
@@ -345,18 +362,14 @@ class SessionService:
                 logger.warning(f"Failed to list events for session {session_id}: {e}")
                 return
 
-            if not events:
+            if not all_event_ids:
                 logger.debug(f"No events found for session {session_id} in AgentCore Memory")
                 return
 
-            # Extract event IDs
-            event_ids = [e.get('eventId') for e in events if e.get('eventId')]
-
-            if not event_ids:
-                return
-
-            def delete_single_event(event_id: str) -> bool:
-                """Delete a single event, returns True on success"""
+            # Delete events sequentially - this runs in background so no need
+            # for parallel execution overhead
+            deleted_count = 0
+            for event_id in all_event_ids:
                 try:
                     client.delete_event(
                         memoryId=config.memory_id,
@@ -364,22 +377,12 @@ class SessionService:
                         sessionId=session_id,
                         eventId=event_id
                     )
-                    return True
+                    deleted_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to delete event {event_id}: {e}")
-                    return False
-
-            # Delete events in parallel for performance
-            # 10 workers balances speed vs API rate limits
-            deleted_count = 0
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(delete_single_event, eid): eid for eid in event_ids}
-                for future in as_completed(futures):
-                    if future.result():
-                        deleted_count += 1
 
             logger.info(
-                f"Deleted {deleted_count}/{len(event_ids)} events from AgentCore Memory "
+                f"Deleted {deleted_count}/{len(all_event_ids)} events from AgentCore Memory "
                 f"for session {session_id}"
             )
 
