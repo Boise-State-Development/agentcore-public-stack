@@ -11,7 +11,8 @@ import {
   heroCalendar,
   heroSparkles,
   heroCurrencyDollar,
-  heroUsers
+  heroUsers,
+  heroShieldCheck
 } from '@ng-icons/heroicons/outline';
 
 interface AdminFeature {
@@ -35,7 +36,8 @@ interface AdminFeature {
       heroCalendar,
       heroSparkles,
       heroCurrencyDollar,
-      heroUsers
+      heroUsers,
+      heroShieldCheck
     })
   ],
   templateUrl: './admin.page.html',
@@ -109,6 +111,12 @@ export class AdminPage {
       description: 'Search and browse users to view their profile, costs, and quota status. Manage user-specific overrides and assignments.',
       icon: 'heroUsers',
       route: '/admin/users',
+    },
+    {
+      title: 'Role Management',
+      description: 'Create and manage application roles with tool and model permissions. Configure JWT mappings and role inheritance.',
+      icon: 'heroShieldCheck',
+      route: '/admin/roles',
     },
   ];
 

@@ -91,5 +91,20 @@ export const routes: Routes = [
         path: 'admin/users/:userId',
         loadComponent: () => import('./admin/users/pages/user-detail/user-detail.page').then(m => m.UserDetailPage),
         canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/roles',
+        loadComponent: () => import('./admin/roles/pages/role-list.page').then(m => m.RoleListPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/roles/new',
+        loadComponent: () => import('./admin/roles/pages/role-form.page').then(m => m.RoleFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/roles/edit/:id',
+        loadComponent: () => import('./admin/roles/pages/role-form.page').then(m => m.RoleFormPage),
+        canActivate: [adminGuard],
     }
 ];
