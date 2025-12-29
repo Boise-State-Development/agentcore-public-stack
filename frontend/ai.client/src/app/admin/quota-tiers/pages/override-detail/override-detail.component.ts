@@ -66,7 +66,11 @@ export class OverrideDetailComponent implements OnInit {
       const future = new Date(now);
       future.setDate(future.getDate() + 30);
 
+      // Check for userId query parameter
+      const userId = this.route.snapshot.queryParamMap.get('userId');
+
       this.overrideForm.patchValue({
+        userId: userId || '',
         validFrom: this.formatDateForInput(now),
         validUntil: this.formatDateForInput(future),
       });

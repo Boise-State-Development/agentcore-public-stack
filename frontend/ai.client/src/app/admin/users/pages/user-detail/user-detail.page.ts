@@ -61,8 +61,15 @@ import { QuotaEventSummary } from '../../models';
     }
 
     @if (state.loading()) {
-      <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-        Loading user details...
+      <div class="flex items-center justify-center h-64">
+        <div class="flex flex-col items-center gap-4">
+          <div
+            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600"
+          ></div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Loading user details...
+          </p>
+        </div>
       </div>
     }
 
@@ -273,12 +280,6 @@ import { QuotaEventSummary } from '../../models';
         >
           Assign Tier
         </button>
-        <button
-          (click)="viewCostDetails()"
-          class="px-4 py-2 border border-gray-300 rounded-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-800"
-        >
-          View Cost Details
-        </button>
       </div>
     }
   `,
@@ -316,15 +317,6 @@ export class UserDetailPage implements OnInit {
     if (userId) {
       this.router.navigate(['/admin/quota/assignments/new'], {
         queryParams: { userId, type: 'direct_user' },
-      });
-    }
-  }
-
-  viewCostDetails(): void {
-    const userId = this.user()?.profile.userId;
-    if (userId) {
-      this.router.navigate(['/admin/costs'], {
-        queryParams: { userId },
       });
     }
   }

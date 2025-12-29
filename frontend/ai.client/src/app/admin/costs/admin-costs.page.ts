@@ -6,7 +6,7 @@ import {
   OnInit,
   signal,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -183,6 +183,7 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
 })
 export class AdminCostsPage implements OnInit {
   private stateService = inject(AdminCostStateService);
+  private router = inject(Router);
 
   // State from service
   loading = this.stateService.loading;
@@ -250,8 +251,7 @@ export class AdminCostsPage implements OnInit {
   }
 
   onUserClick(userId: string): void {
-    // TODO: Navigate to user detail page when implemented
-    console.log('User clicked:', userId);
+    this.router.navigate(['/admin/users', userId]);
   }
 
   async onLoadMoreUsers(): Promise<void> {

@@ -69,6 +69,22 @@ export class AssignmentDetailComponent implements OnInit {
       this.isEditMode.set(true);
       this.assignmentId.set(id);
       await this.loadAssignmentData(id);
+    } else {
+      // Check for query parameters to pre-populate form
+      const userId = this.route.snapshot.queryParamMap.get('userId');
+      const type = this.route.snapshot.queryParamMap.get('type');
+
+      if (type) {
+        this.assignmentForm.patchValue({
+          assignmentType: type as QuotaAssignmentType,
+        });
+      }
+
+      if (userId) {
+        this.assignmentForm.patchValue({
+          userId: userId,
+        });
+      }
     }
 
     // Setup type change listener to update validators

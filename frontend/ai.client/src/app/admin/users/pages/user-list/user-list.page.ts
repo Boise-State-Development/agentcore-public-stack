@@ -87,8 +87,15 @@ import { UserListItem, UserStatus } from '../../models';
 
     <!-- Loading State -->
     @if (state.loading() && state.users().length === 0) {
-      <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-        Loading users...
+      <div class="flex items-center justify-center h-64">
+        <div class="flex flex-col items-center gap-4">
+          <div
+            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600"
+          ></div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Loading users...
+          </p>
+        </div>
       </div>
     }
 
@@ -134,7 +141,7 @@ import { UserListItem, UserStatus } from '../../models';
               <div class="text-sm/6 font-medium">
                 {{ user.quotaUsagePercentage }}% quota used
               </div>
-              @if (user.currentMonthCost !== undefined) {
+              @if (user.currentMonthCost != null) {
                 <div class="text-sm/6 text-gray-500">
                   \${{ user.currentMonthCost.toFixed(2) }} this month
                 </div>
