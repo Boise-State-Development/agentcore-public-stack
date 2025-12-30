@@ -1,5 +1,18 @@
-<div class="min-h-dvh flex items-center justify-center bg-gray-100 dark:bg-gray-900">
-  <div class="w-full max-w-md px-6 py-8">
+<div class="fixed inset-0 flex items-center justify-center">
+  <div class="w-full max-w-md px-4 -mt-20">
+    <!-- Logo -->
+    <div class="mb-8 flex justify-center">
+      <img
+        src="/img/logo-light.png"
+        alt="Logo"
+        class="size-16 dark:hidden">
+      <img
+        src="/img/logo-dark.png"
+        alt="Logo"
+        class="hidden size-16 dark:block">
+    </div>
+
+    <!-- Sign In Card -->
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-8">
       <div class="flex flex-col items-center gap-6">
         <div class="flex flex-col items-center gap-2">
@@ -14,7 +27,7 @@
         @if (errorMessage()) {
           <div class="w-full p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
             <div class="flex items-start gap-3">
-              <svg class="size-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg class="size-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <p class="text-sm text-red-800 dark:text-red-300">
@@ -48,4 +61,3 @@
     </div>
   </div>
 </div>
-

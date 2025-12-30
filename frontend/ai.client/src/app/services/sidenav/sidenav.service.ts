@@ -16,6 +16,9 @@ export class SidenavService {
   // Desktop collapsed state
   private isCollapsedSignal = signal(false);
 
+  // Hidden state (for pages like login where sidenav should not appear at all)
+  private isHiddenSignal = signal(false);
+
   /** Whether the mobile sidenav is currently open */
   readonly isOpen = this.isOpenSignal.asReadonly();
 
@@ -27,6 +30,9 @@ export class SidenavService {
 
   /** Whether the desktop sidenav is collapsed */
   readonly isCollapsed = this.isCollapsedSignal.asReadonly();
+
+  /** Whether the sidenav is completely hidden (for login, etc.) */
+  readonly isHidden = this.isHiddenSignal.asReadonly();
 
   /** Open the mobile sidenav */
   open(): void {
@@ -69,5 +75,15 @@ export class SidenavService {
   /** Expand the desktop sidenav */
   expand(): void {
     this.isCollapsedSignal.set(false);
+  }
+
+  /** Hide the sidenav completely */
+  hide(): void {
+    this.isHiddenSignal.set(true);
+  }
+
+  /** Show the sidenav */
+  show(): void {
+    this.isHiddenSignal.set(false);
   }
 }

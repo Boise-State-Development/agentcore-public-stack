@@ -1,5 +1,5 @@
 <!-- Mobile sidenav overlay -->
-@if (sidenavService.isVisible()) {
+@if (sidenavService.isVisible() && !sidenavService.isHidden()) {
   <div class="relative z-50 lg:hidden" role="dialog" aria-modal="true">
     <!-- Backdrop -->
     <div
@@ -30,15 +30,17 @@
 }
 
 <!-- Static sidebar for desktop -->
-<div
-  class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex size-auto transition-transform duration-300"
-  [class.-translate-x-full]="sidenavService.isCollapsed()">
-  <!-- Sidenav component -->
-  <app-sidenav></app-sidenav>
-</div>
+@if (!sidenavService.isHidden()) {
+  <div
+    class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex size-auto transition-transform duration-300"
+    [class.-translate-x-full]="sidenavService.isCollapsed()">
+    <!-- Sidenav component -->
+    <app-sidenav></app-sidenav>
+  </div>
+}
 
 <!-- Desktop controls (when sidenav collapsed) -->
-@if (sidenavService.isCollapsed()) {
+@if (sidenavService.isCollapsed() && !sidenavService.isHidden()) {
   <div class="hidden lg:flex fixed top-4 left-4 z-50 gap-2">
     <!-- Expand sidebar button -->
     <button
@@ -69,7 +71,7 @@
 }
 
 <!-- Mobile controls (when header content hidden and sidenav not visible) -->
-@if (!headerService.showContent() && !sidenavService.isVisible()) {
+@if (!headerService.showContent() && !sidenavService.isVisible() && !sidenavService.isHidden()) {
   <div class="flex lg:hidden fixed top-4 left-4 z-50 gap-2">
     <!-- Open sidenav button -->
     <button
@@ -101,8 +103,8 @@
 
 <div
   class="transition-[padding] duration-300"
-  [class.lg:pl-72]="!sidenavService.isCollapsed()"
-  [class.lg:pl-0]="sidenavService.isCollapsed()">
+  [class.lg:pl-72]="!sidenavService.isCollapsed() && !sidenavService.isHidden()"
+  [class.lg:pl-0]="sidenavService.isCollapsed() || sidenavService.isHidden()">
   <main class="flex flex-col">
     <!-- Scrollable Content -->
     <div class="flex-1 overflow-y-auto">

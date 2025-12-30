@@ -86,17 +86,7 @@ export class UserService {
       // Decode the payload (middle part)
       const payload = this.base64UrlDecode(parts[1]);
       const jwtPayload: JWTPayload = JSON.parse(payload);
-
-      // Debug: Log the JWT payload to see available claims
-      console.log('[UserService] JWT Payload:', {
-        given_name: jwtPayload.given_name,
-        family_name: jwtPayload.family_name,
-        name: jwtPayload.name,
-        email: jwtPayload.email,
-        preferred_username: jwtPayload.preferred_username,
-        allClaims: Object.keys(jwtPayload)
-      });
-
+      
       // Extract user information matching backend User model
       const email = jwtPayload.email || jwtPayload.preferred_username;
       if (!email) {
@@ -135,13 +125,6 @@ export class UserService {
         roles,
         picture: jwtPayload.picture
       };
-
-      // Debug: Log the mapped user object
-      console.log('[UserService] Mapped User:', {
-        firstName: user.firstName,
-        lastName: user.lastName,
-        fullName: user.fullName
-      });
 
       return user;
     } catch (error) {
