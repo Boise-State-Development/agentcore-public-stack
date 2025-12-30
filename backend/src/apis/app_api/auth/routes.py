@@ -6,6 +6,7 @@ from fastapi.responses import RedirectResponse
 
 from .models import (
     LoginResponse,
+    LogoutResponse,
     TokenExchangeRequest,
     TokenExchangeResponse,
     TokenRefreshRequest,
@@ -329,7 +330,7 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenRefreshResponse:
         auth_service = get_auth_service()
         
         tokens = await auth_service.refresh_access_token(request.refresh_token)
-        
+
         return TokenRefreshResponse(**tokens)
     except ValueError as e:
         # Missing configuration
@@ -339,3 +340,90 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenRefreshResponse:
             detail=str(e)
         )
 
+
+@router.get(
+    "/logout",
+    summary="Get logout URL",
+    description="""
+    Returns the Entra ID logout URL for ending the user's session.
+
+    This endpoint returns the URL that the client should redirect to in order
+    to properly log the user out of both the application and Entra ID.
+
+    ## Usage Flow
+
+    1. Client clears local tokens (access_token, refresh_token, etc.)
+    2. Client calls `/auth/logout` to get the Entra ID logout URL
+    3. Client redirects user to the logout URL
+    4. Entra ID ends the session and redirects back to the application
+
+    ## Query Parameters
+
+    - **post_logout_redirect_uri**: Optional URL to redirect to after logout.
+      If not provided, Entra ID will show its default logout confirmation page.
+
+    ## Response
+
+    Returns a JSON object with:
+    - `logout_url`: The URL to redirect the user to for Entra ID logout
+
+    ## Example Response
+
+    ```json
+    {
+        "logout_url": "https://login.microsoftonline.com/.../oauth2/v2.0/logout?post_logout_redirect_uri=..."
+    }
+    ```
+    """,
+    response_model=LogoutResponse,
+    responses={
+        200: {
+            "description": "Logout URL generated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "logout_url": "https://login.microsoftonline.com/tenant/oauth2/v2.0/logout?post_logout_redirect_uri=https://example.com"
+                    }
+                }
+            }
+        },
+        503: {
+            "description": "Authentication service unavailable",
+        }
+    }
+)
+async def logout(
+    post_logout_redirect_uri: str = Query(
+        None,
+        description="URL to redirect to after logout (must be registered in Entra ID app)"
+    )
+) -> LogoutResponse:
+    """
+    Get Entra ID logout URL.
+
+    Returns the URL that the client should redirect to for proper logout.
+
+    Args:
+        post_logout_redirect_uri: Optional URL to redirect after logout
+
+    Returns:
+        LogoutResponse with logout_url
+    """
+    try:
+        auth_service = get_auth_service()
+
+        logout_url = auth_service.build_logout_url(
+            post_logout_redirect_uri=post_logout_redirect_uri
+        )
+
+        logger.info("Generated logout URL for Entra ID")
+
+        return LogoutResponse(logout_url=logout_url)
+
+    except ValueError as e:
+        # Missing configuration
+        logger.error(f"Authentication not configured: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )

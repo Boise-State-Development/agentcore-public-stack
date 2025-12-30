@@ -48,9 +48,11 @@ class EntraIDJWTValidator:
         self.issuer = f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
         self.jwks_uri = f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
         
-        # Acceptable audiences - only accept proper API access tokens
+        # Acceptable audiences - accept both formats that Entra ID may return
+        # Entra ID can return either format for access tokens with API scopes
         self.acceptable_audiences = [
-            f"api://{self.client_id}",
+            f"api://{self.client_id}",  # Full URI format
+            self.client_id,              # Client ID only format
         ]
 
         # Required scope for API access

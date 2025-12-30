@@ -52,3 +52,8 @@ class LoginResponse(BaseModel):
     authorization_url: str = Field(..., description="URL to redirect user to for authentication")
     state: str = Field(..., description="State token for CSRF protection (should be validated on callback)")
 
+
+class LogoutResponse(BaseModel):
+    """Response model for logout endpoint."""
+    logout_url: str = Field(..., description="URL to redirect user to for Entra ID logout")
+

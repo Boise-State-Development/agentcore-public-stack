@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
+import { AuthService } from '../../auth/auth.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
@@ -16,6 +17,7 @@ import { TooltipDirective } from '../tooltip/tooltip.directive';
 export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
+  private authService = inject(AuthService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -45,5 +47,11 @@ export class Sidenav {
 
   toggleCollapse() {
     this.sidenavService.toggleCollapsed();
+  }
+
+  handleLogout() {
+    // Redirect to home page after logout
+    const postLogoutRedirectUri = window.location.origin;
+    this.authService.logout(postLogoutRedirectUri);
   }
 }

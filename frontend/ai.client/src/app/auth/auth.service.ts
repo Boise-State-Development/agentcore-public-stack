@@ -21,6 +21,10 @@ export interface LoginResponse {
   state: string;
 }
 
+export interface LogoutResponse {
+  logout_url: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -132,6 +136,20 @@ export class AuthService {
    * @param response Token response containing access_token, refresh_token, and expires_in
    */
   storeTokens(response: { access_token: string; refresh_token?: string; expires_in: number }): void {
+    // Debug: Log token audience to help diagnose ID token vs access token issues
+    try {
+      const parts = response.access_token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        console.log('[AuthService] Storing token with audience:', payload.aud);
+        if (typeof payload.aud === 'string' && !payload.aud.startsWith('api://')) {
+          console.warn('[AuthService] WARNING: Token audience does not start with "api://". This may be an ID token instead of an access token.');
+        }
+      }
+    } catch (e) {
+      // Ignore decode errors during logging
+    }
+
     localStorage.setItem(this.tokenKey, response.access_token);
 
     if (response.refresh_token) {
@@ -284,6 +302,61 @@ export class AuthService {
 
     // No token or refresh failed, throw error
     throw new Error('User is not authenticated. Please login.');
+  }
+
+  /**
+   * Logs the user out by clearing local tokens and redirecting to Entra ID logout.
+   *
+   * This performs a complete logout:
+   * 1. Clears all local tokens from localStorage
+   * 2. Fetches the Entra ID logout URL from the backend
+   * 3. Redirects the user to Entra ID to end the session
+   *
+   * @param postLogoutRedirectUri Optional URL to redirect to after Entra ID logout
+   * @throws Error if logout initiation fails
+   */
+  async logout(postLogoutRedirectUri?: string): Promise<void> {
+    // If authentication is disabled, just clear tokens and redirect home
+    if (!environment.enableAuthentication) {
+      this.clearTokens();
+      window.location.href = '/';
+      return;
+    }
+
+    try {
+      // Build query parameters
+      const params = new URLSearchParams();
+      if (postLogoutRedirectUri) {
+        params.set('post_logout_redirect_uri', postLogoutRedirectUri);
+      }
+
+      const queryString = params.toString();
+      const url = `${environment.appApiUrl}/auth/logout${queryString ? `?${queryString}` : ''}`;
+
+      const response = await firstValueFrom(
+        this.http.get<LogoutResponse>(url)
+      );
+
+      if (!response || !response.logout_url) {
+        throw new Error('Invalid logout response');
+      }
+
+      // Clear local tokens first
+      this.clearTokens();
+
+      // Redirect to Entra ID logout
+      window.location.href = response.logout_url;
+    } catch (error) {
+      // On error, still clear tokens and redirect to home
+      this.clearTokens();
+
+      if (error instanceof Error) {
+        console.error('Logout error:', error.message);
+      }
+
+      // Redirect to home page as fallback
+      window.location.href = '/';
+    }
   }
 }
 

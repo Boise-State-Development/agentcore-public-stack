@@ -40,7 +40,7 @@
     <!-- User dropdown fixed at bottom -->
     @if (userService.currentUser(); as user) {
         <div class="shrink-0 border-t border-gray-200 px-3 py-3 dark:border-white/10">
-            <app-user-dropdown [user]="user" [isAdmin]="isAdmin()"></app-user-dropdown>
+            <app-user-dropdown [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
         </div>
     }
 </div>

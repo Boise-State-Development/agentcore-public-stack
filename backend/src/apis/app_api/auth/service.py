@@ -53,6 +53,7 @@ class OIDCAuthService:
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         self.authorization_endpoint = f"{self.authority}/oauth2/v2.0/authorize"
         self.token_endpoint = f"{self.authority}/oauth2/v2.0/token"
+        self.logout_endpoint = f"{self.authority}/oauth2/v2.0/logout"
         
         # Build scope string with API scope (matches frontend format)
         # Format: openid profile email api://{client_id}/Read offline_access
@@ -196,6 +197,9 @@ class OIDCAuthService:
             "code_verifier": state_data.code_verifier,  # PKCE verification
         }
 
+        logger.info(f"Token exchange request - scope: {self.scope}")
+        logger.debug(f"Token exchange - redirect_uri: {redirect}, has_code_verifier: {state_data.code_verifier is not None}")
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -234,8 +238,19 @@ class OIDCAuthService:
 
                 logger.info("Successfully exchanged authorization code for tokens")
 
+                # Log token details for debugging
+                access_token = token_response.get("access_token")
+                if access_token:
+                    try:
+                        # Decode without verification to log audience
+                        token_claims = jwt.decode(access_token, options={"verify_signature": False})
+                        logger.info(f"Access token audience: {token_claims.get('aud')}")
+                        logger.info(f"Access token scopes (scp): {token_claims.get('scp')}")
+                    except Exception as decode_err:
+                        logger.warning(f"Could not decode access token for logging: {decode_err}")
+
                 return {
-                    "access_token": token_response.get("access_token"),
+                    "access_token": access_token,
                     "refresh_token": token_response.get("refresh_token"),
                     "id_token": token_response.get("id_token"),
                     "token_type": token_response.get("token_type", "Bearer"),
@@ -256,6 +271,24 @@ class OIDCAuthService:
                 detail="Authentication service unavailable. Please try again later."
             )
     
+    def build_logout_url(self, post_logout_redirect_uri: Optional[str] = None) -> str:
+        """
+        Build Entra ID logout URL.
+
+        Args:
+            post_logout_redirect_uri: URL to redirect to after logout (optional)
+
+        Returns:
+            Complete logout URL for Entra ID
+        """
+        params = {}
+        if post_logout_redirect_uri:
+            params["post_logout_redirect_uri"] = post_logout_redirect_uri
+
+        if params:
+            return f"{self.logout_endpoint}?{urlencode(params)}"
+        return self.logout_endpoint
+
     async def refresh_access_token(self, refresh_token: str) -> Dict[str, Any]:
         """
         Refresh access token using refresh token.
