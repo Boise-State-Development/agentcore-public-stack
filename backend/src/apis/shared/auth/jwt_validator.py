@@ -48,15 +48,13 @@ class EntraIDJWTValidator:
         self.issuer = f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
         self.jwks_uri = f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
         
-        # Acceptable audiences:
-        # - client_id: For ID tokens
-        # - api://{client_id}: For access tokens with API scope
-        # - api://{client_id}/Read: Alternative API scope format
+        # Acceptable audiences - only accept proper API access tokens
         self.acceptable_audiences = [
-            self.client_id,
             f"api://{self.client_id}",
-            f"api://{self.client_id}/Read",
         ]
+
+        # Required scope for API access
+        self.required_scope = "Read"
         
         # Initialize JWKS client with caching (matches NestJS jwks-rsa config)
         self.jwks_client = PyJWKClient(
@@ -79,21 +77,21 @@ class EntraIDJWTValidator:
     def validate_token(self, token: str) -> User:
         """
         Validate JWT token and extract user information.
-        
-        Matches NestJS EntraIDStrategy validation logic:
+
+        Validation rules:
         - Issuer: https://login.microsoftonline.com/{tenant_id}/v2.0
-        - Audience: client_id (for ID tokens) or api://{client_id} (for access tokens)
+        - Audience: api://{client_id} (access tokens only)
         - Algorithms: RS256
-        - Ignores expiration (backend ignores expiration)
-        
+        - Expiration: Enforced with 60 second clock skew tolerance
+
         Args:
             token: JWT token string
-            
+
         Returns:
             User object with extracted information
-            
+
         Raises:
-            HTTPException: If token is invalid or user doesn't have required role
+            HTTPException: If token is invalid, expired, or user doesn't have required role
         """
         try:
             # First, decode without verification to inspect the token
@@ -126,8 +124,9 @@ class EntraIDJWTValidator:
                     "verify_signature": True,
                     "verify_aud": False,  # We'll verify audience manually
                     "verify_iss": True,
-                    "verify_exp": False,  # Backend ignores expiration (matches NestJS)
-                }
+                    "verify_exp": True,
+                },
+                leeway=60  # Allow 60 seconds clock skew
             )
             
             # Manual audience verification
@@ -139,7 +138,23 @@ class EntraIDJWTValidator:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail=f"Invalid token audience. Expected one of: {self.acceptable_audiences}"
                 )
-            
+
+            # Validate scope claim (scp) for access tokens
+            scp_claim = payload.get('scp', '')
+            token_scopes = scp_claim.split() if scp_claim else []
+
+            logger.debug(f"Token scp claim: '{scp_claim}', parsed scopes: {token_scopes}")
+
+            if self.required_scope not in token_scopes:
+                logger.warning(
+                    f"Token missing required scope '{self.required_scope}'. "
+                    f"Token scp claim: '{scp_claim}', parsed scopes: {token_scopes}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token missing required scope: {self.required_scope}"
+                )
+
             # Extract user information
             email = payload.get('email') or payload.get('preferred_username')
             name = payload.get('name') or (
@@ -209,11 +224,10 @@ class EntraIDJWTValidator:
                 detail="Invalid token."
             )
         except jwt.ExpiredSignatureError:
-            logger.warning("Token expired (but expiration is ignored per configuration)")
-            # Still raise error even though we ignore expiration, for consistency
+            logger.warning("Token expired")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token expired."
+                detail="Token expired. Please refresh your session."
             )
         except Exception as e:
             logger.error(f"Error validating token: {e}", exc_info=True)

@@ -50,39 +50,57 @@ async def _sync_user_background(sync_service, user: User) -> None:
 # Check if authentication is enabled (defaults to true for security)
 ENABLE_AUTHENTICATION = os.environ.get('ENABLE_AUTHENTICATION', 'true').lower() == 'true'
 
+# Environment check - only allow auth bypass in development
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'production').lower()
+IS_DEVELOPMENT = ENVIRONMENT in ('development', 'dev', 'local')
+
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> User:
     """
     FastAPI dependency to get the current authenticated user.
-    
+
     Extracts Bearer token from Authorization header and validates it.
     Returns 401 Unauthorized if token is missing or invalid.
     Returns 403 Forbidden if token is valid but user lacks required roles.
-    
-    When ENABLE_AUTHENTICATION=false, bypasses authentication and returns
-    an anonymous user object. This should only be used in development/testing.
-    
+
+    When ENABLE_AUTHENTICATION=false AND ENVIRONMENT=development, bypasses
+    authentication for local development only. In production, auth bypass
+    is not allowed and will raise an error.
+
     Args:
         credentials: HTTP Bearer token credentials (None if missing)
-        
+
     Returns:
-        User object with authenticated user information (or anonymous user if auth disabled)
-        
+        User object with authenticated user information
+
     Raises:
-        HTTPException: 
-            - 401 if token is missing or invalid (when auth enabled)
-            - 403 if user doesn't have required roles (when auth enabled)
+        HTTPException:
+            - 401 if token is missing or invalid
+            - 403 if user doesn't have required roles
+            - 500 if auth is misconfigured (disabled in non-dev environment)
     """
     # Check if authentication is disabled
     if not ENABLE_AUTHENTICATION:
-        logger.warning("⚠️ Authentication is DISABLED via ENABLE_AUTHENTICATION=false - returning anonymous user")
+        if not IS_DEVELOPMENT:
+            # Fail closed in non-development environments
+            logger.error(
+                "SECURITY ERROR: ENABLE_AUTHENTICATION=false in non-development environment. "
+                "This is not allowed. Set ENVIRONMENT=development or enable authentication."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication service misconfigured."
+            )
+        logger.warning(
+            "⚠️ Authentication is DISABLED (ENABLE_AUTHENTICATION=false, ENVIRONMENT=development)"
+        )
         return User(
             email="anonymous@local.dev",
-            user_id="anonymous",
-            name="Anonymous User",
-            roles=[],
+            user_id="000000000",
+            name="Anonymous User (Dev)",
+            roles=["Developer"],  # Give dev role for local testing
             picture=None
         )
     

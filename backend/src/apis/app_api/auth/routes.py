@@ -23,33 +23,38 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     summary="Initiate OIDC login",
     description="""
     Initiates the OIDC authentication flow by redirecting the user to Entra ID login.
-    
-    This endpoint generates a secure state token for CSRF protection and returns
-    the authorization URL that the client should redirect the user to.
-    
+
+    This endpoint generates secure tokens and returns the authorization URL
+    that the client should redirect the user to.
+
     ## Security Features
-    
+
     - **State Parameter**: A cryptographically secure random token is generated
       and must be validated when the authorization code is exchanged for tokens.
+    - **PKCE (S256)**: Proof Key for Code Exchange prevents authorization code
+      interception attacks. The code_verifier is stored server-side and sent
+      during token exchange.
+    - **Nonce Binding**: A cryptographic nonce is included in the ID token to
+      prevent token replay attacks.
     - **Redirect URI Validation**: The redirect URI is validated to match the
       configured value or the provided value.
-    
+
     ## Usage Flow
-    
+
     1. Client calls `/auth/login` to get the authorization URL and state token
     2. Client redirects user to the authorization URL
     3. User authenticates with Entra ID
     4. Entra ID redirects back to the configured redirect URI with an authorization code
     5. Client calls `/auth/token` with the code and state to exchange for tokens
-    
+
     ## Response
-    
+
     Returns a JSON object with:
-    - `authorization_url`: The URL to redirect the user to
+    - `authorization_url`: The URL to redirect the user to (includes PKCE challenge)
     - `state`: The state token that must be included in the token exchange request
-    
+
     ## Example Response
-    
+
     ```json
     {
         "authorization_url": "https://login.microsoftonline.com/.../oauth2/v2.0/authorize?...",
@@ -94,19 +99,21 @@ async def login(
     """
     try:
         auth_service = get_auth_service()
-        
-        # Generate secure state token
-        state = auth_service.generate_state(redirect_uri=redirect_uri)
-        
-        # Build authorization URL
+
+        # Generate secure state token with PKCE and nonce
+        state, code_challenge, nonce = auth_service.generate_state(redirect_uri=redirect_uri)
+
+        # Build authorization URL with PKCE parameters
         authorization_url = auth_service.build_authorization_url(
             state=state,
+            code_challenge=code_challenge,
+            nonce=nonce,
             redirect_uri=redirect_uri,
             prompt=prompt
         )
-        
-        logger.info("Generated authorization URL for OIDC login")
-        
+
+        logger.info("Generated authorization URL for OIDC login with PKCE")
+
         return LoginResponse(
             authorization_url=authorization_url,
             state=state
@@ -132,38 +139,42 @@ async def login(
     summary="Exchange authorization code for tokens",
     description="""
     Exchanges an authorization code for access and refresh tokens.
-    
+
     This endpoint completes the OIDC authorization code flow by exchanging
     the authorization code received from Entra ID for access and refresh tokens.
-    
+
     ## Security
-    
+
     - **State Validation**: The state parameter is validated to prevent CSRF attacks.
       The state must match the one generated during the login request.
+    - **PKCE Verification**: The code_verifier stored during login is sent to validate
+      that the same client is completing the flow.
+    - **Nonce Validation**: The nonce in the ID token is verified against the stored
+      value to prevent token replay attacks.
     - **One-Time Use**: State tokens are single-use and expire after 10 minutes.
     - **Code Validation**: The authorization code is validated with Entra ID.
-    
+
     ## Request Body
-    
+
     - **code**: Authorization code from Entra ID callback
     - **state**: State token from login request (must match)
     - **redirect_uri**: Optional redirect URI (must match authorization request)
-    
+
     ## Response
-    
+
     Returns tokens including:
     - `access_token`: JWT access token for API authentication
     - `refresh_token`: Token for refreshing the access token
     - `id_token`: ID token containing user information
     - `expires_in`: Access token expiration time in seconds
-    
+
     ## Error Responses
-    
-    - **400 Bad Request**: Invalid or expired state, or token exchange failed
+
+    - **400 Bad Request**: Invalid or expired state, PKCE/nonce mismatch, or token exchange failed
     - **503 Service Unavailable**: Entra ID service unavailable
-    
+
     ## Example Request
-    
+
     ```json
     {
         "code": "authorization-code-from-entraid",
