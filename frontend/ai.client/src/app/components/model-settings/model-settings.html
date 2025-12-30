@@ -52,7 +52,7 @@
           </div>
         } @else {
           <!-- Custom dropdown -->
-          <div class="relative mt-2">
+          <div class="relative mt-1.5">
             <!-- Dropdown trigger button -->
             <button
               type="button"
@@ -63,18 +63,13 @@
               [attr.aria-activedescendant]="isModelDropdownOpen() ? 'model-option-' + focusedOptionIndex() : null"
               (click)="toggleModelDropdown()"
               (keydown)="onDropdownKeydown($event)"
-              class="flex w-full items-center justify-between rounded-sm bg-white px-3 py-2.5 text-left outline-1 -outline-offset-1 outline-gray-300 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:bg-white/5 dark:outline-white/10 dark:focus-visible:outline-primary-400">
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
-                  {{ modelService.selectedModel()?.modelName }}
-                </p>
-                <p class="truncate text-sm/6 text-gray-500 dark:text-gray-400">
-                  {{ modelService.selectedModel()?.providerName }}
-                </p>
-              </div>
+              class="flex w-full items-center justify-between gap-2 rounded-sm bg-white px-2.5 py-1.5 text-left outline-1 -outline-offset-1 outline-gray-300 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:bg-white/5 dark:outline-white/10 dark:focus-visible:outline-primary-400">
+              <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">
+                {{ modelService.selectedModel()?.modelName }}
+              </span>
               <ng-icon
                 name="heroChevronDown"
-                class="size-5 shrink-0 text-gray-400 transition-transform duration-200 dark:text-gray-500"
+                class="size-4 shrink-0 text-gray-400 transition-transform duration-200 dark:text-gray-500"
                 [class.rotate-180]="isModelDropdownOpen()"
                 aria-hidden="true" />
             </button>
@@ -84,7 +79,7 @@
               <ul
                 role="listbox"
                 aria-labelledby="model-select-label"
-                class="absolute z-10 mt-1 max-h-60 w-full divide-y divide-gray-100 overflow-auto rounded-sm bg-white shadow-lg outline-1 outline-black/5 dark:divide-white/10 dark:bg-gray-800 dark:shadow-none dark:-outline-offset-1 dark:outline-white/10">
+                class="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-sm bg-white py-1 shadow-lg outline-1 outline-black/5 dark:bg-gray-800 dark:shadow-none dark:-outline-offset-1 dark:outline-white/10">
                 @for (model of modelService.availableModels(); track model.modelId; let i = $index) {
                   <li
                     [id]="'model-option-' + i"
@@ -92,38 +87,35 @@
                     [attr.aria-selected]="isModelSelected(model)"
                     (click)="selectModel(model)"
                     (mouseenter)="focusedOptionIndex.set(i)"
-                    class="cursor-pointer p-3 text-sm/6 select-none"
+                    class="flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm/5 select-none"
                     [class.bg-primary-600]="focusedOptionIndex() === i"
                     [class.text-white]="focusedOptionIndex() === i"
                     [class.dark:bg-primary-500]="focusedOptionIndex() === i"
                     [class.text-gray-900]="focusedOptionIndex() !== i"
                     [class.dark:text-white]="focusedOptionIndex() !== i">
-                    <div class="flex items-start justify-between gap-3">
-                      <div class="min-w-0 flex-1">
-                        <p
-                          class="truncate"
-                          [class.font-semibold]="isModelSelected(model)"
-                          [class.font-normal]="!isModelSelected(model)">
-                          {{ model.modelName }}
-                        </p>
-                        <p
-                          class="mt-0.5 truncate text-sm/5"
-                          [class.text-primary-200]="focusedOptionIndex() === i"
-                          [class.text-gray-500]="focusedOptionIndex() !== i"
-                          [class.dark:text-gray-400]="focusedOptionIndex() !== i">
-                          {{ model.providerName }}
-                        </p>
-                      </div>
-                      @if (isModelSelected(model)) {
-                        <ng-icon
-                          name="heroCheck"
-                          class="size-5 shrink-0"
-                          [class.text-white]="focusedOptionIndex() === i"
-                          [class.text-primary-600]="focusedOptionIndex() !== i"
-                          [class.dark:text-primary-400]="focusedOptionIndex() !== i"
-                          aria-hidden="true" />
-                      }
+                    <div class="min-w-0 flex-1">
+                      <span
+                        class="block truncate"
+                        [class.font-medium]="isModelSelected(model)">
+                        {{ model.modelName }}
+                      </span>
+                      <span
+                        class="block truncate text-xs/4"
+                        [class.text-primary-200]="focusedOptionIndex() === i"
+                        [class.text-gray-500]="focusedOptionIndex() !== i"
+                        [class.dark:text-gray-400]="focusedOptionIndex() !== i">
+                        {{ model.providerName }}
+                      </span>
                     </div>
+                    @if (isModelSelected(model)) {
+                      <ng-icon
+                        name="heroCheck"
+                        class="size-4 shrink-0"
+                        [class.text-white]="focusedOptionIndex() === i"
+                        [class.text-primary-600]="focusedOptionIndex() !== i"
+                        [class.dark:text-primary-400]="focusedOptionIndex() !== i"
+                        aria-hidden="true" />
+                    }
                   </li>
                 }
               </ul>
