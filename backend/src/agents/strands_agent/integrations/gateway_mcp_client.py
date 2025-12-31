@@ -244,7 +244,7 @@ def create_filtered_gateway_client(
 
 
 # Environment variable control
-GATEWAY_ENABLED = os.environ.get('GATEWAY_MCP_ENABLED', 'true').lower() == 'true'
+GATEWAY_ENABLED = os.environ.get('AGENTCORE_GATEWAY_MCP_ENABLED', 'true').lower() == 'true'
 
 def get_gateway_client_if_enabled(
     enabled_tool_ids: Optional[List[str]] = None
@@ -259,7 +259,7 @@ def get_gateway_client_if_enabled(
         MCPClient or None if disabled or no tools enabled
     """
     if not GATEWAY_ENABLED:
-        logger.info("Gateway MCP is disabled via GATEWAY_MCP_ENABLED=false")
+        logger.info("Gateway MCP is disabled via AGENTCORE_GATEWAY_MCP_ENABLED=false")
         return None
 
     if enabled_tool_ids:
