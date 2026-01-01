@@ -13,6 +13,7 @@ export interface AppConfig {
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
   gateway: GatewayConfig;
+  fileUpload: FileUploadConfig;
   tags: { [key: string]: string };
 }
 
@@ -67,6 +68,15 @@ export interface GatewayConfig {
   throttleBurstLimit: number;
   enableWaf: boolean;
   logLevel?: string;  // Log level for Lambda functions (INFO, DEBUG, ERROR)
+}
+
+export interface FileUploadConfig {
+  enabled: boolean;
+  maxFileSizeBytes: number;      // Maximum file size (default: 4MB per Bedrock limit)
+  maxFilesPerMessage: number;    // Maximum files per message (default: 5)
+  userQuotaBytes: number;        // Per-user storage quota (default: 1GB)
+  retentionDays: number;         // File retention (default: 365 days)
+  corsOrigins?: string;          // Comma-separated CORS origins (defaults based on environment)
 }
 
 /**
@@ -146,6 +156,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
       throttleBurstLimit: parseIntEnv(process.env.CDK_GATEWAY_THROTTLE_BURST_LIMIT) || scope.node.tryGetContext('gateway')?.throttleBurstLimit,
       enableWaf: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLE_WAF) ?? scope.node.tryGetContext('gateway')?.enableWaf,
       logLevel: process.env.CDK_GATEWAY_LOG_LEVEL || scope.node.tryGetContext('gateway')?.logLevel,
+    },
+    fileUpload: {
+      enabled: parseBooleanEnv(process.env.CDK_FILE_UPLOAD_ENABLED) ?? scope.node.tryGetContext('fileUpload')?.enabled ?? true,
+      maxFileSizeBytes: parseIntEnv(process.env.CDK_FILE_UPLOAD_MAX_FILE_SIZE) || scope.node.tryGetContext('fileUpload')?.maxFileSizeBytes || 4 * 1024 * 1024, // 4MB
+      maxFilesPerMessage: parseIntEnv(process.env.CDK_FILE_UPLOAD_MAX_FILES_PER_MESSAGE) || scope.node.tryGetContext('fileUpload')?.maxFilesPerMessage || 5,
+      userQuotaBytes: parseIntEnv(process.env.CDK_FILE_UPLOAD_USER_QUOTA) || scope.node.tryGetContext('fileUpload')?.userQuotaBytes || 1024 * 1024 * 1024, // 1GB
+      retentionDays: parseIntEnv(process.env.CDK_FILE_UPLOAD_RETENTION_DAYS) || scope.node.tryGetContext('fileUpload')?.retentionDays || 365,
+      corsOrigins: process.env.CDK_FILE_UPLOAD_CORS_ORIGINS || scope.node.tryGetContext('fileUpload')?.corsOrigins,
     },
     tags: {
       Environment: environment,

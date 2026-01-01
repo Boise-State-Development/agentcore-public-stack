@@ -4,6 +4,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -710,6 +711,140 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // ============================================================
+    // File Upload Storage (S3 + DynamoDB)
+    // ============================================================
+
+    // Determine allowed CORS origins based on environment
+    const fileUploadCorsOrigins = config.fileUpload?.corsOrigins
+      ? config.fileUpload.corsOrigins.split(',').map(o => o.trim())
+      : config.environment === 'prod'
+        ? ['https://boisestate.ai', 'https://*.boisestate.ai']
+        : ['http://localhost:4200', 'http://localhost:8000'];
+
+    // S3 Bucket for user file uploads
+    const userFilesBucket = new s3.Bucket(this, 'UserFilesBucket', {
+      // Include account ID for global uniqueness
+      bucketName: getResourceName(config, 'user-files', config.awsAccount),
+
+      // Security configuration
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      versioned: false,
+
+      // Retain in prod, allow destroy in dev
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: config.environment !== 'prod',
+
+      // CORS for browser-based pre-signed URL uploads
+      cors: [{
+        allowedOrigins: fileUploadCorsOrigins,
+        allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.HEAD],
+        allowedHeaders: ['Content-Type', 'Content-Length', 'x-amz-*'],
+        exposedHeaders: ['ETag'],
+        maxAge: 3600,
+      }],
+
+      // Intelligent tiering lifecycle rules
+      lifecycleRules: [
+        {
+          id: 'transition-to-ia',
+          transitions: [{
+            storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+            transitionAfter: cdk.Duration.days(30),
+          }],
+        },
+        {
+          id: 'transition-to-glacier',
+          transitions: [{
+            storageClass: s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
+            transitionAfter: cdk.Duration.days(90),
+          }],
+        },
+        {
+          id: 'expire-objects',
+          expiration: cdk.Duration.days(config.fileUpload?.retentionDays || 365),
+        },
+        {
+          id: 'abort-incomplete-multipart',
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        },
+      ],
+    });
+
+    // DynamoDB Table for file metadata
+    /**
+     * Schema:
+     *   PK: USER#{userId}, SK: FILE#{uploadId} - File metadata
+     *   PK: USER#{userId}, SK: QUOTA - User storage quota tracking
+     *   GSI1PK: CONV#{sessionId}, GSI1SK: FILE#{uploadId} - Query files by conversation
+     */
+    const userFilesTable = new dynamodb.Table(this, 'UserFilesTable', {
+      tableName: getResourceName(config, 'user-files'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      timeToLiveAttribute: 'ttl',
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+    });
+
+    // GSI1: SessionIndex - Query files by conversation/session
+    userFilesTable.addGlobalSecondaryIndex({
+      indexName: 'SessionIndex',
+      partitionKey: {
+        name: 'GSI1PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI1SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Store file upload resource names in SSM
+    new ssm.StringParameter(this, 'UserFilesBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/file-upload/bucket-name`,
+      stringValue: userFilesBucket.bucketName,
+      description: 'User files S3 bucket name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserFilesBucketArnParameter', {
+      parameterName: `/${config.projectPrefix}/file-upload/bucket-arn`,
+      stringValue: userFilesBucket.bucketArn,
+      description: 'User files S3 bucket ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserFilesTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/file-upload/table-name`,
+      stringValue: userFilesTable.tableName,
+      description: 'User files metadata table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserFilesTableArnParameter', {
+      parameterName: `/${config.projectPrefix}/file-upload/table-arn`,
+      stringValue: userFilesTable.tableArn,
+      description: 'User files metadata table ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
     // ECS Task Definition
     // ============================================================
     // Note: ECR Repository is created automatically by the build pipeline
@@ -754,6 +889,11 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTable.tableName,
         DYNAMODB_USERS_TABLE_NAME: usersTable.tableName,
         DYNAMODB_APP_ROLES_TABLE_NAME: appRolesTable.tableName,
+        DYNAMODB_USER_FILES_TABLE_NAME: userFilesTable.tableName,
+        S3_USER_FILES_BUCKET_NAME: userFilesBucket.bucketName,
+        FILE_UPLOAD_MAX_SIZE_BYTES: String(config.fileUpload?.maxFileSizeBytes || 4194304),
+        FILE_UPLOAD_MAX_FILES_PER_MESSAGE: String(config.fileUpload?.maxFilesPerMessage || 5),
+        FILE_UPLOAD_USER_QUOTA_BYTES: String(config.fileUpload?.userQuotaBytes || 1073741824),
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -798,6 +938,10 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for AppRoles table
     appRolesTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for file upload resources
+    userFilesTable.grantReadWriteData(taskDefinition.taskRole);
+    userFilesBucket.grantReadWrite(taskDefinition.taskRole);
 
     // ============================================================
     // Target Group
@@ -939,6 +1083,18 @@ export class AppApiStack extends cdk.Stack {
       value: appRolesTable.tableName,
       description: 'AppRoles table name for RBAC',
       exportName: `${config.projectPrefix}-AppRolesTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'UserFilesBucketName', {
+      value: userFilesBucket.bucketName,
+      description: 'S3 bucket for user file uploads',
+      exportName: `${config.projectPrefix}-UserFilesBucketName`,
+    });
+
+    new cdk.CfnOutput(this, 'UserFilesTableName', {
+      value: userFilesTable.tableName,
+      description: 'DynamoDB table for file metadata',
+      exportName: `${config.projectPrefix}-UserFilesTableName`,
     });
   }
 }

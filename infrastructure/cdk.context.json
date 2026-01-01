@@ -53,6 +53,13 @@
     "enableWaf": false,
     "logLevel": "INFO"
   },
+  "fileUpload": {
+    "enabled": true,
+    "maxFileSizeBytes": 4194304,
+    "maxFilesPerMessage": 5,
+    "userQuotaBytes": 1073741824,
+    "retentionDays": 365
+  },
   "tags": {
     "Environment": "dev",
     "Project": "AgentCore",
@@ -66,5 +73,11 @@
   ],
   "acknowledged-issue-numbers": [
     34892
+  ],
+  "availability-zones:account=029812070295:region=us-west-2": [
+    "us-west-2a",
+    "us-west-2b",
+    "us-west-2c",
+    "us-west-2d"
   ]
 }
