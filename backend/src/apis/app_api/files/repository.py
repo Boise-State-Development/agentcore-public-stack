@@ -348,6 +348,50 @@ class FileUploadRepository:
             raise
 
     # =========================================================================
+    # Cascade Delete Operations
+    # =========================================================================
+
+    async def delete_session_files(self, session_id: str) -> list[FileMetadata]:
+        """
+        Delete all files for a session (cascade delete).
+
+        Uses the SessionIndex GSI to find all files, then deletes each one.
+        Also decrements the user quota for each deleted file.
+
+        Args:
+            session_id: The session/conversation identifier
+
+        Returns:
+            List of deleted FileMetadata records
+        """
+        deleted_files = []
+
+        try:
+            # Get all files for this session (including pending)
+            files = await self.list_session_files(session_id, status=None)
+
+            if not files:
+                logger.info(f"No files found for session {session_id}")
+                return deleted_files
+
+            # Delete each file's metadata
+            for file_meta in files:
+                try:
+                    deleted = await self.delete_file(file_meta.user_id, file_meta.upload_id)
+                    if deleted:
+                        deleted_files.append(deleted)
+                        logger.debug(f"Deleted file {file_meta.upload_id} for session cascade delete")
+                except Exception as e:
+                    logger.warning(f"Failed to delete file {file_meta.upload_id}: {e}")
+
+            logger.info(f"Cascade deleted {len(deleted_files)} files for session {session_id}")
+            return deleted_files
+
+        except ClientError as e:
+            logger.error(f"Error in cascade delete for session {session_id}: {e}")
+            raise
+
+    # =========================================================================
     # Helper Methods
     # =========================================================================
 

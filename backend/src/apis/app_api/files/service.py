@@ -347,6 +347,8 @@ class FileUploadService:
         session_id: Optional[str] = None,
         limit: int = 20,
         cursor: Optional[str] = None,
+        sort_by: str = "date",
+        sort_order: str = "desc",
     ) -> FileListResponse:
         """
         List files for a user.
@@ -356,6 +358,8 @@ class FileUploadService:
             session_id: Optional filter by session
             limit: Maximum number of files
             cursor: Pagination cursor
+            sort_by: Sort field (date, size, type)
+            sort_order: Sort order (asc, desc)
 
         Returns:
             FileListResponse with files and pagination
@@ -367,21 +371,55 @@ class FileUploadService:
             )
             # Filter to user's files only (safety check)
             files = [f for f in files if f.user_id == user_id]
-            return FileListResponse(
-                files=[FileResponse.from_metadata(f) for f in files],
-                next_cursor=None,
-                total_count=len(files),
-            )
         else:
             # Query by user
             files, next_cursor = await self.repository.list_user_files(
                 user_id, limit=limit, cursor=cursor, status=FileStatus.READY
             )
+
+        # Apply sorting (DynamoDB only supports date-based sorting natively via SK)
+        # For size/type sorting, we need to sort in application layer
+        files = self._sort_files(files, sort_by, sort_order)
+
+        # Apply pagination for session-based queries (already paginated for user queries)
+        if session_id:
+            return FileListResponse(
+                files=[FileResponse.from_metadata(f) for f in files[:limit]],
+                next_cursor=None if len(files) <= limit else "more",
+                total_count=len(files),
+            )
+        else:
             return FileListResponse(
                 files=[FileResponse.from_metadata(f) for f in files],
                 next_cursor=next_cursor,
                 total_count=None,  # Not available with pagination
             )
+
+    def _sort_files(
+        self,
+        files: List[FileMetadata],
+        sort_by: str,
+        sort_order: str,
+    ) -> List[FileMetadata]:
+        """
+        Sort files by the specified field and order.
+
+        Args:
+            files: List of files to sort
+            sort_by: Sort field (date, size, type)
+            sort_order: Sort order (asc, desc)
+
+        Returns:
+            Sorted list of files
+        """
+        reverse = sort_order == "desc"
+
+        if sort_by == "size":
+            return sorted(files, key=lambda f: f.size_bytes, reverse=reverse)
+        elif sort_by == "type":
+            return sorted(files, key=lambda f: f.mime_type, reverse=reverse)
+        else:  # date (default)
+            return sorted(files, key=lambda f: f.created_at, reverse=reverse)
 
     async def get_session_files(self, session_id: str) -> List[FileMetadata]:
         """
@@ -398,6 +436,66 @@ class FileUploadService:
         return await self.repository.list_session_files(
             session_id, status=FileStatus.READY
         )
+
+    # =========================================================================
+    # Cascade Delete Operations
+    # =========================================================================
+
+    async def delete_session_files(self, session_id: str) -> int:
+        """
+        Delete all files for a session (cascade delete).
+
+        Deletes both S3 objects and DynamoDB metadata for all files
+        in the session, and decrements user quotas accordingly.
+
+        Args:
+            session_id: The session/conversation identifier
+
+        Returns:
+            Number of files deleted
+        """
+        # Get all files for this session first
+        files = await self.repository.list_session_files(session_id, status=None)
+
+        if not files:
+            logger.info(f"No files to cascade delete for session {session_id}")
+            return 0
+
+        deleted_count = 0
+
+        for file_meta in files:
+            try:
+                # Delete S3 object
+                try:
+                    self._s3_client.delete_object(
+                        Bucket=self.bucket_name,
+                        Key=file_meta.s3_key,
+                    )
+                except ClientError as e:
+                    logger.warning(f"Failed to delete S3 object for {file_meta.upload_id}: {e}")
+                    # Continue with metadata deletion
+
+                # Delete metadata
+                deleted = await self.repository.delete_file(
+                    file_meta.user_id, file_meta.upload_id
+                )
+
+                # Decrement quota if file was ready
+                if deleted and file_meta.status == FileStatus.READY:
+                    await self.repository.decrement_quota(
+                        file_meta.user_id, file_meta.size_bytes
+                    )
+
+                deleted_count += 1
+                logger.debug(f"Cascade deleted file {file_meta.upload_id}")
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cascade delete file {file_meta.upload_id}: {e}"
+                )
+
+        logger.info(f"Cascade deleted {deleted_count}/{len(files)} files for session {session_id}")
+        return deleted_count
 
     # =========================================================================
     # Quota Management

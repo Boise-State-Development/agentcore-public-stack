@@ -5,6 +5,7 @@ Endpoints for file upload via pre-signed URLs.
 """
 
 import logging
+from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -141,6 +142,19 @@ async def complete_upload(
 # =============================================================================
 
 
+class SortBy(str, Enum):
+    """Sort field options for file listing."""
+    DATE = "date"
+    SIZE = "size"
+    TYPE = "type"
+
+
+class SortOrder(str, Enum):
+    """Sort order options for file listing."""
+    ASC = "asc"
+    DESC = "desc"
+
+
 @router.get("/", response_model=FileListResponse)
 async def list_files(
     session_id: Optional[str] = Query(
@@ -148,6 +162,12 @@ async def list_files(
     ),
     limit: int = Query(20, ge=1, le=100, description="Maximum files to return"),
     cursor: Optional[str] = Query(None, description="Pagination cursor"),
+    sort_by: SortBy = Query(
+        SortBy.DATE, alias="sortBy", description="Sort by: date, size, or type"
+    ),
+    sort_order: SortOrder = Query(
+        SortOrder.DESC, alias="sortOrder", description="Sort order: asc or desc"
+    ),
     user: User = Depends(get_current_user),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
@@ -155,10 +175,12 @@ async def list_files(
     List files for the authenticated user.
 
     Optionally filter by session/conversation. Returns only files with 'ready' status.
+    Supports sorting by date (default), size, or type.
     """
     logger.info(
         f"User {user.email} listing files"
         + (f" for session {session_id}" if session_id else "")
+        + f" (sort: {sort_by.value} {sort_order.value})"
     )
 
     response = await service.list_user_files(
@@ -166,6 +188,8 @@ async def list_files(
         session_id=session_id,
         limit=limit,
         cursor=cursor,
+        sort_by=sort_by.value,
+        sort_order=sort_order.value,
     )
     return response
 

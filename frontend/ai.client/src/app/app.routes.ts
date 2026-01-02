@@ -73,6 +73,11 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'files',
+        loadComponent: () => import('./files/file-browser.page').then(m => m.FileBrowserPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'admin/quota',
         loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
         canActivate: [adminGuard],

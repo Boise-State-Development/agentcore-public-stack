@@ -13,7 +13,8 @@ import {
   heroSun,
   heroMoon,
   heroComputerDesktop,
-  heroChatBubbleLeftRight
+  heroChatBubbleLeftRight,
+  heroDocument
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 
@@ -39,7 +40,8 @@ export interface User {
       heroSun,
       heroMoon,
       heroComputerDesktop,
-      heroChatBubbleLeftRight
+      heroChatBubbleLeftRight,
+      heroDocument
     })
   ],
   template: `
@@ -158,6 +160,20 @@ export interface User {
                   class="size-5 text-gray-400 dark:text-gray-500"
                 />
                 <span>Manage Conversations</span>
+              </a>
+
+              <!-- My Files (available to all users) -->
+              <a
+                cdkMenuItem
+                routerLink="/files"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroDocument"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span>My Files</span>
               </a>
             </div>
 

@@ -3,6 +3,7 @@
 This service provides operations for session management including:
 - Get session by ID (via GSI lookup)
 - Soft-delete session (transactional move from S#ACTIVE# to S#DELETED# prefix)
+- Cascade delete associated files when session is deleted
 
 The service preserves cost records (C# prefix) for audit trails and billing accuracy.
 """
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from apis.app_api.sessions.models import SessionMetadata
+from apis.app_api.files.service import get_file_upload_service
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +277,9 @@ class SessionService:
             # Note: AgentCore Memory cleanup is now handled via BackgroundTasks
             # in the route handler for true fire-and-forget behavior
 
+            # Note: File cascade delete is also handled via BackgroundTasks
+            # in the route handler
+
             return True
 
         except self.dynamodb.meta.client.exceptions.TransactionCanceledException as e:
@@ -391,3 +396,40 @@ class SessionService:
         except Exception as e:
             # Log but don't raise - content deletion failures shouldn't block session deletion
             logger.error(f"Failed to delete AgentCore Memory content for session {session_id}: {e}")
+
+    def delete_session_files(self, session_id: str) -> None:
+        """
+        Delete all files associated with a session (sync, for background tasks).
+
+        This deletes both S3 objects and DynamoDB metadata for all files
+        in the session, and decrements user quotas accordingly.
+
+        Args:
+            session_id: Session identifier
+
+        Note:
+            - Designed to run as a FastAPI BackgroundTask (fire-and-forget)
+            - Failures are logged but don't affect the session deletion response
+        """
+        import asyncio
+
+        try:
+            file_service = get_file_upload_service()
+
+            # Run the async method synchronously for background task
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                deleted_count = loop.run_until_complete(
+                    file_service.delete_session_files(session_id)
+                )
+                if deleted_count > 0:
+                    logger.info(
+                        f"Background task deleted {deleted_count} files for session {session_id}"
+                    )
+            finally:
+                loop.close()
+
+        except Exception as e:
+            # Log but don't raise - file deletion failures shouldn't affect session deletion
+            logger.error(f"Failed to delete files for session {session_id}: {e}")

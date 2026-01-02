@@ -1,12 +1,33 @@
-<!-- Quota warning indicator -->
+<!-- Cost quota warning indicator -->
 <app-quota-warning-banner />
+
+<!-- Storage quota warning indicator (only shows when files are attached) -->
+<app-storage-quota-banner [showWhenFilesAttached]="showFileAttachments()" />
 
 <div
     class="relative rounded-2xl shadow-xl outline -outline-offset-1 transition-all duration-200"
-    [class]="isFocused()
-      ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30 shadow-lg'
-      : 'bg-white dark:bg-slate-800 outline-1 outline-gray-300 dark:outline-white/10'"
+    [class]="isDraggingOver()
+      ? 'bg-primary-50 dark:bg-primary-900/20 outline-2 outline-dashed outline-primary-500 dark:outline-primary-400 ring-2 ring-primary-500/30 dark:ring-primary-400/30'
+      : isFocused()
+        ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30 shadow-lg'
+        : 'bg-white dark:bg-slate-800 outline-1 outline-gray-300 dark:outline-white/10'"
+    (dragenter)="onDragEnter($event)"
+    (dragover)="onDragOver($event)"
+    (dragleave)="onDragLeave($event)"
+    (drop)="onDrop($event)"
   >
+    <!-- Drop Zone Overlay -->
+    @if (isDraggingOver()) {
+      <div class="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-primary-50/90 dark:bg-primary-900/80 pointer-events-none">
+        <div class="flex flex-col items-center gap-2 text-primary-600 dark:text-primary-300">
+          <svg class="size-8" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+          </svg>
+          <span class="text-sm font-medium">Drop files here</span>
+        </div>
+      </div>
+    }
+
     <!-- File Attachments Area -->
     @if (showFileAttachments()) {
       <div class="border-b border-gray-200 dark:border-gray-700">

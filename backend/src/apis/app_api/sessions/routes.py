@@ -331,12 +331,20 @@ async def delete_session_endpoint(
                 detail=f"Session not found: {session_id}"
             )
 
-        # Queue AgentCore Memory cleanup as background task (fire-and-forget)
-        # This doesn't block the response - cleanup happens after 204 is sent
+        # Queue cleanup tasks as background tasks (fire-and-forget)
+        # These don't block the response - cleanup happens after 204 is sent
+
+        # 1. Delete AgentCore Memory content
         background_tasks.add_task(
             service.delete_agentcore_memory,
             session_id,
             user_id
+        )
+
+        # 2. Cascade delete associated files (S3 objects + metadata)
+        background_tasks.add_task(
+            service.delete_session_files,
+            session_id
         )
 
         logger.info(f"Successfully deleted session {session_id} for user {user_id}")
@@ -407,11 +415,15 @@ async def bulk_delete_sessions_endpoint(
                 )
 
                 if deleted:
-                    # Queue AgentCore Memory cleanup as background task
+                    # Queue cleanup tasks as background tasks
                     background_tasks.add_task(
                         service.delete_agentcore_memory,
                         session_id,
                         user_id
+                    )
+                    background_tasks.add_task(
+                        service.delete_session_files,
+                        session_id
                     )
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,

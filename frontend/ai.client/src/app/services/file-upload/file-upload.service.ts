@@ -466,6 +466,67 @@ export class FileUploadService {
   }
 
   /**
+   * List all files for the authenticated user.
+   *
+   * @param options - Pagination and sorting options
+   * @returns FileListResponse with files and pagination
+   */
+  async listAllFiles(options?: {
+    limit?: number;
+    cursor?: string | null;
+    sortBy?: 'date' | 'size' | 'type';
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<FileListResponse> {
+    await this.authService.ensureAuthenticated();
+
+    try {
+      const params: Record<string, string> = {};
+
+      if (options?.limit) {
+        params['limit'] = options.limit.toString();
+      }
+      if (options?.cursor) {
+        params['cursor'] = options.cursor;
+      }
+      if (options?.sortBy) {
+        params['sortBy'] = options.sortBy;
+      }
+      if (options?.sortOrder) {
+        params['sortOrder'] = options.sortOrder;
+      }
+
+      const response = await firstValueFrom(
+        this.http.get<FileListResponse>(`${this.baseUrl}`, { params })
+      );
+      return response;
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to list files');
+    }
+  }
+
+  /**
+   * Delete multiple files.
+   *
+   * @param uploadIds - Array of upload IDs to delete
+   * @returns Array of results with success/failure for each
+   */
+  async deleteFiles(uploadIds: string[]): Promise<Array<{ uploadId: string; success: boolean; error?: string }>> {
+    const results: Array<{ uploadId: string; success: boolean; error?: string }> = [];
+
+    for (const uploadId of uploadIds) {
+      try {
+        await this.deleteFile(uploadId);
+        results.push({ uploadId, success: true });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Unknown error';
+        results.push({ uploadId, success: false, error });
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Get user's quota status.
    */
   async loadQuota(): Promise<QuotaResponse> {
