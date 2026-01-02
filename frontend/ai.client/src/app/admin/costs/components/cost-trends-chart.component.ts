@@ -246,7 +246,10 @@ export class CostTrendsChartComponent {
   }
 
   private formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
+    // Parse as local date to avoid timezone offset issues
+    // Input format: "YYYY-MM-DD" - split and create date with local timezone
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day); // month is 0-indexed
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
