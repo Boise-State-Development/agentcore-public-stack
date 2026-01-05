@@ -1,4 +1,4 @@
-"""Hook to add cache points to conversation history before model calls
+"""Hook to add a single cache point to conversation history before model calls
 
 This hook implements prompt caching for AWS Bedrock Claude models, which provides
 significant cost and latency benefits for conversational AI applications.
@@ -17,14 +17,13 @@ Model Compatibility:
   * Claude 3.7 Sonnet (us.anthropic.claude-3-7-sonnet-*)
   * Claude Haiku 4.5 (us.anthropic.claude-haiku-4-5-*)
 - Requires Bedrock API version that supports prompt caching (2023-09-30 or later)
-- System prompt caching is handled separately by BedrockModel configuration
 
-How It Works:
-- Bedrock allows up to 4 cache breakpoints per request (1 system + 3 conversation)
-- This hook manages the 3 conversation cache points using a sliding window strategy
-- Cache points are placed after assistant responses and tool results (most valuable content)
-- When the 3-point limit is reached, the oldest cache point is removed (sliding window)
-- This ensures the most recent conversation turns are always cached for optimal efficiency
+Strategy: Single Cache Point at End of Last Assistant Message
+- A cache point means "cache everything up to this point"
+- Placing one CP at the end of the last assistant message caches the entire conversation
+- Works universally for: pure conversation, tool loops, and mixed scenarios
+- Multiple cache points cause DUPLICATE write premiums (25% each)
+- Testing showed 1 CP performs equally to 3 CPs but avoids redundant costs
 """
 
 import logging
@@ -35,29 +34,26 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationCachingHook(HookProvider):
-    """Hook to add cache points to conversation history before model calls
+    """Hook to add a single cache point at the end of the last assistant message
 
-    This hook implements intelligent prompt caching for Claude models on AWS Bedrock.
-    It strategically places cache points in conversation history to maximize cost savings
-    and reduce latency while staying within Bedrock's 4 cache point limit.
+    Strategy: Single Cache Point at End of Last Assistant Message
+
+    Key insight: A cache point means "cache everything up to this point".
+    Placing the CP at the end of the last assistant message works for:
+    - Pure conversation (no tools)
+    - Agent loops with tool calls
+    - Mixed scenarios
 
     Benefits:
     - Cost Savings: Cached tokens cost ~90% less than regular input tokens
-    - Latency Reduction: Cached content is processed instantly, improving response times
-    - Token Efficiency: Reduces effective token usage in long conversations
-    - Better Performance: Especially beneficial for multi-turn conversations with tool usage
+    - Avoids Duplicate Premiums: Multiple CPs cause 25% write premium each
+    - Simpler Logic: Single cache point eliminates sliding window complexity
+    - Same Performance: Testing showed 1 CP performs equally to 3 CPs
 
     Model Compatibility:
     - Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku, Claude 3.7 Sonnet, Claude Haiku 4.5
     - Any Claude model on AWS Bedrock that supports prompt caching
     - Requires Bedrock API version 2023-09-30 or later
-
-    Strategy:
-    - Maintain 3 cache points in conversation (sliding window)
-    - Prioritize recent assistant messages and tool results
-    - When limit reached, remove oldest cache point and add new one
-    - Combined with system prompt cache = 4 total cache breakpoints (Claude/Bedrock limit)
-    - Sliding cache points keep the most recent turns cached for optimal efficiency
     """
 
     def __init__(self, enabled: bool = True):
@@ -67,145 +63,69 @@ class ConversationCachingHook(HookProvider):
         registry.add_callback(BeforeModelCallEvent, self.add_conversation_cache_point)
 
     def add_conversation_cache_point(self, event: BeforeModelCallEvent) -> None:
-        """Add cache points to conversation history with sliding window (max 3, remove oldest when full)
-        
-        This method implements a sliding window cache strategy:
-        1. Counts existing cache points (max 3 allowed by Bedrock)
-        2. If at limit, removes the oldest cache point to make room
-        3. Identifies optimal cache locations (assistant responses, tool results)
-        4. Adds new cache points after the most valuable content blocks
-        
-        The sliding window ensures we always cache the most recent conversation turns,
-        which provides the best cost/performance benefits since recent context is most
-        likely to be reused in subsequent model calls.
+        """Add single cache point at the end of the last assistant message
+
+        This method implements a simple 5-step caching strategy:
+        1. Find all existing cache points and the last assistant message
+        2. Early return if no assistant message exists
+        3. Check if cache point already exists at target location
+        4. Remove ALL existing cache points (reverse order to avoid index issues)
+        5. Append single cache point to end of last assistant content
         """
         if not self.enabled:
-            logger.info("❌ Caching disabled")
             return
 
         messages = event.agent.messages
         if not messages:
-            logger.info("❌ No messages in history")
             return
 
-        logger.info(f"🔍 Processing caching for {len(messages)} messages")
-
-        # Count existing cache points across all content blocks
-        # Bedrock allows up to 3 conversation cache points (plus 1 system prompt cache)
-        existing_cache_count = 0
-        cache_point_positions = []
+        # Step 1: Find all existing cache points and the last assistant message
+        cache_point_positions = []  # [(msg_idx, block_idx), ...]
+        last_assistant_idx = None
 
         for msg_idx, msg in enumerate(messages):
+            # Track last assistant message
+            if msg.get("role") == "assistant":
+                last_assistant_idx = msg_idx
+
             content = msg.get("content", [])
-            if isinstance(content, list):
-                for block_idx, block in enumerate(content):
-                    if isinstance(block, dict) and "cachePoint" in block:
-                        existing_cache_count += 1
-                        cache_point_positions.append((msg_idx, block_idx))
+            if not isinstance(content, list):
+                continue
 
-        # If we already have 3 cache points, remove the oldest one (sliding window)
-        if existing_cache_count >= 3:
-            logger.info(f"📊 Cache limit reached: {existing_cache_count}/3 cache points")
-            # Remove the oldest cache point to make room for new one
-            if cache_point_positions:
-                oldest_msg_idx, oldest_block_idx = cache_point_positions[0]
-                oldest_msg = messages[oldest_msg_idx]
-                oldest_content = oldest_msg.get("content", [])
-                if isinstance(oldest_content, list) and oldest_block_idx < len(oldest_content):
-                    # Remove the cache point block
-                    del oldest_content[oldest_block_idx]
-                    oldest_msg["content"] = oldest_content
-                    existing_cache_count -= 1
-                    logger.info(f"♻️  Removed oldest cache point at message {oldest_msg_idx} block {oldest_block_idx}")
-                    # Update positions for remaining cache points
-                    cache_point_positions.pop(0)
+            for block_idx, block in enumerate(content):
+                if isinstance(block, dict) and "cachePoint" in block:
+                    cache_point_positions.append((msg_idx, block_idx))
 
-        # Strategy: Prioritize assistant messages, then tool_result blocks
-        # This ensures every assistant turn gets cached, with or without tools
+        # Step 2: If no assistant message yet, nothing to cache
+        if last_assistant_idx is None:
+            logger.debug("No assistant message in conversation - skipping cache point")
+            return
 
-        assistant_candidates = []
-        tool_result_candidates = []
+        last_assistant_content = messages[last_assistant_idx].get("content", [])
+        if not isinstance(last_assistant_content, list) or len(last_assistant_content) == 0:
+            logger.debug("Last assistant message has no content - skipping cache point")
+            return
 
-        for msg_idx, msg in enumerate(messages):
-            msg_role = msg.get("role", "")
-            content = msg.get("content", [])
+        # Step 3: Check if cache point already exists at the end of last assistant message
+        last_block = last_assistant_content[-1]
+        if isinstance(last_block, dict) and "cachePoint" in last_block:
+            logger.debug("Cache point already exists at end of last assistant message")
+            return
 
-            if isinstance(content, list) and len(content) > 0:
-                # For assistant messages: cache after reasoning/response (priority)
-                if msg_role == "assistant":
-                    last_block = content[-1]
-                    has_cache = isinstance(last_block, dict) and "cachePoint" in last_block
-                    if not has_cache:
-                        assistant_candidates.append((msg_idx, len(content) - 1, "assistant"))
+        # Step 4: Remove ALL existing cache points (we only want 1 at the end)
+        # Process in reverse order to avoid index shifting issues
+        for msg_idx, block_idx in reversed(cache_point_positions):
+            msg_content = messages[msg_idx].get("content", [])
+            if isinstance(msg_content, list) and block_idx < len(msg_content):
+                del msg_content[block_idx]
+                logger.debug(f"Removed old cache point at msg {msg_idx} block {block_idx}")
 
-                # For user messages: cache after tool_result blocks (secondary)
-                elif msg_role == "user":
-                    for block_idx, block in enumerate(content):
-                        if isinstance(block, dict) and "toolResult" in block:
-                            has_cache = "cachePoint" in block
-                            if not has_cache:
-                                tool_result_candidates.append((msg_idx, block_idx, "tool_result"))
+        # Step 5: Add single cache point at the end of the last assistant message
+        cache_block = {"cachePoint": {"type": "default"}}
 
-        remaining_slots = 3 - existing_cache_count
-        logger.info(f"📊 Cache status: {existing_cache_count}/3 existing, {len(assistant_candidates)} assistant + {len(tool_result_candidates)} tool_result candidates, {remaining_slots} slots available")
-
-        # Prioritize assistant messages: take most recent assistants first, then tool_results
-        candidates_to_cache = []
-        if remaining_slots > 0:
-            # Take recent assistant messages first
-            num_assistants = min(len(assistant_candidates), remaining_slots)
-            if num_assistants > 0:
-                candidates_to_cache.extend(assistant_candidates[-num_assistants:])
-                remaining_slots -= num_assistants
-
-            # Fill remaining slots with tool_results
-            if remaining_slots > 0 and tool_result_candidates:
-                num_tool_results = min(len(tool_result_candidates), remaining_slots)
-                candidates_to_cache.extend(tool_result_candidates[-num_tool_results:])
-
-        if candidates_to_cache:
-
-            for msg_idx, block_idx, block_type in candidates_to_cache:
-                msg = messages[msg_idx]
-                content = msg.get("content", [])
-
-                # Safety check: content must be a list and not empty
-                if not isinstance(content, list):
-                    logger.warning(f"⚠️  Skipping cache point: content is not a list at message {msg_idx}")
-                    continue
-
-                if len(content) == 0:
-                    logger.warning(f"⚠️  Skipping cache point: content is empty at message {msg_idx}")
-                    continue
-
-                if block_idx >= len(content):
-                    logger.warning(f"⚠️  Skipping cache point: block_idx {block_idx} out of range at message {msg_idx}")
-                    continue
-
-                block = content[block_idx]
-
-                # For dict blocks (toolResult, text, etc.), add cachePoint as separate block after it
-                if isinstance(block, dict):
-                    # Safety: Don't insert cachePoint at the beginning of next message
-                    # Only insert within the same message's content array
-                    cache_block = {"cachePoint": {"type": "default"}}
-                    insert_position = block_idx + 1
-
-                    # Insert cache point after the current block
-                    content.insert(insert_position, cache_block)
-                    msg["content"] = content
-                    existing_cache_count += 1
-                    logger.info(f"✅ Added cache point after {block_type} at message {msg_idx} block {block_idx} (total: {existing_cache_count}/3)")
-
-                elif isinstance(block, str):
-                    # Convert string to structured format with cache
-                    msg["content"] = [
-                        {"text": block},
-                        {"cachePoint": {"type": "default"}}
-                    ]
-                    existing_cache_count += 1
-                    logger.info(f"✅ Added cache point after text at message {msg_idx} (total: {existing_cache_count}/3)")
-
-                if existing_cache_count >= 3:
-                    break
+        # Re-fetch content in case it was modified by deletion
+        last_assistant_content = messages[last_assistant_idx].get("content", [])
+        if isinstance(last_assistant_content, list):
+            last_assistant_content.append(cache_block)
+            logger.debug(f"Added cache point at end of assistant message {last_assistant_idx}")
 
