@@ -21,8 +21,8 @@ def _get_user_sync_service():
     global _user_sync_service
     if _user_sync_service is None:
         try:
-            from users.repository import UserRepository
-            from users.sync import UserSyncService
+            from apis.shared.users.repository import UserRepository
+            from apis.shared.users.sync import UserSyncService
             repository = UserRepository()
             _user_sync_service = UserSyncService(repository=repository)
             if _user_sync_service.enabled:

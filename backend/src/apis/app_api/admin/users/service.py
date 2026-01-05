@@ -7,8 +7,8 @@ import json
 from typing import Optional, List
 from datetime import datetime
 
-from users.repository import UserRepository
-from users.models import UserProfile, UserListItem
+from apis.shared.users.repository import UserRepository
+from apis.shared.users.models import UserProfile, UserListItem
 from apis.app_api.costs.aggregator import CostAggregator
 from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.repository import QuotaRepository
