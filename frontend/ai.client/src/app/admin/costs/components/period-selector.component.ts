@@ -54,6 +54,10 @@ export class PeriodSelectorComponent {
 
   periodOptions = computed<PeriodOption[]>(() => {
     const options: PeriodOption[] = [];
+
+    // Add Demo Month option first
+    options.push({ value: 'demo', label: 'Demo Month' });
+
     const now = new Date();
 
     // Generate last 12 months

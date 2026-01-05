@@ -13,13 +13,15 @@ import {
   heroBolt,
   heroArrowTrendingUp,
   heroArrowTrendingDown,
+  heroUserCircle,
 } from '@ng-icons/heroicons/outline';
 
 export type SummaryCardIcon =
   | 'heroCurrencyDollar'
   | 'heroChartBar'
   | 'heroUsers'
-  | 'heroBolt';
+  | 'heroBolt'
+  | 'heroUserCircle';
 
 /**
  * Summary card component for displaying a metric with title, value, optional trend, and icon.
@@ -36,6 +38,7 @@ export type SummaryCardIcon =
       heroBolt,
       heroArrowTrendingUp,
       heroArrowTrendingDown,
+      heroUserCircle,
     }),
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -109,6 +112,8 @@ export class SystemSummaryCardComponent {
         return 'bg-purple-100 dark:bg-purple-900/30';
       case 'heroBolt':
         return 'bg-amber-100 dark:bg-amber-900/30';
+      case 'heroUserCircle':
+        return 'bg-indigo-100 dark:bg-indigo-900/30';
       default:
         return 'bg-gray-100 dark:bg-gray-900/30';
     }
@@ -125,6 +130,8 @@ export class SystemSummaryCardComponent {
         return 'text-purple-600 dark:text-purple-400';
       case 'heroBolt':
         return 'text-amber-600 dark:text-amber-400';
+      case 'heroUserCircle':
+        return 'text-indigo-600 dark:text-indigo-400';
       default:
         return 'text-gray-600 dark:text-gray-400';
     }

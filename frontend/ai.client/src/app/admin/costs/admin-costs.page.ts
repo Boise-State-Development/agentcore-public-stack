@@ -137,10 +137,10 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
               icon="heroCurrencyDollar"
             />
             <app-system-summary-card
-              title="Total Requests"
-              [value]="formattedTotalRequests()"
+              title="Avg Cost/User"
+              [value]="formattedAvgCostPerUser()"
               [trend]="null"
-              icon="heroChartBar"
+              icon="heroUserCircle"
             />
             <app-system-summary-card
               title="Active Users"
@@ -203,9 +203,11 @@ export class AdminCostsPage implements OnInit {
     return this.formatCurrency(cost);
   });
 
-  formattedTotalRequests = computed(() => {
-    const requests = this.stateService.totalRequests();
-    return this.formatNumber(requests);
+  formattedAvgCostPerUser = computed(() => {
+    const cost = this.stateService.totalCost();
+    const users = this.stateService.activeUsers();
+    if (users === 0) return this.formatCurrency(0);
+    return this.formatCurrency(cost / users);
   });
 
   formattedActiveUsers = computed(() => {

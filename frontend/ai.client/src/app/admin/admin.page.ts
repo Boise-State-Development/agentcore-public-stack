@@ -49,28 +49,53 @@ interface AdminFeature {
 export class AdminPage {
   readonly features: AdminFeature[] = [
     {
-      title: 'Bedrock Models',
-      description: 'Browse and explore AWS Bedrock foundation models. View model capabilities, pricing, and add models to your managed collection.',
-      icon: 'heroCpuChip',
-      route: '/admin/bedrock/models',
-    },
-    {
-      title: 'Gemini Models',
-      description: 'Browse and explore Google Gemini AI models. View model specifications, features, and add models to your managed collection.',
-      icon: 'heroSparkles',
-      route: '/admin/gemini/models',
-    },
-    {
-      title: 'OpenAI Models',
-      description: 'Browse and explore OpenAI models including GPT-4 and other offerings. View capabilities and add models to your managed collection.',
-      icon: 'heroCpuChip',
-      route: '/admin/openai/models',
+      title: 'Cost Analytics',
+      description: 'View system-wide usage metrics, top users by cost, model breakdowns, and cost trends. Export reports for analysis.',
+      icon: 'heroCurrencyDollar',
+      route: '/admin/costs',
     },
     {
       title: 'Manage Models',
       description: 'Configure and manage AI models available to users. Control model access by role, set pricing, and enable/disable models.',
       icon: 'heroPencilSquare',
       route: '/admin/manage-models',
+    },
+    {
+      title: 'Tool Catalog',
+      description: 'Manage the tool catalog, configure role-based access, and sync tools from the registry. Control which tools are available to users.',
+      icon: 'heroWrenchScrewdriver',
+      route: '/admin/tools',
+    },
+    // {
+    //   title: 'Bedrock Models',
+    //   description: 'Browse and explore AWS Bedrock foundation models. View model capabilities, pricing, and add models to your managed collection.',
+    //   icon: 'heroCpuChip',
+    //   route: '/admin/bedrock/models',
+    // },
+    // {
+    //   title: 'Gemini Models',
+    //   description: 'Browse and explore Google Gemini AI models. View model specifications, features, and add models to your managed collection.',
+    //   icon: 'heroSparkles',
+    //   route: '/admin/gemini/models',
+    // },
+    // {
+    //   title: 'OpenAI Models',
+    //   description: 'Browse and explore OpenAI models including GPT-4 and other offerings. View capabilities and add models to your managed collection.',
+    //   icon: 'heroCpuChip',
+    //   route: '/admin/openai/models',
+    // },
+    
+    {
+      title: 'User Lookup',
+      description: 'Search and browse users to view their profile, costs, and quota status. Manage user-specific overrides and assignments.',
+      icon: 'heroUsers',
+      route: '/admin/users',
+    },
+    {
+      title: 'Role Management',
+      description: 'Create and manage application roles with tool and model permissions. Configure JWT mappings and role inheritance.',
+      icon: 'heroShieldCheck',
+      route: '/admin/roles',
     },
     {
       title: 'Quota Tiers',
@@ -102,30 +127,7 @@ export class AdminPage {
       icon: 'heroChartBar',
       route: '/admin/quota/events',
     },
-    {
-      title: 'Cost Analytics',
-      description: 'View system-wide usage metrics, top users by cost, model breakdowns, and cost trends. Export reports for analysis.',
-      icon: 'heroCurrencyDollar',
-      route: '/admin/costs',
-    },
-    {
-      title: 'User Lookup',
-      description: 'Search and browse users to view their profile, costs, and quota status. Manage user-specific overrides and assignments.',
-      icon: 'heroUsers',
-      route: '/admin/users',
-    },
-    {
-      title: 'Role Management',
-      description: 'Create and manage application roles with tool and model permissions. Configure JWT mappings and role inheritance.',
-      icon: 'heroShieldCheck',
-      route: '/admin/roles',
-    },
-    {
-      title: 'Tool Catalog',
-      description: 'Manage the tool catalog, configure role-based access, and sync tools from the registry. Control which tools are available to users.',
-      icon: 'heroWrenchScrewdriver',
-      route: '/admin/tools',
-    },
+    
   ];
 
   getIconBackgroundClasses(index: number): string {
