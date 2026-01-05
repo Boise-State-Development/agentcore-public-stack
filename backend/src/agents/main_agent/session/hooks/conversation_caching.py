@@ -10,12 +10,13 @@ Benefits:
 - Better UX: Faster responses, especially in multi-turn conversations
 
 Model Compatibility:
-- Works with Claude models on AWS Bedrock that support prompt caching:
-  * Claude 3.5 Sonnet (us.anthropic.claude-3-5-sonnet-*)
-  * Claude 3 Opus (us.anthropic.claude-3-opus-*)
-  * Claude 3 Haiku (us.anthropic.claude-3-haiku-*)
-  * Claude 3.7 Sonnet (us.anthropic.claude-3-7-sonnet-*)
-  * Claude Haiku 4.5 (us.anthropic.claude-haiku-4-5-*)
+- Claude models on AWS Bedrock:
+  * Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku, Claude 3.7 Sonnet, Claude Haiku 4.5
+- Amazon Nova models on AWS Bedrock:
+  * Nova Micro, Nova Lite, Nova Pro, Nova Premier
+  * Note: Nova has automatic caching, but explicit cache points unlock cost savings
+  * Note: Nova does not support tool definition caching (messages only)
+- NOT supported: Llama, Mistral, Titan, and other non-Claude/Nova models
 - Requires Bedrock API version that supports prompt caching (2023-09-30 or later)
 
 Strategy: Single Cache Point at End of Last Assistant Message
@@ -27,10 +28,35 @@ Strategy: Single Cache Point at End of Last Assistant Message
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 from strands.hooks import HookProvider, HookRegistry, BeforeModelCallEvent
 
 logger = logging.getLogger(__name__)
+
+# Models that support prompt caching with cachePoint field
+# Claude models (Anthropic on Bedrock)
+CACHING_SUPPORTED_PATTERNS = [
+    "anthropic.claude",      # All Claude models
+    "us.anthropic.claude",   # Cross-region Claude models
+    "amazon.nova",           # All Nova models
+    "us.amazon.nova",        # Cross-region Nova models
+]
+
+
+def is_caching_supported(model_id: Optional[str]) -> bool:
+    """Check if the model supports prompt caching with cachePoint field.
+
+    Args:
+        model_id: The model ID to check
+
+    Returns:
+        bool: True if the model supports caching, False otherwise
+    """
+    if not model_id:
+        return False
+
+    model_lower = model_id.lower()
+    return any(pattern in model_lower for pattern in CACHING_SUPPORTED_PATTERNS)
 
 
 class ConversationCachingHook(HookProvider):
@@ -51,8 +77,9 @@ class ConversationCachingHook(HookProvider):
     - Same Performance: Testing showed 1 CP performs equally to 3 CPs
 
     Model Compatibility:
-    - Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku, Claude 3.7 Sonnet, Claude Haiku 4.5
-    - Any Claude model on AWS Bedrock that supports prompt caching
+    - Claude: 3.5 Sonnet, 3 Opus, 3 Haiku, 3.7 Sonnet, Haiku 4.5
+    - Amazon Nova: Micro, Lite, Pro, Premier (messages only, no tool caching)
+    - NOT supported: Llama, Mistral, Titan, and other models
     - Requires Bedrock API version 2023-09-30 or later
     """
 
@@ -65,7 +92,8 @@ class ConversationCachingHook(HookProvider):
     def add_conversation_cache_point(self, event: BeforeModelCallEvent) -> None:
         """Add single cache point at the end of the last assistant message
 
-        This method implements a simple 5-step caching strategy:
+        This method implements a simple 6-step caching strategy:
+        0. Check if the model supports caching (Claude/Nova only)
         1. Find all existing cache points and the last assistant message
         2. Early return if no assistant message exists
         3. Check if cache point already exists at target location
@@ -73,6 +101,18 @@ class ConversationCachingHook(HookProvider):
         5. Append single cache point to end of last assistant content
         """
         if not self.enabled:
+            return
+
+        # Step 0: Check if model supports caching
+        # Get model_id from the agent's model if available
+        model_id = None
+        if hasattr(event.agent, 'model') and hasattr(event.agent.model, 'config'):
+            model_id = getattr(event.agent.model.config, 'model_id', None)
+        elif hasattr(event.agent, 'model') and hasattr(event.agent.model, 'model_id'):
+            model_id = event.agent.model.model_id
+
+        if not is_caching_supported(model_id):
+            logger.debug(f"Model {model_id} does not support caching - skipping cache point")
             return
 
         messages = event.agent.messages
