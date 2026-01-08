@@ -320,7 +320,7 @@ jobs:
 
   deploy-infrastructure:
     name: Deploy CDK Infrastructure
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm  # Use ARM64-native runner for ARM64 Lambda builds
     needs: [test-cdk, push-to-ecr]
     if: |
       always() && !cancelled() &&
@@ -363,6 +363,9 @@ jobs:
       - name: Install system dependencies
         run: |
           bash scripts/common/install-deps.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
           
       - name: Deploy infrastructure
         run: |
