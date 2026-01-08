@@ -7,10 +7,14 @@ FROM public.ecr.aws/lambda/python:3.11 AS builder
 
 # 1. Install system tools
 # Rust/GCC are needed for compiling dependencies like tiktoken or docling-core
-# Amazon Linux 2023 uses dnf, not yum
-RUN dnf update -y && \
-    dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
-    dnf clean all
+# Try dnf first (Amazon Linux 2023), fall back to yum (Amazon Linux 2)
+RUN (dnf --version > /dev/null 2>&1 && \
+     dnf update -y && \
+     dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
+     dnf clean all) || \
+    (yum update -y && \
+     yum install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
+     yum clean all)
 
 # Install Rust (separate step for better error handling)
 # Using explicit retry logic for network reliability in CI
@@ -74,7 +78,12 @@ RUN rm -rf /tmp/models/docling-artifacts/easyocr \
 FROM public.ecr.aws/lambda/python:3.11
 
 # 1. Install only runtime system libs (GL/Glib for CV2)
-RUN dnf install -y mesa-libGL glib2 && dnf clean all
+# Try dnf first (Amazon Linux 2023), fall back to yum (Amazon Linux 2)
+RUN (dnf --version > /dev/null 2>&1 && \
+     dnf install -y mesa-libGL glib2 && \
+     dnf clean all) || \
+    (yum install -y mesa-libGL glib2 && \
+     yum clean all)
 
 # 2. Copy Python Packages
 COPY --from=builder /tmp/packages ${LAMBDA_TASK_ROOT}
