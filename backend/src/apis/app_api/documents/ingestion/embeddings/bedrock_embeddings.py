@@ -11,16 +11,24 @@ import asyncio
 import boto3
 from typing import List, Dict, Any
 
-# Module-level constants (read once at import time)
-VECTOR_STORE_BUCKET_NAME = os.environ.get('ASSISTANTS_VECTOR_STORE_BUCKET_NAME')
-VECTOR_STORE_INDEX_NAME = os.environ.get('ASSISTANTS_VECTOR_STORE_INDEX_NAME')
+# Module-level constants (read once at import time, but not validated until use)
+_VECTOR_STORE_BUCKET_NAME = os.environ.get('ASSISTANTS_VECTOR_STORE_BUCKET_NAME')
+_VECTOR_STORE_INDEX_NAME = os.environ.get('ASSISTANTS_VECTOR_STORE_INDEX_NAME')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-west-2')
 
-# Validate required environment variables
-if not VECTOR_STORE_BUCKET_NAME:
-    raise ValueError("VECTOR_STORE_BUCKET_NAME environment variable is required")
-if not VECTOR_STORE_INDEX_NAME:
-    raise ValueError("VECTOR_STORE_INDEX_NAME environment variable is required")
+
+def _get_vector_store_bucket() -> str:
+    """Get vector store bucket name, validating if not set"""
+    if not _VECTOR_STORE_BUCKET_NAME:
+        raise ValueError("ASSISTANTS_VECTOR_STORE_BUCKET_NAME environment variable is required")
+    return _VECTOR_STORE_BUCKET_NAME
+
+
+def _get_vector_store_index() -> str:
+    """Get vector store index name, validating if not set"""
+    if not _VECTOR_STORE_INDEX_NAME:
+        raise ValueError("ASSISTANTS_VECTOR_STORE_INDEX_NAME environment variable is required")
+    return _VECTOR_STORE_INDEX_NAME
 
 BEDROCK_EMBEDDING_CONFIG = {
     'model_id': 'amazon.titan-embed-text-v2:0',
@@ -120,7 +128,9 @@ async def store_embeddings_in_s3(
     # 1. Use the specific Vector client
     s3vectors = boto3.client('s3vectors', region_name=AWS_REGION)
     
-    print(f"Storing {len(chunks)} chunks for {document_id} in {VECTOR_STORE_BUCKET_NAME} with index {VECTOR_STORE_INDEX_NAME}")
+    vector_bucket = _get_vector_store_bucket()
+    vector_index = _get_vector_store_index()
+    print(f"Storing {len(chunks)} chunks for {document_id} in {vector_bucket} with index {vector_index}")
     
     vectors_payload = []
 
@@ -146,8 +156,8 @@ async def store_embeddings_in_s3(
     # 3. Send to the Vector Index
     # Note: In a production app, you might chunk this into batches of 500
     s3vectors.put_vectors(
-        vectorBucketName=VECTOR_STORE_BUCKET_NAME,
-        indexName=VECTOR_STORE_INDEX_NAME,
+        vectorBucketName=vector_bucket,
+        indexName=vector_index,
         vectors=vectors_payload
     )
     
@@ -161,8 +171,8 @@ async def test_s3vector_dump():
     client = boto3.client('s3vectors', region_name=AWS_REGION)
 
     response = client.list_vectors(
-        vectorBucketName=VECTOR_STORE_BUCKET_NAME,
-        indexName=VECTOR_STORE_INDEX_NAME,
+        vectorBucketName=_get_vector_store_bucket(),
+        indexName=_get_vector_store_index(),
         maxResults=5,
         returnMetadata=True
     )
@@ -178,14 +188,15 @@ async def test_s3vector_dump():
 async def delete_s3vector_data():
     client = boto3.client('s3vectors', region_name=AWS_REGION)
 
-    print(f"🧹 Starting cleanup for index: {VECTOR_STORE_INDEX_NAME}...")
+    vector_index = _get_vector_store_index()
+    print(f"🧹 Starting cleanup for index: {vector_index}...")
     
     # 1. List all vectors
     # Note: If you have > 1000 vectors, you would need a loop with 'NextToken'
     # but for a demo, a single call usually grabs them all.
     response = client.list_vectors(
-        vectorBucketName=VECTOR_STORE_BUCKET_NAME,
-        indexName=VECTOR_STORE_INDEX_NAME
+        vectorBucketName=_get_vector_store_bucket(),
+        indexName=vector_index
     )
     
     vectors = response.get('vectors', [])
@@ -200,8 +211,8 @@ async def delete_s3vector_data():
 
     # 3. Delete them in a batch
     client.delete_vectors(
-        vectorBucketName=VECTOR_STORE_BUCKET_NAME,
-        indexName=VECTOR_STORE_INDEX_NAME,
+        vectorBucketName=_get_vector_store_bucket(),
+        indexName=vector_index,
         keys=keys_to_delete
     )
     
@@ -216,8 +227,8 @@ async def search_assistant_knowledgebase(assistant_id: str, query: str):
 
     # 2. Query the Global Index with a STRICT Filter
     response = client.query_vectors(
-        vectorBucketName=VECTOR_STORE_BUCKET_NAME,
-        indexName=VECTOR_STORE_INDEX_NAME,
+        vectorBucketName=_get_vector_store_bucket(),
+        indexName=_get_vector_store_index(),
         queryVector={
             'float32': query_embedding[0]
         },
