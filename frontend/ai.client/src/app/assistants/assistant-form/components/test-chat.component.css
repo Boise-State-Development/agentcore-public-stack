@@ -1,0 +1,106 @@
+@reference "../../../app.css";
+
+.test-chat-container {
+  @apply rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800;
+}
+
+.test-chat-header {
+  @apply px-4 py-3 border-b border-gray-200 dark:border-gray-700;
+}
+
+.test-chat-disabled {
+  @apply px-4 py-8 text-center;
+}
+
+.test-chat-messages {
+  @apply px-4 py-4 max-h-96 overflow-y-auto space-y-4;
+  min-height: 200px;
+}
+
+.empty-state {
+  @apply flex items-center justify-center h-32 text-center;
+}
+
+.message {
+  @apply flex flex-col;
+}
+
+.message.user-message {
+  @apply items-end;
+}
+
+.message.assistant-message {
+  @apply items-start;
+}
+
+.message-content {
+  @apply max-w-[80%];
+}
+
+.user-bubble {
+  @apply px-4 py-2 rounded-lg bg-blue-600 text-white text-sm;
+}
+
+.assistant-bubble {
+  @apply px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm;
+}
+
+.loading-indicator {
+  @apply flex items-center gap-1;
+}
+
+.loading-indicator .dot {
+  @apply w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.loading-indicator .dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.loading-indicator .dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1);
+  }
+}
+
+.markdown-content {
+  @apply whitespace-pre-wrap;
+}
+
+.test-chat-input {
+  @apply px-10 py-3 border-t border-gray-200 dark:border-gray-700;
+}
+
+.input-container {
+  @apply flex items-end gap-2;
+}
+
+.input-field {
+  @apply flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100 text-sm resize-none;
+}
+
+.input-field:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+.input-actions {
+  @apply flex items-center gap-2;
+}
+
+.clear-button,
+.send-button {
+  @apply p-2 rounded-md text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors;
+}
+
+.send-button {
+  @apply text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20;
+}
+

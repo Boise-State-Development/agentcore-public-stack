@@ -58,6 +58,21 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
+        path: 'assistants/new',
+        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'assistants/:id/edit',
+        loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'assistants',
+        loadComponent: () => import('./assistants/assistants.page').then(m => m.AssistantsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'costs',
         loadComponent: () => import('./costs/cost-dashboard.page').then(m => m.CostDashboardPage),
         canActivate: [authGuard],

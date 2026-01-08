@@ -143,3 +143,24 @@ async def get_current_user(
             detail="Authentication failed."
         )
 
+
+async def get_current_user_id(
+    user: User = Depends(get_current_user)
+) -> str:
+    """
+    FastAPI dependency to get the current user's ID as a string.
+    
+    This is a convenience wrapper around get_current_user that extracts
+    just the user_id field. Useful when you only need the user ID and not
+    the full User object.
+    
+    When ENABLE_AUTHENTICATION=false, returns "anonymous".
+    
+    Args:
+        user: User object from get_current_user dependency
+    
+    Returns:
+        User ID string (or "anonymous" if auth disabled)
+    """
+    return user.user_id
+

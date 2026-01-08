@@ -13,6 +13,7 @@ export interface AppConfig {
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
   gateway: GatewayConfig;
+  assistants: AssistantsConfig;
   fileUpload: FileUploadConfig;
   tags: { [key: string]: string };
 }
@@ -24,6 +25,11 @@ export interface FrontendConfig {
   enabled: boolean;
   bucketName?: string;
   cloudFrontPriceClass: string;
+}
+
+export interface AssistantsConfig {
+  enabled: boolean;
+  corsOrigins: string;
 }
 
 export interface AppApiConfig {
@@ -164,6 +170,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
       userQuotaBytes: parseIntEnv(process.env.CDK_FILE_UPLOAD_USER_QUOTA) || scope.node.tryGetContext('fileUpload')?.userQuotaBytes || 1024 * 1024 * 1024, // 1GB
       retentionDays: parseIntEnv(process.env.CDK_FILE_UPLOAD_RETENTION_DAYS) || scope.node.tryGetContext('fileUpload')?.retentionDays || 365,
       corsOrigins: process.env.CDK_FILE_UPLOAD_CORS_ORIGINS || scope.node.tryGetContext('fileUpload')?.corsOrigins,
+    },
+    assistants: {
+      enabled: parseBooleanEnv(process.env.CDK_ASSISTANTS_ENABLED) ?? scope.node.tryGetContext('assistants')?.enabled ?? true,
+      corsOrigins: process.env.CDK_ASSISTANTS_CORS_ORIGINS || scope.node.tryGetContext('assistants')?.corsOrigins,
     },
     tags: {
       Environment: environment,

@@ -1,0 +1,21 @@
+<div class="space-y-2">
+  @for (assistant of assistants(); track assistant.assistantId) {
+    <button
+      type="button"
+      (click)="onAssistantClick(assistant)"
+      class="w-full text-left p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100">
+        {{ assistant.name }}
+      </h3>
+      <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+        {{ assistant.description }}
+        {{ assistant.status}}
+      </p>
+    </button>
+  } @empty {
+    <div class="text-center py-8 text-gray-500 dark:text-gray-400">
+      No assistants available
+    </div>
+  }
+</div>

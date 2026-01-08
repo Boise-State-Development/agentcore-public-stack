@@ -1,0 +1,36 @@
+<div class="h-full flex flex-col">
+  <header class="border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        Assistants
+      </h1>
+      <button
+        type="button"
+        (click)="onCreateNew()"
+        [disabled]="loading()"
+        class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {{ loading() ? 'Creating...' : 'Create New' }}
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 overflow-auto p-6">
+    <div class="max-w-7xl mx-auto">
+      @if (loading()) {
+        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
+          Loading assistants...
+        </div>
+      } @else if (error()) {
+        <div class="text-center py-8 text-red-600 dark:text-red-400">
+          Error: {{ error() }}
+        </div>
+      } @else {
+        <app-assistant-list 
+          [assistants]="assistants()"
+          (assistantSelected)="onAssistantSelected($event)">
+        </app-assistant-list>
+      }
+    </div>
+  </main>
+</div>

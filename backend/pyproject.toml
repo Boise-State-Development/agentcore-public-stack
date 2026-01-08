@@ -43,6 +43,12 @@ agentcore = [
     "google-genai>=1.0.0",  # For Google Gemini models
 ]
 
+# Document ingestion pipeline dependencies (for Lambda deployment)
+# NOTE: For document ingestion dependencies, see:
+#   backend/src/apis/app_api/documents/ingestion/requirements.txt
+# This is the single source of truth for the Lambda deployment.
+# For local development: pip install -r backend/src/apis/app_api/documents/ingestion/requirements.txt
+
 # Development dependencies
 dev = [
     "pytest>=7.0.0",

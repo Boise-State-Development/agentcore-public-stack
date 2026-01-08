@@ -2,15 +2,23 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { CfnResource } from 'aws-cdk-lib';
 import { AppConfig, getResourceName, applyStandardTags } from './config';
+import * as path from 'path';
+
+// __dirname is available in CommonJS runtime, but TypeScript needs a declaration
+declare const __dirname: string;
 
 export interface AppApiStackProps extends cdk.StackProps {
   config: AppConfig;
@@ -150,10 +158,182 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // ============================================================
-    // Database Layer (Optional - controlled by config.appApi.databaseType)
+    // Assistants Table
+    // Base Table PK (String) SK (String)
+    // Owner Status Index GSI_PK (String) GSI_SK (String)
     // ============================================================
-   
+    const assistantsTable = new dynamodb.Table(this, 'AssistantsTable', {
+      tableName: getResourceName(config, 'assistants'),
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
 
+    assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'OwnerStatusIndex',
+      partitionKey: {
+        name: 'GSI_PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI_SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+    });
+    
+    // ============================================================
+    // Assistants Document Drop Bucket (RAG Injestion Drop Bucket)
+    // ============================================================
+    const origins = config.assistants?.corsOrigins.split(',').map(o => o.trim())
+    
+
+    const assistantsDocumentsBucket = new s3.Bucket(this, 'AssistantsDocumentBucket', {
+      bucketName: getResourceName(config, 'assistants-documents'),
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      autoDeleteObjects: false,
+      cors: [{
+        allowedOrigins: config.assistants?.corsOrigins.split(',').map(o => o.trim()),
+        allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT, s3.HttpMethods.HEAD],
+        allowedHeaders: ['Content-Type', 'Content-Length', 'x-amz-*'],
+        exposedHeaders: ['ETag', 'Content-Length', 'Content-Type'],
+        maxAge: 3600,
+      }],
+    });
+
+    // ============================================================
+    // Assistants Vector Store Bucket
+    // ============================================================
+    // Create S3 Vector Bucket (not a regular S3 bucket)
+    // Using CfnResource since there are no L2 constructs for S3 Vectors yet
+    // Bucket name: 3-63 chars, lowercase, numbers, hyphens only
+    const assistantsVectorStoreBucketName = getResourceName(config, 'assistants-vector-store-v1');
+    
+    const assistantsVectorBucket = new CfnResource(this, 'AssistantsVectorBucket', {
+      type: 'AWS::S3Vectors::VectorBucket',
+      properties: {
+        VectorBucketName: assistantsVectorStoreBucketName,
+      },
+    });
+
+    // Create Vector Index within the bucket
+    // Titan V2 embeddings: 1024 dimensions, float32, cosine similarity
+    const assistantsVectorIndexName = getResourceName(config, 'assistants-vector-index-v1');
+    
+    const assistantsVectorIndex = new CfnResource(this, 'AssistantsVectorIndex', {
+      type: 'AWS::S3Vectors::Index',
+      properties: {
+        VectorBucketName: assistantsVectorStoreBucketName,
+        IndexName: assistantsVectorIndexName,
+        DataType: 'float32', // Only supported type
+        Dimension: 1024, // Titan V2 embedding dimension
+        DistanceMetric: 'cosine', // Cosine similarity for embeddings
+        // MetadataConfiguration: Specify which metadata keys are NOT filterable
+        // By default, all metadata keys (assistant_id, document_id, source) are filterable
+        // Only mark 'text' as non-filterable since it's too large for filtering
+        MetadataConfiguration: {
+          NonFilterableMetadataKeys: ['text'],
+        },
+      },
+    });
+
+    // Index depends on bucket
+    assistantsVectorIndex.addDependency(assistantsVectorBucket);
+
+    // ============================================================
+    // Assistants Document Ingestion Lambda Function
+    // ============================================================
+
+    // Create Lambda function using container image
+    // Container images support up to 10GB (vs 250MB per layer limit)
+    // Dockerfile is in backend/ directory
+    // Build context is set to repo root so we can access backend/ directory
+    // __dirname is infrastructure/lib/, so go up 2 levels to get repo root
+    const repoRoot = path.join(__dirname, '../..'); // infrastructure/lib/ -> infrastructure/ -> repo root
+    const dockerfilePath = path.join(repoRoot, 'backend', 'Dockerfile.rag-ingestion');
+
+    const assistantsDocumentsIngestionlambdaFunction = new lambda.DockerImageFunction(this, 'AssistantsDocumentsIngestionlambdaFunction', {
+      code: lambda.DockerImageCode.fromImageAsset(repoRoot, {
+        file: path.relative(repoRoot, dockerfilePath),
+      }),
+      architecture: lambda.Architecture.ARM_64, // docling (the document parsing library) supports ARM64 (py3-none-any wheel)
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 10240, // Increased to max for heavy ML libraries and to speed up init/invoke
+      environment: {
+        ASSISTANTS_DOCUMENTS_BUCKET_NAME: assistantsDocumentsBucket.bucketName,
+        ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
+        ASSISTANTS_VECTOR_STORE_BUCKET_NAME: assistantsVectorStoreBucketName,
+        ASSISTANTS_VECTOR_STORE_INDEX_NAME: assistantsVectorIndexName, 
+        BEDROCK_REGION: config.awsRegion,
+      },
+      description: 'Assistants document ingestion pipeline - processes documents from S3, extracts text, chunks, generates embeddings, stores in S3 vector store',
+    });
+
+    // ============================================================
+    // Assistants Permissions
+    // ============================================================
+
+    // Give the lambda function permission to read from the documents bucket
+    assistantsDocumentsBucket.grantRead(assistantsDocumentsIngestionlambdaFunction);
+    // Give the lambda function permission to write to the assistants table
+    assistantsTable.grantWriteData(assistantsDocumentsIngestionlambdaFunction);
+    // Give the lambda function permission to read from the assistants table
+    assistantsTable.grantReadData(assistantsDocumentsIngestionlambdaFunction);
+
+    // Give the lambda function full access to the vector bucket and index
+    assistantsDocumentsIngestionlambdaFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3vectors:ListVectorBuckets',
+          's3vectors:GetVectorBucket',
+          's3vectors:GetIndex',
+          's3vectors:PutVectors',
+          's3vectors:ListVectors',
+          's3vectors:ListIndexes',
+          's3vectors:GetVector',
+          's3vectors:GetVectors',
+          's3vectors:DeleteVector',
+        ],
+        resources: [
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorStoreBucketName}`,
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorStoreBucketName}/index/${assistantsVectorIndexName}`,
+        ],
+      })
+    );
+
+    // Give the lambda function permission to invoke the Bedrock model for embeddings
+    assistantsDocumentsIngestionlambdaFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${config.awsRegion}::foundation-model/amazon.titan-embed-text-v2*`,
+        ],
+      })
+    );
+
+    // Configure S3 event trigger to trigger the lambda function when objects are created in the documents bucket with prefix "assistants/"
+    // Trigger Lambda when objects are created in documents bucket with prefix "assistants/"
+    assistantsDocumentsBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(assistantsDocumentsIngestionlambdaFunction),
+      { prefix: 'assistants/' }
+    );
+    
     // ============================================================
     // Quota Management Tables
     // ============================================================
@@ -894,6 +1074,10 @@ export class AppApiStack extends cdk.Stack {
         FILE_UPLOAD_MAX_SIZE_BYTES: String(config.fileUpload?.maxFileSizeBytes || 4194304),
         FILE_UPLOAD_MAX_FILES_PER_MESSAGE: String(config.fileUpload?.maxFilesPerMessage || 5),
         FILE_UPLOAD_USER_QUOTA_BYTES: String(config.fileUpload?.userQuotaBytes || 1073741824),
+        ASSISTANTS_DOCUMENTS_BUCKET_NAME: assistantsDocumentsBucket.bucketName,
+        ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
+        ASSISTANTS_VECTOR_STORE_BUCKET_NAME: assistantsVectorStoreBucketName,
+        ASSISTANTS_VECTOR_STORE_INDEX_NAME: assistantsVectorIndexName, 
         // DATABASE_TYPE: config.appApi.databaseType,
         // ...(databaseConnectionInfo && { DATABASE_CONNECTION: databaseConnectionInfo }),
       },
@@ -1095,6 +1279,26 @@ export class AppApiStack extends cdk.Stack {
       value: userFilesTable.tableName,
       description: 'DynamoDB table for file metadata',
       exportName: `${config.projectPrefix}-UserFilesTableName`,
+    });
+
+    new cdk.CfnOutput(this, 'AssistantsDocumentsIngestionLambdaFunctionArn', {
+      value: assistantsDocumentsIngestionlambdaFunction.functionArn,
+      description: 'ARN of the Assistants documents ingestion Lambda function',
+    });
+
+    new cdk.CfnOutput(this, 'AssistantsVectorStoreBucketName', {
+      value: assistantsVectorStoreBucketName,
+      description: 'Name of the S3 Vector Bucket for assistants embeddings',
+    });
+
+    new cdk.CfnOutput(this, 'AssistantsVectorIndexName', {
+      value: assistantsVectorIndexName,
+      description: 'Name of the Vector Index within the assistants vector bucket',
+    });
+
+    new cdk.CfnOutput(this, 'AssistantsVectorIndexArn', {
+      value: assistantsVectorIndex.getAtt('IndexArn').toString(),
+      description: 'ARN of the assistants vector index',
     });
   }
 }

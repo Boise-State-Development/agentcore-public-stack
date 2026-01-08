@@ -1,0 +1,45 @@
+# CDK build artifacts
+**/cdk.out/
+**/cdk.out
+
+# Python build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/venv/
+**/env/
+**/.venv/
+**/node_modules/
+**/.egg-info/
+**/dist/
+**/build/
+
+# IDE and editor files
+**/.vscode/
+**/.idea/
+**/.cursor/
+**/*.swp
+**/*.swo
+**/*~
+
+# Git
+**/.git/
+**/.gitignore
+
+# Logs
+**/*.log
+
+# OS files
+**/.DS_Store
+**/Thumbs.db
+
+# Frontend build artifacts (not needed for Lambda)
+frontend/
+
+# Other infrastructure (not needed for this Lambda)
+infrastructure/**/cdk.out/
+infrastructure/**/node_modules/
+infrastructure/**/layers/
+

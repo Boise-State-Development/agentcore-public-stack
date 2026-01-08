@@ -1,0 +1,93 @@
+# ==========================================
+# STAGE 1: Builder (Compiler & Downloader)
+# ==========================================
+FROM public.ecr.aws/lambda/python:3.11 AS builder
+
+# 1. Install system tools
+# Rust/GCC are needed for compiling dependencies like tiktoken or docling-core
+RUN yum install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip && \
+    curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# 2. Set rust path
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# 3. Setup Directories
+RUN mkdir -p /tmp/models/docling-artifacts \
+    /tmp/models/tiktoken_cache \
+    /tmp/packages
+
+# 4. Install PyTorch CPU *Explicitly*
+# Installing before requirements.txt ensures we get the lightweight CPU version and not the version that includes GPU support
+RUN pip install \
+    --target /tmp/packages \
+    --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch
+
+# 5. Install Your Requirements
+COPY ./backend/src/apis/app_api/documents/ingestion/requirements.txt .
+RUN pip install \
+    --target /tmp/packages \
+    --no-cache-dir \
+    -r requirements.txt
+
+# 6. Download Tiktoken Vocabulary (Offline Support)
+# We set PYTHONPATH so it can find the 'tiktoken' module in /tmp/packages
+ENV TIKTOKEN_CACHE_DIR=/tmp/models/tiktoken_cache \
+    PYTHONPATH=/tmp/packages
+
+# We must ensure the directory exists before the script runs
+RUN mkdir -p /tmp/models/tiktoken_cache && \
+    python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
+# 7. Download Docling Models
+# We use 'download_models' to fetch the standard pipeline (Layout, Tables, OCR).
+# We force it to the specific artifacts folder.
+ENV PYTHONPATH=/tmp/packages
+RUN python -c "from docling.utils.model_downloader import download_models; \
+    from pathlib import Path; \
+    download_models( \
+        output_dir=Path('/tmp/models/docling-artifacts'), \
+        force=True \
+    )"
+
+# 8. Clean up OCR (Optimization)
+# We delete the heavy EasyOCR model (~200MB) and the table structure model to keep the Lambda image slim
+RUN rm -rf /tmp/models/docling-artifacts/easyocr \
+    /tmp/models/docling-artifacts/table_structure_model
+
+# ==========================================
+# STAGE 2: Runtime (Production Image)
+# ==========================================
+FROM public.ecr.aws/lambda/python:3.11
+
+# 1. Install only runtime system libs (GL/Glib for CV2)
+RUN yum install -y mesa-libGL glib2 && yum clean all
+
+# 2. Copy Python Packages
+COPY --from=builder /tmp/packages ${LAMBDA_TASK_ROOT}
+
+# 3. Copy Baked Models
+# Docling Models (Read directly from /opt)
+COPY --from=builder /tmp/models/docling-artifacts /opt/ml/models/docling-artifacts
+# Tiktoken Cache (Must copy contents to a folder; handler will move this to /tmp)
+COPY --from=builder /tmp/models/tiktoken_cache /opt/ml/models/tiktoken_cache/
+
+# 4. Set Environment Variables
+ENV DOCLING_ARTIFACTS_PATH=/opt/ml/models/docling-artifacts \
+    # Point library to /tmp (handler copies files here at startup)
+    TIKTOKEN_CACHE_DIR=/tmp/tiktoken_cache \
+    PYTHONPATH=${LAMBDA_TASK_ROOT} \
+    # PERFORMANCE FIXES
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    PYTORCH_ENABLE_MPS_FALLBACK=1 \
+    # CRITICAL: Disables NNPACK optimization to prevent "Out of Memory" crash
+    USE_NNPACK=0 \
+    # CRITICAL: Disables PyTorch hardware scan to prevent 60s startup hang
+    TORCH_INDUCTOR_CACHE_DIR=/tmp/torch_inductor
+
+# 5. Copy Your Handler Code
+COPY backend/src/apis/app_api/documents/ingestion/ ${LAMBDA_TASK_ROOT}
+
+CMD [ "handler.lambda_handler" ]

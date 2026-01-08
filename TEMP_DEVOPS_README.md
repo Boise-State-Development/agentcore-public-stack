@@ -75,6 +75,24 @@ Follow these rules when adding or modifying stacks to ensure stability and maint
 *   **Use SSM**: Store dynamic values (like Docker image tags or VPC IDs) in SSM Parameter Store.
 *   **Hierarchy**: Environment Variables > CDK Context > Defaults.
 
+#### Decision Tree: Where Should This Value Live?
+
+**Use `config.ts` + `cdk.context.json` when:**
+- Value is needed **at CDK resource creation time**
+- Examples: CORS origins (for S3 bucket CORS rules), CPU/memory (for ECS task definitions), max file size (for bucket policies)
+
+**Use ECS/Lambda `environment` block when:**
+- Value is needed **at runtime by application code**
+- Resource is in the **same stack** as the service
+- Examples: DynamoDB table names, S3 bucket names, API URLs
+- Application reads via `os.getenv("TABLE_NAME")` in Python
+
+**Use SSM Parameter Store when:**
+- Value is needed **by another stack** (cross-stack reference)
+- Examples: VPC ID (InfrastructureStack → AppApiStack), ALB ARN
+- Consumer stack reads via `ssm.StringParameter.valueForStringParameter()`
+
+
 ### B. Scripting & Automation
 *   **Shell Scripts First**: GitHub Actions YAML should **ONLY** call scripts in `scripts/`.
 *   **Portability**: Scripts must run locally and in CI. Use `set -euo pipefail` for error handling.

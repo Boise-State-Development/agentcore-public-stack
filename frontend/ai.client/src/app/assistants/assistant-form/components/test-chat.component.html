@@ -1,0 +1,100 @@
+<div class="test-chat-container">
+  <div class="test-chat-header">
+    <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+      Test RAG Chat
+    </h3>
+    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+      Test your assistant's knowledge base with uploaded documents
+    </p>
+  </div>
+
+  @if (!hasProcessedDocuments()) {
+    <div class="test-chat-disabled">
+      <div class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+        </svg>
+        <span>Upload and process documents to enable test chat</span>
+      </div>
+    </div>
+  } @else {
+    <div class="test-chat-messages" #messagesContainer>
+      @if (messages().length === 0) {
+        <div class="empty-state">
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Start a conversation to test your assistant's RAG capabilities
+          </p>
+        </div>
+      } @else {
+        @for (message of messages(); track message.id) {
+          <div class="message" [class.user-message]="message.role === 'user'" [class.assistant-message]="message.role === 'assistant'">
+            <div class="message-content">
+              @if (message.role === 'user') {
+                <div class="user-bubble">
+                  {{ message.content }}
+                </div>
+              } @else {
+                <div class="assistant-bubble">
+                  @if (message.isStreaming && !message.content) {
+                    <div class="loading-indicator">
+                      <span class="dot"></span>
+                      <span class="dot"></span>
+                      <span class="dot"></span>
+                    </div>
+                  } @else {
+                    <div class="markdown-content">{{ message.content }}</div>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        }
+      }
+    </div>
+
+    <div class="test-chat-input">
+      <div class="input-container">
+        <textarea
+          [(ngModel)]="userInput"
+          (keydown)="onKeyDown($event)"
+          [disabled]="!isEnabled() || isLoading()"
+          placeholder="Ask a question about your documents..."
+          class="input-field"
+          rows="2"
+        ></textarea>
+        <div class="input-actions">
+          <button
+            type="button"
+            (click)="clearChat()"
+            [disabled]="messages().length === 0 || isLoading()"
+            class="clear-button"
+            title="Clear chat"
+          >
+            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            (click)="sendMessage()"
+            [disabled]="!isEnabled() || isLoading() || !userInput().trim()"
+            class="send-button"
+            title="Send message"
+          >
+            @if (isLoading()) {
+              <svg class="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            } @else {
+              <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L6 12zm0 0h7.5" />
+              </svg>
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</div>
+

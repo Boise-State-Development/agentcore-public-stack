@@ -61,6 +61,10 @@
     "retentionDays": 365,
     "corsOrigins": "http://localhost:4200,http://localhost:8000,https://boisestate.ai,https://*.boisestate.ai"
   },
+  "assistants": {
+    "enabled": true,
+    "corsOrigins": "http://localhost:4200,http://localhost:8000,https://boisestate.ai,https://*.boisestate.ai"
+  },
   "tags": {
     "Environment": "dev",
     "Project": "AgentCore",

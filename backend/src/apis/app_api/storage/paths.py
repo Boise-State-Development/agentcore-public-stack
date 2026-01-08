@@ -133,3 +133,41 @@ def get_message_metadata_path(session_id: str) -> Path:
         }
     """
     return get_session_dir(session_id) / "message-metadata.json"
+
+
+def get_assistants_root() -> Path:
+    """
+    Get the root directory for assistant storage
+
+    Returns:
+        Path: Root directory for all assistants
+
+    Environment Variables:
+        ASSISTANTS_DIR: Override default assistants directory location
+
+    Example:
+        backend/src/assistants/
+    """
+    assistants_dir = os.environ.get('ASSISTANTS_DIR')
+    if assistants_dir:
+        return Path(assistants_dir)
+
+    # Default: backend/src/assistants
+    # Navigate from this file: storage/paths.py -> app_api -> apis -> src -> assistants
+    return Path(__file__).parent.parent.parent.parent / "assistants"
+
+
+def get_assistant_path(assistant_id: str) -> Path:
+    """
+    Get the file path for a specific assistant
+
+    Args:
+        assistant_id: Assistant identifier
+
+    Returns:
+        Path: Full path to the assistant file
+
+    Example:
+        backend/src/assistants/assistant_AST-1234.json
+    """
+    return get_assistants_root() / f"assistant_{assistant_id}.json"
