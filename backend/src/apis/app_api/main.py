@@ -70,19 +70,29 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware for local development
-# In production (AWS), CloudFront handles routing so CORS is not needed
+# Add CORS middleware
+# Backend (ECS Fargate + ALB) is on api.beta.boisestate.ai
+# Frontend (CloudFront) is on beta.boisestate.ai - needs CORS for cross-origin requests
+allowed_origins = []
+
 if os.getenv('ENVIRONMENT', 'development') == 'development':
-    logger.info("Adding CORS middleware for local development")
+    allowed_origins.append("http://localhost:4200")  # Frontend dev server
+    logger.info("CORS: Added local development origin")
+
+# Always allow production frontend in non-local environments
+if os.getenv('ENVIRONMENT') != 'development':
+    allowed_origins.append("https://beta.boisestate.ai")
+    logger.info("CORS: Added production frontend origin")
+
+if allowed_origins:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:4200",  # Frontend dev server
-        ],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
 
 # Import routers
 from apis.app_api.health import router as health_router
