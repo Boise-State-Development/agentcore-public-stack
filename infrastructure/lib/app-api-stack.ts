@@ -161,6 +161,7 @@ export class AppApiStack extends cdk.Stack {
     // Assistants Table
     // Base Table PK (String) SK (String)
     // Owner Status Index GSI_PK (String) GSI_SK (String)
+    // Visibility Status Index GSI2_PK (String) GSI2_SK (String)
     // ============================================================
     const assistantsTable = new dynamodb.Table(this, 'AssistantsTable', {
       tableName: getResourceName(config, 'assistants'),
@@ -188,6 +189,18 @@ export class AppApiStack extends cdk.Stack {
       },
       sortKey: {
         name: 'GSI_SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+    });
+
+    assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'VisibilityStatusIndex',
+      partitionKey: {
+        name: 'GSI2_PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI2_SK',
         type: dynamodb.AttributeType.STRING,
       },
     });

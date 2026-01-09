@@ -41,14 +41,15 @@ export class AssistantService {
     }
   }
 
-  async loadAssistants(includeDrafts = false, includeArchived = false): Promise<void> {
+  async loadAssistants(includeDrafts = false, includeArchived = false, includePublic = false): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
 
     try {
       const response = await firstValueFrom(this.apiService.getAssistants({
         includeDrafts,
-        includeArchived
+        includeArchived,
+        includePublic
       }));
 
       if (response) {

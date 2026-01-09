@@ -1,24 +1,58 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, OnInit, signal, computed } from '@angular/core';
 import { Router } from '@angular/router';
+import { FormsModule } from '@angular/forms';
 import { AssistantService } from './services/assistant.service';
 import { AssistantListComponent } from './components/assistant-list.component';
 import { Assistant } from './models/assistant.model';
+import { UserService } from '../auth/user.service';
 
 @Component({
   selector: 'app-assistants',
   templateUrl: './assistants.page.html',
   styleUrl: './assistants.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssistantListComponent],
+  imports: [AssistantListComponent, FormsModule],
 })
 export class AssistantsPage implements OnInit {
   private router = inject(Router);
   private assistantService = inject(AssistantService);
+  private userService = inject(UserService);
 
   // Use service signals for reactive data
   readonly assistants = this.assistantService.assistants$;
   readonly loading = this.assistantService.loading$;
   readonly error = this.assistantService.error$;
+
+  // Search query signal (stub - not implemented yet)
+  searchQuery = signal<string>('');
+
+  // Computed signals for filtered assistants
+  readonly myAssistants = computed(() => {
+    const allAssistants = this.assistants();
+    const currentUser = this.userService.currentUser();
+    
+    if (!currentUser) {
+      return [];
+    }
+
+    return allAssistants.filter(
+      assistant => assistant.ownerId === currentUser.empl_id
+    );
+  });
+
+  readonly publicAssistants = computed(() => {
+    const allAssistants = this.assistants();
+    const currentUser = this.userService.currentUser();
+    
+    if (!currentUser) {
+      return allAssistants.filter(assistant => assistant.visibility === 'PUBLIC');
+    }
+
+    // Public assistants are those with PUBLIC visibility that are not owned by current user
+    return allAssistants.filter(
+      assistant => assistant.visibility === 'PUBLIC' && assistant.ownerId !== currentUser.empl_id
+    );
+  });
 
   ngOnInit(): void {
     // Load assistants from backend
@@ -27,8 +61,8 @@ export class AssistantsPage implements OnInit {
 
   async loadAssistants(): Promise<void> {
     try {
-      // Load only COMPLETE assistants by default (not drafts or archived)
-      await this.assistantService.loadAssistants(true, false);
+      // Load COMPLETE assistants (not drafts or archived) and include public assistants
+      await this.assistantService.loadAssistants(true, false, true);
     } catch (error) {
       console.error('Error loading assistants:', error);
     }

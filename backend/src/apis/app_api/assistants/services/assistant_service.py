@@ -188,6 +188,11 @@ async def _create_assistant_cloud(assistant: Assistant, table_name: str) -> None
         item['GSI_PK'] = f'OWNER#{assistant.owner_id}'
         item['GSI_SK'] = f'STATUS#{assistant.status}#CREATED#{assistant.created_at}'
         
+        # Add GSI2 keys for visibility-based listings (VisibilityStatusIndex)
+        # Reuse GSI_SK since both indexes use the same sort key pattern
+        item['GSI2_PK'] = f'VISIBILITY#{assistant.visibility}'
+        item['GSI2_SK'] = item['GSI_SK']  # Reuse the same sort key value
+        
         table.put_item(Item=item)
         
         logger.info(f"💾 Stored assistant {assistant.assistant_id} in DynamoDB table {table_name}")
@@ -425,7 +430,9 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
         
         existing_item = existing_response['Item']
         old_status = existing_item.get('status')
+        old_visibility = existing_item.get('visibility')
         status_changed = old_status != assistant.status
+        visibility_changed = old_visibility != assistant.visibility
         
         # Build update expression
         update_parts = []
@@ -433,7 +440,7 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
         expression_attribute_names = {}
         
         # Fields that should never be updated (immutable or composite keys)
-        immutable_fields = {'PK', 'SK', 'GSI_PK', 'GSI_SK', 'assistantId', 'createdAt', 'ownerId'}
+        immutable_fields = {'PK', 'SK', 'GSI_PK', 'GSI_SK', 'GSI2_PK', 'GSI2_SK', 'assistantId', 'createdAt', 'ownerId'}
         
         # Always update updatedAt
         update_parts.append("updatedAt = :updated_at")
@@ -465,9 +472,22 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
                 expression_attribute_values[f":{key}"] = value
         
         # Update GSI_SK if status changed
+        # Both GSI_SK and GSI2_SK use the same sort key pattern, so we can reuse the value
         if status_changed:
+            gsi_sk_value = f'STATUS#{assistant.status}#CREATED#{assistant.created_at}'
             update_parts.append("GSI_SK = :gsi_sk")
-            expression_attribute_values[":gsi_sk"] = f'STATUS#{assistant.status}#CREATED#{assistant.created_at}'
+            expression_attribute_values[":gsi_sk"] = gsi_sk_value
+        else:
+            # Status didn't change, reuse existing GSI_SK value
+            gsi_sk_value = existing_item.get('GSI_SK')
+        
+        # Update GSI2 keys if status or visibility changed
+        # Reuse GSI_SK value since both indexes use the same sort key pattern
+        if status_changed or visibility_changed:
+            update_parts.append("GSI2_PK = :gsi2_pk")
+            update_parts.append("GSI2_SK = :gsi2_sk")  # Reuse the same value as GSI_SK
+            expression_attribute_values[":gsi2_pk"] = f'VISIBILITY#{assistant.visibility}'
+            expression_attribute_values[":gsi2_sk"] = gsi_sk_value
         
         update_expression = "SET " + ", ".join(update_parts)
         
@@ -502,7 +522,8 @@ async def list_user_assistants(
     limit: Optional[int] = None,
     next_token: Optional[str] = None,
     include_archived: bool = False,
-    include_drafts: bool = False
+    include_drafts: bool = False,
+    include_public: bool = False
 ) -> Tuple[List[Assistant], Optional[str]]:
     """
     List assistants for a user with pagination support
@@ -513,6 +534,7 @@ async def list_user_assistants(
         next_token: Pagination token for retrieving next page (optional)
         include_archived: Whether to include archived assistants
         include_drafts: Whether to include draft assistants
+        include_public: Whether to include public assistants (in addition to user's own)
     
     Returns:
         Tuple of (list of Assistant objects, next_token if more assistants exist)
@@ -524,12 +546,13 @@ async def list_user_assistants(
         return await _list_user_assistants_cloud(
             owner_id, table_name=assistants_table, limit=limit,
             next_token=next_token, include_archived=include_archived,
-            include_drafts=include_drafts
+            include_drafts=include_drafts, include_public=include_public
         )
     else:
         return await _list_user_assistants_local(
             owner_id, limit=limit, next_token=next_token,
-            include_archived=include_archived, include_drafts=include_drafts
+            include_archived=include_archived, include_drafts=include_drafts,
+            include_public=include_public
         )
 
 
@@ -591,7 +614,8 @@ async def _list_user_assistants_local(
     limit: Optional[int] = None,
     next_token: Optional[str] = None,
     include_archived: bool = False,
-    include_drafts: bool = False
+    include_drafts: bool = False,
+    include_public: bool = False
 ) -> Tuple[List[Assistant], Optional[str]]:
     """
     List assistants for a user from local file storage with pagination
@@ -602,6 +626,7 @@ async def _list_user_assistants_local(
         next_token: Pagination token (optional)
         include_archived: Whether to include archived assistants
         include_drafts: Whether to include draft assistants
+        include_public: Whether to include public assistants (in addition to user's own)
     
     Returns:
         Tuple of (list of Assistant objects, next_token if more exist)
@@ -621,12 +646,15 @@ async def _list_user_assistants_local(
                 with open(assistant_file, 'r') as f:
                     data = json.load(f)
                 
-                # Filter by owner_id
-                if data.get('ownerId') != owner_id:
-                    continue
-                
                 # Parse assistant
                 assistant = Assistant.model_validate(data)
+                
+                # Filter logic: include if owned by user OR (include_public and visibility is PUBLIC)
+                is_owner = data.get('ownerId') == owner_id
+                is_public = include_public and assistant.visibility == 'PUBLIC' and data.get('ownerId') != owner_id
+                
+                if not (is_owner or is_public):
+                    continue
                 
                 # Filter by status
                 if not include_archived and assistant.status == 'ARCHIVED':
@@ -661,7 +689,8 @@ async def _list_user_assistants_cloud(
     limit: Optional[int] = None,
     next_token: Optional[str] = None,
     include_archived: bool = False,
-    include_drafts: bool = False
+    include_drafts: bool = False,
+    include_public: bool = False
 ) -> Tuple[List[Assistant], Optional[str]]:
     """
     List assistants for a user from DynamoDB with pagination
@@ -673,6 +702,7 @@ async def _list_user_assistants_cloud(
         next_token: Pagination token (optional)
         include_archived: Whether to include archived assistants
         include_drafts: Whether to include draft assistants
+        include_public: Whether to include public assistants (in addition to user's own)
     
     Returns:
         Tuple of (list of Assistant objects, next_token if more exist)
@@ -696,50 +726,135 @@ async def _list_user_assistants_cloud(
             filter_parts.append("#status <> :draft")
             expression_attribute_values[":draft"] = 'DRAFT'
         
-        # Decode next_token for ExclusiveStartKey
-        exclusive_start_key = None
+        # Parse pagination token
+        owner_exclusive_start_key = None
+        public_exclusive_start_key = None
         if next_token:
             try:
                 decoded = base64.b64decode(next_token).decode('utf-8')
-                exclusive_start_key = json.loads(decoded)
+                token_data = json.loads(decoded)
+                owner_exclusive_start_key = token_data.get('owner_key')
+                public_exclusive_start_key = token_data.get('public_key')
             except Exception as e:
                 logger.warning(f"Invalid next_token: {e}, ignoring pagination")
         
-        query_params = {
-            'IndexName': 'OwnerStatusIndex',
-            'KeyConditionExpression': Key('GSI_PK').eq(f'OWNER#{owner_id}'),
+        # When merging results from two queries, we need to fetch more items
+        # to account for filtering. Use a multiplier to ensure we have enough.
+        # DynamoDB filters happen after the query, so we may get fewer items than requested.
+        query_limit = limit * 2 if (limit and limit > 0 and include_public) else limit
+        
+        # Build base query parameters
+        base_query_params = {
             'ScanIndexForward': False,  # Descending order (most recent first)
         }
         
-        if limit and limit > 0:
-            query_params['Limit'] = limit
+        if query_limit and query_limit > 0:
+            base_query_params['Limit'] = query_limit
         
         if filter_parts:
-            query_params['FilterExpression'] = ' AND '.join(filter_parts)
-            query_params['ExpressionAttributeNames'] = {'#status': 'status'}
-            query_params['ExpressionAttributeValues'] = expression_attribute_values
+            base_query_params['FilterExpression'] = ' AND '.join(filter_parts)
+            base_query_params['ExpressionAttributeNames'] = {'#status': 'status'}
+            base_query_params['ExpressionAttributeValues'] = expression_attribute_values
         
-        if exclusive_start_key:
-            query_params['ExclusiveStartKey'] = exclusive_start_key
+        # Query user's own assistants
+        owner_query_params = {
+            **base_query_params,
+            'IndexName': 'OwnerStatusIndex',
+            'KeyConditionExpression': Key('GSI_PK').eq(f'OWNER#{owner_id}'),
+        }
         
-        response = table.query(**query_params)
+        if owner_exclusive_start_key:
+            owner_query_params['ExclusiveStartKey'] = owner_exclusive_start_key
         
-        assistants = []
-        for item in response.get('Items', []):
+        owner_response = table.query(**owner_query_params)
+        
+        owner_assistants = []
+        for item in owner_response.get('Items', []):
             try:
-                assistants.append(Assistant.model_validate(item))
+                owner_assistants.append(Assistant.model_validate(item))
             except Exception as e:
                 logger.warning(f"Failed to parse assistant item: {e}")
                 continue
         
-        # Generate next_token from LastEvaluatedKey
+        owner_last_key = owner_response.get('LastEvaluatedKey')
+        
+        # Query public assistants if requested
+        public_assistants = []
+        public_last_key = None
+        if include_public:
+            # Filter out assistants owned by current user to avoid duplicates
+            public_filter_parts = filter_parts.copy()
+            public_filter_parts.append("ownerId <> :owner_id")
+            public_expression_values = expression_attribute_values.copy()
+            public_expression_values[":owner_id"] = owner_id
+            
+            public_query_params = {
+                **base_query_params,
+                'IndexName': 'VisibilityStatusIndex',
+                'KeyConditionExpression': Key('GSI2_PK').eq('VISIBILITY#PUBLIC'),
+                'FilterExpression': ' AND '.join(public_filter_parts),
+                'ExpressionAttributeNames': {'#status': 'status'},
+                'ExpressionAttributeValues': public_expression_values,
+            }
+            
+            if public_exclusive_start_key:
+                public_query_params['ExclusiveStartKey'] = public_exclusive_start_key
+            
+            public_response = table.query(**public_query_params)
+            
+            for item in public_response.get('Items', []):
+                try:
+                    public_assistants.append(Assistant.model_validate(item))
+                except Exception as e:
+                    logger.warning(f"Failed to parse public assistant item: {e}")
+                    continue
+            
+            public_last_key = public_response.get('LastEvaluatedKey')
+        
+        # Merge and sort results (both lists are already sorted by created_at descending)
+        # Use a merge algorithm for two sorted lists - O(n) instead of O(n log n)
+        all_assistants = []
+        owner_idx = 0
+        public_idx = 0
+        
+        while (owner_idx < len(owner_assistants) or public_idx < len(public_assistants)):
+            # Check if we've reached the limit
+            if limit and limit > 0 and len(all_assistants) >= limit:
+                break
+            
+            # Compare timestamps and take the more recent one
+            if owner_idx >= len(owner_assistants):
+                all_assistants.append(public_assistants[public_idx])
+                public_idx += 1
+            elif public_idx >= len(public_assistants):
+                all_assistants.append(owner_assistants[owner_idx])
+                owner_idx += 1
+            elif owner_assistants[owner_idx].created_at >= public_assistants[public_idx].created_at:
+                all_assistants.append(owner_assistants[owner_idx])
+                owner_idx += 1
+            else:
+                all_assistants.append(public_assistants[public_idx])
+                public_idx += 1
+        
+        # Apply final limit (should already be applied, but ensure)
+        if limit and limit > 0:
+            all_assistants = all_assistants[:limit]
+        
+        # Generate next_token from LastEvaluatedKeys
+        # Only include keys for queries that have more results
         next_page_token = None
-        if 'LastEvaluatedKey' in response:
-            encoded = json.dumps(response['LastEvaluatedKey'])
+        token_data = {}
+        if owner_last_key:
+            token_data['owner_key'] = owner_last_key
+        if public_last_key:
+            token_data['public_key'] = public_last_key
+        
+        if token_data:
+            encoded = json.dumps(token_data)
             next_page_token = base64.b64encode(encoded.encode('utf-8')).decode('utf-8')
         
-        logger.info(f"Listed {len(assistants)} assistants for user {owner_id}")
-        return assistants, next_page_token
+        logger.info(f"Listed {len(all_assistants)} assistants for user {owner_id} (include_public={include_public})")
+        return all_assistants, next_page_token
     
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code', 'Unknown')

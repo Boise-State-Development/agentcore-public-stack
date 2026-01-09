@@ -159,13 +159,17 @@ async def list_assistants_endpoint(
     next_token: Optional[str] = Query(None, description="Pagination token for retrieving the next page"),
     include_archived: bool = Query(False, description="Include archived assistants"),
     include_drafts: bool = Query(False, description="Include draft assistants"),
+    include_public: bool = Query(False, description="Include public assistants (in addition to user's own)"),
     current_user: User = Depends(get_current_user)
 ):
     """
     List assistants for the authenticated user with pagination support.
     
-    Requires JWT authentication. Returns only assistants belonging to the
+    Requires JWT authentication. By default, returns only assistants belonging to the
     authenticated user, sorted by created_at descending (most recent first).
+    
+    When include_public=True, returns both the user's own assistants AND all public
+    assistants (excluding those owned by the user to avoid duplicates).
     
     By default, excludes draft and archived assistants. Use query parameters
     to include them.
@@ -175,6 +179,7 @@ async def list_assistants_endpoint(
         next_token: Pagination token for retrieving next page (optional)
         include_archived: Whether to include archived assistants (default: False)
         include_drafts: Whether to include draft assistants (default: False)
+        include_public: Whether to include public assistants (default: False)
         current_user: Authenticated user from JWT token (injected by dependency)
     
     Returns:
@@ -188,7 +193,7 @@ async def list_assistants_endpoint(
     user_id = current_user.user_id
     
     logger.info(f"GET /assistants - User: {user_id}, Limit: {limit}, NextToken: {next_token}, "
-                f"IncludeArchived: {include_archived}, IncludeDrafts: {include_drafts}")
+                f"IncludeArchived: {include_archived}, IncludeDrafts: {include_drafts}, IncludePublic: {include_public}")
     
     try:
         # Retrieve assistants for the user with pagination
@@ -197,7 +202,8 @@ async def list_assistants_endpoint(
             limit=limit,
             next_token=next_token,
             include_archived=include_archived,
-            include_drafts=include_drafts
+            include_drafts=include_drafts,
+            include_public=include_public
         )
         
         # Convert to response models (excludes owner_id for privacy)

@@ -16,7 +16,7 @@
   </header>
 
   <main class="flex-1 overflow-auto p-6">
-    <div class="max-w-7xl mx-auto">
+    <div class="max-w-7xl mx-auto space-y-8">
       @if (loading()) {
         <div class="text-center py-8 text-gray-500 dark:text-gray-400">
           Loading assistants...
@@ -26,10 +26,40 @@
           Error: {{ error() }}
         </div>
       } @else {
-        <app-assistant-list 
-          [assistants]="assistants()"
-          (assistantSelected)="onAssistantSelected($event)">
-        </app-assistant-list>
+        <!-- Search Bar -->
+        <div>
+          <label for="assistant-search" class="sr-only">Search assistants</label>
+          <input
+            type="text"
+            id="assistant-search"
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+            placeholder="Search assistants..."
+            class="block w-full rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+
+        <!-- My Assistants Section -->
+        <section>
+          <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
+            My Assistants
+          </h2>
+          <app-assistant-list 
+            [assistants]="myAssistants()"
+            (assistantSelected)="onAssistantSelected($event)">
+          </app-assistant-list>
+        </section>
+
+        <!-- Public Assistants Section -->
+        <section>
+          <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
+            Public Assistants
+          </h2>
+          <app-assistant-list 
+            [assistants]="publicAssistants()"
+            (assistantSelected)="onAssistantSelected($event)">
+          </app-assistant-list>
+        </section>
       }
     </div>
   </main>

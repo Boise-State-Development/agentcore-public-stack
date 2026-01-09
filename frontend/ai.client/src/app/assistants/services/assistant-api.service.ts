@@ -34,6 +34,7 @@ export class AssistantApiService {
     nextToken?: string;
     includeArchived?: boolean;
     includeDrafts?: boolean;
+    includePublic?: boolean;
   }): Observable<AssistantsListResponse> {
     let httpParams = new HttpParams();
     if (params?.limit) {
@@ -47,6 +48,9 @@ export class AssistantApiService {
     }
     if (params?.includeDrafts !== undefined) {
       httpParams = httpParams.set('include_drafts', params.includeDrafts.toString());
+    }
+    if (params?.includePublic !== undefined) {
+      httpParams = httpParams.set('include_public', params.includePublic.toString());
     }
 
     return this.http.get<AssistantsListResponse>(this.baseUrl, { params: httpParams });
