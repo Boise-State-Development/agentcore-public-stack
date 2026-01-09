@@ -100,10 +100,12 @@ async def update_document_status(
         if expression_attribute_names:
             update_params['ExpressionAttributeNames'] = expression_attribute_names
         
+        logger.info(f"Updating document status: {status}, chunk_count={chunk_count}, assistant_id={assistant_id}, document_id={document_id}")
         table.update_item(**update_params)
+        logger.info(f"Successfully updated document status in DynamoDB")
         return True
     except Exception as e:
-        logger.error(f"Failed to update document status in DynamoDB: {e}")
+        logger.error(f"Failed to update document status in DynamoDB: {e}", exc_info=True)
         return False
 
 def _format_error_message(exception: Exception) -> Tuple[str, str]:

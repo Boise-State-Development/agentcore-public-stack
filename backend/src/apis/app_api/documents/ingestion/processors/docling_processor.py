@@ -162,6 +162,7 @@ async def process_with_docling(
             )
             
             logger.info(f"Starting chunking process...")
+            logger.info(f"Progress callback provided: {progress_callback is not None}")
             chunk_iter = chunker.chunk(dl_doc=dl_doc)
             
             text_parts = []
@@ -186,12 +187,14 @@ async def process_with_docling(
                     
                     if should_update and progress_callback:
                         try:
-                            # Call progress callback (fire and forget - don't block chunking)
+                            logger.debug(f"Calling progress callback for {chunk_count} chunks")
+                            # Call progress callback with current count
                             await progress_callback(chunk_count)
                             last_update_time = current_time
+                            logger.debug(f"Progress callback completed for {chunk_count} chunks")
                         except Exception as e:
                             # Log but don't fail chunking if status update fails
-                            logger.warning(f"Failed to update chunking progress: {e}")
+                            logger.error(f"Failed to update chunking progress: {e}", exc_info=True)
                     
                     # Log progress every 10 chunks to avoid excessive logging
                     if chunk_count % 10 == 0:

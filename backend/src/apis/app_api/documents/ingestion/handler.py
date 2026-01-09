@@ -259,15 +259,20 @@ async def _process_document_pipeline(
     # Define progress callback to update status during chunking
     async def update_chunking_progress(chunk_count: int) -> None:
         """Update chunk count in DynamoDB during chunking process"""
+        logger.info(f"Updating chunking progress: {chunk_count} chunks processed")
         try:
-            await status_manager.update_status(
+            result = await status_manager.update_status(
                 assistant_id=assistant_id,
                 document_id=document_id,
                 new_status='chunking',  # Stay in chunking status
                 chunk_count=chunk_count
             )
+            if result:
+                logger.info(f"Successfully updated chunking progress to {chunk_count} chunks")
+            else:
+                logger.warning(f"Status update returned False for {chunk_count} chunks")
         except Exception as e:
-            logger.warning(f"Failed to update chunking progress: {e}")
+            logger.error(f"Failed to update chunking progress: {e}", exc_info=True)
             # Don't raise - we don't want status update failures to break chunking
     
     chunks = await process_with_docling(
