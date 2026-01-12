@@ -1,31 +1,4 @@
 # ==========================================
-# STAGE 0: Compiler (For packages requiring GCC 9.3+)
-# ==========================================
-# Use Ubuntu to get GCC 10 for compiling scipy (which requires NumPy 2.x as build dep)
-# We compile scipy here, then copy it to the Lambda base image
-FROM ubuntu:22.04 AS compiler
-
-# Install Python 3.11 and GCC 10
-RUN apt-get update && \
-    apt-get install -y python3.11 python3.11-dev python3-pip gcc-10 g++-10 make && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Set GCC 10 as default
-RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 && \
-    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
-
-# Create directory for compiled packages
-RUN mkdir -p /tmp/compiled-packages
-
-# Install NumPy 1.x first (runtime requirement)
-RUN python3.11 -m pip install --target /tmp/compiled-packages --no-cache-dir "numpy<2.0.0"
-
-# Install scipy (use pre-built wheel if available, otherwise it will compile with GCC 10)
-# Note: scipy's build dependencies require NumPy 2.x, but the resulting scipy works with NumPy 1.x
-RUN python3.11 -m pip install --target /tmp/compiled-packages --no-cache-dir "scipy<2.0.0"
-
-# ==========================================
 # STAGE 1: Builder (Compiler & Downloader)
 # ==========================================
 # Note: AWS Lambda base images support both x86_64 and ARM64
@@ -60,16 +33,7 @@ RUN mkdir -p /tmp/models/docling-artifacts \
     /tmp/models/tiktoken_cache \
     /tmp/packages
 
-# 4. Copy ALL compiled packages from compiler stage (includes scipy and numpy)
-# This ensures pip recognizes scipy as installed and won't try to rebuild it
-COPY --from=compiler /tmp/compiled-packages/ /tmp/packages/
-
-# 5. Install NumPy 1.x explicitly to overwrite NumPy 2.x from compiler stage
-# scipy from compiler stage was built with NumPy 2.x, but works with NumPy 1.x at runtime
-RUN pip install --target /tmp/packages --no-cache-dir --force-reinstall --no-deps "numpy<2.0.0" && \
-    pip install --target /tmp/packages --no-cache-dir "numpy<2.0.0"
-
-# 7. Install PyTorch CPU *Explicitly*
+# 4. Install PyTorch CPU *Explicitly*
 # Installing before requirements.txt ensures we get the lightweight CPU version and not the version that includes GPU support
 RUN pip install \
     --target /tmp/packages \
@@ -77,25 +41,15 @@ RUN pip install \
     --index-url https://download.pytorch.org/whl/cpu \
     torch
 
-# 8. Install scipy using --only-binary to force using pre-built wheel (no source build)
-# The compiler stage confirmed a wheel exists, so this should work
-RUN pip install --target /tmp/packages --no-cache-dir --only-binary :all: "scipy<2.0.0"
-
-# 9. Install Your Requirements  
-# Use --no-build-isolation to prevent pip from trying to build scipy's dependencies
-# scipy is already installed, so pip should use it
+# 5. Install Your Requirements
+# IMPORTANT: `requirements.txt` pins SciPy to a Lambda-compatible wheel (manylinux2014).
 COPY ./backend/src/apis/app_api/documents/ingestion/requirements.txt .
 RUN pip install \
     --target /tmp/packages \
     --no-cache-dir \
-    --no-build-isolation \
-    -r requirements.txt || \
-    pip install \
-        --target /tmp/packages \
-        --no-cache-dir \
-        -r requirements.txt
+    -r requirements.txt
 
-# 10. Download Tiktoken Vocabulary (Offline Support)
+# 6. Download Tiktoken Vocabulary (Offline Support)
 # We set PYTHONPATH so it can find the 'tiktoken' module in /tmp/packages
 ENV TIKTOKEN_CACHE_DIR=/tmp/models/tiktoken_cache \
     PYTHONPATH=/tmp/packages
@@ -104,7 +58,7 @@ ENV TIKTOKEN_CACHE_DIR=/tmp/models/tiktoken_cache \
 RUN mkdir -p /tmp/models/tiktoken_cache && \
     python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
-# 11. Download Docling Models
+# 7. Download Docling Models
 # We use 'download_models' to fetch the standard pipeline (Layout, Tables, OCR).
 # We force it to the specific artifacts folder.
 ENV PYTHONPATH=/tmp/packages
@@ -115,7 +69,7 @@ RUN python -c "from docling.utils.model_downloader import download_models; \
         force=True \
     )"
 
-# 12. Clean up OCR (Optimization)
+# 8. Clean up OCR (Optimization)
 # We delete the heavy EasyOCR model (~200MB) and the table structure model to keep the Lambda image slim
 RUN rm -rf /tmp/models/docling-artifacts/easyocr \
     /tmp/models/docling-artifacts/table_structure_model

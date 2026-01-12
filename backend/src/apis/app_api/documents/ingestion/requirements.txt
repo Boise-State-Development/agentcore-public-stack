@@ -10,6 +10,12 @@
 # Force NumPy 1.x FIRST to prevent compilation errors
 numpy<2.0.0
 
+# Pin SciPy to a Lambda-compatible wheel.
+# AWS Lambda Python base image (Amazon Linux 2) ships glibc 2.26, so newer SciPy wheels
+# tagged manylinux_2_27+ are not compatible and will force a source build (which fails
+# due to the old GCC in AL2). SciPy 1.11.4 provides manylinux2014 (glibc 2.17) wheels.
+scipy==1.11.4
+
 # AWS SDK (already in Lambda runtime, but pinning for consistency)
 boto3>=1.40.1
 
