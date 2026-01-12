@@ -25,7 +25,11 @@
     "enableRds": false,
     "rdsInstanceClass": "t3.medium",
     "rdsEngine": "aurora-postgresql",
-    "rdsDatabaseName": "appdb"
+    "rdsDatabaseName": "appdb",
+    "imageTag": "latest",
+    "entraClientId": "",
+    "entraRedirectUri": "",
+    "entraTenantId": ""
   },
   "inferenceApi": {
     "enabled": true,

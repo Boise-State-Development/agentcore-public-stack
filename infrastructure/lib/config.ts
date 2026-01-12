@@ -44,6 +44,9 @@ export interface AppApiConfig {
   rdsEngine?: string;
   rdsDatabaseName?: string;
   imageTag: string;
+  entraClientId: string;
+  entraRedirectUri: string;
+  entraTenantId: string;
 }
 
 export interface InferenceApiConfig {
@@ -134,6 +137,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity,
       databaseType: 'none', // Set to 'dynamodb' or 'rds' when database is needed
       enableRds: false,
+      entraClientId: process.env.CDK_APP_API_ENTRA_CLIENT_ID || scope.node.tryGetContext('appApi')?.entraClientId,
+      entraRedirectUri: process.env.CDK_APP_API_ENTRA_REDIRECT_URI || scope.node.tryGetContext('appApi')?.entraRedirectUri,
+      entraTenantId: process.env.CDK_APP_API_ENTRA_TENANT_ID || scope.node.tryGetContext('appApi')?.entraTenantId,
     },
     inferenceApi: {
       enabled: parseBooleanEnv(process.env.CDK_INFERENCE_API_ENABLED) ?? scope.node.tryGetContext('inferenceApi')?.enabled,
