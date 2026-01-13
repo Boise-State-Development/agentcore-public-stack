@@ -5,6 +5,7 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, applyStandardTags } from './config';
@@ -31,6 +32,7 @@ export class InfrastructureStack extends cdk.Stack {
   public readonly albListener: elbv2.ApplicationListener;
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly ecsCluster: ecs.Cluster;
+  public readonly authSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: InfrastructureStackProps) {
     super(scope, id, props);
@@ -104,6 +106,43 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/network/availability-zones`,
       stringValue: availabilityZones,
       description: 'Comma-separated list of availability zones',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
+    // Authentication Secret
+    // ============================================================
+    
+    // Create a secret for authentication (e.g., JWT signing key, session secret, etc.)
+    // This secret value should be rotated regularly in production
+    this.authSecret = new secretsmanager.Secret(this, 'AuthenticationSecret', {
+      secretName: getResourceName(config, 'auth-secret'),
+      description: 'Authentication secret for JWT signing, session encryption, and other auth operations',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ description: 'Authentication Secret' }),
+        generateStringKey: 'secret',
+        excludePunctuation: true,
+        includeSpace: false,
+        passwordLength: 64,
+      },
+      removalPolicy: config.environment === 'prod'
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Export Authentication Secret ARN to SSM
+    new ssm.StringParameter(this, 'AuthSecretArnParameter', {
+      parameterName: `/${config.projectPrefix}/auth/secret-arn`,
+      stringValue: this.authSecret.secretArn,
+      description: 'Authentication Secret ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Export Authentication Secret Name to SSM
+    new ssm.StringParameter(this, 'AuthSecretNameParameter', {
+      parameterName: `/${config.projectPrefix}/auth/secret-name`,
+      stringValue: this.authSecret.secretName,
+      description: 'Authentication Secret Name',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -352,6 +391,18 @@ export class InfrastructureStack extends cdk.Stack {
       value: this.ecsCluster.clusterName,
       description: 'ECS Cluster Name',
       exportName: `${config.projectPrefix}-ecs-cluster-name`,
+    });
+
+    new cdk.CfnOutput(this, 'AuthSecretArn', {
+      value: this.authSecret.secretArn,
+      description: 'Authentication Secret ARN',
+      exportName: `${config.projectPrefix}-auth-secret-arn`,
+    });
+
+    new cdk.CfnOutput(this, 'AuthSecretName', {
+      value: this.authSecret.secretName,
+      description: 'Authentication Secret Name',
+      exportName: `${config.projectPrefix}-auth-secret-name`,
     });
   }
 }
