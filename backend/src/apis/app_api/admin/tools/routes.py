@@ -95,6 +95,9 @@ async def admin_create_tool(
     Requires admin access. This only creates the catalog entry.
     To grant access to AppRoles, use the role management endpoints.
 
+    For MCP external tools, provide mcpConfig with server URL and auth settings.
+    For A2A tools, provide a2aConfig with agent URL and capabilities.
+
     Args:
         request: Tool creation data
         admin: Authenticated admin user (injected)
@@ -105,6 +108,10 @@ async def admin_create_tool(
     logger.info(f"Admin {admin.email} creating tool: {request.tool_id}")
 
     service = get_tool_catalog_service()
+
+    # Convert MCP and A2A config requests to models if provided
+    mcp_config = request.mcp_config.to_model() if request.mcp_config else None
+    a2a_config = request.a2a_config.to_model() if request.a2a_config else None
 
     tool = ToolDefinition(
         tool_id=request.tool_id,
@@ -117,6 +124,8 @@ async def admin_create_tool(
         requires_api_key=request.requires_api_key,
         is_public=request.is_public,
         enabled_by_default=request.enabled_by_default,
+        mcp_config=mcp_config,
+        a2a_config=a2a_config,
     )
 
     try:
@@ -137,6 +146,9 @@ async def admin_update_tool(
 
     Requires admin access.
 
+    For MCP external tools, provide mcpConfig with server URL and auth settings.
+    For A2A tools, provide a2aConfig with agent URL and capabilities.
+
     Args:
         tool_id: Tool identifier
         request: Fields to update
@@ -150,6 +162,13 @@ async def admin_update_tool(
     service = get_tool_catalog_service()
 
     updates = request.model_dump(exclude_unset=True, by_alias=False)
+
+    # Convert MCP and A2A config requests to models if provided
+    if "mcp_config" in updates and updates["mcp_config"] is not None:
+        updates["mcp_config"] = request.mcp_config.to_model()
+    if "a2a_config" in updates and updates["a2a_config"] is not None:
+        updates["a2a_config"] = request.a2a_config.to_model()
+
     updated = await service.update_tool(tool_id, updates, admin)
 
     if not updated:

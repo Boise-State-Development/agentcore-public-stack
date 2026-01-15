@@ -99,6 +99,10 @@ class MainAgent:
         self.tool_registry = create_default_registry()
         self.tool_filter = ToolFilter(self.tool_registry)
 
+        # Register external MCP tool IDs from enabled tools
+        # (These will be loaded lazily during _create_agent)
+        self._register_external_mcp_tools()
+
         # Initialize gateway integration
         self.gateway_integration = GatewayIntegration()
 
@@ -121,14 +125,47 @@ class MainAgent:
     def _create_agent(self) -> None:
         """Create agent with filtered tools and session management"""
         try:
-            # Get filtered tools
-            local_tools, gateway_tool_ids = self.tool_filter.filter_tools(self.enabled_tools)
+            # Get filtered tools using extended filter
+            filter_result = self.tool_filter.filter_tools_extended(self.enabled_tools)
+            local_tools = filter_result.local_tools
+            gateway_tool_ids = filter_result.gateway_tool_ids
+            external_mcp_tool_ids = filter_result.external_mcp_tool_ids
 
             # Get gateway client and add to tools if available
             if gateway_tool_ids:
                 gateway_client = self.gateway_integration.get_client(gateway_tool_ids)
                 if gateway_client:
                     local_tools = self.gateway_integration.add_to_tool_list(local_tools)
+
+            # Load external MCP tools and add to tools list
+            if external_mcp_tool_ids:
+                from agents.main_agent.integrations.external_mcp_client import (
+                    get_external_mcp_integration
+                )
+                import asyncio
+
+                external_integration = get_external_mcp_integration()
+                # Run async load in sync context
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're already in an async context, we need to handle differently
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(
+                            asyncio.run,
+                            external_integration.load_external_tools(external_mcp_tool_ids)
+                        )
+                        external_clients = future.result()
+                else:
+                    external_clients = loop.run_until_complete(
+                        external_integration.load_external_tools(external_mcp_tool_ids)
+                    )
+
+                for client in external_clients:
+                    if client not in local_tools:
+                        local_tools.append(client)
+
+                logger.info(f"Added {len(external_clients)} external MCP clients to tools")
 
             # Create hooks
             hooks = self._create_hooks()
@@ -145,6 +182,53 @@ class MainAgent:
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise
+
+    def _register_external_mcp_tools(self) -> None:
+        """
+        Register external MCP tool IDs with the tool filter.
+
+        This queries the tool catalog for tools with protocol='mcp_external'
+        and registers them with the tool filter so they're recognized during filtering.
+        """
+        if not self.enabled_tools:
+            return
+
+        try:
+            from apis.app_api.tools.repository import get_tool_catalog_repository
+            import asyncio
+
+            repository = get_tool_catalog_repository()
+            external_tool_ids = []
+
+            # Query each enabled tool to check if it's an external MCP tool
+            async def check_tools():
+                for tool_id in self.enabled_tools:
+                    tool = await repository.get_tool(tool_id)
+                    if tool and tool.protocol == "mcp_external":
+                        external_tool_ids.append(tool_id)
+                return external_tool_ids
+
+            # Run async check
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, check_tools())
+                        tool_ids = future.result()
+                else:
+                    tool_ids = loop.run_until_complete(check_tools())
+            except RuntimeError:
+                # No event loop available
+                tool_ids = asyncio.run(check_tools())
+
+            if tool_ids:
+                self.tool_filter.set_external_mcp_tools(tool_ids)
+                logger.info(f"Registered {len(tool_ids)} external MCP tools: {tool_ids}")
+
+        except Exception as e:
+            logger.warning(f"Could not register external MCP tools: {e}")
+            # Non-fatal - external tools just won't be available
 
     def _create_hooks(self) -> List:
         """
