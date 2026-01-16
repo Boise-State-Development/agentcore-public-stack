@@ -185,7 +185,11 @@ async def _store_message_metadata_cloud(
         PK: USER#{user_id}
         SK: C#{timestamp}#{uuid}
 
-        GSI: SessionLookupIndex
+        GSI1: UserTimestampIndex (time-range queries by user)
+            GSI1PK: USER#{user_id}
+            GSI1SK: {timestamp}
+
+        GSI2: SessionLookupIndex (per-session cost queries)
             GSI_PK: SESSION#{session_id}
             GSI_SK: C#{timestamp}
 
@@ -193,7 +197,8 @@ async def _store_message_metadata_cloud(
         - Clean separation from session records (S# prefix)
         - Time-ordered by default
         - Unique SK via UUID prevents collisions
-        - Per-session cost queries via GSI
+        - Per-session cost queries via SessionLookupIndex GSI
+        - Time-range queries via UserTimestampIndex GSI
         - TTL only affects cost records (sessions don't have ttl)
     """
     try:
@@ -226,7 +231,11 @@ async def _store_message_metadata_cloud(
             "PK": f"USER#{user_id}",
             "SK": f"C#{timestamp}#{unique_id}",
 
-            # GSI keys for per-session cost queries
+            # GSI1 keys for UserTimestampIndex - enables time-range queries across all user messages
+            "GSI1PK": f"USER#{user_id}",
+            "GSI1SK": timestamp,
+
+            # GSI keys for SessionLookupIndex - enables per-session cost queries
             "GSI_PK": f"SESSION#{session_id}",
             "GSI_SK": f"C#{timestamp}",
 
@@ -679,26 +688,31 @@ async def _store_session_metadata_cloud(
                 merged_item['SK'] = new_sk
 
                 # Transactional delete + put
-                dynamodb.meta.client.transact_write_items(
-                    TransactItems=[
-                        {
-                            'Delete': {
-                                'TableName': table_name,
-                                'Key': {
-                                    'PK': {'S': pk},
-                                    'SK': {'S': old_sk}
+                logger.debug(f"🔄 Transacting session move: old_sk={old_sk[:50]}..., new_sk={new_sk[:50]}...")
+                try:
+                    dynamodb.meta.client.transact_write_items(
+                        TransactItems=[
+                            {
+                                'Delete': {
+                                    'TableName': table_name,
+                                    'Key': {
+                                        'PK': {'S': pk},
+                                        'SK': {'S': old_sk}
+                                    }
+                                }
+                            },
+                            {
+                                'Put': {
+                                    'TableName': table_name,
+                                    'Item': _convert_to_dynamodb_format(merged_item)
                                 }
                             }
-                        },
-                        {
-                            'Put': {
-                                'TableName': table_name,
-                                'Item': _convert_to_dynamodb_format(merged_item)
-                            }
-                        }
-                    ]
-                )
-                logger.info(f"💾 Moved session metadata in DynamoDB (SK changed)")
+                        ]
+                    )
+                    logger.info(f"💾 Moved session metadata in DynamoDB (SK changed)")
+                except Exception as tx_error:
+                    logger.error(f"Transaction failed - PK={pk}, old_SK={old_sk}, new_SK={new_sk}")
+                    raise
             else:
                 # SK unchanged - simple update with deep merge
                 # Build update expression for partial update
@@ -803,10 +817,10 @@ def _convert_to_dynamodb_format(item: dict) -> dict:
         elif isinstance(value, (int, float, Decimal)):
             result[key] = {'N': str(value)}
         elif isinstance(value, list):
-            if all(isinstance(v, str) for v in value):
-                result[key] = {'SS': value} if value else {'L': []}
-            else:
-                result[key] = {'L': [_convert_single_value_to_dynamodb(v) for v in value]}
+            # Always use List type (L), not String Set (SS)
+            # SS has restrictions: no empty strings, no duplicates, cannot be empty
+            # Using L is safer and preserves order
+            result[key] = {'L': [_convert_single_value_to_dynamodb(v) for v in value]}
         elif isinstance(value, dict):
             result[key] = {'M': _convert_to_dynamodb_format(value)}
     return result

@@ -568,13 +568,35 @@ class DynamoDBStorage(MetadataStorage):
                 )
                 items.extend(response.get("Items", []))
 
-            # Convert Decimal to float and remove DynamoDB keys
+            # Convert Decimal to float, remove DynamoDB keys, and flatten for aggregation
             results = []
             for item in items:
                 item_float = self._convert_decimal_to_float(item)
-                for key in ["PK", "SK", "GSI1PK", "GSI1SK", "ttl"]:
+
+                # Remove DynamoDB-specific keys
+                for key in ["PK", "SK", "GSI1PK", "GSI1SK", "GSI_PK", "GSI_SK", "ttl"]:
                     item_float.pop(key, None)
-                results.append(item_float)
+
+                # Flatten nested structures for aggregation compatibility
+                # (matches local_file_storage.get_user_messages_in_range format)
+                model_info = item_float.get("modelInfo", {})
+                token_usage = item_float.get("tokenUsage", {})
+
+                flattened = {
+                    "cost": item_float.get("cost", 0.0),
+                    "inputTokens": token_usage.get("inputTokens", 0),
+                    "outputTokens": token_usage.get("outputTokens", 0),
+                    "cacheReadTokens": token_usage.get("cacheReadInputTokens", 0),
+                    "cacheWriteTokens": token_usage.get("cacheWriteInputTokens", 0),
+                    "modelId": model_info.get("modelId", "unknown"),
+                    "modelName": model_info.get("modelName", "Unknown"),
+                    "provider": model_info.get("provider", "unknown"),
+                    "pricingSnapshot": model_info.get("pricingSnapshot", {}),
+                    "timestamp": item_float.get("timestamp", ""),
+                    "sessionId": item_float.get("sessionId", ""),
+                    "messageId": item_float.get("messageId", "")
+                }
+                results.append(flattened)
 
             return results
 

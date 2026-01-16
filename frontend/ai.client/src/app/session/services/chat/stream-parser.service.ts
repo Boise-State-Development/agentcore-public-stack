@@ -1305,16 +1305,16 @@ export class StreamParserService {
   /**
    * Update the last completed message with metadata if it doesn't have it yet.
    * This handles the case where metadata arrives after a message is finalized.
-   * Also updates if new metadata has more complete information (e.g., TTFT).
+   * Also updates if new metadata has more complete information (e.g., TTFT, cost).
    */
   private updateLastCompletedMessageWithMetadata(): void {
     const completed = this.completedMessages();
     if (completed.length === 0) return;
-    
+
     const lastMessage = completed[completed.length - 1];
     const newMetadata = this.getMetadataForMessage();
     if (!newMetadata) return;
-    
+
     // Always update if message doesn't have metadata
     if (!lastMessage.metadata) {
       this.completedMessages.update(messages => {
@@ -1327,22 +1327,45 @@ export class StreamParserService {
       });
       return;
     }
-    
-    // Update if new metadata has TTFT but existing doesn't (final metadata with calculated TTFT)
+
+    // Check if we need to update - compare existing vs new metadata
     const existingMetadata = lastMessage.metadata as Record<string, unknown>;
     const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number } | undefined;
     const existingTTFT = existingLatency?.timeToFirstToken;
-    
+    const existingCost = existingMetadata['cost'] as number | undefined;
+    const existingTokenUsage = existingMetadata['tokenUsage'] as {
+      cacheReadInputTokens?: number;
+      cacheWriteInputTokens?: number;
+    } | undefined;
+
     const newLatency = newMetadata['latency'] as { timeToFirstToken?: number } | undefined;
     const newTTFT = newLatency?.timeToFirstToken;
-    
-    if (!existingTTFT && newTTFT) {
+    const newCost = newMetadata['cost'] as number | undefined;
+    const newTokenUsage = newMetadata['tokenUsage'] as {
+      cacheReadInputTokens?: number;
+      cacheWriteInputTokens?: number;
+    } | undefined;
+
+    // Update if new metadata has fields that existing doesn't have
+    const needsTTFTUpdate = !existingTTFT && newTTFT;
+    const needsCostUpdate = existingCost === undefined && newCost !== undefined;
+    const needsCacheUpdate = (
+      existingTokenUsage?.cacheReadInputTokens === undefined &&
+      newTokenUsage?.cacheReadInputTokens !== undefined
+    ) || (
+      existingTokenUsage?.cacheWriteInputTokens === undefined &&
+      newTokenUsage?.cacheWriteInputTokens !== undefined
+    );
+
+    if (needsTTFTUpdate || needsCostUpdate || needsCacheUpdate) {
       // Merge new metadata with existing (prefer new values)
       this.completedMessages.update(messages => {
         const updated = [...messages];
         const existingLatencyObj = existingMetadata['latency'] as Record<string, unknown> | undefined;
         const newLatencyObj = newMetadata['latency'] as Record<string, unknown> | undefined;
-        
+        const existingTokenUsageObj = existingMetadata['tokenUsage'] as Record<string, unknown> | undefined;
+        const newTokenUsageObj = newMetadata['tokenUsage'] as Record<string, unknown> | undefined;
+
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
           metadata: {
@@ -1352,6 +1375,11 @@ export class StreamParserService {
             latency: {
               ...(existingLatencyObj || {}),
               ...(newLatencyObj || {})
+            },
+            // Merge tokenUsage object to preserve both values
+            tokenUsage: {
+              ...(existingTokenUsageObj || {}),
+              ...(newTokenUsageObj || {})
             }
           }
         };
@@ -1418,6 +1446,11 @@ export class StreamParserService {
         timeToFirstToken: metadataEvent.metrics.timeToFirstByteMs ?? 0,
         endToEndLatency: metadataEvent.metrics.latencyMs
       };
+    }
+
+    // Include cost if available (sent from backend during streaming)
+    if (metadataEvent.cost !== undefined) {
+      result['cost'] = metadataEvent.cost;
     }
 
     // Preserve any other fields (like trace)

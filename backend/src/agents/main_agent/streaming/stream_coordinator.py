@@ -216,6 +216,22 @@ class StreamCoordinator:
                         # Add end-to-end latency to metrics for consistency
                         final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
 
+                        # Calculate and add cost to metadata if we have usage and agent info
+                        if main_agent_wrapper and hasattr(main_agent_wrapper, 'model_config'):
+                            model_id = main_agent_wrapper.model_config.model_id
+                            usage_for_cost = accumulated_metadata.get("usage", {})
+                            logger.info(f"💰 Cost calculation: model_id={model_id}, usage={usage_for_cost}")
+                            try:
+                                cost = await self._calculate_streaming_cost(
+                                    model_id=model_id,
+                                    usage=usage_for_cost
+                                )
+                                if cost is not None:
+                                    final_metadata["cost"] = cost
+                                    logger.info(f"💰 Calculated streaming cost: ${cost:.6f} for {usage_for_cost.get('inputTokens', 0)} input, {usage_for_cost.get('outputTokens', 0)} output tokens")
+                            except Exception as cost_error:
+                                logger.warning(f"Failed to calculate streaming cost: {cost_error}")
+
                         # Log cache metrics for performance monitoring
                         self._log_cache_metrics(
                             usage=final_metadata.get("usage", {}),
@@ -439,6 +455,22 @@ class StreamCoordinator:
 
                 logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (parallel)")
 
+            # Update compaction state if session manager supports it
+            # This tracks input token usage and triggers compaction when threshold exceeded
+            if hasattr(session_manager, 'update_after_turn'):
+                input_tokens = accumulated_metadata.get("usage", {}).get("inputTokens", 0)
+                # Also include cache tokens for accurate context size tracking
+                cache_read_tokens = accumulated_metadata.get("usage", {}).get("cacheReadInputTokens", 0)
+                cache_write_tokens = accumulated_metadata.get("usage", {}).get("cacheWriteInputTokens", 0)
+                total_input_tokens = input_tokens + cache_read_tokens + cache_write_tokens
+
+                if total_input_tokens > 0:
+                    try:
+                        await session_manager.update_after_turn(total_input_tokens)
+                        logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
+                    except Exception as e:
+                        logger.warning(f"Failed to update compaction state: {e}")
+
         except Exception as e:
             # Handle errors with emergency flush
             logger.error(f"Error in stream_response: {e}")
@@ -573,9 +605,10 @@ class StreamCoordinator:
         else:
             # No cache activity - might be non-Bedrock model or caching disabled
             if input_tokens > 0:
-                logger.debug(
+                logger.info(
                     f"📦 No cache activity [session={session_id[:8]}...]: "
-                    f"input={input_tokens:,} tokens, output={output_tokens:,} tokens"
+                    f"input={input_tokens:,} tokens, output={output_tokens:,} tokens "
+                    f"(usage keys: {list(usage.keys())})"
                 )
 
     def _flush_session(self, session_manager: Any) -> Optional[int]:
@@ -1069,6 +1102,49 @@ class StreamCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to calculate message cost: {e}")
+            return None
+
+    async def _calculate_streaming_cost(
+        self,
+        model_id: str,
+        usage: Dict[str, Any]
+    ) -> Optional[float]:
+        """
+        Calculate cost for streaming response to send to client in real-time.
+
+        This is a lightweight cost calculation used during streaming to show
+        cost immediately in the UI. The full cost calculation with pricing
+        snapshot is done in _store_message_metadata for persistence.
+
+        Args:
+            model_id: Model identifier
+            usage: Token usage dict from streaming
+
+        Returns:
+            Total cost in USD or None if pricing unavailable
+        """
+        if not usage:
+            return None
+
+        try:
+            # Get pricing snapshot for this model
+            pricing = await self._get_pricing_snapshot(model_id)
+            if not pricing:
+                logger.warning(f"No pricing found for model {model_id}")
+                return None
+
+            # Log pricing for debugging
+            if hasattr(pricing, 'model_dump'):
+                pricing_dict = pricing.model_dump(by_alias=True)
+            else:
+                pricing_dict = pricing
+            logger.info(f"💰 Pricing for {model_id}: input=${pricing_dict.get('inputPricePerMtok', 0)}/M, output=${pricing_dict.get('outputPricePerMtok', 0)}/M, cache_read=${pricing_dict.get('cacheReadPricePerMtok', 0)}/M")
+
+            # Calculate cost using the calculator
+            return self._calculate_message_cost(usage, pricing)
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate streaming cost: {e}")
             return None
 
     async def _update_session_metadata(

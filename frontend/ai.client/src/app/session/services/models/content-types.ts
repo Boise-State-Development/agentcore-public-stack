@@ -240,6 +240,8 @@ export interface MetadataEvent {
   metrics?: Metrics;
   trace?: any;
   usage?: Usage;
+  /** Total cost in USD for this message (calculated from token usage and model pricing) */
+  cost?: number;
 }
 
 export interface ExceptionEvent {
