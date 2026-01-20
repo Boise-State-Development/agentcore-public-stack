@@ -1,21 +1,22 @@
 """Document API request/response models"""
 
-from typing import Optional, List, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Literal, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
 
 # Type alias for document processing status
-DocumentStatus = Literal['uploading', 'chunking', 'embedding', 'complete', 'failed']
+DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "failed"]
 
 
 class Document(BaseModel):
-    """Complete document model (internal use)
-    
+    """
+    Complete document model (internal use)
     Stored in DynamoDB using adjacency list pattern:
     PK: AST#{assistant_id}
     SK: DOC#{document_id}
     """
-    model_config = ConfigDict(populate_by_name=True, extra='allow')
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     document_id: str = Field(..., alias="documentId", description="Document identifier")
     assistant_id: str = Field(..., alias="assistantId", description="Parent assistant identifier")
@@ -34,6 +35,7 @@ class Document(BaseModel):
 
 class CreateDocumentRequest(BaseModel):
     """Request body for initiating document upload"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     filename: str = Field(..., description="Original filename")
@@ -43,6 +45,7 @@ class CreateDocumentRequest(BaseModel):
 
 class UploadUrlResponse(BaseModel):
     """Response containing presigned S3 upload URL"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     document_id: str = Field(..., alias="documentId", description="Generated document identifier")
@@ -52,6 +55,7 @@ class UploadUrlResponse(BaseModel):
 
 class DocumentResponse(BaseModel):
     """Response containing document data"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     document_id: str = Field(..., alias="documentId", description="Document identifier")
@@ -69,6 +73,7 @@ class DocumentResponse(BaseModel):
 
 class DocumentsListResponse(BaseModel):
     """Response for listing documents with pagination support"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     documents: List[DocumentResponse] = Field(..., description="List of documents for the assistant")

@@ -72,12 +72,12 @@ where = ["src"]
 include = ["agents*", "apis*"]
 
 [tool.black]
-line-length = 100
+line-length = 150
 target-version = ['py39']
 include = '\.pyi?$'
 
 [tool.ruff]
-line-length = 100
+line-length = 150
 target-version = "py39"
 
 [tool.mypy]
