@@ -52,7 +52,7 @@ export class ChatHttpService {
 
         const token = await this.getBearerTokenForStreamingResponse();
 
-        return fetchEventSource(`${environment.inferenceApiUrl}/invocations`, {
+        return fetchEventSource(`${environment.inferenceApiUrl}/invocations?qualifier=DEFAULT`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
