@@ -3,19 +3,17 @@
 # ==========================================
 # Note: AWS Lambda base images support both x86_64 and ARM64
 # CDK will build for the specified architecture via --platform flag
-FROM public.ecr.aws/lambda/python:3.11 AS builder
+# Using Python 3.12 on Amazon Linux 2023 (AL2023) which has glibc 2.34
+# This allows us to use PyTorch 2.7+ which requires manylinux_2_28 (glibc 2.28)
+FROM public.ecr.aws/lambda/python:3.12 AS builder
 
 # 1. Install system tools
 # Rust/GCC are needed for compiling dependencies like tiktoken or docling-core
-# Try dnf first (Amazon Linux 2023), fall back to yum (Amazon Linux 2)
-# Note: AL2 has GCC 7.3.1, which is insufficient for NumPy 2.x but we pin NumPy 1.x
-RUN (dnf --version > /dev/null 2>&1 && \
-  dnf update -y && \
-  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
-  dnf clean all) || \
-  (yum update -y && \
-  yum install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
-  yum clean all)
+# AL2023 uses dnf as package manager
+# Note: curl-minimal is already installed in the Lambda base image, don't install curl (conflicts)
+RUN dnf update -y && \
+  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip ca-certificates && \
+  dnf clean all
 
 # Install Rust (separate step for better error handling)
 # Using explicit retry logic for network reliability in CI
@@ -35,11 +33,13 @@ RUN mkdir -p /tmp/models/docling-artifacts \
 
 # 4. Install PyTorch CPU *Explicitly*
 # Installing before requirements.txt ensures we get the lightweight CPU version and not the version that includes GPU support
+# AL2023 has glibc 2.34, so we can use the latest PyTorch with manylinux_2_28 wheels
+# Note: transformers 4.45+ requires torch >= 2.6 (see https://github.com/huggingface/transformers/issues/38464)
 RUN pip install \
   --target /tmp/packages \
   --no-cache-dir \
   --index-url https://download.pytorch.org/whl/cpu \
-  torch==2.2.2
+  "torch>=2.6"
 
 # 5. Install Your Requirements
 # IMPORTANT: `requirements.txt` pins SciPy to a Lambda-compatible wheel (manylinux2014).
@@ -77,15 +77,12 @@ RUN rm -rf /tmp/models/docling-artifacts/easyocr \
 # ==========================================
 # STAGE 2: Runtime (Production Image)
 # ==========================================
-FROM public.ecr.aws/lambda/python:3.11
+FROM public.ecr.aws/lambda/python:3.12
 
 # 1. Install only runtime system libs (GL/Glib for CV2)
-# Try dnf first (Amazon Linux 2023), fall back to yum (Amazon Linux 2)
-RUN (dnf --version > /dev/null 2>&1 && \
-  dnf install -y mesa-libGL glib2 && \
-  dnf clean all) || \
-  (yum install -y mesa-libGL glib2 && \
-  yum clean all)
+# AL2023 uses dnf as package manager
+RUN dnf install -y mesa-libGL glib2 && \
+  dnf clean all
 
 # 2. Copy Python Packages
 COPY --from=builder /tmp/packages ${LAMBDA_TASK_ROOT}

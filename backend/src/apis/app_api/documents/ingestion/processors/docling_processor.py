@@ -175,7 +175,12 @@ async def process_with_docling(
     # Import inside function to avoid heavy load at cold start if not needed immediately
     import torch
 
-    torch.backends.nnpack.enabled = False
+    # Disable NNPACK if available (not present in CPU-only PyTorch builds)
+    if hasattr(torch.backends, "nnpack"):
+        torch.backends.nnpack.enabled = False
+        logger.info(f"Disabled torch.backends.nnpack (torch.backends.nnpack.enabled = {torch.backends.nnpack.enabled})")
+    else:
+        logger.info("torch.backends.nnpack not available in this PyTorch build (CPU-only version)")
 
     import tiktoken
     from docling.chunking import HybridChunker
@@ -185,8 +190,6 @@ async def process_with_docling(
     from docling_core.transforms.chunker.tokenizer.openai import OpenAITokenizer
 
     ext = _get_file_extension(filename, mime_type)
-
-    logger.info(f"Docling processor initialized with torch.backends.nnpack.enabled = {torch.backends.nnpack.enabled}")
 
     # Create a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
