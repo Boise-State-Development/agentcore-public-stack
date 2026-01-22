@@ -65,7 +65,16 @@ export class InferenceApiStack extends cdk.Stack {
     
     const runtimeExecutionRole = new iam.Role(this, 'AgentCoreRuntimeExecutionRole', {
       roleName: getResourceName(config, 'agentcore-runtime-role'),
-      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: {
+            'aws:SourceAccount': config.awsAccount,
+          },
+          ArnLike: {
+            'aws:SourceArn': `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:*`,
+          },
+        },
+      }),
       description: 'Execution role for AWS Bedrock AgentCore Runtime',
     });
 
@@ -362,29 +371,6 @@ export class InferenceApiStack extends cdk.Stack {
         'bedrock-agentcore:InvokeBrowser',
       ],
       resources: [this.browser.attrBrowserArn],
-    }));
-
-    // Runtime self-access permissions (required for runtime invocation and introspection)
-    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'RuntimeSelfAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock-agentcore:InvokeAgentRuntime',
-        'bedrock-agentcore:GetAgentRuntime',
-        'bedrock-agentcore:ListAgentRuntimes',
-      ],
-      resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:runtime/*`],
-    }));
-
-    // STS permissions for runtime credential management
-    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'STSAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'sts:GetCallerIdentity',
-        'sts:AssumeRole',
-      ],
-      resources: ['*'],
     }));
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
