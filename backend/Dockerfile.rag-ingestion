@@ -10,8 +10,9 @@ FROM public.ecr.aws/lambda/python:3.12 AS builder
 # 1. Install system tools
 # Rust/GCC are needed for compiling dependencies like tiktoken or docling-core
 # AL2023 uses dnf as package manager
+# Note: curl-minimal is already installed in the Lambda base image, don't install curl (conflicts)
 RUN dnf update -y && \
-  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip curl ca-certificates && \
+  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip ca-certificates && \
   dnf clean all
 
 # Install Rust (separate step for better error handling)
