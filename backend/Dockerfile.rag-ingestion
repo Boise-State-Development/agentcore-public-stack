@@ -34,11 +34,12 @@ RUN mkdir -p /tmp/models/docling-artifacts \
 # 4. Install PyTorch CPU *Explicitly*
 # Installing before requirements.txt ensures we get the lightweight CPU version and not the version that includes GPU support
 # AL2023 has glibc 2.34, so we can use the latest PyTorch with manylinux_2_28 wheels
+# Note: transformers 4.45+ requires torch >= 2.6 (see https://github.com/huggingface/transformers/issues/38464)
 RUN pip install \
   --target /tmp/packages \
   --no-cache-dir \
   --index-url https://download.pytorch.org/whl/cpu \
-  torch==2.5.1
+  "torch>=2.6"
 
 # 5. Install Your Requirements
 # IMPORTANT: `requirements.txt` pins SciPy to a Lambda-compatible wheel (manylinux2014).
