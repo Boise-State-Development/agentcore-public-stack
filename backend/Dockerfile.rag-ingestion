@@ -104,6 +104,8 @@ ENV DOCLING_ARTIFACTS_PATH=/opt/ml/models/docling-artifacts \
   PYTORCH_ENABLE_MPS_FALLBACK=1 \
   # CRITICAL: Disables NNPACK optimization to prevent "Out of Memory" crash
   USE_NNPACK=0 \
+  # CRITICAL: Prevent aggressive CPU feature detection that fails in Lambda
+  ATEN_CPU_CAPABILITY=default \
   # CRITICAL: Disables PyTorch hardware scan to prevent 60s startup hang
   TORCH_INDUCTOR_CACHE_DIR=/tmp/torch_inductor
 

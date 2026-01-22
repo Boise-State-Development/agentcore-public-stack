@@ -29,6 +29,15 @@ if os.environ.get("AWS_EXECUTION_ENV"):
     os.environ.setdefault("HF_HOME", "/opt/ml/models/huggingface")
     # Prevent docling/HybridChunker from trying to download models/tokenizers at runtime
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    # Explicitly disable NNPACK to prevent noisy warnings/errors in Lambda
+    os.environ["USE_NNPACK"] = "0"
+
+    # Suppress known noisy warnings from PyTorch in Lambda
+    import warnings
+
+    warnings.filterwarnings("ignore", message=".*Could not initialize NNPACK.*")
+    warnings.filterwarnings("ignore", message=".*Error in cpuinfo.*")
+    warnings.filterwarnings("ignore", message=".*failed to parse the list of.*")
 
 print("DEBUG: Finished top-level code")
 logger = logging.getLogger(__name__)
