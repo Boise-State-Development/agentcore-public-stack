@@ -209,14 +209,14 @@ build_cdk_context_params() {
     if [ -n "${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS:-}" ]; then
         context_params="${context_params} --context frontend.cloudFrontPriceClass=\"${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS}\""
     fi
-    if [ -n "${CDK_APP_API_ENTRA_CLIENT_ID:-}" ]; then
-        context_params="${context_params} --context appApi.entraClientId=\"${CDK_APP_API_ENTRA_CLIENT_ID}\""
+    if [ -n "${CDK_ENTRA_CLIENT_ID:-}" ]; then
+        context_params="${context_params} --context entraClientId=\"${CDK_ENTRA_CLIENT_ID}\""
     fi
     if [ -n "${CDK_APP_API_ENTRA_REDIRECT_URI:-}" ]; then
         context_params="${context_params} --context appApi.entraRedirectUri=\"${CDK_APP_API_ENTRA_REDIRECT_URI}\""
     fi
-    if [ -n "${CDK_APP_API_ENTRA_TENANT_ID:-}" ]; then
-        context_params="${context_params} --context appApi.entraTenantId=\"${CDK_APP_API_ENTRA_TENANT_ID}\""
+    if [ -n "${CDK_ENTRA_TENANT_ID:-}" ]; then
+        context_params="${context_params} --context entraTenantId=\"${CDK_ENTRA_TENANT_ID}\""
     fi    
     
     echo "${context_params}"

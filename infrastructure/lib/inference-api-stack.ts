@@ -375,15 +375,24 @@ export class InferenceApiStack extends cdk.Stack {
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
       agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
-      roleArn: runtimeExecutionRole.roleArn,      
-      agentRuntimeArtifact: {
+      roleArn: runtimeExecutionRole.roleArn,            
+      agentRuntimeArtifact: {        
         containerConfiguration: {
           containerUri: containerImageUri
         },
       },
+      requestHeaderConfiguration: {
+        requestHeaderAllowlist: ['Authorization'],
+      },
+      authorizerConfiguration: {
+        customJwtAuthorizer: {
+          discoveryUrl: `https://login.microsoftonline.com/${config.entraTenantId}/v2.0/.well-known/openid-configuration`,
+          allowedAudience: [config.entraClientId],
+        }        
+      },
       networkConfiguration: {
         networkMode: 'PUBLIC',
-      },
+      }, 
       protocolConfiguration: 'HTTP',
       description: 'AgentCore Runtime for AI agent workloads with LangGraph and Strands framework support',
       environmentVariables: {
@@ -439,7 +448,7 @@ export class InferenceApiStack extends cdk.Stack {
     this.runtime.node.addDependency(browserExecutionRole);
     this.runtime.node.addDependency(this.memory);
     this.runtime.node.addDependency(this.codeInterpreter);
-    this.runtime.node.addDependency(this.browser);
+    this.runtime.node.addDependency(this.browser);    
 
     // ============================================================
     // SSM Parameters for Cross-Stack References

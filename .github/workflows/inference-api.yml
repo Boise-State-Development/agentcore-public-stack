@@ -36,6 +36,8 @@ env:
   CDK_AWS_REGION: ${{ vars.AWS_REGION }}
   # CDK Configuration - from GitHub Variables
   CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+  CDK_ENTRA_CLIENT_ID: ${{ vars.CDK_ENTRA_CLIENT_ID }}
+  CDK_ENTRA_TENANT_ID: ${{ vars.CDK_ENTRA_TENANT_ID }}
   # CDK Secrets - from GitHub Secrets
   CDK_AWS_ACCOUNT: ${{ secrets.CDK_AWS_ACCOUNT }}
   # AWS Authentication
