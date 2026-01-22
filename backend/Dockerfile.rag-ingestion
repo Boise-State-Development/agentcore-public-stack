@@ -39,7 +39,7 @@ RUN pip install \
   --target /tmp/packages \
   --no-cache-dir \
   --index-url https://download.pytorch.org/whl/cpu \
-  torch==2.0.0
+  torch==2.2.2
 
 # 5. Install Your Requirements
 # IMPORTANT: `requirements.txt` pins SciPy to a Lambda-compatible wheel (manylinux2014).
