@@ -141,5 +141,20 @@ export const routes: Routes = [
         path: 'admin/tools/edit/:toolId',
         loadComponent: () => import('./admin/tools/pages/tool-form.page').then(m => m.ToolFormPage),
         canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-list.page').then(m => m.ProviderListPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers/new',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers/edit/:providerId',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
+        canActivate: [adminGuard],
     }
 ];

@@ -13,7 +13,8 @@ import {
   heroCurrencyDollar,
   heroUsers,
   heroShieldCheck,
-  heroWrenchScrewdriver
+  heroWrenchScrewdriver,
+  heroLink
 } from '@ng-icons/heroicons/outline';
 
 interface AdminFeature {
@@ -39,7 +40,8 @@ interface AdminFeature {
       heroCurrencyDollar,
       heroUsers,
       heroShieldCheck,
-      heroWrenchScrewdriver
+      heroWrenchScrewdriver,
+      heroLink
     })
   ],
   templateUrl: './admin.page.html',
@@ -96,6 +98,12 @@ export class AdminPage {
       description: 'Create and manage application roles with tool and model permissions. Configure JWT mappings and role inheritance.',
       icon: 'heroShieldCheck',
       route: '/admin/roles',
+    },
+    {
+      title: 'OAuth Providers',
+      description: 'Configure third-party OAuth integrations for MCP tool authentication. Manage Google, Microsoft, GitHub, and custom providers.',
+      icon: 'heroLink',
+      route: '/admin/oauth-providers',
     },
     {
       title: 'Quota Tiers',
