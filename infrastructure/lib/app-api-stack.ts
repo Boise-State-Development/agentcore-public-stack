@@ -1180,6 +1180,7 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for assistants base table
     assistantsTable.grantReadWriteData(taskDefinition.taskRole);
+    assistantsDocumentsBucket.grantReadWrite(taskDefinition.taskRole);
 
     // Grant permissions for quota management tables
     userQuotasTable.grantReadWriteData(taskDefinition.taskRole);
