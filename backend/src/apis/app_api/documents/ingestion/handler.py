@@ -173,6 +173,8 @@ def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
     """
     Parse S3 event to extract metadata
     """
+    from urllib.parse import unquote_plus
+
     if not event.get("Records") or len(event["Records"]) == 0:
         raise ValueError("Invalid S3 event: No Records found")
 
@@ -185,6 +187,10 @@ def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
 
     if not bucket or not key:
         raise ValueError(f"Invalid S3 event: Missing bucket or key. bucket={bucket}, key={key}")
+
+    # URL-decode the S3 key to handle special characters (spaces, parentheses, etc.)
+    # S3 event notifications URL-encode keys, but GetObject expects the original key
+    key = unquote_plus(key)
 
     # Check if metadata is already in object (test event format)
     assistant_id = object_data.get("assistant_id")
