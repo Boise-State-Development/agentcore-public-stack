@@ -133,8 +133,17 @@ def create_external_mcp_client(
         # Build list of auth handlers (may combine multiple)
         auth_handlers = []
 
-        # AWS IAM SigV4 authentication (for Lambda/API Gateway)
-        if config.auth_type == MCPAuthType.AWS_IAM or config.auth_type == "aws-iam":
+        # When an OAuth token is provided, use it exclusively as the auth method.
+        # SigV4 and OAuth both use the Authorization header and cannot coexist —
+        # SigV4 sets "AWS4-HMAC-SHA256 ..." while OAuth sets "Bearer ...".
+        # The Lambda Function URL auth type should be NONE for OAuth-authenticated tools.
+        if oauth_token:
+            oauth_auth = create_oauth_bearer_auth(token=oauth_token)
+            auth_handlers.append(oauth_auth)
+            logger.info("  Using OAuth Bearer token auth (skipping SigV4)")
+
+        # AWS IAM SigV4 authentication (for Lambda/API Gateway without OAuth)
+        elif config.auth_type == MCPAuthType.AWS_IAM or config.auth_type == "aws-iam":
             region = config.aws_region
             if not region:
                 region = extract_region_from_url(config.server_url)
@@ -158,13 +167,6 @@ def create_external_mcp_client(
             # Static bearer token (not user-specific OAuth)
             logger.warning("Static bearer token authentication not yet implemented for external MCP")
             # TODO: Implement static bearer token auth
-
-        # Add OAuth Bearer token if provided (user-specific)
-        # This is added on top of other auth methods (e.g., SigV4 + OAuth)
-        if oauth_token:
-            oauth_auth = create_oauth_bearer_auth(token=oauth_token)
-            auth_handlers.append(oauth_auth)
-            logger.info("  Adding OAuth Bearer token to requests")
 
         # Combine auth handlers
         auth = None
