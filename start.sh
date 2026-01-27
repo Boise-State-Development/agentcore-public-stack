@@ -106,13 +106,14 @@ if command -v aws &> /dev/null; then
 
     if [ "$PROFILE_TO_USE" != "default" ]; then
         echo "Using AWS profile: $PROFILE_TO_USE"
-        if aws configure list --profile "$PROFILE_TO_USE" &> /dev/null; then
-            echo "✅ AWS profile '$PROFILE_TO_USE' is valid"
-            export AWS_PROFILE="$PROFILE_TO_USE"
+        export AWS_PROFILE="$PROFILE_TO_USE"
+        
+        if aws sts get-caller-identity &> /dev/null; then
+            echo "✅ AWS profile '$PROFILE_TO_USE' is valid and credentials are working"
         else
-            echo "⚠️  AWS profile '$PROFILE_TO_USE' not found"
+            echo "⚠️  AWS profile '$PROFILE_TO_USE' credentials are not working"
             echo ""
-            echo "💡 To configure this profile, run one of:"
+            echo "💡 To fix this, run one of:"
             echo "   • For SSO: aws configure sso --profile $PROFILE_TO_USE"
             echo "   • To refresh SSO: aws sso login --profile $PROFILE_TO_USE"
             echo "   • For standard credentials: aws configure --profile $PROFILE_TO_USE"
