@@ -121,7 +121,7 @@ async def admin_create_tool(
         icon=request.icon,
         protocol=request.protocol,
         status=request.status,
-        requires_api_key=request.requires_api_key,
+        requires_oauth_provider=request.requires_oauth_provider,
         is_public=request.is_public,
         enabled_by_default=request.enabled_by_default,
         mcp_config=mcp_config,

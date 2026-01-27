@@ -138,6 +138,7 @@ class MainAgent:
                     local_tools = self.gateway_integration.add_to_tool_list(local_tools)
 
             # Load external MCP tools and add to tools list
+            # Pass user_id for OAuth token retrieval on OAuth-enabled tools
             if external_mcp_tool_ids:
                 from agents.main_agent.integrations.external_mcp_client import (
                     get_external_mcp_integration
@@ -153,12 +154,18 @@ class MainAgent:
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(
                             asyncio.run,
-                            external_integration.load_external_tools(external_mcp_tool_ids)
+                            external_integration.load_external_tools(
+                                external_mcp_tool_ids,
+                                user_id=self.user_id,  # Pass user_id for OAuth
+                            )
                         )
                         external_clients = future.result()
                 else:
                     external_clients = loop.run_until_complete(
-                        external_integration.load_external_tools(external_mcp_tool_ids)
+                        external_integration.load_external_tools(
+                            external_mcp_tool_ids,
+                            user_id=self.user_id,  # Pass user_id for OAuth
+                        )
                     )
 
                 for client in external_clients:

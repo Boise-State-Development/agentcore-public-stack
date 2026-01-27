@@ -93,6 +93,15 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'settings/connections',
+        loadComponent: () => import('./settings/connections/connections.page').then(m => m.ConnectionsPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'settings/oauth/callback',
+        loadComponent: () => import('./settings/oauth-callback/oauth-callback.page').then(m => m.OAuthCallbackPage),
+    },
+    {
         path: 'admin/quota',
         loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
         canActivate: [adminGuard],
@@ -141,5 +150,24 @@ export const routes: Routes = [
         path: 'admin/tools/edit/:toolId',
         loadComponent: () => import('./admin/tools/pages/tool-form.page').then(m => m.ToolFormPage),
         canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-list.page').then(m => m.ProviderListPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers/new',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/oauth-providers/edit/:providerId',
+        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: '**',
+        loadComponent: () => import('./not-found/not-found.page').then(m => m.NotFoundPage),
     }
 ];

@@ -43,7 +43,6 @@ class LegacyToolResponse(BaseModel):
     description: str
     category: str
     is_gateway_tool: bool = Field(..., alias="isGatewayTool")
-    requires_api_key: Optional[str] = Field(None, alias="requiresApiKey")
     icon: Optional[str] = None
 
     model_config = {"populate_by_name": True}
@@ -179,7 +178,6 @@ async def list_all_tools(
                 description=t.description,
                 category=t.category.value,
                 is_gateway_tool=t.is_gateway_tool,
-                requires_api_key=t.requires_api_key,
                 icon=t.icon,
             )
             for t in tools
@@ -268,7 +266,6 @@ async def list_available_tools(
                 description=t.description,
                 category=t.category.value,
                 is_gateway_tool=t.is_gateway_tool,
-                requires_api_key=t.requires_api_key,
                 icon=t.icon,
             )
             for t in available_tools

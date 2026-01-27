@@ -108,6 +108,7 @@ from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
+from apis.app_api.oauth.routes import router as oauth_router
 
 # Include routers
 app.include_router(health_router)
@@ -123,6 +124,7 @@ app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
+app.include_router(oauth_router)  # OAuth provider connections
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

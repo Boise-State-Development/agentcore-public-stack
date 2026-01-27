@@ -27,7 +27,7 @@ class ToolMetadata:
     description: str
     category: ToolCategory
     is_gateway_tool: bool = False
-    requires_api_key: Optional[str] = None
+    requires_oauth_provider: Optional[str] = None  # OAuth provider ID if required
     icon: Optional[str] = None  # Icon name for UI
 
     def to_dict(self) -> dict:
@@ -38,7 +38,7 @@ class ToolMetadata:
             "description": self.description,
             "category": self.category.value,
             "isGatewayTool": self.is_gateway_tool,
-            "requiresApiKey": self.requires_api_key,
+            "requiresOauthProvider": self.requires_oauth_provider,
             "icon": self.icon,
         }
 

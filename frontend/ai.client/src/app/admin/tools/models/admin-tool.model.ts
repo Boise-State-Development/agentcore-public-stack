@@ -79,7 +79,7 @@ export interface AdminTool {
   icon: string | null;
   protocol: ToolProtocol;
   status: ToolStatus;
-  requiresApiKey: boolean;
+  requiresOauthProvider: string | null;
   isPublic: boolean;
   allowedAppRoles: string[];
   enabledByDefault: boolean;
@@ -130,7 +130,7 @@ export interface ToolCreateRequest {
   icon?: string;
   protocol?: ToolProtocol;
   status?: ToolStatus;
-  requiresApiKey?: boolean;
+  requiresOauthProvider?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig;
@@ -147,7 +147,7 @@ export interface ToolUpdateRequest {
   icon?: string;
   protocol?: ToolProtocol;
   status?: ToolStatus;
-  requiresApiKey?: boolean;
+  requiresOauthProvider?: string | null;
   isPublic?: boolean;
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig | null;
@@ -182,7 +182,7 @@ export interface ToolFormData {
   icon: string;
   protocol: ToolProtocol;
   status: ToolStatus;
-  requiresApiKey: boolean;
+  requiresOauthProvider: string | null;
   isPublic: boolean;
   enabledByDefault: boolean;
   // MCP configuration (for mcp_external protocol)

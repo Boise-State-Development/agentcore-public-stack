@@ -572,7 +572,7 @@ class ToolCatalogService:
             icon=legacy.icon,
             protocol=ToolProtocol.MCP_GATEWAY if legacy.is_gateway_tool else ToolProtocol.LOCAL,
             status=ToolStatus.ACTIVE,
-            requires_api_key=legacy.requires_api_key is not None,
+            requires_oauth_provider=legacy.requires_oauth_provider,
             is_public=self._is_public_tool(legacy.tool_id),
             enabled_by_default=self._get_default_enabled(legacy.tool_id),
         )

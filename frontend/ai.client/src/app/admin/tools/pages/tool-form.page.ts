@@ -15,8 +15,10 @@ import {
   heroCheck,
   heroServer,
   heroUserGroup,
+  heroLink,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
+import { OAuthProvidersService } from '../../oauth-providers/services/oauth-providers.service';
 import {
   AdminTool,
   ToolFormData,
@@ -35,7 +37,7 @@ import {
   selector: 'app-tool-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, ReactiveFormsModule, NgIcon],
-  providers: [provideIcons({ heroArrowLeft, heroCheck, heroServer, heroUserGroup })],
+  providers: [provideIcons({ heroArrowLeft, heroCheck, heroServer, heroUserGroup, heroLink })],
   host: {
     class: 'block p-6',
   },
@@ -285,7 +287,7 @@ import {
               </div>
 
               <!-- Health Check -->
-              <label class="flex items-center gap-2">
+              <label class="flex items-center gap-2 mb-4">
                 <input
                   type="checkbox"
                   formControlName="mcpHealthCheckEnabled"
@@ -295,6 +297,37 @@ import {
                   Enable Health Checks
                 </span>
               </label>
+            </div>
+
+            <!-- OAuth Provider Requirement -->
+            <div class="border border-emerald-200 dark:border-emerald-800 rounded-lg p-4 bg-emerald-50/50 dark:bg-emerald-900/20">
+              <div class="flex items-center gap-2 mb-4">
+                <ng-icon name="heroLink" class="size-5 text-emerald-600 dark:text-emerald-400" />
+                <h3 class="text-lg font-semibold text-emerald-900 dark:text-emerald-100">User OAuth Connection</h3>
+              </div>
+              <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                If this tool requires access to a user's external account (e.g., Google Workspace, Microsoft 365),
+                select the OAuth provider. The user's access token will be passed to the MCP server.
+              </p>
+              <div>
+                <label for="requiresOauthProvider" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Required OAuth Provider
+                </label>
+                <select
+                  id="requiresOauthProvider"
+                  formControlName="requiresOauthProvider"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 dark:bg-gray-800 dark:border-gray-600"
+                >
+                  <option [value]="''">None - No user OAuth required</option>
+                  @for (provider of oauthProviders(); track provider.providerId) {
+                    <option [value]="provider.providerId">{{ provider.displayName }}</option>
+                  }
+                </select>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Users must connect this provider before using the tool. Manage providers in
+                  <a routerLink="/admin/oauth-providers" class="text-emerald-600 hover:underline">OAuth Settings</a>.
+                </p>
+              </div>
             </div>
           }
 
@@ -477,19 +510,6 @@ import {
               </span>
             </label>
 
-            <label class="flex items-center gap-2">
-              <input
-                type="checkbox"
-                formControlName="requiresApiKey"
-                class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Requires API Key
-              </span>
-              <span class="text-sm text-gray-500 dark:text-gray-400">
-                (Tool requires external API key)
-              </span>
-            </label>
           </div>
 
           <!-- Error Message -->
@@ -526,6 +546,7 @@ export class ToolFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private adminToolService = inject(AdminToolService);
+  private oauthProvidersService = inject(OAuthProvidersService);
 
   readonly categories = TOOL_CATEGORIES;
   readonly protocols = TOOL_PROTOCOLS;
@@ -542,6 +563,9 @@ export class ToolFormPage implements OnInit {
   readonly isEditMode = computed(() => !!this.toolId());
   readonly selectedProtocol = signal<ToolProtocol>('local');
 
+  /** Available OAuth providers for dropdown */
+  readonly oauthProviders = computed(() => this.oauthProvidersService.getEnabledProviders());
+
   form: FormGroup = this.fb.group({
     toolId: ['', [Validators.required, Validators.pattern(/^[a-z][a-z0-9_]{2,49}$/)]],
     displayName: ['', [Validators.required, Validators.minLength(1), Validators.maxLength(100)]],
@@ -552,7 +576,7 @@ export class ToolFormPage implements OnInit {
     icon: [''],
     isPublic: [false],
     enabledByDefault: [false],
-    requiresApiKey: [false],
+    requiresOauthProvider: [''],
     // MCP External Server configuration
     mcpServerUrl: [''],
     mcpTransport: ['streamable-http'],
@@ -618,7 +642,7 @@ export class ToolFormPage implements OnInit {
         icon: tool.icon || '',
         isPublic: tool.isPublic,
         enabledByDefault: tool.enabledByDefault,
-        requiresApiKey: tool.requiresApiKey,
+        requiresOauthProvider: tool.requiresOauthProvider || '',
       });
 
       // Update protocol signal
@@ -702,6 +726,9 @@ export class ToolFormPage implements OnInit {
         };
       }
 
+      // Get OAuth provider value (empty string becomes null)
+      const requiresOauthProvider = formValue.requiresOauthProvider || null;
+
       if (this.isEditMode()) {
         // Update existing tool
         await this.adminToolService.updateTool(this.toolId()!, {
@@ -713,7 +740,7 @@ export class ToolFormPage implements OnInit {
           icon: formValue.icon || undefined,
           isPublic: formValue.isPublic,
           enabledByDefault: formValue.enabledByDefault,
-          requiresApiKey: formValue.requiresApiKey,
+          requiresOauthProvider: requiresOauthProvider,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
         });
@@ -729,7 +756,7 @@ export class ToolFormPage implements OnInit {
           icon: formValue.icon || undefined,
           isPublic: formValue.isPublic,
           enabledByDefault: formValue.enabledByDefault,
-          requiresApiKey: formValue.requiresApiKey,
+          requiresOauthProvider: requiresOauthProvider,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
         });

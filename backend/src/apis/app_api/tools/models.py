@@ -259,8 +259,9 @@ class ToolDefinition(BaseModel):
     # Technical metadata
     protocol: ToolProtocol = Field(..., description="How the tool is invoked")
     status: ToolStatus = Field(default=ToolStatus.ACTIVE)
-    requires_api_key: bool = Field(
-        default=False, description="Whether tool requires external API key"
+    requires_oauth_provider: Optional[str] = Field(
+        None,
+        description="OAuth provider ID if tool requires user OAuth connection (e.g., 'google_workspace')",
     )
 
     # Access control
@@ -317,7 +318,7 @@ class ToolDefinition(BaseModel):
             "icon": self.icon,
             "protocol": self.protocol if isinstance(self.protocol, str) else self.protocol.value,
             "status": self.status if isinstance(self.status, str) else self.status.value,
-            "requiresApiKey": self.requires_api_key,
+            "requiresOauthProvider": self.requires_oauth_provider,
             "isPublic": self.is_public,
             "enabledByDefault": self.enabled_by_default,
             "createdAt": self.created_at.isoformat() + "Z" if self.created_at else None,
@@ -374,7 +375,7 @@ class ToolDefinition(BaseModel):
             icon=item.get("icon"),
             protocol=protocol,
             status=item.get("status", ToolStatus.ACTIVE),
-            requires_api_key=item.get("requiresApiKey", False),
+            requires_oauth_provider=item.get("requiresOauthProvider"),
             is_public=item.get("isPublic", False),
             enabled_by_default=item.get("enabledByDefault", False),
             mcp_config=mcp_config,
@@ -438,6 +439,7 @@ class UserToolAccess(BaseModel):
     icon: Optional[str] = None
     protocol: ToolProtocol
     status: ToolStatus
+    requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
 
     # Access info
     granted_by: List[str] = Field(
@@ -561,7 +563,7 @@ class ToolCreateRequest(BaseModel):
     icon: Optional[str] = Field(None, max_length=50)
     protocol: ToolProtocol = Field(default=ToolProtocol.LOCAL)
     status: ToolStatus = Field(default=ToolStatus.ACTIVE)
-    requires_api_key: bool = Field(default=False, alias="requiresApiKey")
+    requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     is_public: bool = Field(default=False, alias="isPublic")
     enabled_by_default: bool = Field(default=False, alias="enabledByDefault")
 
@@ -583,7 +585,7 @@ class ToolUpdateRequest(BaseModel):
     icon: Optional[str] = Field(None, max_length=50)
     protocol: Optional[ToolProtocol] = None
     status: Optional[ToolStatus] = None
-    requires_api_key: Optional[bool] = Field(None, alias="requiresApiKey")
+    requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     is_public: Optional[bool] = Field(None, alias="isPublic")
     enabled_by_default: Optional[bool] = Field(None, alias="enabledByDefault")
 
@@ -711,7 +713,7 @@ class AdminToolResponse(BaseModel):
     icon: Optional[str] = None
     protocol: ToolProtocol
     status: ToolStatus
-    requires_api_key: bool = Field(..., alias="requiresApiKey")
+    requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
     is_public: bool = Field(..., alias="isPublic")
     allowed_app_roles: List[str] = Field(..., alias="allowedAppRoles")
     enabled_by_default: bool = Field(..., alias="enabledByDefault")
@@ -748,7 +750,7 @@ class AdminToolResponse(BaseModel):
             icon=tool.icon,
             protocol=tool.protocol,
             status=tool.status,
-            requires_api_key=tool.requires_api_key,
+            requires_oauth_provider=tool.requires_oauth_provider,
             is_public=tool.is_public,
             allowed_app_roles=allowed_roles or tool.allowed_app_roles,
             enabled_by_default=tool.enabled_by_default,

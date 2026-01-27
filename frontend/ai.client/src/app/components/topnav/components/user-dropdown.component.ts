@@ -15,7 +15,8 @@ import {
   heroComputerDesktop,
   heroChatBubbleLeftRight,
   heroDocument,
-  heroBriefcase
+  heroBriefcase,
+  heroLink
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 
@@ -43,7 +44,8 @@ export interface User {
       heroMoon,
       heroComputerDesktop,
       heroChatBubbleLeftRight,
-      heroDocument
+      heroDocument,
+      heroLink
     })
   ],
   template: `
@@ -187,6 +189,20 @@ export interface User {
                   class="size-5 text-gray-400 dark:text-gray-500"
                 />
                 <span>My Files</span>
+              </a>
+
+              <!-- Connections (available to all users) -->
+              <a
+                cdkMenuItem
+                routerLink="/settings/connections"
+                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                role="menuitem"
+              >
+                <ng-icon
+                  name="heroLink"
+                  class="size-5 text-gray-400 dark:text-gray-500"
+                />
+                <span>Connections</span>
               </a>
             </div>
 

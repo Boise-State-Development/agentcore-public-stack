@@ -12,8 +12,6 @@ export interface Tool {
   category: ToolCategory;
   /** Whether this is a gateway/MCP tool */
   isGatewayTool: boolean;
-  /** API key required for this tool (if any) */
-  requiresApiKey: string | null;
   /** Icon name for UI */
   icon: string | null;
 }
