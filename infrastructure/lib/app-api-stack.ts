@@ -1139,10 +1139,23 @@ export class AppApiStack extends cdk.Stack {
         FILE_UPLOAD_MAX_SIZE_BYTES: String(config.fileUpload?.maxFileSizeBytes || 4194304),
         FILE_UPLOAD_MAX_FILES_PER_MESSAGE: String(config.fileUpload?.maxFilesPerMessage || 5),
         FILE_UPLOAD_USER_QUOTA_BYTES: String(config.fileUpload?.userQuotaBytes || 1073741824),
-        ASSISTANTS_DOCUMENTS_BUCKET_NAME: assistantsDocumentsBucket.bucketName,
-        ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
-        ASSISTANTS_VECTOR_STORE_BUCKET_NAME: assistantsVectorStoreBucketName,
-        ASSISTANTS_VECTOR_STORE_INDEX_NAME: assistantsVectorIndexName,
+        // RAG resources - imported from RagIngestionStack via SSM
+        ASSISTANTS_DOCUMENTS_BUCKET_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/documents-bucket-name`
+        ),
+        ASSISTANTS_TABLE_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/assistants-table-name`
+        ),
+        ASSISTANTS_VECTOR_STORE_BUCKET_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/vector-bucket-name`
+        ),
+        ASSISTANTS_VECTOR_STORE_INDEX_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/vector-index-name`
+        ),
         ENTRA_CLIENT_ID: config.entraClientId,
         ENTRA_TENANT_ID: config.entraTenantId,
         ENTRA_REDIRECT_URI: config.appApi.entraRedirectUri,
@@ -1180,6 +1193,74 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for assistants base table
     assistantsTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // ============================================================
+    // Grant permissions for NEW RAG resources (from RagIngestionStack)
+    // ============================================================
+    
+    // Import RAG resource identifiers from SSM
+    const ragDocumentsBucketName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/documents-bucket-name`
+    );
+    const ragDocumentsBucketArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/documents-bucket-arn`
+    );
+    const ragAssistantsTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/assistants-table-name`
+    );
+    const ragAssistantsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/assistants-table-arn`
+    );
+    const ragVectorBucketName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/vector-bucket-name`
+    );
+
+    // Import S3 bucket for permissions
+    const ragDocumentsBucket = s3.Bucket.fromBucketAttributes(this, "ImportedRagDocumentsBucket", {
+      bucketName: ragDocumentsBucketName,
+      bucketArn: ragDocumentsBucketArn,
+    });
+
+    // Import DynamoDB table for permissions
+    const ragAssistantsTable = dynamodb.Table.fromTableAttributes(this, "ImportedRagAssistantsTable", {
+      tableName: ragAssistantsTableName,
+      tableArn: ragAssistantsTableArn,
+    });
+
+    // Grant permissions to ECS task role for RAG resources
+    ragDocumentsBucket.grantReadWrite(taskDefinition.taskRole);
+    ragAssistantsTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant S3 Vectors permissions for RAG vector store
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "s3vectors:ListVectorBuckets",
+          "s3vectors:GetVectorBucket",
+          "s3vectors:GetIndex",
+          "s3vectors:PutVectors",
+          "s3vectors:ListVectors",
+          "s3vectors:ListIndexes",
+          "s3vectors:GetVector",
+          "s3vectors:GetVectors",
+          "s3vectors:DeleteVector",
+        ],
+        resources: [
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${ragVectorBucketName}`,
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${ragVectorBucketName}/index/*`,
+        ],
+      })
+    );
+
+    // ============================================================
+    // Other table permissions
+    // ============================================================
 
     // Grant permissions for quota management tables
     userQuotasTable.grantReadWriteData(taskDefinition.taskRole);
