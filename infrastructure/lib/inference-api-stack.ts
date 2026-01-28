@@ -450,6 +450,7 @@ export class InferenceApiStack extends cdk.Stack {
         'bedrock-agentcore:GetMemory',  // Required to discover memory strategies
         'bedrock-agentcore:CreateEvent',
         'bedrock-agentcore:RetrieveMemory',
+        'bedrock-agentcore:RetrieveMemoryRecords',
         'bedrock-agentcore:ListEvents',
         'bedrock-agentcore:ListMemorySessions',
         'bedrock-agentcore:GetMemorySession',
