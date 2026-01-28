@@ -1,7 +1,8 @@
 """Messages API models"""
 
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MessageContent(BaseModel):
@@ -15,6 +16,7 @@ class MessageContent(BaseModel):
     - document: Document content
     - reasoningContent: Chain-of-thought reasoning (Claude extended thinking, etc.)
     """
+
     model_config = ConfigDict(populate_by_name=True)
 
     type: str = Field(..., description="Content type (text, toolUse, toolResult, reasoningContent, etc.)")
@@ -30,6 +32,7 @@ class MessageContent(BaseModel):
 
 class LatencyMetrics(BaseModel):
     """Latency measurements in milliseconds"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     time_to_first_token: int = Field(..., alias="timeToFirstToken", description="Time from request start to first token received (ms)")
@@ -38,6 +41,7 @@ class LatencyMetrics(BaseModel):
 
 class TokenUsage(BaseModel):
     """Token usage statistics from LLM"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     input_tokens: int = Field(..., alias="inputTokens", description="Input tokens consumed")
@@ -49,19 +53,16 @@ class TokenUsage(BaseModel):
 
 class PricingSnapshot(BaseModel):
     """Pricing rates at time of request for historical accuracy"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     input_price_per_mtok: float = Field(..., alias="inputPricePerMtok", description="Price per million input tokens (USD)")
     output_price_per_mtok: float = Field(..., alias="outputPricePerMtok", description="Price per million output tokens (USD)")
     cache_write_price_per_mtok: Optional[float] = Field(
-        None,
-        alias="cacheWritePricePerMtok",
-        description="Price per million cache write tokens (USD) - Bedrock only"
+        None, alias="cacheWritePricePerMtok", description="Price per million cache write tokens (USD) - Bedrock only"
     )
     cache_read_price_per_mtok: Optional[float] = Field(
-        None,
-        alias="cacheReadPricePerMtok",
-        description="Price per million cache read tokens (USD) - Bedrock only"
+        None, alias="cacheReadPricePerMtok", description="Price per million cache read tokens (USD) - Bedrock only"
     )
     currency: str = Field(default="USD", description="Currency code")
     snapshot_at: str = Field(..., alias="snapshotAt", description="ISO timestamp when pricing was captured")
@@ -69,6 +70,7 @@ class PricingSnapshot(BaseModel):
 
 class ModelInfo(BaseModel):
     """Model information for cost calculation and tracking"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     model_id: str = Field(..., alias="modelId", description="Full model identifier (e.g., anthropic.claude-3-5-sonnet-20241022-v2:0)")
@@ -81,6 +83,7 @@ class ModelInfo(BaseModel):
 
 class Attribution(BaseModel):
     """Attribution information for cost tracking and billing"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     user_id: str = Field(..., alias="userId", description="User identifier")
@@ -92,24 +95,35 @@ class Attribution(BaseModel):
     tags: Optional[Dict[str, str]] = Field(None, description="Custom tags for cost allocation")
 
 
+class Citation(BaseModel):
+    """Citation from RAG document retrieval"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    assistant_id: str = Field(..., alias="assistantId", description="Assistant identifier (needed for download URL endpoint)")
+    document_id: str = Field(..., alias="documentId", description="Document identifier in the knowledge base")
+    file_name: str = Field(..., alias="fileName", description="Original filename of the source document")
+    text: str = Field(..., description="Relevant text excerpt from the document")
+
+
 class MessageMetadata(BaseModel):
     """Metadata associated with a single message"""
-    model_config = ConfigDict(populate_by_name=True, extra='allow')
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     latency: Optional[LatencyMetrics] = Field(None, description="Latency measurements")
     token_usage: Optional[TokenUsage] = Field(None, alias="tokenUsage", description="Token usage statistics")
     model_info: Optional[ModelInfo] = Field(None, alias="modelInfo", description="Model information for cost tracking")
     attribution: Optional[Attribution] = Field(None, description="Attribution for cost tracking and billing")
-    cost: Optional[float] = Field(
-        None,
-        description="Total cost in USD for this message (computed from token usage and pricing)"
-    )
+    cost: Optional[float] = Field(None, description="Total cost in USD for this message (computed from token usage and pricing)")
+    citations: Optional[List[Dict[str, str]]] = Field(None, description="RAG citations for this message (stored as dicts for flexible JSON storage)")
     # Note: Feedback will be added in future implementation
     # feedback: Optional[Feedback] = None
 
 
 class Message(BaseModel):
     """Individual message in a conversation"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     role: str = Field(..., description="Message role (user, assistant)")
@@ -120,17 +134,20 @@ class Message(BaseModel):
 
 class MessageResponse(BaseModel):
     """Response model for a single message (matches frontend expectations)"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(..., description="Unique identifier for the message")
-    role: Literal['user', 'assistant', 'system'] = Field(..., description="Role of the message sender")
+    role: Literal["user", "assistant", "system"] = Field(..., description="Role of the message sender")
     content: List[MessageContent] = Field(..., description="List of content blocks in the message")
     created_at: str = Field(..., alias="createdAt", description="ISO timestamp when the message was created")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata associated with the message")
+    citations: Optional[List[Citation]] = Field(None, description="RAG citations from knowledge base retrieval (assistant messages only)")
 
 
 class MessagesListResponse(BaseModel):
     """Response for listing messages with pagination support"""
+
     model_config = ConfigDict(populate_by_name=True)
 
     messages: List[MessageResponse] = Field(..., description="List of messages in the session")

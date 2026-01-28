@@ -46,3 +46,12 @@ export interface DocumentsListResponse {
   nextToken?: string;
 }
 
+/**
+ * Response from GET /assistants/{assistantId}/documents/{documentId}/download
+ */
+export interface DownloadUrlResponse {
+  downloadUrl: string;
+  filename: string;
+  expiresIn: number;
+}
+

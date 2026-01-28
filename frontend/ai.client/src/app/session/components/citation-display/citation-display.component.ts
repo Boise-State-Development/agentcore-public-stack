@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { Citation } from '../../services/models/message.model';
+import { DocumentService } from '../../../assistants/services/document.service';
 
 @Component({
   selector: 'app-citation-display',
@@ -85,23 +86,31 @@ import { Citation } from '../../services/models/message.model';
                         {{ citation.text }}
                       </p>
 
-                      <!-- Link -->
-                      @if (citation.s3Url) {
-                        <a
-                          [href]="citation.s3Url"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 hover:underline
-                                 dark:text-teal-400 dark:hover:text-teal-300
-                                 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500"
-                        >
-                          <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                      <!-- Download button -->
+                      <button
+                        type="button"
+                        class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 hover:underline
+                               dark:text-teal-400 dark:hover:text-teal-300
+                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500
+                               disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
+                        [disabled]="loadingDocumentId() === citation.documentId"
+                        (click)="onDownloadClick(citation)"
+                      >
+                        @if (loadingDocumentId() === citation.documentId) {
+                          <!-- Loading spinner -->
+                          <svg class="size-3 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                           </svg>
-                          View document
+                          <span>Loading...</span>
+                        } @else {
+                          <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                          </svg>
+                          <span>Download source</span>
                           <span class="sr-only">(opens in new tab)</span>
-                        </a>
-                      }
+                        }
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -122,13 +131,45 @@ import { Citation } from '../../services/models/message.model';
   `,
 })
 export class CitationDisplayComponent {
+  private readonly documentService = inject(DocumentService);
+
   citations = input<Citation[]>([]);
   isExpanded = signal<boolean>(false);
+
+  // Track which document is currently loading
+  loadingDocumentId = signal<string | null>(null);
 
   // Computed for derived state - avoids multiple signal reads in template
   citationCount = computed(() => this.citations().length);
 
   private collapseTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Handle download button click - fetches presigned URL on demand
+   */
+  async onDownloadClick(citation: Citation): Promise<void> {
+    if (!citation.assistantId || !citation.documentId) {
+      console.error('Citation missing assistantId or documentId');
+      return;
+    }
+
+    try {
+      this.loadingDocumentId.set(citation.documentId);
+
+      const response = await this.documentService.getDownloadUrl(
+        citation.assistantId,
+        citation.documentId
+      );
+
+      // Open the presigned URL in a new tab
+      window.open(response.downloadUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.error('Failed to get download URL:', error);
+      // Could show a toast notification here
+    } finally {
+      this.loadingDocumentId.set(null);
+    }
+  }
 
   onMouseEnter(): void {
     if (this.collapseTimeout) {

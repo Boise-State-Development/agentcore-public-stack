@@ -1367,10 +1367,11 @@ export class StreamParserService {
       return;
     }
 
-    const citationData = data as Partial<Citation & { s3_key?: string }>;
+    const citationData = data as Partial<Citation>;
 
     // Validate required fields
     if (
+      typeof citationData.assistantId !== 'string' ||
       typeof citationData.documentId !== 'string' ||
       typeof citationData.fileName !== 'string' ||
       typeof citationData.text !== 'string'
@@ -1378,19 +1379,14 @@ export class StreamParserService {
       return;
     }
 
-    // Extract s3_key and map to s3Url (only if non-empty)
-    const s3Url = citationData.s3_key && citationData.s3_key.trim() !== '' 
-      ? citationData.s3_key 
-      : undefined;
-
     // Accumulate citation in pending citations
     this.pendingCitations.update((citations) => [
       ...citations,
       {
+        assistantId: citationData.assistantId!,
         documentId: citationData.documentId!,
         fileName: citationData.fileName!,
         text: citationData.text!,
-        ...(s3Url && { s3Url }),  // Only include if present
       },
     ]);
   }

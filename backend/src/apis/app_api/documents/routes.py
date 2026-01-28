@@ -6,11 +6,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from apis.app_api.assistants.services.assistant_service import get_assistant
-from apis.app_api.documents.models import CreateDocumentRequest, DocumentResponse, DocumentsListResponse, UploadUrlResponse
+from apis.app_api.documents.models import CreateDocumentRequest, DocumentResponse, DocumentsListResponse, DownloadUrlResponse, UploadUrlResponse
 from apis.app_api.documents.services.document_service import _generate_document_id, create_document, list_assistant_documents
 from apis.app_api.documents.services.document_service import delete_document as delete_document_service
 from apis.app_api.documents.services.document_service import get_document as get_document_service
-from apis.app_api.documents.services.storage_service import generate_upload_url
+from apis.app_api.documents.services.storage_service import generate_download_url, generate_upload_url
 from apis.shared.auth.dependencies import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,45 @@ async def get_document(assistant_id: str, document_id: str, user_id: str = Depen
     except Exception as e:
         logger.error(f"Error retrieving document: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve document: {str(e)}")
+
+
+@router.get("/{document_id}/download", response_model=DownloadUrlResponse, status_code=status.HTTP_200_OK)
+async def get_download_url(assistant_id: str, document_id: str, user_id: str = Depends(get_current_user_id)) -> DownloadUrlResponse:
+    """
+    Generate presigned S3 URL for document download
+
+    This endpoint is called on-demand when a user clicks to view/download a source document
+    from a citation. The presigned URL is generated fresh each time to ensure it's valid.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        document_id: Document identifier
+        user_id: Authenticated user ID from JWT
+
+    Returns:
+        DownloadUrlResponse with presigned URL and filename
+    """
+    try:
+        # Verify assistant ownership and get document
+        document = await get_document_service(assistant_id, document_id, user_id)
+
+        if not document:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
+
+        # Generate presigned download URL (1 hour expiration)
+        expires_in = 3600
+        download_url = await generate_download_url(
+            s3_key=document.s3_key,
+            expires_in=expires_in,
+        )
+
+        return DownloadUrlResponse(downloadUrl=download_url, filename=document.filename, expiresIn=expires_in)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating download URL: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate download URL: {str(e)}")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -47,14 +47,14 @@ export interface FileAttachmentData {
  * Sent as SSE events before the assistant response starts streaming.
  */
 export interface Citation {
+  /** Assistant identifier (needed for download URL endpoint) */
+  assistantId: string;
   /** Document identifier in the knowledge base */
   documentId: string;
   /** Original filename of the source document */
   fileName: string;
   /** Relevant text excerpt from the document */
   text: string;
-  /** Optional S3 URL/key for accessing the source document */
-  s3Url?: string;
 }
 
 /**

@@ -3,12 +3,12 @@
 Retrieves conversation history from AgentCore Memory or local file storage.
 """
 
+import base64
+import json
 import logging
 import os
-import json
-import base64
-from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from apis.app_api.messages.models import Message, MessageContent, MessageResponse, MessagesListResponse
 
@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Check if AgentCore Memory is available
 try:
-    from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
+    from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
@@ -40,17 +41,11 @@ def _ensure_image_base64(image_data: Dict[str, Any]) -> Dict[str, Any]:
         raw_bytes = source["bytes"]
         if isinstance(raw_bytes, bytes):
             # Convert raw bytes to base64 string
-            encoded = base64.b64encode(raw_bytes).decode('utf-8')
-            return {
-                "format": image_data.get("format", "png"),
-                "data": encoded
-            }
+            encoded = base64.b64encode(raw_bytes).decode("utf-8")
+            return {"format": image_data.get("format", "png"), "data": encoded}
         elif isinstance(raw_bytes, str):
             # Already a string (possibly base64), use as-is
-            return {
-                "format": image_data.get("format", "png"),
-                "data": raw_bytes
-            }
+            return {"format": image_data.get("format", "png"), "data": raw_bytes}
 
     # Check if already in frontend format (format + data)
     if "data" in image_data and "format" in image_data:
@@ -90,19 +85,11 @@ def _ensure_document_base64(document_data: Dict[str, Any]) -> Dict[str, Any]:
         raw_bytes = source["bytes"]
         if isinstance(raw_bytes, bytes):
             # Convert raw bytes to base64 string
-            encoded = base64.b64encode(raw_bytes).decode('utf-8')
-            return {
-                "format": document_data.get("format", "txt"),
-                "name": document_data.get("name", "document"),
-                "data": encoded
-            }
+            encoded = base64.b64encode(raw_bytes).decode("utf-8")
+            return {"format": document_data.get("format", "txt"), "name": document_data.get("name", "document"), "data": encoded}
         elif isinstance(raw_bytes, str):
             # Already a string (possibly base64), use as-is
-            return {
-                "format": document_data.get("format", "txt"),
-                "name": document_data.get("name", "document"),
-                "data": raw_bytes
-            }
+            return {"format": document_data.get("format", "txt"), "name": document_data.get("name", "document"), "data": raw_bytes}
 
     # Check if already in frontend format (format + name + data)
     if "data" in document_data and "format" in document_data:
@@ -201,19 +188,14 @@ def _convert_content_block(content_item: Any) -> MessageContent:
             tool_result=tool_result,
             image=image,
             document=document,
-            reasoning_content=reasoning_content
+            reasoning_content=reasoning_content,
         )
     else:
         # Handle non-dict content (shouldn't happen but be defensive)
         return MessageContent(type="text", text=str(content_item))
 
 
-def _convert_message_to_response(
-    msg: Message,
-    session_id: str,
-    sequence_number: int,
-    message_id: Optional[str] = None
-) -> MessageResponse:
+def _convert_message_to_response(msg: Message, session_id: str, sequence_number: int, message_id: Optional[str] = None) -> MessageResponse:
     """
     Convert a Message model to MessageResponse model for API response
 
@@ -232,15 +214,26 @@ def _convert_message_to_response(
 
     # Convert metadata to dict if it's a MessageMetadata object
     metadata_dict = None
+    citations = None
     if msg.metadata:
         metadata_dict = msg.metadata.model_dump(exclude_none=True, by_alias=True)
 
+        # Extract citations from metadata (they're stored there but should be top-level in response)
+        # Citations are removed from metadata_dict to avoid duplication
+        if isinstance(metadata_dict, dict) and "citations" in metadata_dict:
+            citations_data = metadata_dict.pop("citations")
+            # Convert citation dicts to Citation objects for type validation
+            if citations_data:
+                from apis.app_api.messages.models import Citation
+
+                try:
+                    citations = [Citation(**c) for c in citations_data]
+                except Exception as e:
+                    logger.warning(f"Failed to parse citations for message {computed_id}: {e}")
+                    citations = None
+
     return MessageResponse(
-        id=computed_id,
-        role=msg.role,
-        content=msg.content,
-        created_at=msg.timestamp or "",
-        metadata=metadata_dict
+        id=computed_id, role=msg.role, content=msg.content, created_at=msg.timestamp or "", metadata=metadata_dict, citations=citations
     )
 
 
@@ -313,6 +306,7 @@ def _convert_message(msg: Any, metadata: Any = None) -> Message:
 
     # Convert metadata if present
     from apis.app_api.messages.models import MessageMetadata
+
     message_metadata = None
     if metadata:
         if isinstance(metadata, dict):
@@ -323,64 +317,52 @@ def _convert_message(msg: Any, metadata: Any = None) -> Message:
         elif isinstance(metadata, MessageMetadata):
             message_metadata = metadata
 
-    return Message(
-        role=role,
-        content=content_blocks,
-        timestamp=str(timestamp) if timestamp else None,
-        metadata=message_metadata
-    )
+    return Message(role=role, content=content_blocks, timestamp=str(timestamp) if timestamp else None, metadata=message_metadata)
 
 
-def _apply_pagination(
-    messages: List[Message],
-    limit: Optional[int] = None,
-    next_token: Optional[str] = None
-) -> Tuple[List[Message], Optional[str]]:
+def _apply_pagination(messages: List[Message], limit: Optional[int] = None, next_token: Optional[str] = None) -> Tuple[List[Message], Optional[str]]:
     """
     Apply pagination to a list of messages
-    
+
     Args:
         messages: List of messages (should be sorted by sequence)
         limit: Maximum number of messages to return
         next_token: Pagination token (sequence number to start from)
-    
+
     Returns:
         Tuple of (paginated messages, next_token if more messages exist)
     """
     start_index = 0
-    
+
     # Decode next_token if provided (it's a base64-encoded sequence number)
     if next_token:
         try:
-            decoded = base64.b64decode(next_token).decode('utf-8')
+            decoded = base64.b64decode(next_token).decode("utf-8")
             start_index = int(decoded)
         except Exception as e:
             logger.warning(f"Invalid next_token: {e}, starting from beginning")
             start_index = 0
-    
+
     # Apply start index
     paginated_messages = messages[start_index:]
-    
+
     # Apply limit
     if limit and limit > 0:
         paginated_messages = paginated_messages[:limit]
         # Check if there are more messages
         if start_index + limit < len(messages):
             next_seq = start_index + limit
-            next_token = base64.b64encode(str(next_seq).encode('utf-8')).decode('utf-8')
+            next_token = base64.b64encode(str(next_seq).encode("utf-8")).decode("utf-8")
         else:
             next_token = None
     else:
         next_token = None
-    
+
     return paginated_messages, next_token
 
 
 async def get_messages_from_cloud(
-    session_id: str,
-    user_id: str,
-    limit: Optional[int] = None,
-    next_token: Optional[str] = None
+    session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None
 ) -> MessagesListResponse:
     """
     Retrieve messages from AgentCore Memory
@@ -394,8 +376,8 @@ async def get_messages_from_cloud(
     Returns:
         MessagesListResponse with paginated conversation history
     """
-    memory_id = os.environ.get('AGENTCORE_MEMORY_ID')
-    aws_region = os.environ.get('AWS_REGION', 'us-west-2')
+    memory_id = os.environ.get("AGENTCORE_MEMORY_ID")
+    aws_region = os.environ.get("AWS_REGION", "us-west-2")
 
     if not memory_id:
         raise ValueError("AGENTCORE_MEMORY_ID environment variable not set")
@@ -405,39 +387,30 @@ async def get_messages_from_cloud(
         memory_id=memory_id,
         session_id=session_id,
         actor_id=user_id,
-        enable_prompt_caching=False  # Not needed for reading
+        enable_prompt_caching=False,  # Not needed for reading
     )
 
     # Create session manager
-    session_manager = AgentCoreMemorySessionManager(
-        agentcore_memory_config=config,
-        region_name=aws_region
-    )
+    session_manager = AgentCoreMemorySessionManager(agentcore_memory_config=config, region_name=aws_region)
 
     logger.info(f"Retrieving messages from AgentCore Memory - Session: {session_id}, User: {user_id}")
 
     try:
         # Fetch messages and metadata in parallel for better performance
         import asyncio
-        
+
         async def fetch_messages():
             """Fetch messages from AgentCore Memory (runs in thread pool since it's sync)"""
-            return await asyncio.to_thread(
-                session_manager.list_messages,
-                session_id,
-                "default"
-            )
-        
+            return await asyncio.to_thread(session_manager.list_messages, session_id, "default")
+
         async def fetch_metadata():
             """Fetch metadata from DynamoDB"""
             from apis.app_api.sessions.services.metadata import get_all_message_metadata
+
             return await get_all_message_metadata(session_id, user_id)
-        
+
         # Run both fetches in parallel
-        messages_raw, metadata_index = await asyncio.gather(
-            fetch_messages(),
-            fetch_metadata()
-        )
+        messages_raw, metadata_index = await asyncio.gather(fetch_messages(), fetch_metadata())
 
         logger.info(f"AgentCore Memory returned {len(messages_raw) if messages_raw else 0} raw messages")
         logger.info(f"Metadata index contains {len(metadata_index)} entries")
@@ -480,20 +453,14 @@ async def get_messages_from_cloud(
         start_seq = 0
         if next_token:
             try:
-                decoded = base64.b64decode(next_token).decode('utf-8')
+                decoded = base64.b64decode(next_token).decode("utf-8")
                 start_seq = int(decoded)
             except Exception:
                 start_seq = 0
-        
-        message_responses = [
-            _convert_message_to_response(msg, session_id, start_seq + idx)
-            for idx, msg in enumerate(paginated_messages)
-        ]
 
-        return MessagesListResponse(
-            messages=message_responses,
-            next_token=next_page_token
-        )
+        message_responses = [_convert_message_to_response(msg, session_id, start_seq + idx) for idx, msg in enumerate(paginated_messages)]
+
+        return MessagesListResponse(messages=message_responses, next_token=next_page_token)
 
     except Exception as e:
         logger.error(f"Error retrieving messages from AgentCore Memory: {e}")
@@ -501,10 +468,7 @@ async def get_messages_from_cloud(
 
 
 async def get_messages_from_local(
-    session_id: str,
-    user_id: str,
-    limit: Optional[int] = None,
-    next_token: Optional[str] = None
+    session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None
 ) -> MessagesListResponse:
     """
     Retrieve messages from local file storage
@@ -528,7 +492,8 @@ async def get_messages_from_local(
         MessagesListResponse with paginated conversation history
     """
     # Use centralized path utilities
-    from apis.app_api.storage.paths import get_messages_dir, get_message_metadata_path
+    from apis.app_api.storage.paths import get_message_metadata_path, get_messages_dir
+
     messages_dir = get_messages_dir(session_id)
     metadata_file = get_message_metadata_path(session_id)
 
@@ -538,7 +503,7 @@ async def get_messages_from_local(
     metadata_index = {}
     if metadata_file.exists():
         try:
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, "r") as f:
                 metadata_index = json.load(f)
             logger.info(f"Loaded metadata for {len(metadata_index)} messages")
         except Exception as e:
@@ -551,7 +516,7 @@ async def get_messages_from_local(
             # Get all message files sorted by message_id
             message_files = sorted(
                 messages_dir.glob("message_*.json"),
-                key=lambda p: int(p.stem.split("_")[1])  # Extract number from message_N.json
+                key=lambda p: int(p.stem.split("_")[1]),  # Extract number from message_N.json
             )
 
             logger.info(f"Found {len(message_files)} message files")
@@ -559,7 +524,7 @@ async def get_messages_from_local(
             # Read each message file
             for message_file in message_files:
                 try:
-                    with open(message_file, 'r') as f:
+                    with open(message_file, "r") as f:
                         data = json.load(f)
 
                     # Extract the message object
@@ -600,7 +565,7 @@ async def get_messages_from_local(
     start_index = 0
     if next_token:
         try:
-            decoded = base64.b64decode(next_token).decode('utf-8')
+            decoded = base64.b64decode(next_token).decode("utf-8")
             start_index = int(decoded)
         except Exception:
             start_index = 0
@@ -611,18 +576,10 @@ async def get_messages_from_local(
         # Message ID is computed from session_id and sequence number (0-based)
         message_responses.append(_convert_message_to_response(msg_obj, session_id, seq_num))
 
-    return MessagesListResponse(
-        messages=message_responses,
-        next_token=next_page_token
-    )
+    return MessagesListResponse(messages=message_responses, next_token=next_page_token)
 
 
-async def get_messages(
-    session_id: str,
-    user_id: str,
-    limit: Optional[int] = None,
-    next_token: Optional[str] = None
-) -> MessagesListResponse:
+async def get_messages(session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None) -> MessagesListResponse:
     """
     Retrieve messages for a session and user with pagination support
 
@@ -638,14 +595,13 @@ async def get_messages(
         MessagesListResponse with paginated conversation history
     """
     # Check AGENTCORE_MEMORY_TYPE to decide between cloud/local
-    memory_type = os.environ.get('AGENTCORE_MEMORY_TYPE', 'file').lower()
-    memory_id = os.environ.get('AGENTCORE_MEMORY_ID')
+    memory_type = os.environ.get("AGENTCORE_MEMORY_TYPE", "file").lower()
+    memory_id = os.environ.get("AGENTCORE_MEMORY_ID")
 
     # Use cloud if memory_type is dynamodb and library is available
-    if memory_type == 'dynamodb' and memory_id and AGENTCORE_MEMORY_AVAILABLE:
+    if memory_type == "dynamodb" and memory_id and AGENTCORE_MEMORY_AVAILABLE:
         logger.info(f"Using AgentCore Memory for session {session_id}")
         return await get_messages_from_cloud(session_id, user_id, limit, next_token)
     else:
         logger.info(f"Using local file storage for session {session_id}")
         return await get_messages_from_local(session_id, user_id, limit, next_token)
-

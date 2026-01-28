@@ -37,6 +37,7 @@ class StreamCoordinator:
         session_id: str,
         user_id: str,
         main_agent_wrapper: Any = None,
+        citations: Optional[List] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -51,6 +52,7 @@ class StreamCoordinator:
             session_id: Session identifier
             user_id: User identifier
             main_agent_wrapper: MainAgent wrapper instance (has model_config, enabled_tools, etc.)
+            citations: Optional list of citation dicts from RAG retrieval to persist with metadata
 
         Yields:
             str: SSE formatted events
@@ -417,6 +419,8 @@ class StreamCoordinator:
                         first_token_for_message = first_token_time if idx == 0 else None
 
                     logger.info(f"📊 Queuing message metadata for message_id={msg_id} (index {idx})")
+                    # Only attach citations to the first assistant message in the stream (RAG retrieval is for entire response)
+                    citations_for_message = citations if idx == 0 else None
                     metadata_tasks.append(
                         self._store_message_metadata(
                             session_id=session_id,
@@ -427,6 +431,7 @@ class StreamCoordinator:
                             stream_end_time=msg_end_time,
                             first_token_time=first_token_for_message,
                             agent=main_agent_wrapper,  # Use wrapper instead of internal agent
+                            citations=citations_for_message,  # Pass citations for persistence
                         )
                     )
 
@@ -813,9 +818,10 @@ class StreamCoordinator:
         stream_end_time: float,
         first_token_time: Optional[float],
         agent: Any = None,
+        citations: Optional[List] = None,
     ) -> None:
         """
-        Store message-level metadata (token usage, latency, model info)
+        Store message-level metadata (token usage, latency, model info, citations)
 
         Args:
             session_id: Session identifier
@@ -826,6 +832,7 @@ class StreamCoordinator:
             stream_end_time: Timestamp when stream ended
             first_token_time: Timestamp of first token received
             agent: Agent instance for extracting model info
+            citations: Optional list of citation dicts from RAG retrieval
         """
         try:
             from apis.app_api.messages.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
@@ -930,9 +937,14 @@ class StreamCoordinator:
             )
 
             # Create MessageMetadata
-            if token_usage or latency_metrics or model_info:
+            if token_usage or latency_metrics or model_info or citations:
                 message_metadata = MessageMetadata(
-                    latency=latency_metrics, token_usage=token_usage, model_info=model_info, attribution=attribution, cost=cost
+                    latency=latency_metrics,
+                    token_usage=token_usage,
+                    model_info=model_info,
+                    attribution=attribution,
+                    cost=cost,
+                    citations=citations,  # Include citations from RAG retrieval
                 )
 
                 # Store metadata

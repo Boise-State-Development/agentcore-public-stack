@@ -4,28 +4,25 @@ Main Agent Orchestrator - Slim coordination layer for multi-agent system
 This module provides a clean, maintainable agent implementation with clear separation
 of concerns across specialized modules.
 """
+
 import logging
 from typing import AsyncGenerator, List, Optional
 
 # Core orchestration
-from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
-
-# Session management
-from agents.main_agent.session import SessionFactory
-from agents.main_agent.session.hooks import StopHook, ConversationCachingHook
-
-# Tool management
-from agents.main_agent.tools import (
-    create_default_registry,
-    ToolFilter,
-    GatewayIntegration
-)
+from agents.main_agent.core import AgentFactory, ModelConfig, SystemPromptBuilder
 
 # Multimodal content
 from agents.main_agent.multimodal import PromptBuilder
 
+# Session management
+from agents.main_agent.session import SessionFactory
+from agents.main_agent.session.hooks import ConversationCachingHook, StopHook
+
 # Streaming coordination
 from agents.main_agent.streaming import StreamCoordinator
+
+# Tool management
+from agents.main_agent.tools import GatewayIntegration, ToolFilter, create_default_registry
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +47,7 @@ class MainAgent:
         system_prompt: Optional[str] = None,
         caching_enabled: Optional[bool] = None,
         provider: Optional[str] = None,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
     ):
         """
         Initialize Main Agent with modular architecture and multi-provider support
@@ -78,11 +75,7 @@ class MainAgent:
 
         # Initialize model configuration
         self.model_config = ModelConfig.from_params(
-            model_id=model_id,
-            temperature=temperature,
-            caching_enabled=caching_enabled,
-            provider=provider,
-            max_tokens=max_tokens
+            model_id=model_id, temperature=temperature, caching_enabled=caching_enabled, provider=provider, max_tokens=max_tokens
         )
 
         # Initialize system prompt builder
@@ -111,9 +104,7 @@ class MainAgent:
 
         # Initialize session manager
         self.session_manager = SessionFactory.create_session_manager(
-            session_id=session_id,
-            user_id=self.user_id,
-            caching_enabled=self.model_config.caching_enabled
+            session_id=session_id, user_id=self.user_id, caching_enabled=self.model_config.caching_enabled
         )
 
         # Initialize streaming coordinator (now stateless)
@@ -140,10 +131,9 @@ class MainAgent:
             # Load external MCP tools and add to tools list
             # Pass user_id for OAuth token retrieval on OAuth-enabled tools
             if external_mcp_tool_ids:
-                from agents.main_agent.integrations.external_mcp_client import (
-                    get_external_mcp_integration
-                )
                 import asyncio
+
+                from agents.main_agent.integrations.external_mcp_client import get_external_mcp_integration
 
                 external_integration = get_external_mcp_integration()
                 # Run async load in sync context
@@ -151,13 +141,14 @@ class MainAgent:
                 if loop.is_running():
                     # If we're already in an async context, we need to handle differently
                     import concurrent.futures
+
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(
                             asyncio.run,
                             external_integration.load_external_tools(
                                 external_mcp_tool_ids,
                                 user_id=self.user_id,  # Pass user_id for OAuth
-                            )
+                            ),
                         )
                         external_clients = future.result()
                 else:
@@ -179,11 +170,7 @@ class MainAgent:
 
             # Create agent using factory
             self.agent = AgentFactory.create_agent(
-                model_config=self.model_config,
-                system_prompt=self.system_prompt,
-                tools=local_tools,
-                session_manager=self.session_manager,
-                hooks=hooks
+                model_config=self.model_config, system_prompt=self.system_prompt, tools=local_tools, session_manager=self.session_manager, hooks=hooks
             )
 
         except Exception as e:
@@ -201,8 +188,9 @@ class MainAgent:
             return
 
         try:
-            from apis.app_api.tools.repository import get_tool_catalog_repository
             import asyncio
+
+            from apis.app_api.tools.repository import get_tool_catalog_repository
 
             repository = get_tool_catalog_repository()
             external_tool_ids = []
@@ -220,6 +208,7 @@ class MainAgent:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     import concurrent.futures
+
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(asyncio.run, check_tools())
                         tool_ids = future.result()
@@ -252,20 +241,20 @@ class MainAgent:
 
         # Add conversation caching hook if enabled (Bedrock only - other providers don't support cachePoint)
         from agents.main_agent.core import ModelProvider
+
         if self.model_config.caching_enabled and self.model_config.get_provider() == ModelProvider.BEDROCK:
             conversation_hook = ConversationCachingHook(enabled=True)
             hooks.append(conversation_hook)
             logger.info(f"✅ ConversationCachingHook registered (caching_enabled={self.model_config.caching_enabled})")
         else:
-            logger.info(f"⚠️ ConversationCachingHook NOT registered (caching_enabled={self.model_config.caching_enabled}, provider={self.model_config.get_provider()})")
+            logger.info(
+                f"⚠️ ConversationCachingHook NOT registered (caching_enabled={self.model_config.caching_enabled}, provider={self.model_config.get_provider()})"
+            )
 
         return hooks
 
     async def stream_async(
-        self,
-        message: str,
-        session_id: Optional[str] = None,
-        files: Optional[List] = None
+        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses
@@ -274,6 +263,7 @@ class MainAgent:
             message: User message text
             session_id: Session identifier (defaults to instance session_id)
             files: Optional list of FileContent objects (with base64 bytes)
+            citations: Optional list of citation dicts from RAG retrieval
 
         Yields:
             str: SSE formatted events
@@ -292,7 +282,8 @@ class MainAgent:
             session_manager=self.session_manager,
             session_id=session_id or self.session_id,
             user_id=self.user_id,
-            main_agent_wrapper=self  # Pass wrapper for metadata extraction
+            main_agent_wrapper=self,  # Pass wrapper for metadata extraction
+            citations=citations,  # Pass citations for storage
         ):
             yield event
 
@@ -303,10 +294,7 @@ class MainAgent:
         Returns:
             dict: Model configuration
         """
-        return {
-            **self.model_config.to_dict(),
-            "system_prompts": [self.system_prompt]
-        }
+        return {**self.model_config.to_dict(), "system_prompts": [self.system_prompt]}
 
     def get_tool_statistics(self) -> dict:
         """

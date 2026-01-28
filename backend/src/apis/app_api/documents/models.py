@@ -78,3 +78,13 @@ class DocumentsListResponse(BaseModel):
 
     documents: List[DocumentResponse] = Field(..., description="List of documents for the assistant")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+
+
+class DownloadUrlResponse(BaseModel):
+    """Response containing presigned S3 download URL"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    download_url: str = Field(..., alias="downloadUrl", description="Presigned S3 URL for download")
+    filename: str = Field(..., description="Original filename")
+    expires_in: int = Field(..., alias="expiresIn", description="URL expiration in seconds")

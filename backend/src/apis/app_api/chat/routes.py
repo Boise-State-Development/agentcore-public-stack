@@ -166,6 +166,7 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
     assistant = None
     augmented_message = request.message
     system_prompt = None
+    context_chunks = []  # RAG context chunks for citation events
 
     # Get assistant_id from request or session preferences (priority: request > preferences)
     assistant_id_to_use = request.assistant_id
@@ -369,6 +370,20 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
+
+            # Yield citation events BEFORE the agent stream starts
+            # This allows the UI to display sources immediately
+            if context_chunks:
+                for chunk in context_chunks:
+                    citation_event = {
+                        "type": "citation",
+                        "assistantId": assistant_id_to_use,
+                        "documentId": chunk.get("metadata", {}).get("document_id", ""),
+                        "fileName": chunk.get("metadata", {}).get("source", "Unknown Source"),
+                        "text": chunk.get("text", "")[:500],  # Limit excerpt length
+                    }
+                    yield f"event: citation\ndata: {json.dumps(citation_event)}\n\n"
+
             # Pass resolved files (from S3) merged with any direct file content
             # Use augmented message if assistant RAG was applied
             stream_iterator = agent.stream_async(

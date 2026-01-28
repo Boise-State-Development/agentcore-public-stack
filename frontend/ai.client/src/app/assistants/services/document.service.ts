@@ -7,7 +7,8 @@ import {
   CreateDocumentRequest,
   UploadUrlResponse,
   Document,
-  DocumentsListResponse
+  DocumentsListResponse,
+  DownloadUrlResponse
 } from '../models/document.model';
 
 /**
@@ -219,6 +220,29 @@ export class DocumentService {
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get document');
+    }
+  }
+
+  /**
+   * Get a presigned download URL for a document.
+   * This is called on-demand when a user clicks to view/download a source document.
+   *
+   * @param assistantId - The assistant identifier
+   * @param documentId - The document identifier
+   * @returns Promise resolving to download URL response
+   * @throws DocumentUploadError on API failure
+   */
+  async getDownloadUrl(assistantId: string, documentId: string): Promise<DownloadUrlResponse> {
+    await this.authService.ensureAuthenticated();
+
+    try {
+      return await firstValueFrom(
+        this.http.get<DownloadUrlResponse>(
+          `${this.baseUrl}/${assistantId}/documents/${documentId}/download`
+        )
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to get download URL');
     }
   }
 

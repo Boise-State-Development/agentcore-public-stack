@@ -445,6 +445,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             max_tokens=input_data.max_tokens,
         )
 
+        # Build citations list for persistence (convert context chunks to citation format)
+        citations_for_storage = []
+        if context_chunks:
+            for chunk in context_chunks:
+                citations_for_storage.append(
+                    {
+                        "assistantId": input_data.assistant_id,
+                        "documentId": chunk.get("metadata", {}).get("document_id", ""),
+                        "fileName": chunk.get("metadata", {}).get("source", "Unknown Source"),
+                        "text": chunk.get("text", "")[:500],  # Limit excerpt length
+                    }
+                )
+
         # Create stream with optional quota warning injection
         async def stream_with_quota_warning() -> AsyncGenerator[str, None]:
             """Wrap agent stream to inject quota warning at start if needed"""
@@ -454,16 +467,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             # Yield citation events BEFORE the agent stream starts
             # This allows the UI to display sources immediately
-            if context_chunks:
-                for chunk in context_chunks:
-                    citation_event = {
-                        "type": "citation",
-                        "documentId": chunk.get("metadata", {}).get("document_id", ""),
-                        "fileName": chunk.get("metadata", {}).get("source", "Unknown Source"),
-                        "text": chunk.get("text", "")[:500],  # Limit excerpt length
-                        "s3Url": chunk.get("s3_url"),  # Presigned URL for document access
-                    }
-                    yield f"event: citation\ndata: {json.dumps(citation_event)}\n\n"
+            if citations_for_storage:
+                for citation in citations_for_storage:
+                    yield f"event: citation\ndata: {json.dumps(citation)}\n\n"
 
             # Then yield all agent stream events
             # Use augmented message if assistant RAG was applied
@@ -472,6 +478,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 augmented_message,  # Use augmented message if assistant RAG was applied
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
+                citations=citations_for_storage if citations_for_storage else None,  # Pass citations for persistence
             ):
                 yield event
 
