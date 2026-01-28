@@ -1073,6 +1073,12 @@ export class AppApiStack extends cdk.Stack {
           this,
           `/${config.projectPrefix}/rag/vector-index-name`
         ),
+        // AgentCore Memory Configuration (imported from InferenceApiStack)
+        AGENTCORE_MEMORY_TYPE: 'dynamodb',
+        AGENTCORE_MEMORY_ID: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/inference-api/memory-id`
+        ),
         ENTRA_CLIENT_ID: config.entraClientId,
         ENTRA_TENANT_ID: config.entraTenantId,
         ENTRA_REDIRECT_URI: config.appApi.entraRedirectUri,
@@ -1258,6 +1264,29 @@ export class AppApiStack extends cdk.Stack {
     oauthUserTokensTable.grantReadWriteData(taskDefinition.taskRole);
     oauthTokenEncryptionKey.grantEncryptDecrypt(taskDefinition.taskRole);
     oauthClientSecretsSecret.grantRead(taskDefinition.taskRole);
+
+    // Grant permissions for AgentCore Memory (imported from InferenceApiStack)
+    const memoryArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/inference-api/memory-arn`
+    );
+    
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreMemoryAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:GetMemory',
+          'bedrock-agentcore:CreateEvent',
+          'bedrock-agentcore:RetrieveMemory',
+          'bedrock-agentcore:ListEvents',
+          'bedrock-agentcore:ListMemorySessions',
+          'bedrock-agentcore:GetMemorySession',
+          'bedrock-agentcore:DeleteMemorySession',
+        ],
+        resources: [memoryArn],
+      })
+    );
 
     // ============================================================
     // Target Group
