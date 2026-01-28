@@ -1193,6 +1193,20 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for assistants base table
     assistantsTable.grantReadWriteData(taskDefinition.taskRole);
+    
+    // Grant explicit permissions for GSI queries (grantReadWriteData doesn't include GSI Query permissions)
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:Query',
+          'dynamodb:Scan'
+        ],
+        resources: [
+          `${assistantsTable.tableArn}/index/*`
+        ],
+      })
+    );
 
     // ============================================================
     // Grant permissions for NEW RAG resources (from RagIngestionStack)
@@ -1232,6 +1246,20 @@ export class AppApiStack extends cdk.Stack {
     // Grant permissions to ECS task role for RAG resources
     ragDocumentsBucket.grantReadWrite(taskDefinition.taskRole);
     ragAssistantsTable.grantReadWriteData(taskDefinition.taskRole);
+    
+    // Grant explicit permissions for GSI queries on RAG assistants table
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:Query',
+          'dynamodb:Scan'
+        ],
+        resources: [
+          `${ragAssistantsTableArn}/index/*`
+        ],
+      })
+    );
 
     // Grant S3 Vectors permissions for RAG vector store
     taskDefinition.taskRole.addToPrincipalPolicy(
