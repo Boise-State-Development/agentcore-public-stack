@@ -1239,6 +1239,20 @@ export class AppApiStack extends cdk.Stack {
       }),
     );
 
+    // Grant Bedrock permissions for title generation (Nova Micro)
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockTitleGeneration',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          // Nova Micro for title generation
+          `arn:aws:bedrock:${config.awsRegion}::foundation-model/amazon.nova-micro-v1:0`,
+          `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:inference-profile/us.amazon.nova-micro-v1:0`,
+        ],
+      }),
+    );
+
     // Grant permissions for OAuth provider management
     oauthProvidersTable.grantReadWriteData(taskDefinition.taskRole);
     oauthUserTokensTable.grantReadWriteData(taskDefinition.taskRole);
