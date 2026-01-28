@@ -1238,6 +1238,7 @@ export class AppApiStack extends cdk.Stack {
         actions: [
           'bedrock-agentcore:GetMemory',
           'bedrock-agentcore:CreateEvent',
+          'bedrock-agentcore:DeleteEvent',
           'bedrock-agentcore:RetrieveMemory',
           'bedrock-agentcore:ListEvents',
           'bedrock-agentcore:ListMemorySessions',
