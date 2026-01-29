@@ -447,14 +447,19 @@ export class InferenceApiStack extends cdk.Stack {
       sid: 'MemoryAccess',
       effect: iam.Effect.ALLOW,
       actions: [
-        'bedrock-agentcore:GetMemory',  // Required to discover memory strategies
+        // Memory configuration
+        'bedrock-agentcore:GetMemory',
+        'bedrock-agentcore:GetMemoryStrategies',
+        // Event operations (create only - runtime doesn't delete)
         'bedrock-agentcore:CreateEvent',
+        'bedrock-agentcore:ListEvents',
+        // Memory retrieval
         'bedrock-agentcore:RetrieveMemory',
         'bedrock-agentcore:RetrieveMemoryRecords',
-        'bedrock-agentcore:ListEvents',
+        'bedrock-agentcore:ListMemoryRecords',
+        // Session operations (read only - runtime doesn't delete sessions)
         'bedrock-agentcore:ListMemorySessions',
         'bedrock-agentcore:GetMemorySession',
-        'bedrock-agentcore:DeleteMemorySession',
       ],
       resources: [this.memory.attrMemoryArn],
     }));

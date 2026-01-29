@@ -1237,12 +1237,20 @@ export class AppApiStack extends cdk.Stack {
         sid: 'AgentCoreMemoryAccess',
         effect: iam.Effect.ALLOW,
         actions: [
+          // Memory configuration
           'bedrock-agentcore:GetMemory',
+          'bedrock-agentcore:GetMemoryStrategies',
+          // Event operations
           'bedrock-agentcore:CreateEvent',
           'bedrock-agentcore:DeleteEvent',
+          'bedrock-agentcore:ListEvents',
+          // Memory retrieval
           'bedrock-agentcore:RetrieveMemory',
           'bedrock-agentcore:RetrieveMemoryRecords',
-          'bedrock-agentcore:ListEvents',
+          'bedrock-agentcore:ListMemoryRecords',
+          // Memory record deletion
+          'bedrock-agentcore:BatchDeleteMemoryRecords',
+          // Session operations
           'bedrock-agentcore:ListMemorySessions',
           'bedrock-agentcore:GetMemorySession',
           'bedrock-agentcore:DeleteMemorySession',
