@@ -69,6 +69,15 @@
     "enabled": true,
     "corsOrigins": "http://localhost:4200,http://localhost:8000,https://boisestate.ai,https://*.boisestate.ai"
   },
+  "ragIngestion": {
+    "enabled": true,
+    "corsOrigins": "http://localhost:4200,http://localhost:8000,https://boisestate.ai,https://*.boisestate.ai",
+    "lambdaMemorySize": 10240,
+    "lambdaTimeout": 900,
+    "embeddingModel": "amazon.titan-embed-text-v2",
+    "vectorDimension": 1024,
+    "vectorDistanceMetric": "cosine"
+  },
   "tags": {
     "Environment": "dev",
     "Project": "AgentCore",

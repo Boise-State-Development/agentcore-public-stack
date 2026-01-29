@@ -5,6 +5,7 @@ import { FrontendStack } from '../lib/frontend-stack';
 import { AppApiStack } from '../lib/app-api-stack';
 import { InferenceApiStack } from '../lib/inference-api-stack';
 import { GatewayStack } from '../lib/gateway-stack';
+import { RagIngestionStack } from '../lib/rag-ingestion-stack';
 import { loadConfig, getStackEnv } from '../lib/config';
 
 const app = new cdk.App();
@@ -58,6 +59,16 @@ if (config.gateway.enabled) {
     env,
     description: `${config.projectPrefix} Gateway Stack - Bedrock AgentCore Gateway with MCP Tools`,
     stackName: `${config.projectPrefix}-GatewayStack`,
+  });
+}
+
+// RAG Ingestion Stack - Independent RAG Pipeline
+if (config.ragIngestion.enabled) {
+  new RagIngestionStack(app, 'RagIngestionStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} RAG Ingestion Stack - Independent RAG Pipeline`,
+    stackName: `${config.projectPrefix}-RagIngestionStack`,
   });
 }
 

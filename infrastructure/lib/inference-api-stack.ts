@@ -171,6 +171,111 @@ export class InferenceApiStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${config.awsRegion}:${config.awsAccount}:parameter/${config.projectPrefix}/*`],
     }));
 
+    // DynamoDB Users Table permissions (imported from App API Stack)
+    const usersTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/users/users-table-arn`
+    );
+    
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'UsersTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:PutItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        usersTableArn,
+        `${usersTableArn}/index/*`, // GSI permissions
+      ],
+    }));
+
+    // DynamoDB AppRoles Table permissions (imported from App API Stack)
+    // This table stores both RBAC roles AND tool catalog definitions
+    const appRolesTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rbac/app-roles-table-arn`
+    );
+    
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AppRolesTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+        // Note: No write permissions - inference API only reads tool definitions and roles
+      ],
+      resources: [
+        appRolesTableArn,
+        `${appRolesTableArn}/index/*`, // GSI permissions
+      ],
+    }));
+
+    // DynamoDB Assistants Table permissions (imported from RagIngestionStack)
+    const assistantsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/assistants-table-arn`
+    );
+    
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AssistantsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:PutItem',
+        'dynamodb:UpdateItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        assistantsTableArn,
+        `${assistantsTableArn}/index/*`, // GSI permissions
+      ],
+    }));
+
+    // S3 Assistants Documents Bucket permissions - NOT NEEDED by inference API
+    // Documents are only accessed during ingestion (Lambda function)
+    // Inference API only queries the vector store, not the raw documents
+
+    // S3 Vectors permissions for RAG (READ-ONLY for queries)
+    const assistantsVectorBucketName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/vector-bucket-name`
+    );
+    
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AssistantsVectorStoreAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3vectors:GetVector',
+        's3vectors:GetVectors',
+        's3vectors:QueryVectors',  // Main action for RAG search
+        's3vectors:GetIndex',
+        's3vectors:ListIndexes',
+        // Note: No PutVectors or DeleteVector - inference API only reads
+      ],
+      resources: [
+        `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorBucketName}`,
+        `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorBucketName}/index/*`,
+      ],
+    }));
+
+    // Bedrock permissions for generating query embeddings
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockEmbeddingsAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeModel',
+      ],
+      resources: [
+        `arn:aws:bedrock:${config.awsRegion}::foundation-model/amazon.titan-embed-text-v2*`,
+      ],
+    }));
+
     // ECR image access - scoped to specific repository
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'ECRImageAccess',
@@ -342,12 +447,19 @@ export class InferenceApiStack extends cdk.Stack {
       sid: 'MemoryAccess',
       effect: iam.Effect.ALLOW,
       actions: [
+        // Memory configuration
+        'bedrock-agentcore:GetMemory',
+        'bedrock-agentcore:GetMemoryStrategies',
+        // Event operations (create only - runtime doesn't delete)
         'bedrock-agentcore:CreateEvent',
-        'bedrock-agentcore:RetrieveMemory',
         'bedrock-agentcore:ListEvents',
+        // Memory retrieval
+        'bedrock-agentcore:RetrieveMemory',
+        'bedrock-agentcore:RetrieveMemoryRecords',
+        'bedrock-agentcore:ListMemoryRecords',
+        // Session operations (read only - runtime doesn't delete sessions)
         'bedrock-agentcore:ListMemorySessions',
         'bedrock-agentcore:GetMemorySession',
-        'bedrock-agentcore:DeleteMemorySession',
       ],
       resources: [this.memory.attrMemoryArn],
     }));
@@ -405,11 +517,40 @@ export class InferenceApiStack extends cdk.Stack {
         'AWS_REGION': config.awsRegion,
         'AWS_DEFAULT_REGION': config.awsRegion,
         
+        // DynamoDB Tables (imported from App API Stack)
+        'DYNAMODB_USERS_TABLE_NAME': ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/users/users-table-name`
+        ),
+        'DYNAMODB_APP_ROLES_TABLE_NAME': ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rbac/app-roles-table-name`
+        ),
+        
+        // Assistants & RAG (imported from RagIngestionStack via SSM)
+        'ASSISTANTS_TABLE_NAME': ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/assistants-table-name`
+        ),
+        // Note: ASSISTANTS_DOCUMENTS_BUCKET_NAME not needed - inference API only queries vectors
+        'ASSISTANTS_VECTOR_STORE_BUCKET_NAME': ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/vector-bucket-name`
+        ),
+        'ASSISTANTS_VECTOR_STORE_INDEX_NAME': ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/vector-index-name`
+        ),
+        
         // AgentCore Resources
         'MEMORY_ARN': this.memory.attrMemoryArn,
         'MEMORY_ID': this.memory.attrMemoryId,
         'CODE_INTERPRETER_ID': this.codeInterpreter.attrCodeInterpreterId,
         'BROWSER_ID': this.browser.attrBrowserId,
+        
+        // AgentCore Memory Configuration (for session management)
+        'AGENTCORE_MEMORY_TYPE': 'dynamodb',  // Use AWS Bedrock AgentCore Memory
+        'AGENTCORE_MEMORY_ID': this.memory.attrMemoryId,  // Same as MEMORY_ID above
         
         // AgentCore Gateway (optional - for MCP tools)
         'GATEWAY_URL': config.gateway.enabled

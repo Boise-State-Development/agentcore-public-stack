@@ -327,16 +327,34 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Continue anyway - better to allow than block on error
 
         # 2. Load assistant with access check
-        assistant = await get_assistant_with_access_check(assistant_id=input_data.assistant_id, user_id=user_id, user_email=current_user.email)
-
+        assistant = await get_assistant_with_access_check(
+            assistant_id=input_data.assistant_id,
+            user_id=user_id,
+            user_email=current_user.email
+        )
+        
         if not assistant:
-            logger.warning(f"Assistant {input_data.assistant_id} not found or access denied for user {user_id}")
-            raise HTTPException(status_code=404, detail=f"Assistant not found or access denied: {input_data.assistant_id}")
-
+            # Check if assistant exists at all to provide better error message
+            from apis.app_api.assistants.services.assistant_service import assistant_exists
+            exists = await assistant_exists(input_data.assistant_id)
+            
+            if not exists:
+                logger.warning(f"❌ Assistant {input_data.assistant_id} does not exist (404)")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Assistant not found: {input_data.assistant_id}"
+                )
+            else:
+                logger.warning(f"🔒 Access denied: user {user_id} ({current_user.email}) cannot access assistant {input_data.assistant_id} (403)")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: You do not have permission to access this assistant"
+                )
+        
         # Mark as viewed if this is a shared assistant (not owned)
         if assistant.owner_id != user_id:
             await mark_share_as_interacted(assistant_id=input_data.assistant_id, user_email=current_user.email)
-
+        
         # 3. Search assistant knowledge base
         try:
             logger.info(f"Searching knowledge base for assistant {input_data.assistant_id} with query: {input_data.message[:100]}...")

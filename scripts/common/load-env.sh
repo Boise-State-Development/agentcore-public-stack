@@ -219,6 +219,20 @@ build_cdk_context_params() {
         context_params="${context_params} --context entraTenantId=\"${CDK_ENTRA_TENANT_ID}\""
     fi    
     
+    # RAG Ingestion optional parameters
+    if [ -n "${CDK_RAG_ENABLED:-}" ]; then
+        context_params="${context_params} --context ragIngestion.enabled=\"${CDK_RAG_ENABLED}\""
+    fi
+    if [ -n "${CDK_RAG_CORS_ORIGINS:-}" ]; then
+        context_params="${context_params} --context ragIngestion.corsOrigins=\"${CDK_RAG_CORS_ORIGINS}\""
+    fi
+    if [ -n "${CDK_RAG_LAMBDA_MEMORY:-}" ]; then
+        context_params="${context_params} --context ragIngestion.lambdaMemorySize=\"${CDK_RAG_LAMBDA_MEMORY}\""
+    fi
+    if [ -n "${CDK_RAG_LAMBDA_TIMEOUT:-}" ]; then
+        context_params="${context_params} --context ragIngestion.lambdaTimeout=\"${CDK_RAG_LAMBDA_TIMEOUT}\""
+    fi
+    
     echo "${context_params}"
 }
 
@@ -234,6 +248,12 @@ export CDK_VPC_CIDR="${CDK_VPC_CIDR:-$(get_json_value "vpcCidr" "${CONTEXT_FILE}
 export CDK_HOSTED_ZONE_DOMAIN="${CDK_HOSTED_ZONE_DOMAIN:-$(get_json_value "infrastructureHostedZoneDomain" "${CONTEXT_FILE}")}"
 export CDK_ALB_SUBDOMAIN="${CDK_ALB_SUBDOMAIN:-$(get_json_value "albSubdomain" "${CONTEXT_FILE}")}"
 export CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-$(get_json_value "certificateArn" "${CONTEXT_FILE}")}"
+
+# RAG Ingestion configuration
+export CDK_RAG_ENABLED="${CDK_RAG_ENABLED:-$(get_json_value "ragIngestion.enabled" "${CONTEXT_FILE}")}"
+export CDK_RAG_CORS_ORIGINS="${CDK_RAG_CORS_ORIGINS:-$(get_json_value "ragIngestion.corsOrigins" "${CONTEXT_FILE}")}"
+export CDK_RAG_LAMBDA_MEMORY="${CDK_RAG_LAMBDA_MEMORY:-$(get_json_value "ragIngestion.lambdaMemorySize" "${CONTEXT_FILE}")}"
+export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIngestion.lambdaTimeout" "${CONTEXT_FILE}")}"
 
 # AWS Account - try multiple sources (env vars take precedence)
 CDK_CONTEXT_ACCOUNT=$(get_json_value "awsAccount" "${CONTEXT_FILE}")

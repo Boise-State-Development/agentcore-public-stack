@@ -17,6 +17,7 @@ export interface AppConfig {
   gateway: GatewayConfig;
   assistants: AssistantsConfig;
   fileUpload: FileUploadConfig;
+  ragIngestion: RagIngestionConfig;
   tags: { [key: string]: string };
 }
 
@@ -86,6 +87,16 @@ export interface FileUploadConfig {
   userQuotaBytes: number;        // Per-user storage quota (default: 1GB)
   retentionDays: number;         // File retention (default: 365 days)
   corsOrigins?: string;          // Comma-separated CORS origins (defaults based on environment)
+}
+
+export interface RagIngestionConfig {
+  enabled: boolean;              // Enable/disable RAG stack
+  corsOrigins: string;           // Comma-separated CORS origins
+  lambdaMemorySize: number;      // Lambda memory in MB (default: 10240)
+  lambdaTimeout: number;         // Lambda timeout in seconds (default: 900)
+  embeddingModel: string;        // Bedrock model ID (default: "amazon.titan-embed-text-v2")
+  vectorDimension: number;       // Embedding dimension (default: 1024)
+  vectorDistanceMetric: string;  // Distance metric (default: "cosine")
 }
 
 /**
@@ -181,6 +192,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: parseBooleanEnv(process.env.CDK_ASSISTANTS_ENABLED) ?? scope.node.tryGetContext('assistants')?.enabled ?? true,
       corsOrigins: process.env.CDK_ASSISTANTS_CORS_ORIGINS || scope.node.tryGetContext('assistants')?.corsOrigins,
     },
+    ragIngestion: {
+      enabled: parseBooleanEnv(process.env.CDK_RAG_ENABLED) ?? scope.node.tryGetContext('ragIngestion')?.enabled ?? true,
+      corsOrigins: process.env.CDK_RAG_CORS_ORIGINS || scope.node.tryGetContext('ragIngestion')?.corsOrigins || '',
+      lambdaMemorySize: parseIntEnv(process.env.CDK_RAG_LAMBDA_MEMORY) || scope.node.tryGetContext('ragIngestion')?.lambdaMemorySize || 10240,
+      lambdaTimeout: parseIntEnv(process.env.CDK_RAG_LAMBDA_TIMEOUT) || scope.node.tryGetContext('ragIngestion')?.lambdaTimeout || 900,
+      embeddingModel: process.env.CDK_RAG_EMBEDDING_MODEL || scope.node.tryGetContext('ragIngestion')?.embeddingModel || 'amazon.titan-embed-text-v2',
+      vectorDimension: parseIntEnv(process.env.CDK_RAG_VECTOR_DIMENSION) || scope.node.tryGetContext('ragIngestion')?.vectorDimension || 1024,
+      vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric || 'cosine',
+    },
     tags: {
       Environment: environment,
       Project: projectPrefix,
@@ -256,6 +276,53 @@ function validateConfig(config: AppConfig): void {
   const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
   if (!cidrPattern.test(config.vpcCidr)) {
     throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+  }
+
+  // Validate RAG Ingestion configuration
+  if (config.ragIngestion.enabled) {
+    // Validate Lambda memory size (128 MB to 10240 MB)
+    if (config.ragIngestion.lambdaMemorySize < 128 || config.ragIngestion.lambdaMemorySize > 10240) {
+      throw new Error(
+        `RAG Lambda memory size must be between 128 and 10240 MB. Got: ${config.ragIngestion.lambdaMemorySize}`
+      );
+    }
+
+    // Validate Lambda timeout (1 to 900 seconds)
+    if (config.ragIngestion.lambdaTimeout < 1 || config.ragIngestion.lambdaTimeout > 900) {
+      throw new Error(
+        `RAG Lambda timeout must be between 1 and 900 seconds. Got: ${config.ragIngestion.lambdaTimeout}`
+      );
+    }
+
+    // Validate vector dimension (must be positive)
+    if (config.ragIngestion.vectorDimension <= 0) {
+      throw new Error(
+        `RAG vector dimension must be positive. Got: ${config.ragIngestion.vectorDimension}`
+      );
+    }
+
+    // Validate distance metric
+    const validMetrics = ['cosine', 'euclidean', 'dot_product'];
+    if (!validMetrics.includes(config.ragIngestion.vectorDistanceMetric)) {
+      throw new Error(
+        `RAG vector distance metric must be one of: ${validMetrics.join(', ')}. Got: ${config.ragIngestion.vectorDistanceMetric}`
+      );
+    }
+
+    // Validate embedding model (basic check for non-empty string)
+    if (!config.ragIngestion.embeddingModel || config.ragIngestion.embeddingModel.trim() === '') {
+      throw new Error('RAG embedding model must be a non-empty string');
+    }
+
+    // Validate CORS origins if provided
+    if (config.ragIngestion.corsOrigins) {
+      const origins = config.ragIngestion.corsOrigins.split(',').map(o => o.trim());
+      origins.forEach(origin => {
+        if (origin && !origin.startsWith('http://') && !origin.startsWith('https://') && origin !== '*') {
+          console.warn(`Warning: RAG CORS origin '${origin}' should start with http:// or https:// or be '*'`);
+        }
+      });
+    }
   }
 
   // // Validate Route53 domain if enabled

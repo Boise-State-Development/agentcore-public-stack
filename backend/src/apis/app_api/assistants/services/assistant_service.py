@@ -429,7 +429,10 @@ async def _get_assistant_cloud_without_ownership_check(assistant_id: str, table_
         table_name: DynamoDB table name
 
     Returns:
-        Assistant object if found, None otherwise
+        Assistant object if found, None if not found
+        
+    Raises:
+        Exception: On DynamoDB errors (not ResourceNotFoundException)
     """
     try:
         import boto3
@@ -448,15 +451,19 @@ async def _get_assistant_cloud_without_ownership_check(assistant_id: str, table_
         return Assistant.model_validate(item)
 
     except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "Unknown")
-        if error_code == "ResourceNotFoundException":
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        error_message = e.response.get('Error', {}).get('Message', str(e))
+        
+        if error_code == 'ResourceNotFoundException':
             logger.info(f"Table {table_name} not found")
+            return None
         else:
-            logger.error(f"Failed to retrieve assistant from DynamoDB: {error_code} - {e}")
-        return None
+            # Don't suppress real errors like AccessDeniedException
+            logger.error(f"DynamoDB error retrieving assistant {assistant_id}: {error_code} - {error_message}")
+            raise Exception(f"DynamoDB error ({error_code}): {error_message}") from e
     except Exception as e:
-        logger.error(f"Failed to retrieve assistant from DynamoDB: {e}", exc_info=True)
-        return None
+        logger.error(f"Failed to retrieve assistant {assistant_id} from DynamoDB: {e}", exc_info=True)
+        raise
 
 
 async def update_assistant(
@@ -1228,7 +1235,10 @@ async def check_share_access(assistant_id: str, user_email: str) -> bool:
         user_email: User's email address (will be normalized to lowercase)
 
     Returns:
-        True if share record exists, False otherwise
+        True if share record exists, False if not found
+        
+    Raises:
+        Exception: On DynamoDB errors (not ResourceNotFoundException)
     """
     assistants_table = os.environ.get("ASSISTANTS_TABLE_NAME")
     if not assistants_table:
@@ -1250,11 +1260,19 @@ async def check_share_access(assistant_id: str, user_email: str) -> bool:
         return "Item" in response
 
     except ClientError as e:
-        logger.debug(f"Error checking share access: {e}")
-        return False
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        error_message = e.response.get('Error', {}).get('Message', str(e))
+        
+        if error_code == 'ResourceNotFoundException':
+            logger.debug(f"Table {assistants_table} not found")
+            return False
+        else:
+            # Don't suppress real errors like AccessDeniedException
+            logger.error(f"DynamoDB error checking share access for {assistant_id}: {error_code} - {error_message}")
+            raise Exception(f"DynamoDB error ({error_code}): {error_message}") from e
     except Exception as e:
-        logger.error(f"Error checking share access: {e}", exc_info=True)
-        return False
+        logger.error(f"Error checking share access for {assistant_id}: {e}", exc_info=True)
+        raise
 
 
 async def mark_share_as_interacted(assistant_id: str, user_email: str) -> bool:
