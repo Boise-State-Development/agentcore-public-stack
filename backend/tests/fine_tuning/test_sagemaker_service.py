@@ -95,6 +95,76 @@ class TestCreateTrainingJob:
         assert "VpcConfig" not in call_kwargs
 
 
+class TestCreateTrainingJobWithScripts:
+
+    def test_injects_sagemaker_program_hp(self, service, mock_sagemaker):
+        """When source_dir_s3_uri is provided, sagemaker_program HP should be set."""
+        mock_sagemaker.create_training_job.return_value = {}
+
+        service.create_training_job(
+            job_name="ft-test",
+            hyperparameters={"epochs": "3"},
+            input_s3_uri="s3://bucket/input",
+            output_s3_uri="s3://bucket/output",
+            instance_type="ml.g5.2xlarge",
+            source_dir_s3_uri="s3://bucket/scripts/sourcedir.tar.gz",
+        )
+
+        call_kwargs = mock_sagemaker.create_training_job.call_args[1]
+        assert call_kwargs["HyperParameters"]["sagemaker_program"] == "train.py"
+
+    def test_injects_sagemaker_submit_directory_hp(self, service, mock_sagemaker):
+        """When source_dir_s3_uri is provided, sagemaker_submit_directory HP should be set."""
+        mock_sagemaker.create_training_job.return_value = {}
+
+        service.create_training_job(
+            job_name="ft-test",
+            hyperparameters={"epochs": "3"},
+            input_s3_uri="s3://bucket/input",
+            output_s3_uri="s3://bucket/output",
+            instance_type="ml.g5.2xlarge",
+            source_dir_s3_uri="s3://bucket/scripts/sourcedir.tar.gz",
+        )
+
+        call_kwargs = mock_sagemaker.create_training_job.call_args[1]
+        assert call_kwargs["HyperParameters"]["sagemaker_submit_directory"] == "s3://bucket/scripts/sourcedir.tar.gz"
+
+    def test_no_script_hps_when_source_dir_empty(self, service, mock_sagemaker):
+        """When source_dir_s3_uri is empty, no script HPs should be injected (backward compat)."""
+        mock_sagemaker.create_training_job.return_value = {}
+
+        service.create_training_job(
+            job_name="ft-test",
+            hyperparameters={"epochs": "3"},
+            input_s3_uri="s3://bucket/input",
+            output_s3_uri="s3://bucket/output",
+            instance_type="ml.g5.2xlarge",
+            source_dir_s3_uri="",
+        )
+
+        call_kwargs = mock_sagemaker.create_training_job.call_args[1]
+        assert "sagemaker_program" not in call_kwargs["HyperParameters"]
+        assert "sagemaker_submit_directory" not in call_kwargs["HyperParameters"]
+
+    def test_does_not_mutate_original_hyperparameters(self, service, mock_sagemaker):
+        """Should not mutate the caller's hyperparameters dict when injecting script HPs."""
+        mock_sagemaker.create_training_job.return_value = {}
+        original_hps = {"epochs": "3"}
+
+        service.create_training_job(
+            job_name="ft-test",
+            hyperparameters=original_hps,
+            input_s3_uri="s3://bucket/input",
+            output_s3_uri="s3://bucket/output",
+            instance_type="ml.g5.2xlarge",
+            source_dir_s3_uri="s3://bucket/scripts/sourcedir.tar.gz",
+        )
+
+        # Original dict should not be mutated
+        assert "sagemaker_program" not in original_hps
+        assert "sagemaker_submit_directory" not in original_hps
+
+
 class TestDescribeTrainingJob:
 
     def test_returns_normalized_status(self, service, mock_sagemaker):

@@ -66,12 +66,23 @@ class SageMakerService:
         instance_type: str,
         instance_count: int = 1,
         max_runtime: int = 86400,
+        source_dir_s3_uri: str = "",
     ) -> dict:
         """Create a SageMaker training job.
+
+        When source_dir_s3_uri is provided, injects sagemaker_program and
+        sagemaker_submit_directory hyperparameters so the HuggingFace DLC
+        uses the custom training script instead of the default.
 
         Returns the response from create_training_job API call.
         """
         image_uri = self.get_huggingface_image_uri()
+
+        # Inject custom script hyperparameters if source_dir provided
+        if source_dir_s3_uri:
+            hyperparameters = {**hyperparameters}  # Copy to avoid mutation
+            hyperparameters["sagemaker_program"] = "train.py"
+            hyperparameters["sagemaker_submit_directory"] = source_dir_s3_uri
 
         subnets = [s.strip() for s in self._subnet_ids.split(",") if s.strip()]
         security_groups = [self._security_group_id] if self._security_group_id else []

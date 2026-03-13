@@ -16,6 +16,7 @@ import {
   heroWrenchScrewdriver,
   heroLink,
   heroFingerPrint,
+  heroAcademicCap,
 } from '@ng-icons/heroicons/outline';
 
 interface AdminFeature {
@@ -44,6 +45,7 @@ interface AdminFeature {
       heroWrenchScrewdriver,
       heroLink,
       heroFingerPrint,
+      heroAcademicCap,
     })
   ],
   templateUrl: './admin.page.html',
@@ -112,6 +114,12 @@ export class AdminPage {
       description: 'Configure third-party OAuth integrations for MCP tool authentication. Manage Google, Microsoft, GitHub, and custom providers.',
       icon: 'heroLink',
       route: '/admin/oauth-providers',
+    },
+    {
+      title: 'Fine-Tuning Access',
+      description: 'Manage which users can access fine-tuning. Grant or revoke access, set monthly compute hour quotas, and monitor usage.',
+      icon: 'heroAcademicCap',
+      route: '/admin/fine-tuning',
     },
     {
       title: 'Quota Tiers',

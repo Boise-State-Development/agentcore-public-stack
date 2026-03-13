@@ -13,6 +13,7 @@ from apis.app_api.fine_tuning.job_repository import get_fine_tuning_jobs_reposit
 from apis.app_api.fine_tuning.s3_service import get_fine_tuning_s3_service
 from apis.app_api.fine_tuning.sagemaker_service import get_sagemaker_service
 from apis.app_api.fine_tuning.repository import get_fine_tuning_access_repository
+from apis.app_api.fine_tuning.script_packaging_service import get_script_packaging_service
 
 
 def _create_app():
@@ -21,7 +22,7 @@ def _create_app():
     return app
 
 
-def _setup_deps(app, user, grant, jobs_repo=None, s3_service=None, sagemaker=None, access_repo=None):
+def _setup_deps(app, user, grant, jobs_repo=None, s3_service=None, sagemaker=None, access_repo=None, script_service=None):
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[require_fine_tuning_access] = lambda: grant
     if jobs_repo:
@@ -32,6 +33,8 @@ def _setup_deps(app, user, grant, jobs_repo=None, s3_service=None, sagemaker=Non
         app.dependency_overrides[get_sagemaker_service] = lambda: sagemaker
     if access_repo:
         app.dependency_overrides[get_fine_tuning_access_repository] = lambda: access_repo
+    if script_service:
+        app.dependency_overrides[get_script_packaging_service] = lambda: script_service
 
 
 SAMPLE_GRANT = {
@@ -64,6 +67,7 @@ SAMPLE_JOB = {
     "updated_at": "2026-03-13T10:00:00+00:00",
     "error_message": None,
     "max_runtime_seconds": 86400,
+    "training_progress": None,
 }
 
 
@@ -135,7 +139,10 @@ class TestCreateJob:
 
         mock_access = MagicMock()
 
-        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, mock_s3, mock_sm, mock_access)
+        mock_script = MagicMock()
+        mock_script.ensure_scripts_uploaded.return_value = "s3://test-bucket/scripts/sourcedir.tar.gz"
+
+        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, mock_s3, mock_sm, mock_access, mock_script)
 
         client = TestClient(app)
         resp = client.post(
@@ -153,7 +160,7 @@ class TestCreateJob:
     def test_returns_400_for_unknown_model(self, make_user):
         app = _create_app()
         user = make_user(email="user@example.com")
-        _setup_deps(app, user, SAMPLE_GRANT, MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        _setup_deps(app, user, SAMPLE_GRANT, MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
 
         client = TestClient(app)
         resp = client.post(
@@ -174,7 +181,7 @@ class TestCreateJob:
         mock_s3 = MagicMock()
         mock_s3.check_object_exists.return_value = False
 
-        _setup_deps(app, user, SAMPLE_GRANT, MagicMock(), mock_s3, MagicMock(), MagicMock())
+        _setup_deps(app, user, SAMPLE_GRANT, MagicMock(), mock_s3, MagicMock(), MagicMock(), MagicMock())
 
         client = TestClient(app)
         resp = client.post(
@@ -197,7 +204,7 @@ class TestCreateJob:
         mock_s3 = MagicMock()
         mock_s3.check_object_exists.return_value = True
 
-        _setup_deps(app, user, low_quota_grant, MagicMock(), mock_s3, MagicMock(), MagicMock())
+        _setup_deps(app, user, low_quota_grant, MagicMock(), mock_s3, MagicMock(), MagicMock(), MagicMock())
 
         client = TestClient(app)
         resp = client.post(

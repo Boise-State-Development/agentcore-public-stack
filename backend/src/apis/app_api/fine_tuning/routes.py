@@ -1,5 +1,6 @@
 """User-facing routes for fine-tuning."""
 
+import os
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
@@ -33,6 +34,7 @@ from .inference_models import (
     TrainedModelResponse,
 )
 from .inference_repository import InferenceRepository, get_inference_repository
+from .script_packaging_service import ScriptPackagingService, get_script_packaging_service
 from .dependencies import require_fine_tuning_access
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,7 @@ async def create_job(
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
     access_repo: FineTuningAccessRepository = Depends(get_fine_tuning_access_repository),
+    script_service: ScriptPackagingService = Depends(get_script_packaging_service),
 ):
     """Create a new fine-tuning training job."""
     # Validate model
@@ -155,6 +158,16 @@ async def create_job(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     sagemaker_job_name = f"ft-{job_id[:8]}-{timestamp}"
 
+    # Add DynamoDB progress reporting hyperparameters
+    jobs_table_name = os.environ.get("DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME", "fine-tuning-jobs")
+    hyperparameters["dynamodb_table_name"] = jobs_table_name
+    hyperparameters["dynamodb_region"] = os.environ.get("AWS_REGION", "us-west-2")
+    hyperparameters["job_pk"] = f"USER#{user.user_id}"
+    hyperparameters["job_sk"] = f"JOB#{job_id}"
+
+    # Ensure training scripts are uploaded and get the S3 URI
+    scripts_s3_uri = script_service.ensure_scripts_uploaded()
+
     # S3 paths
     output_s3_prefix = s3_service.get_output_s3_prefix(user.user_id, job_id)
     output_s3_uri = s3_service.get_output_s3_uri(user.user_id, job_id)
@@ -184,6 +197,7 @@ async def create_job(
             output_s3_uri=output_s3_uri,
             instance_type=instance_type,
             max_runtime=request.max_runtime_seconds,
+            source_dir_s3_uri=scripts_s3_uri,
         )
         job = jobs_repo.update_job_status(user.user_id, job_id, "TRAINING")
     except Exception as e:

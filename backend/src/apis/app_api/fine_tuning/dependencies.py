@@ -9,6 +9,7 @@ from .job_repository import FineTuningJobsRepository, get_fine_tuning_jobs_repos
 from .s3_service import FineTuningS3Service, get_fine_tuning_s3_service
 from .sagemaker_service import SageMakerService, get_sagemaker_service
 from .inference_repository import InferenceRepository, get_inference_repository
+from .script_packaging_service import ScriptPackagingService, get_script_packaging_service
 
 logger = logging.getLogger(__name__)
 

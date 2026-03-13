@@ -29,6 +29,10 @@ AVAILABLE_MODELS: List[AvailableModel] = [
             "epochs": "3",
             "per_device_train_batch_size": "4",
             "learning_rate": "2e-5",
+            "weight_decay": "0.01",
+            "split_ratio": "0.8",
+            "seed": "42",
+            "context_length": "512",
         },
     ),
     AvailableModel(
@@ -41,6 +45,10 @@ AVAILABLE_MODELS: List[AvailableModel] = [
             "epochs": "3",
             "per_device_train_batch_size": "4",
             "learning_rate": "2e-5",
+            "weight_decay": "0.01",
+            "split_ratio": "0.8",
+            "seed": "42",
+            "context_length": "512",
         },
     ),
     AvailableModel(
@@ -53,6 +61,10 @@ AVAILABLE_MODELS: List[AvailableModel] = [
             "epochs": "3",
             "per_device_train_batch_size": "8",
             "learning_rate": "5e-5",
+            "weight_decay": "0.01",
+            "split_ratio": "0.8",
+            "seed": "42",
+            "context_length": "512",
         },
     ),
 ]
@@ -127,6 +139,7 @@ class JobResponse(BaseModel):
     updated_at: str
     error_message: Optional[str] = None
     max_runtime_seconds: int = 86400
+    training_progress: Optional[float] = None
 
 
 class JobListResponse(BaseModel):

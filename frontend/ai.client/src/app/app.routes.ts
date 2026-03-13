@@ -187,6 +187,11 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
+        path: 'admin/fine-tuning',
+        loadComponent: () => import('./admin/fine-tuning-access/fine-tuning-access.page').then(m => m.FineTuningAccessPage),
+        canActivate: [adminGuard],
+    },
+    {
         path: '**',
         loadComponent: () => import('./not-found/not-found.page').then(m => m.NotFoundPage),
     }

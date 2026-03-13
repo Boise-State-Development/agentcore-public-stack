@@ -63,6 +63,7 @@ class FineTuningJobsRepository:
             "updated_at": item["updatedAt"],
             "error_message": item.get("error_message"),
             "max_runtime_seconds": int(item.get("max_runtime_seconds", 86400)),
+            "training_progress": float(item["training_progress"]) if item.get("training_progress") is not None else None,
         }
         return result
 

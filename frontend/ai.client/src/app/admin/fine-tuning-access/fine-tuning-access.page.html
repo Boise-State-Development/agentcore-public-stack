@@ -1,0 +1,244 @@
+<div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+  <!-- Back link -->
+  <a routerLink="/admin" class="mb-6 inline-flex items-center gap-1 text-sm/6 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+    <ng-icon name="heroArrowLeft" class="size-4" />
+    Back to Admin
+  </a>
+
+  <!-- Page header -->
+  <div class="mb-6 flex items-start justify-between">
+    <div>
+      <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Fine-Tuning Access</h1>
+      <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        Manage which users can create fine-tuning and inference jobs. Each user gets a monthly GPU-hour quota.
+      </p>
+    </div>
+    <button
+      (click)="state.toggleGrantForm()"
+      class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+    >
+      <ng-icon name="heroPlus" class="size-4" />
+      Grant Access
+    </button>
+  </div>
+
+  <!-- Inline grant form -->
+  @if (state.showGrantForm()) {
+    <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+      <h2 class="mb-3 text-sm/6 font-semibold text-blue-900 dark:text-blue-200">Grant Fine-Tuning Access</h2>
+      <form (ngSubmit)="submitGrant()" class="flex flex-wrap items-end gap-3">
+        <div class="flex-1">
+          <label for="grant-email" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Email address</label>
+          <input
+            id="grant-email"
+            type="email"
+            required
+            [(ngModel)]="newEmail"
+            name="email"
+            placeholder="user@example.com"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+          />
+        </div>
+        <div class="w-36">
+          <label for="grant-quota" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Monthly hours</label>
+          <input
+            id="grant-quota"
+            type="number"
+            required
+            min="1"
+            step="1"
+            [(ngModel)]="newQuota"
+            name="quota"
+            class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          />
+        </div>
+        <div class="flex gap-2">
+          <button
+            type="submit"
+            class="inline-flex items-center gap-1 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+          >
+            <ng-icon name="heroCheck" class="size-4" />
+            Submit
+          </button>
+          <button
+            type="button"
+            (click)="state.toggleGrantForm()"
+            class="inline-flex items-center gap-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  }
+
+  <!-- Error display -->
+  @if (state.hasError()) {
+    <div class="mb-4 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+      <div class="flex-1">
+        <p class="text-sm/6 text-red-800 dark:text-red-200">{{ state.error() }}</p>
+      </div>
+      <button
+        (click)="state.clearError()"
+        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        [appTooltip]="'Dismiss'"
+        appTooltipPosition="left"
+        aria-label="Dismiss error"
+      >
+        <ng-icon name="heroXMark" class="size-5" />
+      </button>
+    </div>
+  }
+
+  <!-- Loading spinner (only when no data yet) -->
+  @if (state.loading() && state.grantCount() === 0) {
+    <div class="flex items-center justify-center py-12">
+      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" role="status" aria-label="Loading"></div>
+    </div>
+  }
+
+  <!-- Grants table -->
+  @if (state.grantCount() > 0) {
+    <div class="overflow-hidden rounded-sm border border-gray-200 dark:border-gray-700">
+      <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+        <thead class="bg-gray-50 dark:bg-gray-800">
+          <tr>
+            <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Email</th>
+            <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Quota</th>
+            <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Usage This Month</th>
+            <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Granted</th>
+            <th scope="col" class="px-4 py-3 text-right text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
+          @for (grant of state.grants(); track grant.email) {
+            <tr class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
+              <!-- Email -->
+              <td class="whitespace-nowrap px-4 py-3 text-sm/6 font-medium text-gray-900 dark:text-white">
+                {{ grant.email }}
+              </td>
+
+              <!-- Quota -->
+              <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                @if (editingEmail() === grant.email) {
+                  <form (ngSubmit)="submitQuotaUpdate()" class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      [(ngModel)]="editQuota"
+                      [ngModelOptions]="{standalone: true}"
+                      class="w-20 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      aria-label="Monthly quota hours"
+                    />
+                    <span class="text-gray-500 dark:text-gray-400">hrs</span>
+                    <button
+                      type="submit"
+                      class="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
+                      [appTooltip]="'Save'"
+                      appTooltipPosition="top"
+                      aria-label="Save quota"
+                    >
+                      <ng-icon name="heroCheck" class="size-4" />
+                    </button>
+                    <button
+                      type="button"
+                      (click)="cancelEdit()"
+                      class="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                      [appTooltip]="'Cancel'"
+                      appTooltipPosition="top"
+                      aria-label="Cancel editing"
+                    >
+                      <ng-icon name="heroXMark" class="size-4" />
+                    </button>
+                  </form>
+                } @else {
+                  {{ grant.monthly_quota_hours }} hrs
+                }
+              </td>
+
+              <!-- Usage -->
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <div class="w-24">
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)" aria-valuemin="0" aria-valuemax="100">
+                      <div
+                        [class]="'h-full rounded-full transition-all ' + usageBarColor(grant.current_month_usage_hours, grant.monthly_quota_hours)"
+                        [style.width.%]="usagePercent(grant.current_month_usage_hours, grant.monthly_quota_hours)"
+                      ></div>
+                    </div>
+                  </div>
+                  <span class="whitespace-nowrap text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ grant.current_month_usage_hours.toFixed(1) }} / {{ grant.monthly_quota_hours }} hrs
+                  </span>
+                </div>
+              </td>
+
+              <!-- Granted date -->
+              <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                {{ formatDate(grant.granted_at) }}
+              </td>
+
+              <!-- Actions -->
+              <td class="whitespace-nowrap px-4 py-3 text-right">
+                @if (confirmingRevoke() === grant.email) {
+                  <div class="flex items-center justify-end gap-2">
+                    <span class="text-xs text-red-600 dark:text-red-400">Revoke?</span>
+                    <button
+                      (click)="executeRevoke(grant.email)"
+                      class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      (click)="cancelRevoke()"
+                      class="rounded-sm border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      No
+                    </button>
+                  </div>
+                } @else {
+                  <div class="flex items-center justify-end gap-1">
+                    <button
+                      (click)="startEdit(grant.email, grant.monthly_quota_hours)"
+                      class="rounded-sm p-1.5 text-gray-400 hover:text-blue-600 dark:text-gray-500 dark:hover:text-blue-400"
+                      [appTooltip]="'Edit Quota'"
+                      appTooltipPosition="top"
+                      aria-label="Edit quota for {{ grant.email }}"
+                    >
+                      <ng-icon name="heroPencilSquare" class="size-4" />
+                    </button>
+                    <button
+                      (click)="confirmRevoke(grant.email)"
+                      class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                      [appTooltip]="'Revoke Access'"
+                      appTooltipPosition="top"
+                      aria-label="Revoke access for {{ grant.email }}"
+                    >
+                      <ng-icon name="heroTrash" class="size-4" />
+                    </button>
+                  </div>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Summary -->
+    <p class="mt-3 text-sm/6 text-gray-500 dark:text-gray-400">
+      {{ state.grantCount() }} user{{ state.grantCount() === 1 ? '' : 's' }} with fine-tuning access
+    </p>
+  }
+
+  <!-- Empty state -->
+  @if (!state.loading() && state.grantCount() === 0) {
+    <div class="rounded-sm border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+      <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+        No users have fine-tuning access yet. Click "Grant Access" to add users.
+      </p>
+    </div>
+  }
+</div>
