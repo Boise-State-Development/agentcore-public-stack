@@ -1,0 +1,230 @@
+<div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+  <!-- Back link -->
+  <a routerLink="/fine-tuning" class="mb-6 inline-flex items-center gap-1 text-sm/6 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+    <ng-icon name="heroArrowLeft" class="size-4" />
+    Back to Fine-Tuning
+  </a>
+
+  <!-- Error banner -->
+  @if (state.error(); as errorMsg) {
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+      <p class="flex-1 text-sm/6 text-red-800 dark:text-red-200">{{ errorMsg }}</p>
+      <button
+        (click)="state.clearError()"
+        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        [appTooltip]="'Dismiss'"
+        appTooltipPosition="left"
+        aria-label="Dismiss error"
+      >
+        <ng-icon name="heroXMark" class="size-5" />
+      </button>
+    </div>
+  }
+
+  <!-- Download error -->
+  @if (downloadError(); as errMsg) {
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+      <p class="flex-1 text-sm/6 text-red-800 dark:text-red-200">{{ errMsg }}</p>
+    </div>
+  }
+
+  <!-- Loading spinner -->
+  @if (state.loading() && !state.currentTrainingJob()) {
+    <div class="flex items-center justify-center py-12">
+      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" role="status" aria-label="Loading"></div>
+    </div>
+  }
+
+  @if (state.currentTrainingJob(); as job) {
+    <!-- Page header -->
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">{{ job.model_name }}</h1>
+        <app-status-badge [status]="job.status" />
+      </div>
+      <button
+        (click)="refreshJob()"
+        class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        [appTooltip]="'Refresh'"
+        appTooltipPosition="bottom"
+        aria-label="Refresh job details"
+      >
+        <ng-icon name="heroArrowPath" class="size-4" />
+      </button>
+    </div>
+
+    <!-- Metadata card -->
+    <section class="mb-6 rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+      <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+        <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Job Details</h2>
+      </div>
+      <div class="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
+        <!-- Status -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</dt>
+          <dd class="mt-1"><app-status-badge [status]="job.status" /></dd>
+        </div>
+        <!-- Model -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Model</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ job.model_name }}</dd>
+        </div>
+        <!-- Instance Type -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Instance Type</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ job.instance_type }}</dd>
+        </div>
+        <!-- Created -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Created</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ job.created_at | date:'medium' }}</dd>
+        </div>
+        <!-- Started -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Started</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">
+            {{ job.training_start_time ? (job.training_start_time | date:'medium') : '-' }}
+          </dd>
+        </div>
+        <!-- Ended -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Ended</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">
+            {{ job.training_end_time ? (job.training_end_time | date:'medium') : '-' }}
+          </dd>
+        </div>
+        <!-- Billable Time -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Billable Time</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ formatDuration(job.billable_seconds) }}</dd>
+        </div>
+        <!-- Cost -->
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Estimated Cost</dt>
+          <dd class="mt-1 text-sm/6 text-gray-900 dark:text-white">{{ formatCost(job.estimated_cost_usd) }}</dd>
+        </div>
+        <!-- Progress -->
+        @if (job.training_progress != null) {
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Progress</dt>
+            <dd class="mt-1">
+              <div class="flex items-center gap-2">
+                <div class="h-2 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700" role="progressbar" [attr.aria-valuenow]="job.training_progress" aria-valuemin="0" aria-valuemax="100">
+                  <div
+                    class="h-full rounded-full bg-blue-500 transition-all"
+                    [style.width.%]="job.training_progress"
+                  ></div>
+                </div>
+                <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ job.training_progress }}%</span>
+              </div>
+            </dd>
+          </div>
+        }
+      </div>
+
+      <!-- Error message -->
+      @if (job.status === 'FAILED' && job.error_message) {
+        <div class="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+          <dt class="text-xs font-medium uppercase tracking-wider text-red-600 dark:text-red-400">Error</dt>
+          <dd class="mt-1 text-sm/6 text-red-700 dark:text-red-300">{{ job.error_message }}</dd>
+        </div>
+      }
+
+      <!-- Hyperparameters -->
+      @if (job.hyperparameters) {
+        <div class="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
+          <dt class="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Hyperparameters</dt>
+          <dd>
+            <div class="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+              @for (param of job.hyperparameters | keyvalue; track param.key) {
+                <div class="flex items-baseline justify-between gap-2">
+                  <span class="text-xs text-gray-500 dark:text-gray-400">{{ param.key }}</span>
+                  <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ param.value }}</span>
+                </div>
+              }
+            </div>
+          </dd>
+        </div>
+      }
+    </section>
+
+    <!-- Actions bar -->
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+      @if (job.status === 'COMPLETED') {
+        <button
+          (click)="downloadArtifact()"
+          [disabled]="loadingDownload()"
+          [class]="'inline-flex items-center gap-1.5 rounded-sm px-4 py-2 text-sm font-medium text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600 ' +
+            (loadingDownload() ? 'cursor-not-allowed bg-green-400' : 'bg-green-600 hover:bg-green-700')"
+        >
+          @if (loadingDownload()) {
+            <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" role="status" aria-label="Preparing download"></div>
+            Preparing...
+          } @else {
+            <ng-icon name="heroArrowDownTray" class="size-4" />
+            Download Model Artifact
+          }
+        </button>
+      }
+
+      @if (confirmingStop()) {
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-red-600 dark:text-red-400">Stop this job?</span>
+          <button
+            (click)="executeStop()"
+            class="rounded-sm bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+          >
+            Yes, Stop
+          </button>
+          <button
+            (click)="cancelStop()"
+            class="rounded-sm border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+        </div>
+      } @else if (canStop(job.status)) {
+        <button
+          (click)="confirmStop()"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-gray-800 dark:text-red-400 dark:hover:bg-red-900/20"
+        >
+          <ng-icon name="heroStop" class="size-4" />
+          Stop Job
+        </button>
+      }
+    </div>
+
+    <!-- Logs section -->
+    <section>
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">CloudWatch Logs</h2>
+        <button
+          (click)="refreshLogs()"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          [appTooltip]="'Refresh Logs'"
+          appTooltipPosition="top"
+          aria-label="Refresh logs"
+        >
+          <ng-icon name="heroArrowPath" class="size-3.5" />
+        </button>
+      </div>
+
+      @if (loadingLogs() && state.currentLogs().length === 0) {
+        <div class="flex items-center justify-center rounded-sm border border-gray-200 bg-white py-8 dark:border-gray-700 dark:bg-gray-900">
+          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Loading logs"></div>
+        </div>
+      } @else if (state.currentLogs().length > 0) {
+        <div class="max-h-96 overflow-auto rounded-sm border border-gray-200 bg-gray-950 dark:border-gray-700">
+          <pre class="p-4 text-xs/5 text-gray-300"><code>@for (line of state.currentLogs(); track $index) {{{ line }}
+}</code></pre>
+        </div>
+      } @else {
+        <div class="rounded-sm border border-gray-200 bg-white py-8 text-center dark:border-gray-700 dark:bg-gray-900">
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">No logs available yet.</p>
+        </div>
+      }
+    </section>
+  }
+</div>

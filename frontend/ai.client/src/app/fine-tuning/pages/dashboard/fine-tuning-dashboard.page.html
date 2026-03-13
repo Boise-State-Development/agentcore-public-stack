@@ -1,0 +1,267 @@
+<div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+  <!-- Page header -->
+  <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Fine-Tuning</h1>
+      <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        Train custom models and run inference on your data.
+      </p>
+    </div>
+    @if (state.hasAccess()) {
+      <div class="flex items-center gap-3">
+        <button
+          (click)="refresh()"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          [appTooltip]="'Refresh'"
+          appTooltipPosition="bottom"
+          aria-label="Refresh dashboard"
+        >
+          <ng-icon name="heroArrowPath" class="size-4" />
+        </button>
+        <button
+          (click)="navigateToNewInferenceJob()"
+          class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        >
+          <ng-icon name="heroPlus" class="size-4" />
+          New Inference Job
+        </button>
+        <button
+          (click)="navigateToNewTrainingJob()"
+          class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+        >
+          <ng-icon name="heroPlus" class="size-4" />
+          New Training Job
+        </button>
+      </div>
+    }
+  </div>
+
+  <!-- Error display -->
+  @if (state.error(); as errorMsg) {
+    <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">
+      <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0 text-red-600 dark:text-red-400" />
+      <div class="flex-1">
+        <p class="text-sm/6 text-red-800 dark:text-red-200">{{ errorMsg }}</p>
+      </div>
+      <button
+        (click)="state.clearError()"
+        class="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        [appTooltip]="'Dismiss'"
+        appTooltipPosition="left"
+        aria-label="Dismiss error"
+      >
+        <ng-icon name="heroXMark" class="size-5" />
+      </button>
+    </div>
+  }
+
+  <!-- Loading spinner (only when no data yet) -->
+  @if (state.loading() && !state.access()) {
+    <div class="flex items-center justify-center py-12">
+      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" role="status" aria-label="Loading"></div>
+    </div>
+  }
+
+  <!-- No-access state -->
+  @if (!state.loading() && state.access() && !state.hasAccess()) {
+    <div class="rounded-sm border border-gray-200 bg-white py-16 text-center dark:border-gray-700 dark:bg-gray-900">
+      <ng-icon name="heroLockClosed" class="mx-auto size-12 text-gray-300 dark:text-gray-600" />
+      <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">No Fine-Tuning Access</h2>
+      <p class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">
+        You don't currently have access to fine-tuning features.<br />
+        Contact an administrator to request access.
+      </p>
+    </div>
+  }
+
+  <!-- Main content when access is granted -->
+  @if (state.hasAccess() && state.access(); as access) {
+    <!-- Quota card -->
+    <div class="mb-8 max-w-sm">
+      <app-quota-card [access]="access" />
+    </div>
+
+    <!-- Training Jobs section -->
+    <section class="mb-8">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Training Jobs</h2>
+        <span class="text-sm text-gray-500 dark:text-gray-400">
+          {{ state.trainingJobCount() }} job{{ state.trainingJobCount() === 1 ? '' : 's' }}
+        </span>
+      </div>
+
+      @if (state.trainingJobCount() > 0) {
+        <div class="overflow-hidden rounded-sm border border-gray-200 dark:border-gray-700">
+          <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-800">
+              <tr>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Model</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Instance</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Created</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
+              @for (job of state.trainingJobs(); track job.job_id) {
+                <tr class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <td class="whitespace-nowrap px-4 py-3">
+                    <app-status-badge [status]="job.status" />
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 font-medium">
+                    <a
+                      [routerLink]="'/fine-tuning/training/' + job.job_id"
+                      class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      {{ job.model_name }}
+                    </a>
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ job.instance_type }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ formatCost(job.estimated_cost_usd) }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                    {{ job.created_at | date:'short' }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-right">
+                    @if (confirmingStopTraining() === job.job_id) {
+                      <div class="flex items-center justify-end gap-2">
+                        <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                        <button
+                          (click)="executeStopTraining(job.job_id)"
+                          class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          (click)="cancelStopTraining()"
+                          class="rounded-sm border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                        >
+                          No
+                        </button>
+                      </div>
+                    } @else if (canStopTraining(job.status)) {
+                      <button
+                        (click)="confirmStopTraining(job.job_id)"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                        [appTooltip]="'Stop Job'"
+                        appTooltipPosition="top"
+                        [attr.aria-label]="'Stop training job ' + job.job_id"
+                      >
+                        <ng-icon name="heroStop" class="size-4" />
+                      </button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else if (!state.loading()) {
+        <div class="rounded-sm border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+            No training jobs yet.
+          </p>
+          <button
+            (click)="navigateToNewTrainingJob()"
+            class="mt-3 inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            <ng-icon name="heroPlus" class="size-4" />
+            Create your first training job
+          </button>
+        </div>
+      }
+    </section>
+
+    <!-- Inference Jobs section -->
+    <section>
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Inference Jobs</h2>
+        <span class="text-sm text-gray-500 dark:text-gray-400">
+          {{ state.inferenceJobCount() }} job{{ state.inferenceJobCount() === 1 ? '' : 's' }}
+        </span>
+      </div>
+
+      @if (state.inferenceJobCount() > 0) {
+        <div class="overflow-hidden rounded-sm border border-gray-200 dark:border-gray-700">
+          <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-800">
+              <tr>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Status</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Model</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Instance</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost</th>
+                <th scope="col" class="px-4 py-3 text-left text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Created</th>
+                <th scope="col" class="px-4 py-3 text-right text-xs/4 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900">
+              @for (job of state.inferenceJobs(); track job.job_id) {
+                <tr class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <td class="whitespace-nowrap px-4 py-3">
+                    <app-status-badge [status]="job.status" />
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 font-medium">
+                    <a
+                      [routerLink]="'/fine-tuning/inference/' + job.job_id"
+                      class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      {{ job.model_name }}
+                    </a>
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ job.instance_type }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                    {{ formatCost(job.estimated_cost_usd) }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                    {{ job.created_at | date:'short' }}
+                  </td>
+                  <td class="whitespace-nowrap px-4 py-3 text-right">
+                    @if (confirmingStopInference() === job.job_id) {
+                      <div class="flex items-center justify-end gap-2">
+                        <span class="text-xs text-red-600 dark:text-red-400">Stop?</span>
+                        <button
+                          (click)="executeStopInference(job.job_id)"
+                          class="rounded-sm bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          (click)="cancelStopInference()"
+                          class="rounded-sm border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                        >
+                          No
+                        </button>
+                      </div>
+                    } @else if (canStopInference(job.status)) {
+                      <button
+                        (click)="confirmStopInference(job.job_id)"
+                        class="rounded-sm p-1.5 text-gray-400 hover:text-red-600 dark:text-gray-500 dark:hover:text-red-400"
+                        [appTooltip]="'Stop Job'"
+                        appTooltipPosition="top"
+                        [attr.aria-label]="'Stop inference job ' + job.job_id"
+                      >
+                        <ng-icon name="heroStop" class="size-4" />
+                      </button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else if (!state.loading()) {
+        <div class="rounded-sm border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+            No inference jobs yet. Train a model first, then run inference on your data.
+          </p>
+        </div>
+      }
+    </section>
+  }
+</div>

@@ -192,6 +192,31 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
+        path: 'fine-tuning',
+        loadComponent: () => import('./fine-tuning/pages/dashboard/fine-tuning-dashboard.page').then(m => m.FineTuningDashboardPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'fine-tuning/new-training',
+        loadComponent: () => import('./fine-tuning/pages/create-training-job/create-training-job.page').then(m => m.CreateTrainingJobPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'fine-tuning/new-inference',
+        loadComponent: () => import('./fine-tuning/pages/create-inference-job/create-inference-job.page').then(m => m.CreateInferenceJobPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'fine-tuning/training/:jobId',
+        loadComponent: () => import('./fine-tuning/pages/training-job-detail/training-job-detail.page').then(m => m.TrainingJobDetailPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'fine-tuning/inference/:jobId',
+        loadComponent: () => import('./fine-tuning/pages/inference-job-detail/inference-job-detail.page').then(m => m.InferenceJobDetailPage),
+        canActivate: [authGuard],
+    },
+    {
         path: '**',
         loadComponent: () => import('./not-found/not-found.page').then(m => m.NotFoundPage),
     }
