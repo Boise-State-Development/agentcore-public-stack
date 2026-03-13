@@ -239,7 +239,12 @@ function getMockValueForParam(suffix: string): string {
 
 /** Convenience: create a CDK App with SSM context pre-mocked for a given stack. */
 export function createMockApp(config: AppConfig, stackNames?: string[]): cdk.App {
-  const app = new cdk.App();
+  const app = new cdk.App({
+    context: {
+      // Skip Docker bundling during unit tests — layers are built at deploy time
+      'aws:cdk:bundling-stacks': [],
+    },
+  });
   mockSsmContext(app, config, stackNames);
   return app;
 }

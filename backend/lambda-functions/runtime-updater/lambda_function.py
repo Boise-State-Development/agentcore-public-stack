@@ -18,18 +18,12 @@ import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import sys
-
-# Install latest boto3 at runtime to get newest API support
-from pip._internal import main
-main(['install', '-I', '-q', 'boto3', '--target', '/tmp/', '--no-cache-dir', '--disable-pip-version-check'])
-sys.path.insert(0, '/tmp/')
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 import boto3
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ClientError
 
 # AWS clients
 dynamodb = boto3.client('dynamodb')
@@ -455,17 +449,7 @@ def update_runtime(
         update_params['environmentVariables'] = current_runtime['environmentVariables']
     
     # Call UpdateAgentRuntime API
-    try:
-        bedrock_agentcore.update_agent_runtime(**update_params)
-    except ParamValidationError:
-        # SDK version doesn't support requestHeaderConfiguration yet — retry without it.
-        # This is a fallback; the boto3 version should be kept up to date to avoid this path.
-        logger.warning(
-            f"SDK does not support requestHeaderConfiguration (boto3 {boto3.__version__}). "
-            "Retrying without it. UPDATE BOTO3 to preserve Authorization header forwarding."
-        )
-        update_params.pop('requestHeaderConfiguration', None)
-        bedrock_agentcore.update_agent_runtime(**update_params)
+    bedrock_agentcore.update_agent_runtime(**update_params)
     
     logger.info(f"Runtime {runtime_id} update initiated")
 

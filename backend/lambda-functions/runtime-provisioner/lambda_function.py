@@ -14,12 +14,6 @@ import os
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-import sys
-
-# Install latest boto3 at runtime to get newest API support
-from pip._internal import main
-main(['install', '-I', '-q', 'boto3', '--target', '/tmp/', '--no-cache-dir', '--disable-pip-version-check'])
-sys.path.insert(0, '/tmp/')
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

@@ -13,7 +13,7 @@ import { AppApiStack } from '../lib/app-api-stack';
 import { InferenceApiStack } from '../lib/inference-api-stack';
 import { GatewayStack } from '../lib/gateway-stack';
 import { RagIngestionStack } from '../lib/rag-ingestion-stack';
-import { createMockConfig, mockSsmContext, mockEnv } from './helpers/mock-config';
+import { createMockConfig, mockSsmContext, createMockApp, mockEnv } from './helpers/mock-config';
 
 /* ------------------------------------------------------------------ */
 /*  Non-production stacks (retainDataOnDelete: false)                 */
@@ -23,8 +23,7 @@ let templates: Record<string, Template>;
 
 beforeAll(() => {
   const config = createMockConfig(); // retainDataOnDelete: false
-  const app = new cdk.App();
-  mockSsmContext(app, config);
+  const app = createMockApp(config);
   const env = mockEnv(config);
 
   const infraStack = new InfrastructureStack(app, 'Infra', { config, env });
@@ -276,8 +275,7 @@ describe('Production removal policies', () => {
 
   beforeAll(() => {
     const prodConfig = createMockConfig({ retainDataOnDelete: true });
-    const prodApp = new cdk.App();
-    mockSsmContext(prodApp, prodConfig);
+    const prodApp = createMockApp(prodConfig);
     const prodEnv = mockEnv(prodConfig);
 
     const infraStack = new InfrastructureStack(prodApp, 'ProdInfra', { config: prodConfig, env: prodEnv });

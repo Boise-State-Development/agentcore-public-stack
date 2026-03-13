@@ -1075,6 +1075,24 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // ============================================================
+    // Shared Lambda Layer: pinned boto3 for AgentCore API support
+    // ============================================================
+
+    const boto3Layer = new lambda.LayerVersion(this, "Boto3Layer", {
+      code: lambda.Code.fromAsset("../backend/lambda-layers/boto3-layer", {
+        bundling: {
+          image: lambda.Runtime.PYTHON_3_14.bundlingImage,
+          command: [
+            "bash", "-c",
+            "pip install -r requirements.txt -t /asset-output/python --no-cache-dir",
+          ],
+        },
+      }),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_14],
+      description: "Pinned boto3 layer for AgentCore API support",
+    });
+
+    // ============================================================
     // Runtime Provisioner Lambda
     // ============================================================
 
@@ -1094,6 +1112,7 @@ export class AppApiStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       architecture: lambda.Architecture.ARM_64,
+      layers: [boto3Layer],
       environment: {
         PROJECT_PREFIX: config.projectPrefix,
         AUTH_PROVIDERS_TABLE: authProvidersTableName,
@@ -1288,6 +1307,7 @@ export class AppApiStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       memorySize: 512,
       architecture: lambda.Architecture.ARM_64,
+      layers: [boto3Layer],
       environment: {
         PROJECT_PREFIX: config.projectPrefix,
         AUTH_PROVIDERS_TABLE: authProvidersTableName,
