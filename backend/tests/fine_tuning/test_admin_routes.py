@@ -41,6 +41,11 @@ def _override_jobs_repo(app: FastAPI, jobs_repo: MagicMock):
     app.dependency_overrides[get_jobs_repository] = lambda: jobs_repo
 
 
+def _override_inf_repo(app: FastAPI, inf_repo: MagicMock):
+    from apis.app_api.admin.fine_tuning.routes import get_inf_repository
+    app.dependency_overrides[get_inf_repository] = lambda: inf_repo
+
+
 SAMPLE_GRANT = {
     "email": "user@example.com",
     "granted_by": "admin@example.com",
@@ -304,4 +309,76 @@ class TestListAllJobs:
 
         client = TestClient(app)
         resp = client.get("/admin/fine-tuning/jobs")
+        assert resp.status_code == 403
+
+
+SAMPLE_INFERENCE_JOB = {
+    "job_id": "inf-xyz789",
+    "user_id": "user-001",
+    "email": "user@example.com",
+    "job_type": "inference",
+    "training_job_id": "train-abc123",
+    "model_name": "Meta Llama 3 8B",
+    "model_s3_path": "s3://bucket/output/user-001/train-abc123/ft-trainabc/output/model.tar.gz",
+    "status": "TRANSFORMING",
+    "input_s3_key": "inference-input/user-001/xyz/input.txt",
+    "output_s3_prefix": "inference-output/user-001/inf-xyz789",
+    "result_s3_key": None,
+    "instance_type": "ml.g5.2xlarge",
+    "transform_job_name": "inf-xyz78900-20260313",
+    "transform_start_time": None,
+    "transform_end_time": None,
+    "billable_seconds": None,
+    "estimated_cost_usd": None,
+    "created_at": "2026-03-13T14:00:00+00:00",
+    "updated_at": "2026-03-13T14:00:00+00:00",
+    "error_message": None,
+    "max_runtime_seconds": 3600,
+}
+
+
+class TestListAllInferenceJobs:
+
+    def test_returns_200_with_all_inference_jobs(self, make_user):
+        app = _create_app()
+        admin = make_user(email="admin@example.com", roles=["Admin"])
+        _override_auth(app, admin)
+
+        mock_inf_repo = MagicMock()
+        mock_inf_repo.list_all_inference_jobs.return_value = [SAMPLE_INFERENCE_JOB]
+        _override_inf_repo(app, mock_inf_repo)
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/inference-jobs")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_count"] == 1
+        assert body["jobs"][0]["job_id"] == "inf-xyz789"
+        assert body["jobs"][0]["job_type"] == "inference"
+
+    def test_filters_by_status(self, make_user):
+        app = _create_app()
+        admin = make_user(email="admin@example.com", roles=["Admin"])
+        _override_auth(app, admin)
+
+        mock_inf_repo = MagicMock()
+        mock_inf_repo.list_all_inference_jobs.return_value = [SAMPLE_INFERENCE_JOB]
+        _override_inf_repo(app, mock_inf_repo)
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/inference-jobs?status=TRANSFORMING")
+
+        assert resp.status_code == 200
+        mock_inf_repo.list_all_inference_jobs.assert_called_once_with(status_filter="TRANSFORMING")
+
+    def test_requires_admin_role(self):
+        app = _create_app()
+
+        def _raise_403():
+            raise HTTPException(status_code=403, detail="Forbidden")
+        app.dependency_overrides[require_admin] = _raise_403
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/inference-jobs")
         assert resp.status_code == 403

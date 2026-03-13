@@ -26,6 +26,13 @@ from .job_models import (
 from .job_repository import FineTuningJobsRepository, get_fine_tuning_jobs_repository
 from .s3_service import FineTuningS3Service, get_fine_tuning_s3_service
 from .sagemaker_service import SageMakerService, get_sagemaker_service
+from .inference_models import (
+    CreateInferenceJobRequest,
+    InferenceJobResponse,
+    InferenceJobListResponse,
+    TrainedModelResponse,
+)
+from .inference_repository import InferenceRepository, get_inference_repository
 from .dependencies import require_fine_tuning_access
 
 logger = logging.getLogger(__name__)
@@ -350,3 +357,315 @@ def _sync_job_status(
         logger.info(f"Incremented usage for {job['email']} by {billable_hours:.2f} hours")
 
     return updated
+
+
+def _sync_inference_status(
+    job: dict,
+    inf_repo: InferenceRepository,
+    sagemaker: SageMakerService,
+    access_repo: FineTuningAccessRepository,
+) -> dict:
+    """Sync inference job status from SageMaker and update DynamoDB if changed."""
+    try:
+        sm_status = sagemaker.describe_transform_job(job["transform_job_name"])
+    except Exception as e:
+        logger.warning(f"Failed to describe transform job {job['transform_job_name']}: {e}")
+        return job
+
+    status_map = {
+        "Completed": "COMPLETED",
+        "Failed": "FAILED",
+        "Stopped": "STOPPED",
+        "InProgress": "TRANSFORMING",
+    }
+    new_status = status_map.get(sm_status["status"], job["status"])
+
+    if new_status == job["status"]:
+        return job
+
+    update_kwargs = {}
+    if sm_status.get("transform_start_time"):
+        update_kwargs["transform_start_time"] = sm_status["transform_start_time"]
+    if sm_status.get("transform_end_time"):
+        update_kwargs["transform_end_time"] = sm_status["transform_end_time"]
+    if sm_status.get("billable_seconds"):
+        update_kwargs["billable_seconds"] = sm_status["billable_seconds"]
+        cost = sagemaker.calculate_cost(job["instance_type"], sm_status["billable_seconds"])
+        update_kwargs["estimated_cost_usd"] = cost
+    if sm_status.get("failure_reason"):
+        update_kwargs["error_message"] = sm_status["failure_reason"]
+
+    updated = inf_repo.update_inference_status(
+        job["user_id"], job["job_id"], new_status, **update_kwargs
+    )
+
+    # Increment usage quota on terminal status (if billable time exists)
+    if new_status in ("COMPLETED", "FAILED", "STOPPED") and sm_status.get("billable_seconds"):
+        billable_hours = sm_status["billable_seconds"] / 3600
+        access_repo.increment_usage(job["email"], billable_hours)
+        logger.info(f"Incremented inference usage for {job['email']} by {billable_hours:.2f} hours")
+
+    return updated
+
+
+# =========================================================================
+# Trained Models (for inference model selection)
+# =========================================================================
+
+@router.get("/trained-models")
+async def list_trained_models(
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
+    s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
+):
+    """List COMPLETED training jobs as model options for inference."""
+    all_jobs = jobs_repo.list_user_jobs(user.user_id)
+    completed = [j for j in all_jobs if j["status"] == "COMPLETED"]
+
+    models = []
+    for job in completed:
+        # Build the model artifact S3 path
+        model_s3_path = f"s3://{s3_service.bucket_name}/{job['output_s3_prefix']}/{job['sagemaker_job_name']}/output/model.tar.gz"
+        models.append(
+            TrainedModelResponse(
+                training_job_id=job["job_id"],
+                model_id=job["model_id"],
+                model_name=job["model_name"],
+                model_s3_path=model_s3_path,
+                instance_type=job["instance_type"],
+                completed_at=job.get("training_end_time"),
+                estimated_cost_usd=job.get("estimated_cost_usd"),
+            ).model_dump()
+        )
+
+    return models
+
+
+# =========================================================================
+# Inference (Batch Transform) Endpoints
+# =========================================================================
+
+@router.post("/inference/presign", response_model=PresignResponse)
+async def inference_presign_upload(
+    request: PresignRequest,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
+):
+    """Generate a presigned PUT URL for inference input file upload."""
+    try:
+        presigned_url, s3_key = s3_service.generate_inference_upload_url(
+            user_id=user.user_id,
+            filename=request.filename,
+            content_type=request.content_type,
+        )
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=s3_service.presign_expiration)
+        ).isoformat()
+
+        return PresignResponse(
+            presigned_url=presigned_url,
+            s3_key=s3_key,
+            expires_at=expires_at,
+        )
+    except Exception as e:
+        logger.error(f"Error generating inference presigned URL: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate upload URL")
+
+
+@router.post("/inference", response_model=InferenceJobResponse, status_code=status.HTTP_201_CREATED)
+async def create_inference_job(
+    request: CreateInferenceJobRequest,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+    s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
+    sagemaker: SageMakerService = Depends(get_sagemaker_service),
+    access_repo: FineTuningAccessRepository = Depends(get_fine_tuning_access_repository),
+):
+    """Create a new inference (Batch Transform) job."""
+    # Look up the referenced training job — must be COMPLETED and owned by user
+    training_job = jobs_repo.get_job(user.user_id, request.training_job_id)
+    if not training_job:
+        raise HTTPException(status_code=400, detail="Training job not found")
+    if training_job["status"] != "COMPLETED":
+        raise HTTPException(status_code=400, detail="Training job has not completed successfully")
+
+    # Verify input file exists in S3
+    if not s3_service.check_object_exists(request.input_s3_key):
+        raise HTTPException(status_code=400, detail="Input file not found in S3. Upload your input file first.")
+
+    # Check quota (need at least 0.5 hours remaining for inference)
+    remaining = grant["monthly_quota_hours"] - grant["current_month_usage_hours"]
+    if remaining < 0.5:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient quota. You have {remaining:.1f} hours remaining, minimum 0.5 required.",
+        )
+
+    # Build model artifact S3 path from training job's output
+    model_s3_path = f"s3://{s3_service.bucket_name}/{training_job['output_s3_prefix']}/{training_job['sagemaker_job_name']}/output/model.tar.gz"
+
+    # Resolve instance type (default to training job's instance type)
+    instance_type = request.instance_type or training_job["instance_type"]
+
+    # Generate identifiers
+    job_id = uuid.uuid4().hex
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    transform_job_name = f"inf-{job_id[:8]}-{timestamp}"
+
+    # S3 paths
+    output_s3_prefix = s3_service.get_inference_output_s3_prefix(user.user_id, job_id)
+    output_s3_uri = s3_service.get_inference_output_s3_uri(user.user_id, job_id)
+    input_s3_uri = f"s3://{s3_service.bucket_name}/{request.input_s3_key}"
+
+    # Create DynamoDB record
+    job = inf_repo.create_inference_job(
+        user_id=user.user_id,
+        email=user.email,
+        job_id=job_id,
+        training_job_id=request.training_job_id,
+        model_name=training_job["model_name"],
+        model_s3_path=model_s3_path,
+        input_s3_key=request.input_s3_key,
+        instance_type=instance_type,
+        transform_job_name=transform_job_name,
+        output_s3_prefix=output_s3_prefix,
+        max_runtime_seconds=request.max_runtime_seconds,
+    )
+
+    # Start SageMaker Batch Transform job
+    try:
+        sagemaker.create_transform_job(
+            job_name=transform_job_name,
+            model_artifact_s3_uri=model_s3_path,
+            input_s3_uri=input_s3_uri,
+            output_s3_uri=output_s3_uri,
+            instance_type=instance_type,
+            max_runtime=request.max_runtime_seconds,
+        )
+        job = inf_repo.update_inference_status(user.user_id, job_id, "TRANSFORMING")
+    except Exception as e:
+        logger.error(f"Failed to start transform job {transform_job_name}: {e}")
+        inf_repo.update_inference_status(
+            user.user_id, job_id, "FAILED",
+            error_message=f"Failed to start inference: {str(e)}",
+        )
+        raise HTTPException(status_code=500, detail="Failed to start inference job")
+
+    return InferenceJobResponse(**job)
+
+
+@router.get("/inference", response_model=InferenceJobListResponse)
+async def list_inference_jobs(
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+):
+    """List the current user's inference jobs."""
+    jobs = inf_repo.list_user_inference_jobs(user.user_id)
+    return InferenceJobListResponse(
+        jobs=[InferenceJobResponse(**j) for j in jobs],
+        total_count=len(jobs),
+    )
+
+
+@router.get("/inference/{job_id}", response_model=InferenceJobResponse)
+async def get_inference_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+    sagemaker: SageMakerService = Depends(get_sagemaker_service),
+    access_repo: FineTuningAccessRepository = Depends(get_fine_tuning_access_repository),
+):
+    """Get inference job details. Syncs status from SageMaker if still transforming."""
+    job = inf_repo.get_inference_job(user.user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Inference job not found")
+
+    # Sync status from SageMaker for active jobs
+    if job["status"] == "TRANSFORMING" and job.get("transform_job_name"):
+        job = _sync_inference_status(job, inf_repo, sagemaker, access_repo)
+
+    return InferenceJobResponse(**job)
+
+
+@router.get("/inference/{job_id}/logs")
+async def get_inference_logs(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+    sagemaker: SageMakerService = Depends(get_sagemaker_service),
+):
+    """Get CloudWatch logs for an inference job."""
+    job = inf_repo.get_inference_job(user.user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Inference job not found")
+
+    if not job.get("transform_job_name"):
+        return {"logs": []}
+
+    logs = sagemaker.get_transform_logs(job["transform_job_name"])
+    return {"logs": logs}
+
+
+@router.get("/inference/{job_id}/download")
+async def download_inference_result(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+    s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
+):
+    """Get a presigned download URL for inference results."""
+    job = inf_repo.get_inference_job(user.user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Inference job not found")
+
+    if job["status"] != "COMPLETED":
+        raise HTTPException(status_code=400, detail="Inference job has not completed successfully")
+
+    # Batch Transform writes output based on the input filename
+    # Try result_s3_key if set, otherwise construct from output prefix
+    result_key = job.get("result_s3_key")
+    if not result_key:
+        # Batch Transform appends ".out" to the input filename
+        input_filename = job["input_s3_key"].rsplit("/", 1)[-1]
+        result_key = f"{job['output_s3_prefix']}/{input_filename}.out"
+
+    if not s3_service.check_object_exists(result_key):
+        raise HTTPException(status_code=404, detail="Inference results not found")
+
+    download_url = s3_service.generate_download_url(result_key)
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=s3_service.presign_expiration)
+    ).isoformat()
+
+    return {"download_url": download_url, "expires_at": expires_at, "result_s3_key": result_key}
+
+
+@router.delete("/inference/{job_id}")
+async def stop_inference_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    grant: dict = Depends(require_fine_tuning_access),
+    inf_repo: InferenceRepository = Depends(get_inference_repository),
+    sagemaker: SageMakerService = Depends(get_sagemaker_service),
+):
+    """Stop a running inference job."""
+    job = inf_repo.get_inference_job(user.user_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Inference job not found")
+
+    if job["status"] not in ("PENDING", "TRANSFORMING"):
+        raise HTTPException(status_code=400, detail=f"Cannot stop job in {job['status']} status")
+
+    if job.get("transform_job_name"):
+        sagemaker.stop_transform_job(job["transform_job_name"])
+
+    updated = inf_repo.update_inference_status(user.user_id, job_id, "STOPPED")
+    return InferenceJobResponse(**updated)

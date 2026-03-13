@@ -91,6 +91,13 @@ def jobs_repository(fine_tuning_jobs_table):
 
 
 @pytest.fixture()
+def inference_repository(fine_tuning_jobs_table):
+    """Instantiate an InferenceRepository against the moto table (same table as training)."""
+    from apis.app_api.fine_tuning.inference_repository import InferenceRepository
+    return InferenceRepository(table_name="test-fine-tuning-jobs")
+
+
+@pytest.fixture()
 def mock_s3_bucket(aws, monkeypatch):
     """Create an S3 bucket in moto for presigned URL tests."""
     bucket_name = "test-fine-tuning-data"

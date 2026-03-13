@@ -1,4 +1,4 @@
-"""SageMaker service for managing fine-tuning training jobs."""
+"""SageMaker service for managing fine-tuning training and inference jobs."""
 
 import os
 import logging
@@ -22,8 +22,17 @@ _HF_DLC_IMAGES = {
 }
 
 
+_HF_DLC_INFERENCE_IMAGES = {
+    "us-east-1": "763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
+    "us-east-2": "763104351884.dkr.ecr.us-east-2.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
+    "us-west-2": "763104351884.dkr.ecr.us-west-2.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
+    "eu-west-1": "763104351884.dkr.ecr.eu-west-1.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
+    "ap-southeast-1": "763104351884.dkr.ecr.ap-southeast-1.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-gpu-py310-cu118-ubuntu20.04",
+}
+
+
 class SageMakerService:
-    """Wrapper around boto3 SageMaker client for training job operations."""
+    """Wrapper around boto3 SageMaker client for training and inference operations."""
 
     def __init__(
         self,
@@ -196,6 +205,178 @@ class SageMakerService:
         """Calculate estimated cost based on instance type and billable time."""
         cost_per_hour = INSTANCE_COST_PER_HOUR.get(instance_type, 0.0)
         return round(cost_per_hour * (billable_seconds / 3600), 4)
+
+    # =====================================================================
+    # Batch Transform (Inference) Methods
+    # =====================================================================
+
+    def get_huggingface_inference_image_uri(self) -> str:
+        """Return the HuggingFace inference DLC image URI for the current region."""
+        uri = _HF_DLC_INFERENCE_IMAGES.get(self._region)
+        if not uri:
+            raise ValueError(f"No HuggingFace inference DLC image configured for region {self._region}")
+        return uri
+
+    def create_transform_job(
+        self,
+        job_name: str,
+        model_artifact_s3_uri: str,
+        input_s3_uri: str,
+        output_s3_uri: str,
+        instance_type: str,
+        instance_count: int = 1,
+        max_runtime: int = 3600,
+    ) -> dict:
+        """Create a SageMaker Batch Transform job.
+
+        Steps:
+        1. Create a SageMaker Model from the training artifact
+        2. Create a Transform Job using that model
+
+        Returns the response from create_transform_job API call.
+        """
+        image_uri = self.get_huggingface_inference_image_uri()
+        model_name = f"model-{job_name}"
+
+        subnets = [s.strip() for s in self._subnet_ids.split(",") if s.strip()]
+        security_groups = [self._security_group_id] if self._security_group_id else []
+
+        # Step 1: Create SageMaker Model
+        model_params = {
+            "ModelName": model_name,
+            "PrimaryContainer": {
+                "Image": image_uri,
+                "ModelDataUrl": model_artifact_s3_uri,
+            },
+            "ExecutionRoleArn": self._role_arn,
+        }
+
+        if subnets and security_groups:
+            model_params["VpcConfig"] = {
+                "SecurityGroupIds": security_groups,
+                "Subnets": subnets,
+            }
+
+        try:
+            self._sagemaker.create_model(**model_params)
+            logger.info(f"Created SageMaker model: {model_name}")
+        except ClientError as e:
+            logger.error(f"Error creating model {model_name}: {e}")
+            raise
+
+        # Step 2: Create Transform Job
+        transform_params = {
+            "TransformJobName": job_name,
+            "ModelName": model_name,
+            "TransformInput": {
+                "DataSource": {
+                    "S3DataSource": {
+                        "S3DataType": "S3Prefix",
+                        "S3Uri": input_s3_uri,
+                    }
+                },
+                "ContentType": "text/plain",
+            },
+            "TransformOutput": {
+                "S3OutputPath": output_s3_uri,
+            },
+            "TransformResources": {
+                "InstanceType": instance_type,
+                "InstanceCount": instance_count,
+            },
+            "MaxPayloadInMB": 6,
+        }
+
+        if max_runtime:
+            transform_params["TransformJobName"] = job_name
+            transform_params["ModelName"] = model_name
+
+        try:
+            response = self._sagemaker.create_transform_job(**transform_params)
+            logger.info(f"Created SageMaker transform job: {job_name}")
+            return response
+        except ClientError as e:
+            logger.error(f"Error creating transform job {job_name}: {e}")
+            raise
+
+    def describe_transform_job(self, job_name: str) -> dict:
+        """Describe a SageMaker Batch Transform job.
+
+        Returns a normalized dict with status, timestamps, and failure reason.
+        """
+        try:
+            response = self._sagemaker.describe_transform_job(
+                TransformJobName=job_name
+            )
+
+            result = {
+                "status": response["TransformJobStatus"],
+            }
+
+            if "TransformStartTime" in response:
+                result["transform_start_time"] = response["TransformStartTime"].isoformat()
+            if "TransformEndTime" in response:
+                result["transform_end_time"] = response["TransformEndTime"].isoformat()
+            if "FailureReason" in response:
+                result["failure_reason"] = response["FailureReason"]
+
+            # Calculate billable seconds from start/end times
+            if "TransformStartTime" in response and "TransformEndTime" in response:
+                delta = response["TransformEndTime"] - response["TransformStartTime"]
+                result["billable_seconds"] = int(delta.total_seconds())
+
+            return result
+        except ClientError as e:
+            logger.error(f"Error describing transform job {job_name}: {e}")
+            raise
+
+    def stop_transform_job(self, job_name: str) -> bool:
+        """Stop a SageMaker Batch Transform job. Returns True if stop was requested."""
+        try:
+            self._sagemaker.stop_transform_job(TransformJobName=job_name)
+            logger.info(f"Requested stop for transform job: {job_name}")
+            return True
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code == "ValidationException":
+                logger.warning(f"Transform job {job_name} cannot be stopped (may already be stopped)")
+                return False
+            raise
+
+    def get_transform_logs(self, job_name: str, limit: int = 100) -> List[str]:
+        """Read CloudWatch logs for a Batch Transform job.
+
+        Returns a list of log messages (most recent last).
+        """
+        log_group = "/aws/sagemaker/TransformJobs"
+        log_stream_prefix = f"{job_name}/"
+
+        try:
+            streams_response = self._logs.describe_log_streams(
+                logGroupName=log_group,
+                logStreamNamePrefix=log_stream_prefix,
+                orderBy="LogStreamName",
+                descending=False,
+            )
+            streams = streams_response.get("logStreams", [])
+            if not streams:
+                return []
+
+            log_stream_name = streams[0]["logStreamName"]
+            events_response = self._logs.get_log_events(
+                logGroupName=log_group,
+                logStreamName=log_stream_name,
+                limit=limit,
+                startFromHead=False,
+            )
+
+            return [event["message"] for event in events_response.get("events", [])]
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code == "ResourceNotFoundException":
+                return []
+            logger.error(f"Error reading logs for transform job {job_name}: {e}")
+            raise
 
 
 # Singleton access

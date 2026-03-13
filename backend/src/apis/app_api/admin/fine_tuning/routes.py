@@ -15,6 +15,14 @@ from apis.app_api.fine_tuning.job_repository import (
     get_fine_tuning_jobs_repository,
 )
 from apis.app_api.fine_tuning.job_models import JobResponse, JobListResponse
+from apis.app_api.fine_tuning.inference_repository import (
+    InferenceRepository,
+    get_inference_repository,
+)
+from apis.app_api.fine_tuning.inference_models import (
+    InferenceJobResponse,
+    InferenceJobListResponse,
+)
 from .models import GrantAccessRequest, UpdateQuotaRequest, AccessListResponse
 
 logger = logging.getLogger(__name__)
@@ -30,6 +38,10 @@ def get_repository() -> FineTuningAccessRepository:
 
 def get_jobs_repository() -> FineTuningJobsRepository:
     return get_fine_tuning_jobs_repository()
+
+
+def get_inf_repository() -> InferenceRepository:
+    return get_inference_repository()
 
 
 # ========== Access Management ==========
@@ -164,4 +176,26 @@ async def list_all_jobs(
         )
     except Exception as e:
         logger.error(f"Error listing all fine-tuning jobs: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ========== Inference Job Management ==========
+
+@router.get("/inference-jobs", response_model=InferenceJobListResponse)
+async def list_all_inference_jobs(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    admin_user: User = Depends(require_admin),
+    inf_repo: InferenceRepository = Depends(get_inf_repository),
+):
+    """List all inference jobs across all users (admin only)."""
+    logger.info(f"Admin {admin_user.email} listing all inference jobs (status={status_filter})")
+
+    try:
+        jobs = inf_repo.list_all_inference_jobs(status_filter=status_filter)
+        return InferenceJobListResponse(
+            jobs=[InferenceJobResponse(**j) for j in jobs],
+            total_count=len(jobs),
+        )
+    except Exception as e:
+        logger.error(f"Error listing all inference jobs: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -17,8 +17,10 @@ class FineTuningS3Service:
     """Generates presigned URLs for dataset upload and model artifact download.
 
     S3 key patterns:
-        Dataset:  datasets/{userId}/{uuid}/{filename}
-        Output:   output/{userId}/{jobId}/  (SageMaker writes here)
+        Training dataset:   datasets/{userId}/{uuid}/{filename}
+        Training output:    output/{userId}/{jobId}/  (SageMaker writes here)
+        Inference input:    inference-input/{userId}/{uuid}/{filename}
+        Inference output:   inference-output/{userId}/{jobId}/  (Batch Transform writes here)
     """
 
     def __init__(
@@ -92,6 +94,41 @@ class FineTuningS3Service:
     def get_output_s3_uri(self, user_id: str, job_id: str) -> str:
         """Return the full s3:// URI for SageMaker output config."""
         prefix = self.get_output_s3_prefix(user_id, job_id)
+        return f"s3://{self.bucket_name}/{prefix}"
+
+    # =====================================================================
+    # Inference (Batch Transform) S3 methods
+    # =====================================================================
+
+    def generate_inference_upload_url(
+        self, user_id: str, filename: str, content_type: str
+    ) -> Tuple[str, str]:
+        """Generate a presigned PUT URL for inference input file upload.
+
+        Returns (presigned_url, s3_key).
+        """
+        upload_id = uuid.uuid4().hex
+        s3_key = f"inference-input/{user_id}/{upload_id}/{filename}"
+
+        presigned_url = self._s3_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": self.bucket_name,
+                "Key": s3_key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=self.presign_expiration,
+        )
+
+        return presigned_url, s3_key
+
+    def get_inference_output_s3_prefix(self, user_id: str, job_id: str) -> str:
+        """Return the S3 prefix where Batch Transform should write output."""
+        return f"inference-output/{user_id}/{job_id}"
+
+    def get_inference_output_s3_uri(self, user_id: str, job_id: str) -> str:
+        """Return the full s3:// URI for Batch Transform output config."""
+        prefix = self.get_inference_output_s3_prefix(user_id, job_id)
         return f"s3://{self.bucket_name}/{prefix}"
 
 
