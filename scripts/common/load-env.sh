@@ -203,7 +203,12 @@ build_cdk_context_params() {
     if [ -n "${CDK_RAG_LAMBDA_TIMEOUT:-}" ]; then
         context_params="${context_params} --context ragIngestion.lambdaTimeout=\"${CDK_RAG_LAMBDA_TIMEOUT}\""
     fi
-    
+
+    # SageMaker Fine-Tuning optional parameters
+    if [ -n "${CDK_FINE_TUNING_ENABLED:-}" ]; then
+        context_params="${context_params} --context fineTuning.enabled=\"${CDK_FINE_TUNING_ENABLED}\""
+    fi
+
     echo "${context_params}"
 }
 
@@ -266,6 +271,9 @@ export CDK_FILE_UPLOAD_MAX_SIZE_MB="${CDK_FILE_UPLOAD_MAX_SIZE_MB:-$(get_json_va
 export CDK_RAG_ENABLED="${CDK_RAG_ENABLED:-$(get_json_value "ragIngestion.enabled" "${CONTEXT_FILE}")}"
 export CDK_RAG_LAMBDA_MEMORY="${CDK_RAG_LAMBDA_MEMORY:-$(get_json_value "ragIngestion.lambdaMemorySize" "${CONTEXT_FILE}")}"
 export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIngestion.lambdaTimeout" "${CONTEXT_FILE}")}"
+
+# SageMaker Fine-Tuning configuration
+export CDK_FINE_TUNING_ENABLED="${CDK_FINE_TUNING_ENABLED:-$(get_json_value "fineTuning.enabled" "${CONTEXT_FILE}")}"
 
 # AWS Account - try multiple sources (env vars take precedence)
 CDK_CONTEXT_ACCOUNT=$(get_json_value "awsAccount" "${CONTEXT_FILE}")
