@@ -19,6 +19,7 @@ export interface AppConfig {
   assistants: AssistantsConfig;
   fileUpload: FileUploadConfig;
   ragIngestion: RagIngestionConfig;
+  fineTuning: FineTuningConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -82,6 +83,10 @@ export interface RagIngestionConfig {
   embeddingModel: string;        // Bedrock model ID (default: "amazon.titan-embed-text-v2")
   vectorDimension: number;       // Embedding dimension (default: 1024)
   vectorDistanceMetric: string;  // Distance metric (default: "cosine")
+}
+
+export interface FineTuningConfig {
+  enabled: boolean;              // Enable/disable SageMaker Fine-Tuning stack
 }
 
 /**
@@ -202,6 +207,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       vectorDimension: parseIntEnv(process.env.CDK_RAG_VECTOR_DIMENSION) || scope.node.tryGetContext('ragIngestion')?.vectorDimension,
       vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric,
     },
+    fineTuning: {
+      enabled: parseBooleanEnv(process.env.CDK_FINE_TUNING_ENABLED) ?? scope.node.tryGetContext('fineTuning')?.enabled ?? false,
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -220,6 +228,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   App API Enabled: ${config.appApi.enabled}`);
   console.log(`   Inference API Enabled: ${config.inferenceApi.enabled}`);
   console.log(`   Gateway Enabled: ${config.gateway.enabled}`);
+  console.log(`   Fine-Tuning Enabled: ${config.fineTuning.enabled}`);
   console.log(`   App Version: ${config.appVersion}`);
 
   // Validate configuration

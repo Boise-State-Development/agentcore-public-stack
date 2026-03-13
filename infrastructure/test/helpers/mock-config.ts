@@ -76,6 +76,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       vectorDimension: 1024,
       vectorDistanceMetric: 'cosine',
     },
+    fineTuning: {
+      enabled: false,
+    },
     tags: { ManagedBy: 'CDK', Environment: 'test' },
   };
 
@@ -102,6 +105,12 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'rag-ingestion/image-tag',
   ],
   GatewayStack: [],
+  SageMakerFineTuningStack: [
+    'network/vpc-id',
+    'network/vpc-cidr',
+    'network/private-subnet-ids',
+    'network/availability-zones',
+  ],
   InferenceApiStack: [
     'inference-api/image-tag',
     'oauth/client-secrets-arn',
@@ -172,6 +181,15 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'rag/assistants-table-arn',
     'inference-api/runtime-execution-role-arn',
     'inference-api/memory-arn',
+    'fine-tuning/jobs-table-name',
+    'fine-tuning/jobs-table-arn',
+    'fine-tuning/access-table-name',
+    'fine-tuning/access-table-arn',
+    'fine-tuning/data-bucket-name',
+    'fine-tuning/data-bucket-arn',
+    'fine-tuning/sagemaker-execution-role-arn',
+    'fine-tuning/sagemaker-security-group-id',
+    'fine-tuning/private-subnet-ids',
   ],
 };
 

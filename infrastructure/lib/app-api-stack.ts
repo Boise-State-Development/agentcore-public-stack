@@ -1075,6 +1075,137 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // ============================================================
+    // Fine-Tuning Resources (optional - from SageMakerFineTuningStack)
+    // ============================================================
+
+    // Default: fine-tuning disabled
+    container.addEnvironment('FINE_TUNING_ENABLED', 'false');
+
+    if (config.fineTuning.enabled) {
+      // Import resource identifiers from SageMakerFineTuningStack via SSM
+      const ftJobsTableName = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/jobs-table-name`
+      );
+      const ftJobsTableArn = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/jobs-table-arn`
+      );
+      const ftAccessTableName = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/access-table-name`
+      );
+      const ftAccessTableArn = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/access-table-arn`
+      );
+      const ftDataBucketName = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/data-bucket-name`
+      );
+      const ftDataBucketArn = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/data-bucket-arn`
+      );
+      const sagemakerRoleArn = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/sagemaker-execution-role-arn`
+      );
+      const sagemakerSgId = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/sagemaker-security-group-id`
+      );
+      const ftPrivateSubnetIds = ssm.StringParameter.valueForStringParameter(
+        this, `/${config.projectPrefix}/fine-tuning/private-subnet-ids`
+      );
+
+      // Add fine-tuning environment variables to container
+      container.addEnvironment('FINE_TUNING_ENABLED', 'true');
+      container.addEnvironment('DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME', ftJobsTableName);
+      container.addEnvironment('DYNAMODB_FINE_TUNING_ACCESS_TABLE_NAME', ftAccessTableName);
+      container.addEnvironment('S3_FINE_TUNING_BUCKET_NAME', ftDataBucketName);
+      container.addEnvironment('SAGEMAKER_EXECUTION_ROLE_ARN', sagemakerRoleArn);
+      container.addEnvironment('SAGEMAKER_SECURITY_GROUP_ID', sagemakerSgId);
+      container.addEnvironment('SAGEMAKER_SUBNET_IDS', ftPrivateSubnetIds);
+
+      // Grant ECS task role: DynamoDB access to fine-tuning tables
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'FineTuningJobsTableAccess',
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+            'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+          ],
+          resources: [ftJobsTableArn, `${ftJobsTableArn}/index/*`],
+        })
+      );
+
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'FineTuningAccessTableAccess',
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+            'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+          ],
+          resources: [ftAccessTableArn, `${ftAccessTableArn}/index/*`],
+        })
+      );
+
+      // Grant ECS task role: S3 access to fine-tuning data bucket (for presigned URLs)
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'FineTuningDataBucketAccess',
+          effect: iam.Effect.ALLOW,
+          actions: [
+            's3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket',
+          ],
+          resources: [ftDataBucketArn, `${ftDataBucketArn}/*`],
+        })
+      );
+
+      // Grant ECS task role: SageMaker job management
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'SageMakerTrainingJobManagement',
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'sagemaker:CreateTrainingJob',
+            'sagemaker:DescribeTrainingJob',
+            'sagemaker:StopTrainingJob',
+            'sagemaker:CreateTransformJob',
+            'sagemaker:DescribeTransformJob',
+            'sagemaker:StopTransformJob',
+          ],
+          resources: [
+            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:training-job/${config.projectPrefix}-*`,
+            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:transform-job/${config.projectPrefix}-*`,
+          ],
+        })
+      );
+
+      // Grant iam:PassRole on the SageMaker execution role
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'SageMakerPassRole',
+          effect: iam.Effect.ALLOW,
+          actions: ['iam:PassRole'],
+          resources: [sagemakerRoleArn],
+          conditions: {
+            StringEquals: {
+              'iam:PassedToService': 'sagemaker.amazonaws.com',
+            },
+          },
+        })
+      );
+
+      // Grant CloudWatch Logs read access for training job logs
+      taskDefinition.taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'SageMakerLogsReadAccess',
+          effect: iam.Effect.ALLOW,
+          actions: ['logs:GetLogEvents', 'logs:FilterLogEvents'],
+          resources: [
+            `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/sagemaker/*`,
+          ],
+        })
+      );
+    }
+
+    // ============================================================
     // Runtime Provisioner Lambda
     // ============================================================
 

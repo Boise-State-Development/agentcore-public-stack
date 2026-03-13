@@ -6,6 +6,7 @@ import { AppApiStack } from '../lib/app-api-stack';
 import { InferenceApiStack } from '../lib/inference-api-stack';
 import { GatewayStack } from '../lib/gateway-stack';
 import { RagIngestionStack } from '../lib/rag-ingestion-stack';
+import { SageMakerFineTuningStack } from '../lib/sagemaker-fine-tuning-stack';
 import { loadConfig, getStackEnv } from '../lib/config';
 
 const app = new cdk.App();
@@ -69,6 +70,16 @@ if (config.ragIngestion.enabled) {
     env,
     description: `${config.projectPrefix} RAG Ingestion Stack - Independent RAG Pipeline`,
     stackName: `${config.projectPrefix}-RagIngestionStack`,
+  });
+}
+
+// SageMaker Fine-Tuning Stack - Optional ML Training Infrastructure
+if (config.fineTuning.enabled) {
+  new SageMakerFineTuningStack(app, 'SageMakerFineTuningStack', {
+    config,
+    env,
+    description: `${config.projectPrefix} SageMaker Fine-Tuning Stack - DynamoDB Tables, IAM Roles, Networking`,
+    stackName: `${config.projectPrefix}-SageMakerFineTuningStack`,
   });
 }
 

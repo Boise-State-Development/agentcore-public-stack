@@ -80,6 +80,9 @@ describe('RagIngestionStack', () => {
         vectorDimension: 1024,
         vectorDistanceMetric: 'cosine',
       },
+      fineTuning: {
+        enabled: false,
+      },
       tags: {
         ManagedBy: 'CDK',
       },
