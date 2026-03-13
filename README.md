@@ -1,6 +1,4 @@
 # AgentCore Public Stack
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Infrastructure](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml)
 [![RAG Ingestion](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml)
 [![Inference API](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml)
@@ -193,5 +191,10 @@ agentcore-public-stack/
 Contributions are welcome. Please open an issue to discuss proposed changes before submitting a pull request.
 
 ## License
+This project is licensed under the PolyForm Noncommercial License 1.0.0.
+You may use, modify, and distribute this software for noncommercial purposes only.
+Commercial use, including use in a product or service that generates revenue,
+is prohibited without a separate commercial license.
 
-MIT License — see [LICENSE](LICENSE) for details.
+See the LICENSE file for the full license text.
+For commercial licensing inquiries, please contact: techtransfer@noisestate.edu
