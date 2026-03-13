@@ -5,9 +5,6 @@ import { FineTuningUploadService } from './fine-tuning-upload.service';
 describe('FineTuningUploadService', () => {
   let service: FineTuningUploadService;
 
-  // Store original XMLHttpRequest
-  const OriginalXHR = globalThis.XMLHttpRequest;
-
   beforeEach(() => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -17,7 +14,7 @@ describe('FineTuningUploadService', () => {
   });
 
   afterEach(() => {
-    globalThis.XMLHttpRequest = OriginalXHR;
+    vi.unstubAllGlobals();
     TestBed.resetTestingModule();
   });
 
@@ -57,7 +54,7 @@ describe('FineTuningUploadService', () => {
       }
     }
 
-    globalThis.XMLHttpRequest = MockXHRInstance as unknown as typeof XMLHttpRequest;
+    vi.stubGlobal('XMLHttpRequest', MockXHRInstance as unknown as typeof XMLHttpRequest);
 
     return { getInstance: () => instances[instances.length - 1] };
   }
