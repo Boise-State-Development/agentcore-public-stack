@@ -131,6 +131,12 @@ app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
 app.include_router(oauth_router)  # OAuth provider connections
 
+# Conditionally register fine-tuning routes
+if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
+    from apis.app_api.fine_tuning.routes import router as fine_tuning_router
+    app.include_router(fine_tuning_router)
+    logger.info("Fine-tuning routes enabled")
+
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
 # Use parent directory (src/) as base

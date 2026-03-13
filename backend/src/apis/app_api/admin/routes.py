@@ -735,3 +735,9 @@ router.include_router(oauth_admin_router)
 from .auth_providers.routes import router as auth_providers_router
 
 router.include_router(auth_providers_router)
+
+# ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
+if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
+    from .fine_tuning.routes import router as fine_tuning_admin_router
+
+    router.include_router(fine_tuning_admin_router)
