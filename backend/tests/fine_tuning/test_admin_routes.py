@@ -36,6 +36,11 @@ def _override_repo(app: FastAPI, repo: MagicMock):
     app.dependency_overrides[get_repository] = lambda: repo
 
 
+def _override_jobs_repo(app: FastAPI, jobs_repo: MagicMock):
+    from apis.app_api.admin.fine_tuning.routes import get_jobs_repository
+    app.dependency_overrides[get_jobs_repository] = lambda: jobs_repo
+
+
 SAMPLE_GRANT = {
     "email": "user@example.com",
     "granted_by": "admin@example.com",
@@ -230,3 +235,73 @@ class TestRevokeAccess:
         resp = client.delete("/admin/fine-tuning/access/nobody@example.com")
 
         assert resp.status_code == 404
+
+
+SAMPLE_JOB = {
+    "job_id": "abc123def456",
+    "user_id": "user-001",
+    "email": "user@example.com",
+    "model_id": "meta-llama-3-8b",
+    "model_name": "Meta Llama 3 8B",
+    "status": "TRAINING",
+    "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+    "output_s3_prefix": "output/user-001/abc123def456",
+    "instance_type": "ml.g5.2xlarge",
+    "instance_count": 1,
+    "hyperparameters": {"epochs": "3"},
+    "sagemaker_job_name": "ft-abc12345-20260313",
+    "training_start_time": None,
+    "training_end_time": None,
+    "billable_seconds": None,
+    "estimated_cost_usd": None,
+    "created_at": "2026-03-13T10:00:00+00:00",
+    "updated_at": "2026-03-13T10:00:00+00:00",
+    "error_message": None,
+    "max_runtime_seconds": 86400,
+}
+
+
+class TestListAllJobs:
+
+    def test_returns_200_with_all_jobs(self, make_user):
+        app = _create_app()
+        admin = make_user(email="admin@example.com", roles=["Admin"])
+        _override_auth(app, admin)
+
+        mock_jobs_repo = MagicMock()
+        mock_jobs_repo.list_all_jobs.return_value = [SAMPLE_JOB]
+        _override_jobs_repo(app, mock_jobs_repo)
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/jobs")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_count"] == 1
+        assert body["jobs"][0]["job_id"] == "abc123def456"
+
+    def test_filters_by_status(self, make_user):
+        app = _create_app()
+        admin = make_user(email="admin@example.com", roles=["Admin"])
+        _override_auth(app, admin)
+
+        mock_jobs_repo = MagicMock()
+        mock_jobs_repo.list_all_jobs.return_value = [SAMPLE_JOB]
+        _override_jobs_repo(app, mock_jobs_repo)
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/jobs?status=TRAINING")
+
+        assert resp.status_code == 200
+        mock_jobs_repo.list_all_jobs.assert_called_once_with(status_filter="TRAINING")
+
+    def test_requires_admin_role(self):
+        app = _create_app()
+
+        def _raise_403():
+            raise HTTPException(status_code=403, detail="Forbidden")
+        app.dependency_overrides[require_admin] = _raise_403
+
+        client = TestClient(app)
+        resp = client.get("/admin/fine-tuning/jobs")
+        assert resp.status_code == 403

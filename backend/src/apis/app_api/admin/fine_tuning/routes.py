@@ -1,6 +1,7 @@
 """Admin API routes for fine-tuning access management."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 import logging
 
 from apis.shared.auth import User, require_admin
@@ -9,6 +10,11 @@ from apis.app_api.fine_tuning.repository import (
     get_fine_tuning_access_repository,
 )
 from apis.app_api.fine_tuning.models import FineTuningAccessGrant
+from apis.app_api.fine_tuning.job_repository import (
+    FineTuningJobsRepository,
+    get_fine_tuning_jobs_repository,
+)
+from apis.app_api.fine_tuning.job_models import JobResponse, JobListResponse
 from .models import GrantAccessRequest, UpdateQuotaRequest, AccessListResponse
 
 logger = logging.getLogger(__name__)
@@ -20,6 +26,10 @@ router = APIRouter(prefix="/fine-tuning", tags=["admin-fine-tuning"])
 
 def get_repository() -> FineTuningAccessRepository:
     return get_fine_tuning_access_repository()
+
+
+def get_jobs_repository() -> FineTuningJobsRepository:
+    return get_fine_tuning_jobs_repository()
 
 
 # ========== Access Management ==========
@@ -132,4 +142,26 @@ async def revoke_access(
         raise
     except Exception as e:
         logger.error(f"Error revoking fine-tuning access: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ========== Job Management ==========
+
+@router.get("/jobs", response_model=JobListResponse)
+async def list_all_jobs(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    admin_user: User = Depends(require_admin),
+    jobs_repo: FineTuningJobsRepository = Depends(get_jobs_repository),
+):
+    """List all fine-tuning jobs across all users (admin only)."""
+    logger.info(f"Admin {admin_user.email} listing all fine-tuning jobs (status={status_filter})")
+
+    try:
+        jobs = jobs_repo.list_all_jobs(status_filter=status_filter)
+        return JobListResponse(
+            jobs=[JobResponse(**j) for j in jobs],
+            total_count=len(jobs),
+        )
+    except Exception as e:
+        logger.error(f"Error listing all fine-tuning jobs: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

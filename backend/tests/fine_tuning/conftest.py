@@ -49,6 +49,59 @@ def repository(fine_tuning_access_table):
     return FineTuningAccessRepository(table_name="test-fine-tuning-access")
 
 
+@pytest.fixture()
+def fine_tuning_jobs_table(aws, monkeypatch):
+    """Create the fine-tuning-jobs DynamoDB table in moto."""
+    table_name = "test-fine-tuning-jobs"
+    monkeypatch.setenv("DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME", table_name)
+
+    client = boto3.client("dynamodb", region_name="us-east-1")
+    client.create_table(
+        TableName=table_name,
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+            {"AttributeName": "status", "AttributeType": "S"},
+            {"AttributeName": "createdAt", "AttributeType": "S"},
+        ],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": "StatusIndex",
+                "KeySchema": [
+                    {"AttributeName": "status", "KeyType": "HASH"},
+                    {"AttributeName": "createdAt", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    return boto3.resource("dynamodb", region_name="us-east-1").Table(table_name)
+
+
+@pytest.fixture()
+def jobs_repository(fine_tuning_jobs_table):
+    """Instantiate a FineTuningJobsRepository against the moto table."""
+    from apis.app_api.fine_tuning.job_repository import FineTuningJobsRepository
+    return FineTuningJobsRepository(table_name="test-fine-tuning-jobs")
+
+
+@pytest.fixture()
+def mock_s3_bucket(aws, monkeypatch):
+    """Create an S3 bucket in moto for presigned URL tests."""
+    bucket_name = "test-fine-tuning-data"
+    monkeypatch.setenv("S3_FINE_TUNING_BUCKET_NAME", bucket_name)
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=bucket_name)
+    return bucket_name
+
+
 @pytest.fixture
 def make_user():
     """Factory for creating test User objects."""

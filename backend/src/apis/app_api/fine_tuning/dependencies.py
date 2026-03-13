@@ -1,10 +1,13 @@
-"""FastAPI dependencies for fine-tuning access control."""
+"""FastAPI dependencies for fine-tuning access control and services."""
 
 import logging
 from fastapi import Depends, HTTPException, status
 from apis.shared.auth import User
 from apis.shared.auth.dependencies import get_current_user
 from .repository import FineTuningAccessRepository, get_fine_tuning_access_repository
+from .job_repository import FineTuningJobsRepository, get_fine_tuning_jobs_repository
+from .s3_service import FineTuningS3Service, get_fine_tuning_s3_service
+from .sagemaker_service import SageMakerService, get_sagemaker_service
 
 logger = logging.getLogger(__name__)
 
