@@ -54,6 +54,47 @@ export class SessionList {
   });
 
   /**
+   * Computed signal that groups sessions by time period:
+   * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
+   */
+  readonly groupedSessions = computed(() => {
+    const sessions = this.sessions();
+    if (!sessions || sessions.length === 0) return [];
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+    const startOf7DaysAgo = new Date(startOfToday.getTime() - 6 * 86400000);
+    const startOf30DaysAgo = new Date(startOfToday.getTime() - 29 * 86400000);
+
+    const groups: { label: string; sessions: SessionMetadata[] }[] = [
+      { label: 'Today', sessions: [] },
+      { label: 'Yesterday', sessions: [] },
+      { label: 'Last 7 Days', sessions: [] },
+      { label: 'Last 30 Days', sessions: [] },
+      { label: 'Older', sessions: [] },
+    ];
+
+    for (const session of sessions) {
+      const date = new Date(session.lastMessageAt || session.createdAt);
+      if (date >= startOfToday) {
+        groups[0].sessions.push(session);
+      } else if (date >= startOfYesterday) {
+        groups[1].sessions.push(session);
+      } else if (date >= startOf7DaysAgo) {
+        groups[2].sessions.push(session);
+      } else if (date >= startOf30DaysAgo) {
+        groups[3].sessions.push(session);
+      } else {
+        groups[4].sessions.push(session);
+      }
+    }
+
+    // Only return groups that have sessions
+    return groups.filter(g => g.sessions.length > 0);
+  });
+
+  /**
    * Computed signal for pagination token.
    */
   readonly nextToken = computed(() => {
