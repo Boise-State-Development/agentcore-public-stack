@@ -147,6 +147,82 @@ If using Route 53, ACM offers a **"Create records in Route 53"** button that han
 
 ---
 
+## 2d. Enable X-Ray Transaction Search (once per account)
+
+X-Ray Transaction Search is an **account-level singleton** — it cannot be managed via CloudFormation if it already exists. You must configure it via the AWS CLI.
+
+> [!IMPORTANT]
+> Before running the commands below, replace these placeholders with your actual values:
+> - `PARTITION` — usually `aws` (or `aws-cn`, `aws-us-gov`)
+> - `REGION` — your deployment region (e.g. `us-west-2`)
+> - `ACCOUNT_ID` — your 12-digit AWS account ID
+
+**1. Create the CloudWatch Logs resource policy for X-Ray:**
+
+```bash
+aws logs put-resource-policy \
+  --policy-name XRayTransactionSearchPolicy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "TransactionSearchXRayAccess",
+        "Effect": "Allow",
+        "Principal": { "Service": "xray.amazonaws.com" },
+        "Action": "logs:PutLogEvents",
+        "Resource": [
+          "arn:PARTITION:logs:REGION:ACCOUNT_ID:log-group:aws/spans:*",
+          "arn:PARTITION:logs:REGION:ACCOUNT_ID:log-group:/aws/application-signals/data:*"
+        ],
+        "Condition": {
+          "ArnLike": {
+            "aws:SourceArn": "arn:PARTITION:xray:REGION:ACCOUNT_ID:*"
+          },
+          "StringEquals": {
+            "aws:SourceAccount": "ACCOUNT_ID"
+          }
+        }
+      }
+    ]
+  }'
+```
+
+**2. Set the trace segment destination to CloudWatch Logs:**
+
+```bash
+aws xray update-trace-segment-destination --destination CloudWatchLogs
+```
+
+**3. Configure the indexing sampling percentage:**
+
+```bash
+aws xray update-indexing-rule \
+  --name "Default" \
+  --rule '{"Probabilistic": {"DesiredSamplingPercentage": 5}}'
+```
+
+> [!TIP]
+> A sampling percentage of `5` is a reasonable starting point for most workloads. Increase to `100` if you need full trace visibility during debugging.
+
+**Reference:** [Enable Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html#CloudWatch-Transaction-Search-EnableAPI)
+
+> [!NOTE]
+> This only needs to be done once per AWS account. If Transaction Search is already enabled in your account, skip this step.
+
+<details>
+<summary>How do I verify Transaction Search is enabled?</summary>
+
+Run:
+
+```bash
+aws xray get-trace-segment-destination
+```
+
+If configured correctly, the output should show `CloudWatchLogs` as the destination.
+
+</details>
+
+
 ## Values to Carry Forward
 
 Before moving to Step 3, confirm you have these values recorded:

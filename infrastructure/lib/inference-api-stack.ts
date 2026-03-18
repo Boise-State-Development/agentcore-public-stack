@@ -771,8 +771,7 @@ export class InferenceApiStack extends cdk.Stack {
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.
-    // Manage it via AWS CLI instead:
-    //   aws xray update-transaction-search-config --indexing-percentage <5|100>
+    // See 2d in .github/docs/deploy/step-02-aws-setup.md for more information
 
     // ============================================================
     // Observability: Vended Log Deliveries for AgentCore Resources
