@@ -36,6 +36,8 @@ from apis.shared.quota import (
     is_quota_enforcement_enabled,
 )
 
+from apis.shared.rbac.service import get_app_role_service
+
 from .models import FileContent, InvocationRequest
 from .service import get_agent
 
@@ -283,6 +285,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
         )
+
+    # Check model access if a specific model_id is requested
+    if input_data.model_id:
+        app_role_service = get_app_role_service()
+        if not await app_role_service.can_access_model(current_user, input_data.model_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to model: {input_data.model_id}",
+            )
 
     # Handle assistant RAG integration if assistant_id is provided
     # Import here to avoid circular import (app_api.assistants imports from inference_api.chat.routes)

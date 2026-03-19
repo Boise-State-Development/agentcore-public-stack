@@ -6,6 +6,10 @@ Provides a direct Bedrock Converse API wrapper authenticated via API keys
 - Streaming (SSE) and non-streaming responses
 - Reasoning models (extended thinking / reasoning content blocks)
 - Multiple Bedrock model IDs
+
+RBAC model access is enforced via ``AppRoleService.can_access_model()``
+before any Bedrock invocation occurs. Requests for models the caller's
+role does not permit are rejected with HTTP 403.
 """
 
 import json
@@ -21,6 +25,7 @@ from fastapi.responses import StreamingResponse
 
 from apis.shared.auth.models import User
 from apis.shared import quota as shared_quota
+from apis.shared.rbac.service import get_app_role_service
 from apis.app_api.costs.calculator import CostCalculator
 from apis.app_api.costs.pricing_config import create_pricing_snapshot
 from apis.shared.sessions.metadata import store_message_metadata
@@ -390,6 +395,14 @@ async def api_converse(
                 f"Error checking quota for user {validated_key.user_id}: {exc}",
                 exc_info=True,
             )
+
+    # 2.7 Model access check (RBAC)
+    app_role_service = get_app_role_service()
+    if not await app_role_service.can_access_model(user, request.model_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to model: {request.model_id}",
+        )
 
     # 3. Streaming path
     if request.stream:
