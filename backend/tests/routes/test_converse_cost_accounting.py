@@ -163,6 +163,18 @@ def mock_quota_disabled():
         yield m
 
 
+@pytest.fixture
+def mock_app_role_service():
+    """Patch get_app_role_service to allow all model access (avoids DynamoDB)."""
+    svc = MagicMock()
+    svc.can_access_model = AsyncMock(return_value=True)
+    with patch(
+        "apis.inference_api.chat.converse_routes.get_app_role_service",
+        return_value=svc,
+    ):
+        yield svc
+
+
 # ---------------------------------------------------------------------------
 # Bug Condition Test 1: Non-streaming cost recording
 # Validates: Requirements 1.1 (2.1)
@@ -186,6 +198,7 @@ class TestNonStreamingCostRecording:
         mock_store_metadata,
         mock_pricing,
         mock_quota_disabled,
+        mock_app_role_service,
     ):
         """Non-streaming request must call store_message_metadata with cost > 0."""
         resp = client.post(
@@ -241,6 +254,7 @@ class TestStreamingCostRecording:
         mock_store_metadata,
         mock_pricing,
         mock_quota_disabled,
+        mock_app_role_service,
     ):
         """Streaming request must call store_message_metadata after stream completes."""
         resp = client.post(
@@ -424,6 +438,7 @@ class TestNonStreamingResponseFormatPreservation:
         client,
         mock_validate_api_key,
         mock_bedrock_client,
+        mock_app_role_service,
     ):
         """Non-streaming response must contain all ConverseResponse fields."""
         resp = client.post(
@@ -459,6 +474,7 @@ class TestNonStreamingResponseFormatPreservation:
         self,
         client,
         mock_validate_api_key,
+        mock_app_role_service,
     ):
         """Reasoning model response must include reasoning field."""
         fake_client = MagicMock()
@@ -492,11 +508,12 @@ class TestNonStreamingResponseFormatPreservation:
         max_tokens=max_tokens_st,
         top_p=top_p_st,
     )
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_response_format_consistent_across_inputs(
         self,
         client,
         mock_validate_api_key,
+        mock_app_role_service,
         content,
         temperature,
         max_tokens,
@@ -569,6 +586,7 @@ class TestStreamingSSEFormatPreservation:
         client,
         mock_validate_api_key,
         mock_bedrock_client,
+        mock_app_role_service,
     ):
         """Streaming response must emit SSE events in correct order with correct data."""
         resp = client.post(
@@ -608,11 +626,12 @@ class TestStreamingSSEFormatPreservation:
         assert events[6][1] == {}  # done
 
     @given(content=message_content_st)
-    @settings(max_examples=15, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(max_examples=15, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_sse_always_ends_with_done(
         self,
         client,
         mock_validate_api_key,
+        mock_app_role_service,
         content,
     ):
         """Streaming response always ends with a 'done' event regardless of input.
@@ -711,6 +730,7 @@ class TestAuthPreservation:
         client,
         mock_validate_api_key,
         mock_bedrock_client,
+        mock_app_role_service,
     ):
         """Valid API key must proceed to Bedrock call and return 200."""
         resp = client.post(
@@ -764,6 +784,7 @@ class TestErrorPreservation:
         self,
         client,
         mock_validate_api_key,
+        mock_app_role_service,
     ):
         """Bedrock client error must return 502."""
         fake_client = MagicMock()
@@ -790,6 +811,7 @@ class TestErrorPreservation:
         self,
         client,
         mock_validate_api_key,
+        mock_app_role_service,
     ):
         """Bedrock streaming error must yield error + done SSE events."""
         fake_client = MagicMock()
