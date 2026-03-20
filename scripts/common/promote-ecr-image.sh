@@ -99,6 +99,12 @@ main() {
         --region "${CDK_AWS_REGION}"
 
     log_success "Promoted ${service_name} image ${image_tag} from ${src_repo} to ${dst_repo}"
+
+    # Export for downstream workflow steps
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
+        echo "IMAGE_TAG=${image_tag}" >> "$GITHUB_OUTPUT"
+    fi
+    echo "IMAGE_TAG=${image_tag}" >> "$GITHUB_ENV"
 }
 
 main "$@"
