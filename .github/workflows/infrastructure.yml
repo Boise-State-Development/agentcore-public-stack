@@ -1,4 +1,4 @@
-name: "Step 1 — Deploy Infrastructure (VPC, ALB, ECS)"
+name: "1. Deploy Infrastructure (VPC, ALB, ECS)"
 
 on:
   push:

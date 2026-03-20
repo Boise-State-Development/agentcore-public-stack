@@ -1,4 +1,4 @@
-name: "Step 3 — Deploy Inference API (AgentCore Runtime)"
+name: "3. Deploy Inference API (AgentCore Runtime)"
 
 on:
   push:

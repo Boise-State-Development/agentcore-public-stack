@@ -95,6 +95,12 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 > [!TIP]
 > These are the minimum required variables. For optional settings like ECS sizing, CloudFront price class, CORS origins, and more, see the [Full Configuration Reference](../../ACTIONS-REFERENCE.md).
 
+### Optional Features
+
+| Variable Name | Default | Description |
+|---------------|---------|-------------|
+| `CDK_FINE_TUNING_ENABLED` | `false` | Set to `true` to enable the SageMaker Fine-Tuning stack. Must be set before running the fine-tuning deployment workflow in Step 4. |
+
 ---
 
 ## 3c. Identity Provider Configuration

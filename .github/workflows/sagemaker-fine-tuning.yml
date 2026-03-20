@@ -1,4 +1,4 @@
-name: "Step 2 — Deploy SageMaker Fine-Tuning"
+name: "2. Deploy SageMaker Fine-Tuning (Optional)"
 
 on:
   push:

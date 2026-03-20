@@ -1,4 +1,4 @@
-name: "Step 6 — Deploy Gateway (Lambda Tools)"
+name: "5. Deploy Gateway (Lambda Tools)"
 
 on:
   push:

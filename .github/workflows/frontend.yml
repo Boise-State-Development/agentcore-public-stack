@@ -1,4 +1,4 @@
-name: "Step 5 — Deploy Frontend (CloudFront)"
+name: "5. Deploy Frontend (CloudFront)"
 
 on:
   push:

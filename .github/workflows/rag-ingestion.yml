@@ -1,4 +1,4 @@
-name: "Step 2 — Deploy RAG Ingestion"
+name: "2. Deploy RAG Ingestion"
 
 on:
   push:

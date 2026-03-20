@@ -1,4 +1,4 @@
-name: "Step 7 — Seed Bootstrap Data"
+name: "6. Seed Bootstrap Data"
 
 on:
   workflow_dispatch:

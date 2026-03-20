@@ -1,4 +1,4 @@
-name: "Step 4 — Deploy App API (Backend)"
+name: "4. Deploy App API (Backend)"
 
 on:
   push:
