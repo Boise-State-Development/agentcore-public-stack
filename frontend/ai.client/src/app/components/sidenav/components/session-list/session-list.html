@@ -1,5 +1,4 @@
 <nav class="flex h-full flex-col">
-    <h3 class="px-2 text-[11px]/5 font-medium text-gray-400 dark:text-gray-200">Sessions</h3>
     @if (isLoading()) {
         <div class="flex items-center justify-center py-8">
             <span class="text-sm text-gray-500 dark:text-gray-400">Loading sessions...</span>
@@ -9,62 +8,95 @@
             <span class="text-sm text-red-500 dark:text-red-400">Failed to load sessions</span>
         </div>
     } @else {
-        @if (sessions() && sessions()!.length > 0) {
-            <ul role="list" class="flex flex-col gap-y-1">
-                @for (session of sessions()!; track session.sessionId) {
-                    <li class="group relative">
-                        <a
-                            [routerLink]="['/s', getSessionId(session.sessionId)]"
-                            routerLinkActive="bg-gray-200 !text-secondary-500 dark:bg-white/5 dark:!text-white"
-                            (click)="onSessionClick()"
-                            class="flex gap-x-3 rounded-md px-2 py-2 pr-10 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
-                        >
-                            <div class="flex min-w-0 flex-1 flex-col gap-y-1">
-                                <div class="min-w-0 flex-auto truncate">
-                                    <span>{{ getSessionTitle(session) }}</span>
-                                </div>
-                            </div>
-                        </a>
-                        <!-- Ellipsis menu button - visible on hover with fade-in animation -->
-                        <button
-                            type="button"
-                            [cdkMenuTriggerFor]="sessionMenu"
-                            [cdkMenuPosition]="menuPositions"
-                            [disabled]="deletingSessionId() === session.sessionId"
-                            class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                            [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
-                            aria-haspopup="menu"
-                        >
-                            @if (deletingSessionId() === session.sessionId) {
-                                <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
-                            } @else {
-                                <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
-                            }
-                        </button>
+        @if (groupedSessions().length > 0) {
+            <div class="flex flex-col gap-y-4">
+                @for (group of groupedSessions(); track group.label) {
+                    <section>
+                        <h3 class="px-2 pb-1 text-[11px]/5 font-medium text-gray-400 dark:text-gray-500">{{ group.label }}</h3>
+                        <ul role="list" class="flex flex-col gap-y-1">
+                            @for (session of group.sessions; track session.sessionId) {
+                                <li class="group relative">
+                                    @if (renamingSessionId() === session.sessionId) {
+                                        <!-- Inline rename input -->
+                                        <div class="flex items-center gap-1 rounded-md px-2 py-1.5">
+                                            <input
+                                                #renameInput
+                                                type="text"
+                                                [value]="renameValue()"
+                                                (input)="renameValue.set(renameInput.value)"
+                                                (keydown)="onRenameKeydown($event, session)"
+                                                (blur)="onRenameSubmit(session)"
+                                                class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm/6 font-medium text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
+                                                aria-label="Rename conversation"
+                                            />
+                                        </div>
+                                    } @else {
+                                        <a
+                                            [routerLink]="['/s', getSessionId(session.sessionId)]"
+                                            routerLinkActive="bg-gray-200 !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                                            (click)="onSessionClick()"
+                                            class="flex gap-x-3 rounded-md px-2 py-2 pr-10 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                        >
+                                            <div class="flex min-w-0 flex-1 flex-col gap-y-1">
+                                                <div class="min-w-0 flex-auto truncate">
+                                                    <span>{{ getSessionTitle(session) }}</span>
+                                                </div>
+                                            </div>
+                                        </a>
+                                        <!-- Ellipsis menu button - visible on hover with fade-in animation -->
+                                        <button
+                                            type="button"
+                                            [cdkMenuTriggerFor]="sessionMenu"
+                                            [cdkMenuPosition]="menuPositions"
+                                            [disabled]="deletingSessionId() === session.sessionId"
+                                            class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                                            [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
+                                            aria-haspopup="menu"
+                                        >
+                                            @if (deletingSessionId() === session.sessionId) {
+                                                <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
+                                            } @else {
+                                                <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                                            }
+                                        </button>
 
-                        <!-- Session options menu -->
-                        <ng-template #sessionMenu>
-                            <div
-                                cdkMenu
-                                class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
-                                role="menu"
-                                aria-orientation="vertical"
-                            >
-                                <button
-                                    cdkMenuItem
-                                    type="button"
-                                    (click)="onDeleteClick($event, session)"
-                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-red-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-red-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                    role="menuitem"
-                                >
-                                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                                    <span>Delete</span>
-                                </button>
-                            </div>
-                        </ng-template>
-                    </li>
+                                        <!-- Session options menu -->
+                                        <ng-template #sessionMenu>
+                                            <div
+                                                cdkMenu
+                                                class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                                                role="menu"
+                                                aria-orientation="vertical"
+                                            >
+                                                <button
+                                                    cdkMenuItem
+                                                    type="button"
+                                                    (click)="onRenameClick($event, session)"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                                                    role="menuitem"
+                                                >
+                                                    <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                                                    <span>Rename</span>
+                                                </button>
+                                                <button
+                                                    cdkMenuItem
+                                                    type="button"
+                                                    (click)="onDeleteClick($event, session)"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-red-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-red-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                                                    role="menuitem"
+                                                >
+                                                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                                                    <span>Delete</span>
+                                                </button>
+                                            </div>
+                                        </ng-template>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    </section>
                 }
-            </ul>
+            </div>
         } @else {
             <div class="text-center">
                 <ng-icon name="heroChatBubbleLeftRight" size="48" class="mx-auto text-gray-400 dark:text-gray-500" />

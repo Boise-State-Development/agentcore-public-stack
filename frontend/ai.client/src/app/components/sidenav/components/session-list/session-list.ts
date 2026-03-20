@@ -1,11 +1,11 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SessionMetadata } from '../../../../session/services/models/session-metadata.model';
@@ -16,7 +16,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -27,12 +27,24 @@ export class SessionList {
   private toastService = inject(ToastService);
   private dialog = inject(Dialog);
   private router = inject(Router);
+  private injector = inject(Injector);
 
   /**
    * Signal tracking which session is currently being deleted.
    * Used to show loading state on the delete button.
    */
   protected deletingSessionId = signal<string | null>(null);
+
+  /**
+   * Signal tracking which session is currently being renamed.
+   * When set, the session title is replaced with an inline text input.
+   */
+  protected renamingSessionId = signal<string | null>(null);
+
+  /**
+   * Signal holding the current value of the rename input field.
+   */
+  protected renameValue = signal('');
 
   /**
    * Reactive resource for fetching sessions (base API data).
@@ -51,6 +63,47 @@ export class SessionList {
   readonly sessions = computed(() => {
     const response = this.mergedSessionsResource();
     return response?.sessions;
+  });
+
+  /**
+   * Computed signal that groups sessions by time period:
+   * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
+   */
+  readonly groupedSessions = computed(() => {
+    const sessions = this.sessions();
+    if (!sessions || sessions.length === 0) return [];
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+    const startOf7DaysAgo = new Date(startOfToday.getTime() - 6 * 86400000);
+    const startOf30DaysAgo = new Date(startOfToday.getTime() - 29 * 86400000);
+
+    const groups: { label: string; sessions: SessionMetadata[] }[] = [
+      { label: 'Today', sessions: [] },
+      { label: 'Yesterday', sessions: [] },
+      { label: 'Last 7 Days', sessions: [] },
+      { label: 'Last 30 Days', sessions: [] },
+      { label: 'Older', sessions: [] },
+    ];
+
+    for (const session of sessions) {
+      const date = new Date(session.lastMessageAt || session.createdAt);
+      if (date >= startOfToday) {
+        groups[0].sessions.push(session);
+      } else if (date >= startOfYesterday) {
+        groups[1].sessions.push(session);
+      } else if (date >= startOf7DaysAgo) {
+        groups[2].sessions.push(session);
+      } else if (date >= startOf30DaysAgo) {
+        groups[3].sessions.push(session);
+      } else {
+        groups[4].sessions.push(session);
+      }
+    }
+
+    // Only return groups that have sessions
+    return groups.filter(g => g.sessions.length > 0);
   });
 
   /**
@@ -146,6 +199,81 @@ export class SessionList {
    */
   protected onSessionClick(): void {
     this.sidenavService.close();
+  }
+
+  /**
+   * Enters rename mode for a session. Populates the input with the current title.
+   * Focus is handled in the template via a callback on the input element.
+   *
+   * @param event - Click event (stopped to prevent navigation)
+   * @param session - The session to rename
+   */
+  protected onRenameClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.renameValue.set(session.title || '');
+    this.renamingSessionId.set(session.sessionId);
+
+    // Focus the input after the template re-renders
+    afterNextRender(() => {
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Rename conversation"]');
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }, { injector: this.injector });
+  }
+
+  /**
+   * Submits the rename, calling the API and updating the local cache.
+   * Exits rename mode on success or error.
+   *
+   * @param session - The session being renamed
+   */
+  protected async onRenameSubmit(session: SessionMetadata): Promise<void> {
+    const newTitle = this.renameValue().trim();
+    if (!newTitle || newTitle === session.title) {
+      this.onRenameCancel();
+      return;
+    }
+
+    try {
+      await this.sessionService.updateSessionTitle(session.sessionId, newTitle);
+      this.sessionService.updateSessionTitleInCache(session.sessionId, newTitle);
+      this.sessionsResource.reload();
+    } catch (error) {
+      console.error('Failed to rename session:', error);
+      this.toastService.error(
+        'Failed to rename',
+        'There was an error renaming the conversation. Please try again.'
+      );
+    } finally {
+      this.renamingSessionId.set(null);
+    }
+  }
+
+  /**
+   * Cancels rename mode without saving.
+   */
+  protected onRenameCancel(): void {
+    this.renamingSessionId.set(null);
+  }
+
+  /**
+   * Handles keydown events on the rename input.
+   * Enter submits, Escape cancels.
+   *
+   * @param event - Keyboard event
+   * @param session - The session being renamed
+   */
+  protected onRenameKeydown(event: KeyboardEvent, session: SessionMetadata): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.onRenameSubmit(session);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      this.onRenameCancel();
+    }
   }
 
   /**
