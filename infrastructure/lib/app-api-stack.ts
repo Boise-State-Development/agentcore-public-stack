@@ -413,19 +413,19 @@ export class AppApiStack extends cdk.Stack {
 
     const userFilesBucketName = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/bucket-name`
+      `/${config.projectPrefix}/user-file-uploads/bucket-name`
     );
     const userFilesBucketArn = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/bucket-arn`
+      `/${config.projectPrefix}/user-file-uploads/bucket-arn`
     );
     const userFilesTableName = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/table-name`
+      `/${config.projectPrefix}/user-file-uploads/table-name`
     );
     const userFilesTableArn = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/table-arn`
+      `/${config.projectPrefix}/user-file-uploads/table-arn`
     );
 
     // ============================================================

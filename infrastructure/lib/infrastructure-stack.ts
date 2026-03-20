@@ -1059,7 +1059,7 @@ export class InfrastructureStack extends cdk.Stack {
 
     // S3 Bucket for user file uploads
     const userFilesBucket = new s3.Bucket(this, "UserFilesBucket", {
-      bucketName: getResourceName(config, "user-files", config.awsAccount),
+      bucketName: getResourceName(config, "user-file-uploads", config.awsAccount),
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
@@ -1113,7 +1113,7 @@ export class InfrastructureStack extends cdk.Stack {
      *   GSI1PK: CONV#{sessionId}, GSI1SK: FILE#{uploadId} - Query files by conversation
      */
     const userFilesTable = new dynamodb.Table(this, "UserFilesTable", {
-      tableName: getResourceName(config, "user-files"),
+      tableName: getResourceName(config, "user-file-uploads"),
       partitionKey: {
         name: "PK",
         type: dynamodb.AttributeType.STRING,
@@ -1146,28 +1146,28 @@ export class InfrastructureStack extends cdk.Stack {
 
     // Store file upload resource names in SSM
     new ssm.StringParameter(this, "UserFilesBucketNameParameter", {
-      parameterName: `/${config.projectPrefix}/file-upload/bucket-name`,
+      parameterName: `/${config.projectPrefix}/user-file-uploads/bucket-name`,
       stringValue: userFilesBucket.bucketName,
       description: "User files S3 bucket name",
       tier: ssm.ParameterTier.STANDARD,
     });
 
     new ssm.StringParameter(this, "UserFilesBucketArnParameter", {
-      parameterName: `/${config.projectPrefix}/file-upload/bucket-arn`,
+      parameterName: `/${config.projectPrefix}/user-file-uploads/bucket-arn`,
       stringValue: userFilesBucket.bucketArn,
       description: "User files S3 bucket ARN",
       tier: ssm.ParameterTier.STANDARD,
     });
 
     new ssm.StringParameter(this, "UserFilesTableNameParameter", {
-      parameterName: `/${config.projectPrefix}/file-upload/table-name`,
+      parameterName: `/${config.projectPrefix}/user-file-uploads/table-name`,
       stringValue: userFilesTable.tableName,
       description: "User files metadata table name",
       tier: ssm.ParameterTier.STANDARD,
     });
 
     new ssm.StringParameter(this, "UserFilesTableArnParameter", {
-      parameterName: `/${config.projectPrefix}/file-upload/table-arn`,
+      parameterName: `/${config.projectPrefix}/user-file-uploads/table-arn`,
       stringValue: userFilesTable.tableArn,
       description: "User files metadata table ARN",
       tier: ssm.ParameterTier.STANDARD,

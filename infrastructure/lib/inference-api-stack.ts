@@ -360,7 +360,7 @@ export class InferenceApiStack extends cdk.Stack {
     // DynamoDB User Files Table permissions (imported from Infrastructure Stack)
     const userFilesTableArn = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/table-arn`
+      `/${config.projectPrefix}/user-file-uploads/table-arn`
     );
     
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
@@ -380,7 +380,7 @@ export class InferenceApiStack extends cdk.Stack {
     // S3 User Files Bucket permissions (imported from Infrastructure Stack)
     const userFilesBucketArn = ssm.StringParameter.valueForStringParameter(
       this,
-      `/${config.projectPrefix}/file-upload/bucket-arn`
+      `/${config.projectPrefix}/user-file-uploads/bucket-arn`
     );
     
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
