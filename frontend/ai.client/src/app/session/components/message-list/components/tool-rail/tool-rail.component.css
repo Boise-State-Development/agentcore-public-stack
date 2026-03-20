@@ -1,0 +1,132 @@
+:host {
+  display: block;
+}
+
+/* Status dot base */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+/* Chevron rotation */
+.chevron {
+  transition: transform 0.2s ease-out;
+}
+
+.chevron.open {
+  transform: rotate(90deg);
+}
+
+/* Collapsible animation (same pattern as existing tool-use component) */
+.collapsible-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease-out;
+}
+
+.collapsible-content.open {
+  grid-template-rows: 1fr;
+}
+
+.collapsible-content > div {
+  overflow: hidden;
+}
+
+/* Shimmer animation for pending status dots */
+@keyframes shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Text shimmer sweep for header when tools are running */
+@keyframes text-shimmer {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
+.text-shimmer {
+  --shimmer-base: #9ca3af; /* gray-400 */
+  --shimmer-highlight: #d1d5db; /* gray-300 */
+
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-base) 25%,
+    var(--shimmer-highlight) 50%,
+    var(--shimmer-base) 75%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-shimmer 2s ease-in-out infinite;
+}
+
+:host-context(.dark) .text-shimmer {
+  --shimmer-base: #6b7280; /* gray-500 */
+  --shimmer-highlight: #9ca3af; /* gray-400 */
+}
+
+/* Force child spans to inherit the shimmer gradient instead of their own text colors */
+.text-shimmer span {
+  color: inherit;
+  -webkit-text-fill-color: inherit;
+}
+
+/* Muted JSON syntax highlighting for result blocks */
+.result-block .json-key {
+  color: #6b7280; /* gray-500 */
+}
+
+.result-block .json-string {
+  color: #4b5563; /* gray-600 */
+}
+
+.result-block .json-number {
+  color: #6366f1; /* indigo-500 — subtle accent for numbers */
+}
+
+.result-block .json-boolean {
+  color: #6366f1;
+}
+
+.result-block .json-null {
+  color: #9ca3af; /* gray-400 */
+}
+
+.result-block .json-bracket {
+  color: #9ca3af;
+}
+
+:host-context(.dark) .result-block .json-key {
+  color: #9ca3af; /* gray-400 */
+}
+
+:host-context(.dark) .result-block .json-string {
+  color: #d1d5db; /* gray-300 */
+}
+
+:host-context(.dark) .result-block .json-number {
+  color: #a5b4fc; /* indigo-300 */
+}
+
+:host-context(.dark) .result-block .json-boolean {
+  color: #a5b4fc;
+}
+
+:host-context(.dark) .result-block .json-null {
+  color: #6b7280; /* gray-500 */
+}
+
+:host-context(.dark) .result-block .json-bracket {
+  color: #6b7280;
+}

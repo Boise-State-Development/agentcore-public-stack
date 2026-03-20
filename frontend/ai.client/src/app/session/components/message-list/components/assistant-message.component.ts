@@ -1,17 +1,22 @@
 import { ChangeDetectionStrategy, Component, input, computed } from '@angular/core';
 import { Message, ContentBlock, ToolUseData } from '../../../services/models/message.model';
 import { ToolUseComponent } from './tool-use';
+import { ToolRailComponent } from './tool-rail';
+import { ToolCallGroup, ToolCallDisplay } from './tool-rail/tool-rail.model';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
 
 /**
  * Display block types for rendering in the template.
- * Transforms content blocks into display-specific blocks that include promoted visuals.
+ * Transforms content blocks into display-specific blocks that include
+ * promoted visuals and grouped tool rails.
  */
 interface DisplayBlock {
-  type: 'text' | 'tool_use' | 'tool_use_minimized' | 'promoted_visual' | 'reasoningContent';
+  type: 'text' | 'tool_group' | 'tool_use_minimized' | 'promoted_visual' | 'reasoningContent';
   data?: ContentBlock;
+  // For tool groups (inline rail)
+  group?: ToolCallGroup;
   // For promoted visuals
   uiType?: string;
   payload?: unknown;
@@ -23,6 +28,7 @@ interface DisplayBlock {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ToolUseComponent,
+    ToolRailComponent,
     ReasoningContentComponent,
     StreamingTextComponent,
     InlineVisualComponent,
@@ -56,14 +62,14 @@ interface DisplayBlock {
               </div>
             </div>
           }
-          @case ('tool_use') {
+          @case ('tool_group') {
             <div
               class="message-block tool-use-block"
               [style.animation-delay]="$index * 0.1 + 's'"
             >
-              <app-tool-use
+              <app-tool-rail
                 class="flex w-full justify-start"
-                [toolUse]="block.data!"
+                [group]="block.group!"
               />
             </div>
           }
@@ -147,41 +153,61 @@ export class AssistantMessageComponent {
 
   /**
    * Transforms content blocks into display blocks.
-   * Detects tool results with ui_display: "inline" and creates:
-   * 1. A minimized tool block
-   * 2. A promoted visual component (rendered AFTER tool block)
+   * - Consecutive non-promoted tool-use blocks are grouped into a single ToolCallGroup
+   *   rendered as an inline rail via app-tool-rail.
+   * - Tool-use blocks with promoted visuals (ui_display: "inline") are kept separate
+   *   as minimized tool + promoted visual pairs.
+   * - Text and reasoning blocks flush any accumulated tool group and stand alone.
    */
   displayBlocks = computed<DisplayBlock[]>(() => {
     const blocks = this.message().content;
     const result: DisplayBlock[] = [];
+    let pendingToolCalls: ToolCallDisplay[] = [];
+
+    const flushToolGroup = () => {
+      if (pendingToolCalls.length > 0) {
+        result.push({
+          type: 'tool_group',
+          group: {
+            calls: [...pendingToolCalls],
+            // groupSummary is not populated yet -- future enhancement.
+            // For now, always uses fallback mode (chained tool names).
+          },
+        });
+        pendingToolCalls = [];
+      }
+    };
 
     for (const block of blocks) {
       // Handle reasoning content
       if (block.type === 'reasoningContent' && block.reasoningContent) {
+        flushToolGroup();
         result.push({ type: 'reasoningContent', data: block });
         continue;
       }
 
       // Handle text
       if (block.type === 'text' && block.text) {
+        flushToolGroup();
         result.push({ type: 'text', data: block });
         continue;
       }
 
-      // Handle tool use - check for promoted visuals
+      // Handle tool use
       if ((block.type === 'toolUse' || block.type === 'tool_use') && block.toolUse) {
         const toolUse = block.toolUse as ToolUseData;
         const promotedVisual = this.extractPromotedVisual(toolUse);
 
         if (promotedVisual) {
-          // Add minimized tool block first
+          // Promoted visuals break the tool group and render separately
+          flushToolGroup();
+
           result.push({
             type: 'tool_use_minimized',
             data: block,
             toolUseId: toolUse.toolUseId
           });
 
-          // Add promoted visual after
           result.push({
             type: 'promoted_visual',
             uiType: promotedVisual.uiType,
@@ -189,12 +215,21 @@ export class AssistantMessageComponent {
             toolUseId: toolUse.toolUseId
           });
         } else {
-          // Regular tool block
-          result.push({ type: 'tool_use', data: block });
+          // Accumulate into the current tool group
+          pendingToolCalls.push({
+            id: toolUse.toolUseId,
+            toolName: toolUse.name,
+            input: toolUse.input || {},
+            result: toolUse.result,
+            status: toolUse.status || 'pending',
+          });
         }
         continue;
       }
     }
+
+    // Flush any remaining tool calls
+    flushToolGroup();
 
     return result;
   });

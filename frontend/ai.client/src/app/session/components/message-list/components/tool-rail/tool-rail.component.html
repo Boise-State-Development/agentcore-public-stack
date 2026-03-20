@@ -1,0 +1,143 @@
+<!-- Collapsed header -->
+<button
+  type="button"
+  (click)="toggleExpanded()"
+  class="flex items-center gap-2 cursor-pointer group w-full text-left"
+  [attr.aria-expanded]="effectiveExpanded()"
+  aria-label="Toggle tool call details"
+>
+  <svg
+    class="chevron size-3 text-gray-400 dark:text-gray-500 shrink-0"
+    [class.open]="effectiveExpanded()"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+  </svg>
+
+  <!-- Summary mode header -->
+  @if (hasSummaries() && group().groupSummary) {
+    <span
+      class="text-xs text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300"
+      [class.text-shimmer]="shouldAutoExpand()"
+    >
+      {{ group().groupSummary }}
+    </span>
+  } @else {
+    <!-- Fallback mode header: chained tool names -->
+    <span
+      class="text-xs text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 flex items-center gap-1.5 flex-wrap"
+      [class.text-shimmer]="shouldAutoExpand()"
+    >
+      @for (call of group().calls; track call.id; let last = $last) {
+        <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
+        @if (!last) {
+          <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
+        }
+      }
+      <span class="text-gray-400 dark:text-gray-500 ml-1">({{ group().calls.length }} tools)</span>
+    </span>
+  }
+</button>
+
+<!-- Expanded rail -->
+<div class="collapsible-content" [class.open]="effectiveExpanded()">
+  <div>
+    <div
+      class="pl-4 space-y-3 mt-2 border-l-2"
+      [class.border-blue-600/20]="hasSummaries()"
+      [class.dark:border-blue-500/20]="hasSummaries()"
+      [class.border-gray-300/50]="!hasSummaries()"
+      [class.dark:border-gray-600/50]="!hasSummaries()"
+    >
+      @for (call of group().calls; track call.id) {
+        <div>
+          <!-- Tool name row -->
+          <div class="flex items-center gap-2 mb-0.5">
+            <span [class]="statusDotClass(call)"></span>
+            <span class="text-xs font-medium text-gray-600 dark:text-gray-400">
+              {{ call.toolName }}
+            </span>
+            @if (call.durationMs) {
+              <span class="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+                {{ formatDuration(call.durationMs) }}
+              </span>
+            }
+          </div>
+
+          <!-- Summary mode: show summary text -->
+          @if (hasSummaries() && call.summary) {
+            <p class="text-xs text-gray-500 dark:text-gray-400 ml-3.5">
+              {{ call.summary }}
+            </p>
+          }
+
+          <!-- Fallback mode: show raw input/output -->
+          @if (!hasSummaries()) {
+            <div class="ml-3.5 space-y-1">
+              <!-- Input -->
+              @if (call.input && (call.input | keyvalue)?.length) {
+                <div class="flex items-baseline gap-1.5">
+                  <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0">input:</span>
+                  <span class="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
+                    {{ formatInput(call.input) }}
+                  </span>
+                </div>
+              }
+
+              <!-- Result -->
+              @if (call.result) {
+                <div class="flex items-start gap-1.5">
+                  <span class="text-xs shrink-0 mt-1"
+                    [class.text-gray-400]="call.result.status !== 'error'"
+                    [class.dark:text-gray-500]="call.result.status !== 'error'"
+                    [class.text-red-500]="call.result.status === 'error'"
+                    [class.dark:text-red-400]="call.result.status === 'error'"
+                  >result:</span>
+                  <div class="result-block text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5 w-full overflow-hidden">
+                    @if (isResultExpanded(call.id)) {
+                      <!-- Full result with syntax highlighting -->
+                      @for (item of call.result.content; track $index) {
+                        @if (item.json) {
+                          <pre class="font-mono text-xs overflow-x-auto"><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre>
+                        } @else if (item.text) {
+                          <div class="whitespace-pre-wrap break-all">{{ item.text }}</div>
+                        }
+                      }
+                    } @else {
+                      <!-- Truncated result -->
+                      <span class="font-mono break-all whitespace-pre-wrap text-gray-500 dark:text-gray-400">{{ truncateResult(getResultText(call)) }}</span>
+                    }
+
+                    @if (getResultText(call).length > 200) {
+                      <button
+                        type="button"
+                        (click)="toggleFullResult(call.id)"
+                        class="text-blue-600 dark:text-blue-400 hover:underline mt-1 block text-xs cursor-pointer"
+                      >
+                        {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
+                      </button>
+                    }
+                  </div>
+                </div>
+
+                <!-- Images (if any) -->
+                @for (item of getResultImages(call); track $index) {
+                  <div class="mt-1 rounded-xs overflow-hidden bg-gray-100 dark:bg-gray-800 p-1 border border-gray-200 dark:border-gray-700">
+                    <img
+                      [src]="getImageDataUrl(item)"
+                      alt="Tool result image"
+                      class="max-w-full h-auto rounded-xs"
+                    />
+                  </div>
+                }
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</div>
