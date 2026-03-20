@@ -771,7 +771,10 @@ jobs:
         run: bash scripts/common/install-deps.sh
 
       - name: Fetch promote script from develop
-        run: git show ${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh && chmod +x scripts/common/promote-ecr-image.sh
+        run: |
+          git fetch origin ${{ env.NIGHTLY_REF }} --depth=1
+          git show origin/${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh
+          chmod +x scripts/common/promote-ecr-image.sh
 
       - name: Promote develop RAG Ingestion image to nightly-mv ECR
         env:
@@ -839,7 +842,10 @@ jobs:
         run: bash scripts/common/install-deps.sh
 
       - name: Fetch promote script from develop
-        run: git show ${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh && chmod +x scripts/common/promote-ecr-image.sh
+        run: |
+          git fetch origin ${{ env.NIGHTLY_REF }} --depth=1
+          git show origin/${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh
+          chmod +x scripts/common/promote-ecr-image.sh
 
       - name: Promote develop Inference API image to nightly-mv ECR
         env:
@@ -907,7 +913,10 @@ jobs:
         run: bash scripts/common/install-deps.sh
 
       - name: Fetch promote script from develop
-        run: git show ${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh && chmod +x scripts/common/promote-ecr-image.sh
+        run: |
+          git fetch origin ${{ env.NIGHTLY_REF }} --depth=1
+          git show origin/${{ env.NIGHTLY_REF }}:scripts/common/promote-ecr-image.sh > scripts/common/promote-ecr-image.sh
+          chmod +x scripts/common/promote-ecr-image.sh
 
       - name: Promote develop App API image to nightly-mv ECR
         env:
