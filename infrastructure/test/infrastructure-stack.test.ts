@@ -347,10 +347,10 @@ describe('InfrastructureStack', () => {
       'admin/managed-models-table-name',
       'auth/auth-providers-table-name',
       'auth/auth-providers-stream-arn',
-      'file-upload/bucket-name',
-      'file-upload/bucket-arn',
-      'file-upload/table-name',
-      'file-upload/table-arn',
+      'user-file-uploads/bucket-name',
+      'user-file-uploads/bucket-arn',
+      'user-file-uploads/table-name',
+      'user-file-uploads/table-arn',
     ];
 
     for (const param of expectedParams) {

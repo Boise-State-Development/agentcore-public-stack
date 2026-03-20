@@ -409,16 +409,16 @@ describe('Stack Dependency Order', () => {
 
   test('InferenceApiStack reads file-upload params from InfrastructureStack', () => {
     const inferenceReads = reads.get('InferenceApiStack')!;
-    expect(inferenceReads.has('file-upload/table-arn')).toBe(true);
-    expect(inferenceReads.has('file-upload/bucket-arn')).toBe(true);
+    expect(inferenceReads.has('user-file-uploads/table-arn')).toBe(true);
+    expect(inferenceReads.has('user-file-uploads/bucket-arn')).toBe(true);
   });
 
   test('AppApiStack reads file-upload params from InfrastructureStack', () => {
     const appReads = reads.get('AppApiStack')!;
-    expect(appReads.has('file-upload/bucket-name')).toBe(true);
-    expect(appReads.has('file-upload/bucket-arn')).toBe(true);
-    expect(appReads.has('file-upload/table-name')).toBe(true);
-    expect(appReads.has('file-upload/table-arn')).toBe(true);
+    expect(appReads.has('user-file-uploads/bucket-name')).toBe(true);
+    expect(appReads.has('user-file-uploads/bucket-arn')).toBe(true);
+    expect(appReads.has('user-file-uploads/table-name')).toBe(true);
+    expect(appReads.has('user-file-uploads/table-arn')).toBe(true);
   });
 
   test('GatewayStack reads zero SSM params', () => {

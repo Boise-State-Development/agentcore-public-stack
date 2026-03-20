@@ -130,8 +130,8 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'admin/managed-models-table-arn',
     'auth/auth-providers-table-arn',
     'auth/auth-provider-secrets-arn',
-    'file-upload/table-arn',
-    'file-upload/bucket-arn',
+    'user-file-uploads/table-arn',
+    'user-file-uploads/bucket-arn',
   ],
   AppApiStack: [
     'network/vpc-id',
@@ -192,10 +192,10 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'fine-tuning/sagemaker-execution-role-arn',
     'fine-tuning/sagemaker-security-group-id',
     'fine-tuning/private-subnet-ids',
-    'file-upload/bucket-name',
-    'file-upload/bucket-arn',
-    'file-upload/table-name',
-    'file-upload/table-arn',
+    'user-file-uploads/bucket-name',
+    'user-file-uploads/bucket-arn',
+    'user-file-uploads/table-name',
+    'user-file-uploads/table-arn',
   ],
 };
 
