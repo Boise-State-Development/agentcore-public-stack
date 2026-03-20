@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Script: Promote ECR Image
-# Description: Copies a Docker image from a source ECR repository (DEVELOP_PROJECT_PREFIX)
+# Description: Copies a Docker image from a source ECR repository (SOURCE_PROJECT_PREFIX)
 #              to a target ECR repository (CDK_PROJECT_PREFIX) within the same account.
 #              This avoids rebuilding images when promoting across nightly environments.
 #
@@ -13,7 +13,7 @@ set -euo pipefail
 #   CDK_AWS_ACCOUNT          - AWS account ID
 #   CDK_AWS_REGION           - AWS region
 #   CDK_PROJECT_PREFIX       - Target project prefix (e.g. nightly-mv)
-#   DEVELOP_PROJECT_PREFIX   - Source project prefix (e.g. nightly-agentcore)
+#   SOURCE_PROJECT_PREFIX    - Source project prefix (e.g. agentcore)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -26,7 +26,7 @@ main() {
     local service_name="${1:?Usage: promote-ecr-image.sh <service-name>}"
 
     # Validate required env vars
-    for var in CDK_AWS_ACCOUNT CDK_AWS_REGION CDK_PROJECT_PREFIX DEVELOP_PROJECT_PREFIX; do
+    for var in CDK_AWS_ACCOUNT CDK_AWS_REGION CDK_PROJECT_PREFIX SOURCE_PROJECT_PREFIX; do
         if [ -z "${!var:-}" ]; then
             log_error "${var} is not set"
             exit 1
@@ -34,7 +34,7 @@ main() {
     done
 
     local ecr_registry="${CDK_AWS_ACCOUNT}.dkr.ecr.${CDK_AWS_REGION}.amazonaws.com"
-    local src_repo="${DEVELOP_PROJECT_PREFIX}-${service_name}"
+    local src_repo="${SOURCE_PROJECT_PREFIX}-${service_name}"
     local dst_repo="${CDK_PROJECT_PREFIX}-${service_name}"
 
     log_info "Promoting image: ${src_repo} -> ${dst_repo}"
@@ -45,7 +45,7 @@ main() {
         docker login --username AWS --password-stdin "${ecr_registry}"
 
     # Read the current image tag from the source SSM parameter
-    local ssm_param="/${DEVELOP_PROJECT_PREFIX}/${service_name}/image-tag"
+    local ssm_param="/${SOURCE_PROJECT_PREFIX}/${service_name}/image-tag"
     log_info "Reading image tag from SSM: ${ssm_param}"
 
     local image_tag
@@ -94,7 +94,7 @@ main() {
         --name "${dst_ssm_param}" \
         --value "${image_tag}" \
         --type "String" \
-        --description "Promoted image tag for ${service_name} from ${DEVELOP_PROJECT_PREFIX}" \
+        --description "Promoted image tag for ${service_name} from ${SOURCE_PROJECT_PREFIX}" \
         --overwrite \
         --region "${CDK_AWS_REGION}"
 

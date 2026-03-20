@@ -778,7 +778,7 @@ jobs:
 
       - name: Promote develop RAG Ingestion image to nightly-mv ECR
         env:
-          DEVELOP_PROJECT_PREFIX: ${{ vars.DEVELOP_PROJECT_PREFIX }}
+          SOURCE_PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX-development }}
         run: bash scripts/common/promote-ecr-image.sh rag-ingestion
 
       - name: Deploy RAG Ingestion
@@ -849,7 +849,7 @@ jobs:
 
       - name: Promote develop Inference API image to nightly-mv ECR
         env:
-          DEVELOP_PROJECT_PREFIX: ${{ vars.DEVELOP_PROJECT_PREFIX }}
+          SOURCE_PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX-development }}
         run: bash scripts/common/promote-ecr-image.sh inference-api
 
       - name: Build and deploy Inference API
@@ -920,7 +920,7 @@ jobs:
 
       - name: Promote develop App API image to nightly-mv ECR
         env:
-          DEVELOP_PROJECT_PREFIX: ${{ vars.DEVELOP_PROJECT_PREFIX }}
+          SOURCE_PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX-development }}
         run: bash scripts/common/promote-ecr-image.sh app-api
 
       - name: Build and deploy App API
