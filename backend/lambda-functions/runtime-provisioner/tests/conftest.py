@@ -39,7 +39,7 @@ SSM_PARAMS: dict[str, str] = {
     f"/{PROJECT_PREFIX}/cost-tracking/system-cost-rollup-table-name": "test-system-cost-rollup-table",
     f"/{PROJECT_PREFIX}/admin/managed-models-table-name": "test-managed-models-table",
     # File upload
-    f"/{PROJECT_PREFIX}/file-upload/table-name": "test-user-files-table",
+    f"/{PROJECT_PREFIX}/user-file-uploads/table-name": "test-user-files-table",
     # Auth / OAuth secrets & URLs
     f"/{PROJECT_PREFIX}/auth/auth-provider-secrets-arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-auth-secrets",
     f"/{PROJECT_PREFIX}/oauth/token-encryption-key-arn": "arn:aws:kms:us-east-1:123456789012:key/test-token-key",
