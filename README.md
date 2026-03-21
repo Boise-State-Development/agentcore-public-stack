@@ -3,19 +3,13 @@
 <!-- IMAGE PLACEHOLDER: Animated GIF or hero banner showing the AgentCore chat interface in action — a user asking a question, the agent streaming a response, and a tool being invoked (e.g., Code Interpreter generating a chart). Dimensions: ~800x400px, optimized for GitHub rendering. -->
 <!-- Example: ![AgentCore Demo](docs/images/hero-demo.gif) -->
 
-# 🤖 AgentCore Public Stack
+<h1>🤖 AgentCore Public Stack</h1>
 
 **An open-source, production-ready Generative AI platform for institutions**
 *Built by Boise State University, designed for everyone.*
 
-[![1. Deploy Infrastructure (VPC, ALB, ECS)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml)
-[![2. Deploy RAG Ingestion](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml)
-[![2. Deploy SageMaker Fine-Tuning (Optional)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml)
-[![3. Deploy Inference API (AgentCore Runtime)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml)
-[![4. Deploy App API (Backend)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml)
-[![5. Deploy Frontend (CloudFront)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml)
-[![5. Deploy Gateway (Lambda Tools)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/gateway.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/gateway.yml)
-[![6. Seed Bootstrap Data](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/bootstrap-data-seeding.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/bootstrap-data-seeding.yml)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.16-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?style=flat&logo=python&logoColor=white)
 ![Angular](https://img.shields.io/badge/Angular-v21-DD0031?style=flat&logo=angular&logoColor=white)
@@ -131,30 +125,34 @@ The admin dashboard gives institutional administrators full control over the pla
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User Interface                                │
-│                     Angular v21 + Tailwind CSS v4.1+                       │
-└─────────────────────────────────────┬───────────────────────────────────────┘
-                                      │ SSE Streaming
-                                      v
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              App API (FastAPI)                              │
-│         Authentication · Session Management · Admin Controls · RBAC        │
-└─────────────────────────────────────┬───────────────────────────────────────┘
-                                      │
-                                      v
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Inference API (Strands Agent)                       │
-│        Turn-based Session Manager · Dynamic Tool Filtering · Caching       │
-└───────┬─────────────────┬─────────────────┬─────────────────┬──────────────┘
-        │                 │                 │                 │
-        v                 v                 v                 v
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│  Local Tools  │ │ Built-in Tools│ │  MCP Tools    │ │ Runtime Tools │
-│  (Direct)     │ │ (AWS SDK)     │ │  (Gateway)    │ │ (A2A)         │
-│               │ │               │ │               │ │               │
-│ Custom Python │ │ Code Interp.  │ │ Configurable  │ │ Multi-agent   │
-│ tools         │ │ Browser       │ │ via Admin UI  │ │ collaboration │
-└───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘
+│                              User Interface                                 │
+│                     Angular v21 + Tailwind CSS v4.1+                        │
+└──────────┬──────────────────────────────────────────────┬───────────────────┘
+           │ REST (auth, sessions, admin, files)          │ SSE Streaming
+           v                                              │
+┌──────────────────────────────┐                          │
+│       App API (FastAPI)      │                          │
+│  Auth · RBAC · Sessions      │  /auth/runtime-endpoint  │
+│  Admin · Costs · Quotas      │── returns runtime URL ───┘
+└──────────────────────────────┘                          │
+                                                          v
+                                        ┌─────────────────────────────────┐
+                                        │  AgentCore Runtime (AWS Managed)│
+                                        │  Inference API + Strands Agent  │
+                                        │  /invocations (SSE streaming)   │
+                                        └───────┬─────────┬───────┬───────┘
+                                                │         │       │
+                    ┌───────────────────────────┘         │       └───────────┐
+                    v                                     v                   v
+          ┌──────────────────┐              ┌──────────────────┐  ┌──────────────────┐
+          │   Local Tools    │              │  AgentCore Tools │  │  AgentCore       │
+          │   (Direct)       │              │  (AWS Managed)   │  │  Gateway (MCP)   │
+          │                  │              │                  │  │                  │
+          │ Weather, Search, │              │ Code Interpreter │  │ Lambda Functions │
+          │ Visualization    │              │ Browser (Nova)   │  │ Wikipedia, ArXiv │
+          └──────────────────┘              │ Memory           │  │ Google, Tavily,  │
+                                            └──────────────────┘  │ Finance          │
+                                                                  └──────────────────┘
 ```
 
 <!-- IMAGE PLACEHOLDER: A polished, designed version of the architecture diagram above — using a tool like Excalidraw, draw.io, or Figma. Use color-coded boxes, clean arrows, and icons for each layer. This would replace or complement the ASCII diagram for a more professional look. Dimensions: ~900x500px. -->
@@ -187,11 +185,11 @@ The fastest path to production is the **GitHub Actions pipeline**, which automat
 | Networking | VPC, ALB, Security Groups | Isolated network with load balancing |
 | Fine-Tuning *(optional)* | SageMaker, S3, DynamoDB | Model training, batch inference, artifact storage |
 | RAG Ingestion | Lambda, S3 | Document ingestion for retrieval-augmented generation |
-| Inference API | ECS Fargate | Agent orchestration with Bedrock |
+| Inference API | Bedrock Agentcore | Agent orchestration with Bedrock |
 | App API | ECS Fargate | Authentication, admin, session management |
 | Frontend | S3 + CloudFront | Angular SPA with global CDN |
 | MCP Gateway | Lambda + API Gateway | Serverless MCP tool endpoints |
-| Data | DynamoDB | Users, sessions, costs, quotas, roles |
+| Bootstrapper | DynamoDB | Users, sessions, costs, quotas, roles |
 
 <!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing all deployment workflows with green checkmarks — Infrastructure, App API, Inference API, Frontend, Gateway, RAG Ingestion, and Bootstrap Data pipelines all passing. Dimensions: ~800x400px. -->
 <!-- Example: ![Deployment Pipelines](docs/images/github-actions.png) -->
@@ -215,20 +213,23 @@ See [backend/README.md](backend/README.md) for detailed backend setup, including
 ```
 agentcore-public-stack/
 ├── backend/
+│   ├── lambda-functions/            # Runtime provisioner & updater
 │   └── src/
 │       ├── agents/main_agent/       # Agent core: factory, tools, memory, streaming
 │       └── apis/
 │           ├── app_api/             # Application API (port 8000)
-│           ├── inference_api/       # Inference API (port 8001)
-│           └── shared/              # Shared utilities
+│           ├── inference_api/       # AgentCore Runtime API (port 8001)
+│           └── shared/              # Auth, RBAC, shared utilities
 ├── frontend/ai.client/              # Angular SPA
 │   └── src/app/
 │       ├── auth/                    # OIDC authentication
 │       ├── session/                 # Chat UI
 │       ├── admin/                   # Admin dashboard
+│       ├── fine-tuning/             # SageMaker fine-tuning UI
 │       └── services/               # State management
 ├── infrastructure/                  # AWS CDK stacks
-│   └── lib/
+│   └── lib/                         # Infra, App API, Inference API, Frontend,
+│                                    # Gateway, RAG Ingestion, SageMaker Fine-Tuning
 └── .github/
     ├── workflows/                   # CI/CD pipelines
     └── docs/deploy/                 # Deployment guides
@@ -247,9 +248,6 @@ See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new f
 ## 🤝 Contributing
 
 Contributions are welcome! Please open an issue to discuss proposed changes before submitting a pull request.
-
-Thanks to our contributors:
-- [@magicfoodhand](https://github.com/magicfoodhand) — Session list grouping and renaming (#43)
 
 ---
 
