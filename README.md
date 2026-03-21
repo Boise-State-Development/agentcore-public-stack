@@ -23,7 +23,7 @@
 
 ---
 
-> 🚀 **Ready to deploy?** Fork the repo and follow the [**GitHub Actions Quick Start**](.github/README-ACTIONS.md) to go from zero to an AWS environment in under an hour.
+> 🚀 **Ready to deploy?** Fork the repo and follow the [**GitHub Actions Quick Start**](.github/README-ACTIONS.md) to deploy to your AWS environment in under an hour.
 
 ---
 
