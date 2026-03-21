@@ -540,36 +540,3 @@ jobs:
             write_failure_summary "CDK Deploy" "1" "Deployment failed — check logs above"
           fi
 
-  create-git-tag:
-    name: Create Git Tag
-    runs-on: ubuntu-latest
-    needs: deploy-infrastructure
-    if: github.ref == 'refs/heads/main' && success()
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Create annotated git tag
-        run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
-          TAG="v${VERSION}"
-
-          if git tag -l "${TAG}" | grep -q "${TAG}"; then
-            echo "Tag ${TAG} already exists — skipping."
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "${TAG}" -m "Release ${VERSION}"
-            git push origin "${TAG}"
-            echo "Created and pushed tag ${TAG}"
-          fi
-
-          echo "## Git Tag" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: \`${TAG}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: \`${VERSION}\`" >> $GITHUB_STEP_SUMMARY

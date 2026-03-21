@@ -1,0 +1,133 @@
+name: "Release"
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v${VERSION}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # Detect pre-release versions (alpha, beta, rc, dev)
+          if echo "${VERSION}" | grep -qE '(alpha|beta|rc|dev)'; then
+            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if tag already exists
+        id: check-tag
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.TAG }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.TAG }} already exists — skipping release."
+            echo "EXISTS=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "EXISTS=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes
+        if: steps.check-tag.outputs.EXISTS == 'false'
+        id: notes
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TAG="${{ steps.version.outputs.TAG }}"
+          NOTES_FILE=$(mktemp)
+
+          # Extract the section for this version from RELEASE_NOTES.md
+          # Matches from "# Release Notes — v<VERSION>" up to the next "# Release Notes —" or EOF
+          awk -v ver="${TAG}" '
+            BEGIN { found=0 }
+            /^# Release Notes — / {
+              if (found) exit
+              if (index($0, ver)) { found=1; next }
+            }
+            found { print }
+          ' RELEASE_NOTES.md > "${NOTES_FILE}"
+
+          # Trim leading/trailing blank lines
+          sed -i '/./,$!d' "${NOTES_FILE}"          # trim leading blanks
+          sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "${NOTES_FILE}"  # trim trailing blanks
+
+          if [ ! -s "${NOTES_FILE}" ]; then
+            echo "⚠️ No release notes found for ${TAG} in RELEASE_NOTES.md"
+            echo "Release ${VERSION}" > "${NOTES_FILE}"
+          fi
+
+          echo "NOTES_FILE=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create git tag
+        if: steps.check-tag.outputs.EXISTS == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.TAG }}" -m "Release ${{ steps.version.outputs.VERSION }}"
+          git push origin "${{ steps.version.outputs.TAG }}"
+
+      - name: Create GitHub Release
+        if: steps.check-tag.outputs.EXISTS == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PRERELEASE="${{ steps.version.outputs.PRERELEASE }}"
+          NOTES_FILE="${{ steps.notes.outputs.NOTES_FILE }}"
+
+          ARGS=(
+            "${TAG}"
+            --title "Release ${VERSION}"
+            --notes-file "${NOTES_FILE}"
+            --verify-tag
+          )
+
+          if [ "${PRERELEASE}" = "true" ]; then
+            ARGS+=( --prerelease )
+          fi
+
+          gh release create "${ARGS[@]}"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          EXISTS="${{ steps.check-tag.outputs.EXISTS }}"
+
+          {
+            if [ "${EXISTS}" = "true" ]; then
+              echo "## ⏭️ Release Skipped"
+              echo ""
+              echo "Tag \`${TAG}\` already exists — no release created."
+            else
+              echo "## 🏷️ Release Created"
+              echo ""
+              echo "| | |"
+              echo "|---|---|"
+              echo "| **Tag** | \`${TAG}\` |"
+              echo "| **Version** | \`${VERSION}\` |"
+              echo "| **Pre-release** | ${{ steps.version.outputs.PRERELEASE }} |"
+              echo "| **Release URL** | [${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG}) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
