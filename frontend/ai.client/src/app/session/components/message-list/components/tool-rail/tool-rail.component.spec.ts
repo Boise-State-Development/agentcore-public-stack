@@ -41,12 +41,11 @@ describe('ToolRailComponent', () => {
       const button = fixture.nativeElement.querySelector('button');
       expect(button).toBeTruthy();
       expect(button.textContent).toContain('search_classes');
-      expect(button.textContent).toContain('(1 tools)');
     });
   });
 
   describe('multiple consecutive tool calls', () => {
-    it('should show all tool names chained in the header', () => {
+    it('should show up to 3 tool names in collapsed header', () => {
       const group = makeGroup({
         calls: [
           makeCall({ id: 'tool-1', toolName: 'google_drive_search' }),
@@ -61,7 +60,55 @@ describe('ToolRailComponent', () => {
       expect(button.textContent).toContain('google_drive_search');
       expect(button.textContent).toContain('web_search');
       expect(button.textContent).toContain('web_fetch');
-      expect(button.textContent).toContain('(3 tools)');
+      // No overflow text when exactly at the limit
+      expect(button.textContent).not.toContain('and');
+    });
+
+    it('should show "and X more" when collapsed with >3 tool calls', () => {
+      const group = makeGroup({
+        calls: [
+          makeCall({ id: 'tool-1', toolName: 'tool_a' }),
+          makeCall({ id: 'tool-2', toolName: 'tool_b' }),
+          makeCall({ id: 'tool-3', toolName: 'tool_c' }),
+          makeCall({ id: 'tool-4', toolName: 'tool_d' }),
+          makeCall({ id: 'tool-5', toolName: 'tool_e' }),
+        ],
+      });
+      fixture.componentRef.setInput('group', group);
+      fixture.detectChanges();
+
+      const button = fixture.nativeElement.querySelector('button');
+      // Collapsed: first 3 shown, rest summarized
+      expect(button.textContent).toContain('tool_a');
+      expect(button.textContent).toContain('tool_b');
+      expect(button.textContent).toContain('tool_c');
+      expect(button.textContent).not.toContain('tool_d');
+      expect(button.textContent).not.toContain('tool_e');
+      expect(button.textContent).toContain('and 2 more');
+    });
+
+    it('should show all tool names with count when expanded', () => {
+      const group = makeGroup({
+        calls: [
+          makeCall({ id: 'tool-1', toolName: 'tool_a' }),
+          makeCall({ id: 'tool-2', toolName: 'tool_b' }),
+          makeCall({ id: 'tool-3', toolName: 'tool_c' }),
+          makeCall({ id: 'tool-4', toolName: 'tool_d' }),
+        ],
+      });
+      fixture.componentRef.setInput('group', group);
+      fixture.detectChanges();
+
+      component.toggleExpanded();
+      fixture.detectChanges();
+
+      const button = fixture.nativeElement.querySelector('button');
+      expect(button.textContent).toContain('tool_a');
+      expect(button.textContent).toContain('tool_b');
+      expect(button.textContent).toContain('tool_c');
+      expect(button.textContent).toContain('tool_d');
+      expect(button.textContent).toContain('(4 tools)');
+      expect(button.textContent).not.toContain('and');
     });
 
     it('should show arrow separators between tool names', () => {

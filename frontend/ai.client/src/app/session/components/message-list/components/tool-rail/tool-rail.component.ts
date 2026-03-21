@@ -27,9 +27,22 @@ export class ToolRailComponent {
   /** Track which individual tool results are fully expanded (for long results in fallback mode) */
   expandedResultIds = signal<Set<string>>(new Set());
 
+  /** Max tool names shown in the collapsed header before truncating */
+  private readonly COLLAPSED_MAX = 3;
+
   /** Determine display mode: true if any summary text exists */
   hasSummaries = computed(() =>
     !!this.group().groupSummary || this.group().calls.some(c => c.summary)
+  );
+
+  /** Tool calls visible in the collapsed header (first N) */
+  collapsedHeaderCalls = computed(() =>
+    this.group().calls.slice(0, this.COLLAPSED_MAX)
+  );
+
+  /** Number of tool calls beyond the collapsed limit */
+  overflowCount = computed(() =>
+    Math.max(0, this.group().calls.length - this.COLLAPSED_MAX)
   );
 
   /** Auto-expand if any tool is still pending */

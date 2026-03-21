@@ -32,6 +32,13 @@
 
 .collapsible-content > div {
   overflow: hidden;
+  opacity: 0;
+  transition: opacity 0s ease-out; /* instant hide on collapse */
+}
+
+.collapsible-content.open > div {
+  opacity: 1;
+  transition: opacity 0.15s ease-out 0.05s; /* fade in after slight delay on expand */
 }
 
 /* Shimmer animation for pending status dots */

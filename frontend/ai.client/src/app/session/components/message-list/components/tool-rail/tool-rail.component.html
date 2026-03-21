@@ -31,13 +31,27 @@
       class="text-xs text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 flex items-center gap-1.5 flex-wrap"
       [class.text-shimmer]="shouldAutoExpand()"
     >
-      @for (call of group().calls; track call.id; let last = $last) {
-        <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
-        @if (!last) {
-          <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
+      @if (effectiveExpanded()) {
+        <!-- Expanded: show all tool names with total count -->
+        @for (call of group().calls; track call.id; let last = $last) {
+          <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
+          @if (!last) {
+            <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
+          }
+        }
+        <span class="text-gray-400 dark:text-gray-500 ml-1">({{ group().calls.length }} tools)</span>
+      } @else {
+        <!-- Collapsed: show first 3 then "and X more" -->
+        @for (call of collapsedHeaderCalls(); track call.id; let last = $last) {
+          <span class="font-medium text-gray-500 dark:text-gray-400">{{ call.toolName }}</span>
+          @if (!last) {
+            <span class="text-gray-300 dark:text-gray-600">&rarr;</span>
+          }
+        }
+        @if (overflowCount() > 0) {
+          <span class="text-gray-400 dark:text-gray-500 ml-0.5">and {{ overflowCount() }} more</span>
         }
       }
-      <span class="text-gray-400 dark:text-gray-500 ml-1">({{ group().calls.length }} tools)</span>
     </span>
   }
 </button>

@@ -7,6 +7,91 @@ import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
 
+// ──────────────────────────────────────────────────────────────
+// 🔧 MOCK FLAG — set to true to render 10 fake tool calls
+//    for visual development. Remove when done.
+// ──────────────────────────────────────────────────────────────
+const MOCK_TOOL_RAIL = false;
+
+const MOCK_TOOL_GROUP: ToolCallGroup = {
+  calls: [
+    {
+      id: 'mock-1',
+      toolName: 'search_knowledge_base',
+      input: { query: 'agentcore memory thresholds', top_k: 10 },
+      result: { status: 'success', content: [{ text: 'Found 3 relevant documents about memory configuration and retrieval thresholds.' }] },
+      status: 'complete',
+      durationMs: 1243,
+    },
+    {
+      id: 'mock-2',
+      toolName: 'get_session_history',
+      input: { session_id: 'sess_abc123', limit: 50 },
+      result: { status: 'success', content: [{ json: { messages: 47, turns: 12, last_active: '2026-03-20T09:14:00Z' } }] },
+      status: 'complete',
+      durationMs: 389,
+    },
+    {
+      id: 'mock-3',
+      toolName: 'code_interpreter',
+      input: { code: 'import pandas as pd\ndf = pd.read_csv("metrics.csv")\ndf.describe()' },
+      result: { status: 'success', content: [{ text: '       count   mean    std     min     25%     50%     75%     max\nlatency  500  124.3   45.2    32.1    94.7   118.6   148.3   312.9\ntokens   500 1847.0  623.1   128.0  1394.0  1812.0  2241.0  4096.0' }] },
+      status: 'complete',
+      durationMs: 4821,
+    },
+    {
+      id: 'mock-4',
+      toolName: 'web_browser',
+      input: { url: 'https://docs.aws.amazon.com/bedrock/latest/agentcore/memory-api.html', action: 'read' },
+      result: { status: 'success', content: [{ text: 'Amazon Bedrock AgentCore Memory API reference documentation. The RetrievalConfig object supports relevance_score (float 0.0-1.0) and top_k (int 1-1000) parameters for controlling semantic search behavior...' }] },
+      status: 'complete',
+      durationMs: 2156,
+    },
+    {
+      id: 'mock-5',
+      toolName: 'wikipedia_search',
+      input: { query: 'vector similarity search thresholds' },
+      result: { status: 'error', content: [{ text: 'MCP connection timeout: Gateway did not respond within 30s. Retries exhausted (3/3).' }] },
+      status: 'error',
+    },
+    {
+      id: 'mock-6',
+      toolName: 'arxiv_search',
+      input: { query: 'semantic memory retrieval relevance filtering', max_results: 5 },
+      result: { status: 'success', content: [{ json: { papers: [{ title: 'Adaptive Threshold Selection for RAG Systems', year: 2025, arxiv_id: '2501.04832' }, { title: 'Memory-Augmented LLM Agents: A Survey', year: 2025, arxiv_id: '2502.11290' }] } }] },
+      status: 'complete',
+      durationMs: 1872,
+    },
+    {
+      id: 'mock-7',
+      toolName: 'calculate_cost',
+      input: { model: 'anthropic.claude-sonnet-4-20250514', input_tokens: 12480, output_tokens: 3200 },
+      result: { status: 'success', content: [{ json: { input_cost: 0.0374, output_cost: 0.048, total_cost: 0.0854, currency: 'USD' } }] },
+      status: 'complete',
+      durationMs: 12,
+    },
+    {
+      id: 'mock-8',
+      toolName: 'update_memory_config',
+      input: { memory_id: 'mem_xK9f2', namespace: 'facts', relevance_score: 0.7, top_k: 10 },
+      status: 'pending',
+    },
+    {
+      id: 'mock-9',
+      toolName: 'run_evaluation_suite',
+      input: { suite: 'memory_retrieval_quality', dataset: 'golden_qa_v3', threshold: 0.85 },
+      status: 'pending',
+    },
+    {
+      id: 'mock-10',
+      toolName: 'generate_report',
+      input: { format: 'markdown', sections: ['summary', 'recommendations', 'cost_analysis'] },
+      status: 'pending',
+    },
+  ],
+};
+// ──────────────────────────────────────────────────────────────
+
 /**
  * Display block types for rendering in the template.
  * Transforms content blocks into display-specific blocks that include
@@ -160,6 +245,13 @@ export class AssistantMessageComponent {
    * - Text and reasoning blocks flush any accumulated tool group and stand alone.
    */
   displayBlocks = computed<DisplayBlock[]>(() => {
+    // 🔧 MOCK: return fake tool group for visual dev
+    if (MOCK_TOOL_RAIL) {
+      return [
+        { type: 'tool_group', group: MOCK_TOOL_GROUP },
+      ];
+    }
+
     const blocks = this.message().content;
     const result: DisplayBlock[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
