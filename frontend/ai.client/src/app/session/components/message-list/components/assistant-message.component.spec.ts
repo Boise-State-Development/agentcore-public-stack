@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { provideMarkdown } from 'ngx-markdown';
+import { provideMarkdown, MarkdownService } from 'ngx-markdown';
 import { AssistantMessageComponent } from './assistant-message.component';
 import { Message, ContentBlock } from '../../../services/models/message.model';
 
@@ -60,6 +60,11 @@ describe('AssistantMessageComponent', () => {
       imports: [AssistantMessageComponent],
       providers: [provideMarkdown()],
     }).compileComponents();
+
+    // Stub render before component creation to prevent unhandled
+    // rejections from the real KaTeX dependency not being available.
+    const markdownService = TestBed.inject(MarkdownService);
+    markdownService.render = () => Promise.resolve();
 
     fixture = TestBed.createComponent(AssistantMessageComponent);
     component = fixture.componentInstance;
