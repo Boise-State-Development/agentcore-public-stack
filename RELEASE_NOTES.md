@@ -1,3 +1,18 @@
+# Release Notes — v1.0.0-beta.16
+
+**Release Date:** March 20, 2026
+**Previous Release:** v1.0.0-beta.15 (March 20, 2026)
+
+---
+
+## Hotfix: Runtime Provisioner SSM Path
+
+The runtime provisioner Lambda was still referencing the old `/file-upload/table-name` SSM parameter path for the user files DynamoDB table. This caused `AccessDeniedException` on `dynamodb:GetItem` because the AgentCore runtime container received the old table name (`user-files`) while the IAM policy was scoped to the new table (`user-file-uploads`). Updated to `/user-file-uploads/table-name` to match the Infrastructure stack's SSM exports.
+
+---
+
+---
+
 # Release Notes — v1.0.0-beta.15
 
 **Release Date:** March 20, 2026
