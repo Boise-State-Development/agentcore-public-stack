@@ -22,7 +22,7 @@ The runtime provisioner Lambda was still referencing the old `/file-upload/table
 
 ## Highlights
 
-This release focuses on **security hardening**, **deployment reliability**, and **platform modernization**. RBAC model access enforcement is now applied at the inference layer, the nightly CI/CD pipeline gains a full merge-validation track to catch integration issues before release, and the entire stack has been upgraded to current runtime versions (Python 3.13, Angular 21.2, Node.js 24 Actions, CDK 2.1112).
+This release introduces the **SageMaker Fine-Tuning** stack — a complete model training and inference platform built on Amazon SageMaker, deployable as an optional CDK stack. Beyond that, the release delivers **security hardening**, **deployment reliability**, and **platform modernization**: RBAC model access enforcement is now applied at the inference layer, the nightly CI/CD pipeline gains a full merge-validation track to catch integration issues before release, and the entire stack has been upgraded to current runtime versions (Python 3.13, Angular 21.2, Node.js 24 Actions, CDK 2.1112).
 
 ---
 
@@ -47,6 +47,12 @@ A complete model fine-tuning platform has been added, allowing users with admin-
 - EC2 networking permissions for VPC-based training jobs
 - Elapsed time display and polling for active jobs
 - Comprehensive test suite (admin routes, user routes, repositories, SageMaker service, training/inference scripts)
+
+---
+
+## Community Contribution 🎉
+
+This release includes our first outside contribution! Thanks to [@magicfoodhand](https://github.com/magicfoodhand) for **Session List Grouping Enhancements** (#43) — the session sidebar now groups conversations by date range (Today, Yesterday, Previous 7 Days, etc.) and supports inline session renaming. A great UX improvement.
 
 ---
 

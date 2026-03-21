@@ -23,7 +23,7 @@
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-v4.1-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial-blue?style=flat)
 
-[Features](#-key-features) · [Architecture](#-architecture) · [Admin Dashboard](#-admin-dashboard) · [Deployment](#-deployment) · [Contributing](#-contributing)
+[Features](#-key-features) · [Architecture](#-architecture) · [Admin Dashboard](#-admin-dashboard) · [Deployment](#-deployment) · [Release Notes](RELEASE_NOTES.md) · [Contributing](#-contributing)
 
 </div>
 
@@ -236,9 +236,20 @@ agentcore-public-stack/
 
 ---
 
+## 📋 Release Notes
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new features, bug fixes, platform upgrades, and deployment notes for each release.
+
+**Current release:** v1.0.0-beta.16
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please open an issue to discuss proposed changes before submitting a pull request.
+
+Thanks to our contributors:
+- [@magicfoodhand](https://github.com/magicfoodhand) — Session list grouping and renaming (#43)
 
 ---
 
