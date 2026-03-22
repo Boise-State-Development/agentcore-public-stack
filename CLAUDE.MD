@@ -18,26 +18,27 @@ Production-ready multi-agent conversational AI system built with AWS Bedrock Age
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
+
+# Install uv (one-time)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install for app_api only
-pip install -e "."
+uv sync
 
 # Install for inference_api (with AgentCore)
-pip install -e ".[agentcore]"
+uv sync --extra agentcore
 
 # Install all including dev tools
-pip install -e ".[agentcore,dev]"
+uv sync --extra agentcore --extra dev
 
 # Run App API (port 8000)
-cd src/apis/app_api && python main.py
+cd src/apis/app_api && uv run python main.py
 
 # Run Inference API (port 8001)
-cd src/apis/inference_api && python main.py
+cd src/apis/inference_api && uv run python main.py
 
 # Run tests
-python -m pytest tests/ -v
+uv run python -m pytest tests/ -v
 ```
 
 ### Frontend

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Script: Install Dependencies for Inference API
-# Description: Installs Python dependencies for the Inference API service
+# Description: Installs Python dependencies for the Inference API service using uv
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,34 +40,34 @@ main() {
         exit 1
     fi
     
-    # Check if Python is installed
-    if ! command -v python3 &> /dev/null; then
-        log_error "Python 3 is not installed. Please install Python 3.9 or higher."
-        exit 1
+    # Install uv if not present
+    if ! command -v uv &> /dev/null; then
+        log_info "Installing uv..."
+        curl -LsSf https://astral.sh/uv/0.7.12/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
     fi
     
-    # Display Python version
-    PYTHON_VERSION=$(python3 --version)
-    log_info "Using ${PYTHON_VERSION}"
+    # Display uv version
+    UV_VERSION=$(uv --version)
+    log_info "Using ${UV_VERSION}"
     
-    # Upgrade pip
-    log_info "Upgrading pip..."
-    python3 -m pip install --upgrade pip
-    
-    # Install the package and its dependencies
-    log_info "Installing dependencies from pyproject.toml..."
-    python3 -m pip install -e ".[agentcore,dev]"
+    # Install dependencies from lock file
+    # --frozen: replay the lock file exactly, no resolution
+    # --extra agentcore: include agentcore optional deps
+    # --extra dev: include dev dependencies for testing
+    log_info "Installing dependencies from uv.lock..."
+    uv sync --frozen --extra agentcore --extra dev
     
     # Verify installation
     log_info "Verifying installation..."
-    if python3 -c "import fastapi" 2>/dev/null; then
+    if uv run python -c "import fastapi" 2>/dev/null; then
         log_success "FastAPI installed successfully"
     else
         log_error "FastAPI installation verification failed"
         exit 1
     fi
     
-    if python3 -c "import uvicorn" 2>/dev/null; then
+    if uv run python -c "import uvicorn" 2>/dev/null; then
         log_success "Uvicorn installed successfully"
     else
         log_error "Uvicorn installation verification failed"

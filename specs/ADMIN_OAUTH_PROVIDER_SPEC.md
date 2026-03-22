@@ -261,8 +261,8 @@ npx cdk deploy AppApiStack
 # Verify in AWS Console: DynamoDB tables, KMS key, Secrets Manager
 Phase 2
 bashcd backend
-pip install -e ".[agentcore,dev]"
-python -m pytest tests/test_oauth.py -v
+uv sync --extra agentcore --extra dev
+uv run python -m pytest tests/test_oauth.py -v
 # Start API and test endpoints with curl
 Phase 3
 bashcd frontend/ai.client

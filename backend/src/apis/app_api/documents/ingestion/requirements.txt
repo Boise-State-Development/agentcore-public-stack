@@ -4,7 +4,7 @@
 # It includes only the dependencies needed for the Lambda runtime.
 #
 # To build Lambda package:
-#   pip install -r requirements.txt -t ./package
+#   uv pip install -r requirements.txt --target ./package
 #   zip -r lambda-package.zip package/
 
 # NumPy and SciPy - AL2023 has glibc 2.34 so modern wheels work fine

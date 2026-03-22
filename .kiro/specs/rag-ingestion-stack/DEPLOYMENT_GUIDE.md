@@ -52,7 +52,7 @@ cd infrastructure
 npm install
 
 cd ../backend
-pip install -e .
+uv sync
 
 # Set environment variables
 export CDK_PROJECT_PREFIX="bsu-agentcore"

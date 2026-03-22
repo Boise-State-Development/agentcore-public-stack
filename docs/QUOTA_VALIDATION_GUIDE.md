@@ -23,17 +23,13 @@ Before starting validation, ensure you have:
 ### Step 1.1: Install Backend Dependencies
 
 ```bash
-cd backend/src
-
-# Create virtual environment if not exists
-python -m venv ../venv
-source ../venv/bin/activate  # On Windows: ..\venv\Scripts\activate
+cd backend
 
 # Install dependencies
-pip install -r requirements.txt
+uv sync --extra dev
 
 # Verify quota module imports
-python -c "from agents.main_agent.quota import QuotaTier, QuotaResolver; print('✅ Quota module loaded')"
+uv run python -c "from agents.main_agent.quota import QuotaTier, QuotaResolver; print('✅ Quota module loaded')"
 ```
 
 **Expected Output:**

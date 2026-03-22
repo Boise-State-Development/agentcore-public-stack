@@ -276,7 +276,7 @@ aws configure --profile dev
 
 Install AWS CLI:
 - **macOS:** `brew install awscli`
-- **Linux:** `pip install awscli` or download from AWS
+- **Linux:** Download from [AWS CLI install guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - **Windows:** Download MSI installer from AWS
 
 ### SSO Session Expired

@@ -105,7 +105,7 @@ class SessionFactory:
         if not AGENTCORE_MEMORY_AVAILABLE:
             raise RuntimeError(
                 "bedrock_agentcore package is required. "
-                "Install with: pip install -e '.[agentcore]'"
+                "Install with: uv sync --extra agentcore"
             )
 
         # Load memory configuration from environment (raises if AGENTCORE_MEMORY_ID not set)

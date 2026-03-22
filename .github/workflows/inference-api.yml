@@ -10,6 +10,7 @@ on:
       - 'backend/src/apis/shared/**'
       - 'backend/src/agents/**'
       - 'backend/pyproject.toml'
+      - 'backend/uv.lock'
       - 'backend/Dockerfile.inference-api'
       - 'infrastructure/lib/inference-api-stack.ts'
       - 'scripts/stack-inference-api/**'
@@ -23,6 +24,7 @@ on:
       - 'backend/src/apis/shared/**'
       - 'backend/src/agents/**'
       - 'backend/pyproject.toml'
+      - 'backend/uv.lock'
       - 'backend/Dockerfile.inference-api'
       - 'infrastructure/lib/inference-api-stack.ts'
       - 'scripts/stack-inference-api/**'
@@ -82,8 +84,10 @@ jobs:
         id: cache-python
         uses: actions/cache/restore@v5
         with:
-          path: ~/.local/lib/python3.*/site-packages
-          key: python-packages-${{ hashFiles('backend/pyproject.toml') }}
+          path: |
+            ~/.cache/uv
+            backend/.venv
+          key: uv-packages-${{ hashFiles('backend/uv.lock') }}
 
       - name: Restore node_modules cache
         id: cache-infrastructure
@@ -106,8 +110,10 @@ jobs:
         if: steps.cache-python.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: ~/.local/lib/python3.*/site-packages
-          key: python-packages-${{ hashFiles('backend/pyproject.toml') }}
+          path: |
+            ~/.cache/uv
+            backend/.venv
+          key: uv-packages-${{ hashFiles('backend/uv.lock') }}
 
       - name: Save node_modules cache
         if: steps.cache-infrastructure.outputs.cache-hit != 'true'
@@ -247,8 +253,10 @@ jobs:
       - name: Restore Python packages cache
         uses: actions/cache/restore@v5
         with:
-          path: ~/.local/lib/python3.*/site-packages
-          key: python-packages-${{ hashFiles('backend/pyproject.toml') }}
+          path: |
+            ~/.cache/uv
+            backend/.venv
+          key: uv-packages-${{ hashFiles('backend/uv.lock') }}
 
       - name: Run Python tests
         id: run-tests

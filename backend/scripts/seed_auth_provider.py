@@ -40,7 +40,7 @@ Prerequisites:
     - AWS credentials configured (via env vars, profile, or IAM role)
     - DynamoDB auth-providers table deployed (via CDK AppApiStack)
     - Secrets Manager secret created (via CDK AppApiStack)
-    - pip install boto3 httpx (included in project dependencies)
+    - uv sync (boto3 and httpx are included in project dependencies)
 """
 
 import argparse
@@ -376,7 +376,7 @@ Examples:
         import boto3
         from botocore.exceptions import ClientError
     except ImportError:
-        print("  ERROR: boto3 is required. Install with: pip install boto3")
+        print("  ERROR: boto3 is required. Install with: uv sync")
         sys.exit(1)
 
     # Create AWS session

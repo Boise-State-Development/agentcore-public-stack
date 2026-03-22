@@ -50,7 +50,7 @@ class DynamoDBStorage(MetadataStorage):
         if boto3 is None:
             raise ImportError(
                 "boto3 is required for DynamoDB storage. "
-                "Install with: pip install boto3"
+                "Install with: uv sync"
             )
 
         self.dynamodb = boto3.resource('dynamodb')

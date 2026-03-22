@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Script: Run Tests for App API
-# Description: Runs Python tests for the App API service
+# Description: Runs Python tests for the App API service using uv
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,17 +29,20 @@ main() {
     cd "${BACKEND_DIR}"
     log_info "Working directory: $(pwd)"
     
-    # Upgrade pip
-    log_info "Upgrading pip..."
-    python3 -m pip install --upgrade pip --quiet
+    # Install uv if not present
+    if ! command -v uv &> /dev/null; then
+        log_info "Installing uv..."
+        curl -LsSf https://astral.sh/uv/0.7.12/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
     
-    # Install ALL dependencies fresh
-    log_info "Installing all dependencies (fresh install for debugging)..."
-    python3 -m pip install -e ".[agentcore,dev]"
+    # Sync dependencies from lock file (includes dev deps for testing)
+    log_info "Syncing dependencies from uv.lock..."
+    uv sync --frozen --extra agentcore --extra dev
     
     # Verify installation
     log_info "Verifying installation..."
-    python3 -c "import fastapi; import uvicorn; print('Core dependencies installed')"
+    uv run python -c "import fastapi; import uvicorn; print('Core dependencies installed')"
     
     # Run tests
     log_info "Executing tests..."
@@ -61,11 +64,11 @@ main() {
     
     # Test import directly
     log_info "Testing direct import..."
-    python3 -c "from agents.main_agent.quota.checker import QuotaChecker; print('Direct import works')"
+    uv run python -c "from agents.main_agent.quota.checker import QuotaChecker; print('Direct import works')"
     
     # Run pytest with import-mode=importlib
     log_info "Running pytest..."
-    python3 -m pytest tests/ \
+    uv run python -m pytest tests/ \
         -v \
         --tb=short \
         --color=yes \

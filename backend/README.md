@@ -1,92 +1,52 @@
 # AgentCore Backend
 
-This backend uses a unified dependency management approach with a single `pyproject.toml` file.
+This backend uses a unified dependency management approach with a single `pyproject.toml` file, managed by [uv](https://docs.astral.sh/uv/) for fast, reproducible, and secure dependency resolution.
 
 ## Installation
+
+### Prerequisites
+
+Install `uv` (one-time setup):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### For App API (Authentication Service)
 
 The App API only needs core dependencies (FastAPI, auth utilities):
-##### Linux/Mac
+
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -e "."
-```
-##### PowerShell
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\Activate.ps1
-pip install -e "."
-```
-##### Command Prompt (CMD)
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\activate.bat
-pip install -e "."
+uv sync
 ```
 
 ### For Inference API (Agent Execution Service)
 
 The Inference API needs core dependencies + AgentCore-specific packages:
 
-##### Linux/Mac
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[agentcore]"
-```
-##### PowerShell
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\Activate.ps1
-pip install -e ".[agentcore]"
-```
-##### Command Prompt (CMD)
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\activate.bat
-pip install -e ".[agentcore]"
+uv sync --extra agentcore
 ```
 
 ### For Development (All Dependencies + Dev Tools)
 
 Install everything including pytest, black, ruff, mypy:
 
-##### Linux/Mac
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[agentcore,dev]"
+uv sync --extra agentcore --extra dev
 ```
-##### PowerShell
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\Activate.ps1
-pip install -e ".[agentcore,dev]"
-```
-##### Command Prompt (CMD)
-```bash
-cd backend
-python3 -m venv venv
-venv\Scripts\activate.bat
-pip install -e ".[agentcore,dev]"
-```
+
+> **Note:** `uv sync` creates and manages a `.venv` automatically. You don't need to create or activate a virtual environment manually. Use `uv run` to execute commands inside the managed environment.
 
 ## AWS Configuration
 
 This project requires AWS credentials for Bedrock and other AWS services.
 
 **Quick Setup:**
-##### Linux/Mac/Powershell
+
 ```bash
 # Configure AWS CLI profile
 aws configure --profile my-profile
@@ -110,8 +70,10 @@ export AWS_PROFILE=my-profile
 ```
 backend/
 ├── pyproject.toml          # Single source of truth for all dependencies
+├── uv.lock                 # Locked dependency graph (committed to git)
+├── .venv/                  # Virtual environment (managed by uv, gitignored)
 ├── src/
-│   ├── agentcore/          # Agent orchestration & tools
+│   ├── agents/             # Agent implementations
 │   └── apis/
 │       ├── shared/         # Shared auth utilities
 │       ├── app_api/        # Authentication API (port 8000)
@@ -123,18 +85,16 @@ backend/
 ### App API (Authentication)
 ```bash
 cd backend
-source venv/bin/activate
 cd src/apis/app_api
-python main.py
+uv run python main.py
 # Runs on http://localhost:8000
 ```
 
 ### Inference API (Agent Execution)
 ```bash
 cd backend
-source venv/bin/activate
 cd src/apis/inference_api
-python main.py
+uv run python main.py
 # Runs on http://localhost:8001
 ```
 
@@ -184,13 +144,11 @@ export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION=us-west-2
 ```
 
-**1c. Python venv activated with dependencies installed**
+**1c. Dependencies installed**
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -e "."
+uv sync
 ```
 
 **1d. Register your application with your OIDC provider**
@@ -244,13 +202,13 @@ The seed script supports both interactive mode (prompts for each value) and non-
 
 ```bash
 cd backend
-python scripts/seed_auth_provider.py
+uv run python scripts/seed_auth_provider.py
 ```
 
 **Dry run** (preview what would be written without making changes):
 
 ```bash
-python scripts/seed_auth_provider.py --dry-run \
+uv run python scripts/seed_auth_provider.py --dry-run \
     --provider-id entra-id \
     --issuer-url "https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0" \
     --client-id "YOUR_CLIENT_ID" \
@@ -264,7 +222,7 @@ python scripts/seed_auth_provider.py --dry-run \
 #### Example: Microsoft Entra ID (non-interactive)
 
 ```bash
-python scripts/seed_auth_provider.py \
+uv run python scripts/seed_auth_provider.py \
     --provider-id entra-id \
     --display-name "Microsoft Entra ID" \
     --issuer-url "https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0" \
@@ -291,7 +249,7 @@ The script will securely prompt for the client secret since `--client-secret` wa
 #### Example: AWS Cognito (non-interactive)
 
 ```bash
-python scripts/seed_auth_provider.py \
+uv run python scripts/seed_auth_provider.py \
     --provider-id cognito \
     --display-name "AWS Cognito" \
     --issuer-url "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_AbCdEfGhI" \
@@ -322,7 +280,7 @@ python scripts/seed_auth_provider.py \
 | `--force` | Overwrite an existing provider without prompting for confirmation |
 | `--profile` | Use a specific AWS CLI profile |
 
-Run `python scripts/seed_auth_provider.py --help` for the full list of options.
+Run `uv run python scripts/seed_auth_provider.py --help` for the full list of options.
 
 ---
 
@@ -353,7 +311,7 @@ ENABLE_AUTHENTICATION=true
 ### Step 4: Start the Backend and Log In
 
 ```bash
-cd backend/src/apis/app_api && python main.py
+cd backend/src/apis/app_api && uv run python main.py
 ```
 
 1. Open `http://localhost:4200` in your browser

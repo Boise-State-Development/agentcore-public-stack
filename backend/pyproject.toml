@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentcore-stack"
 version = "1.0.0-beta.16"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
 license = {text = "MIT"}
@@ -49,7 +49,7 @@ agentcore = [
 # NOTE: For document ingestion dependencies, see:
 #   backend/src/apis/app_api/documents/ingestion/requirements.txt
 # This is the single source of truth for the Lambda deployment.
-# For local development: pip install -r backend/src/apis/app_api/documents/ingestion/requirements.txt
+# For local development: uv pip install -r backend/src/apis/app_api/documents/ingestion/requirements.txt
 
 # Development dependencies
 dev = [
@@ -80,12 +80,12 @@ include = ["agents*", "apis*"]
 
 [tool.black]
 line-length = 150
-target-version = ['py39']
+target-version = ['py310']
 include = '\.pyi?$'
 
 [tool.ruff]
 line-length = 150
-target-version = "py39"
+target-version = "py310"
 
 [tool.mypy]
 python_version = "3.9"

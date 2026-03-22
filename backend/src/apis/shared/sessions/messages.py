@@ -481,6 +481,6 @@ async def get_messages(session_id: str, user_id: str, limit: Optional[int] = Non
     if not AGENTCORE_MEMORY_AVAILABLE:
         raise RuntimeError(
             "bedrock_agentcore package is required. "
-            "Install with: pip install -e '.[agentcore]'"
+            "Install with: uv sync --extra agentcore"
         )
     return await get_messages_from_cloud(session_id, user_id, limit, next_token)

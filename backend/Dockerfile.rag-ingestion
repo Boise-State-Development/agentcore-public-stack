@@ -12,7 +12,7 @@ FROM public.ecr.aws/lambda/python:3.12 AS builder
 # AL2023 uses dnf as package manager
 # Note: curl-minimal is already installed in the Lambda base image, don't install curl (conflicts)
 RUN dnf update -y && \
-  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip ca-certificates && \
+  dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip ca-certificates unzip && \
   dnf clean all
 
 # Install Rust (separate step for better error handling)
@@ -26,27 +26,31 @@ RUN set -euxo pipefail && \
 # 2. Set rust path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# Install uv for secure, locked dependency installation
+COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /uvx /bin/
+
 # 3. Setup Directories
 RUN mkdir -p /tmp/models/docling-artifacts \
   /tmp/models/tiktoken_cache \
   /tmp/packages
 
-# 4. Install PyTorch CPU *Explicitly*
-# Installing before requirements.txt ensures we get the lightweight CPU version and not the version that includes GPU support
+# 4. Install PyTorch CPU from the PyTorch index using uv
+# Installing before other deps ensures we get the lightweight CPU version
 # AL2023 has glibc 2.34, so we can use the latest PyTorch with manylinux_2_28 wheels
-# Note: transformers 4.45+ requires torch >= 2.6 (see https://github.com/huggingface/transformers/issues/38464)
-RUN pip install \
+# Note: transformers 4.45+ requires torch >= 2.6
+RUN uv pip install \
   --target /tmp/packages \
-  --no-cache-dir \
+  --no-cache \
   --index-url https://download.pytorch.org/whl/cpu \
   "torch>=2.6"
 
-# 5. Install Your Requirements
-# IMPORTANT: `requirements.txt` pins SciPy to a Lambda-compatible wheel (manylinux2014).
+# 5. Install remaining dependencies from requirements.txt using uv
+# uv pip install verifies hashes when present in the requirements file
+# and is significantly faster than pip
 COPY ./backend/src/apis/app_api/documents/ingestion/requirements.txt .
-RUN pip install \
+RUN uv pip install \
   --target /tmp/packages \
-  --no-cache-dir \
+  --no-cache \
   -r requirements.txt
 
 # 6. Download Tiktoken Vocabulary (Offline Support)

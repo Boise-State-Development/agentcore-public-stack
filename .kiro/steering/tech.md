@@ -65,32 +65,31 @@ There is no unified setup or start script. Each service is started individually 
 ```bash
 cd backend
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# Install uv (one-time)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install dependencies
-pip install -e ".[agentcore,dev]"  # All dependencies + dev tools
-pip install -e ".[agentcore]"      # AgentCore + core dependencies
-pip install -e "."                 # Core dependencies only
+uv sync --extra agentcore --extra dev  # All dependencies + dev tools
+uv sync --extra agentcore              # AgentCore + core dependencies
+uv sync                                # Core dependencies only
 
 # Run App API (port 8000)
 cd src/apis/app_api
-python main.py
+uv run python main.py
 
 # Run Inference API (port 8001)
 cd src/apis/inference_api
-python main.py
+uv run python main.py
 
 # Run tests
-python -m pytest tests/ -v
+uv run python -m pytest tests/ -v
 
 # Code formatting
-black src/
-ruff check src/
+uv run black src/
+uv run ruff check src/
 
 # Type checking
-mypy src/
+uv run mypy src/
 ```
 
 ### Frontend Development

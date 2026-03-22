@@ -118,7 +118,7 @@ class DynamoDBStateStore(StateStore):
             from botocore.exceptions import ClientError
         except ImportError:
             raise ImportError(
-                "boto3 is required for DynamoDBStateStore. Install with: pip install boto3"
+                "boto3 is required for DynamoDBStateStore. Install with: uv sync"
             )
         
         self.table_name = table_name or os.getenv('DYNAMODB_OIDC_STATE_TABLE_NAME', 'oidc-state-store')

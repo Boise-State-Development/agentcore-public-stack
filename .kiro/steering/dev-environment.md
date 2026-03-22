@@ -32,12 +32,12 @@ Node.js LTS, npm, Angular CLI, AWS CLI v2, AWS CDK, .NET SDK 8.0, GitHub CLI (gh
 
 - Syntax checking and compilation (`python3 -c`, `tsc`, `ng build`, `npm run build`)
 - Running tests (`pytest`, `vitest`, `npm test`)
-- Installing dependencies (`pip install`, `npm install`)
+- Installing dependencies (`uv sync`, `npm install`)
 - Linting and formatting (`ruff`, `black`, `eslint`, `prettier`)
 - Type checking (`mypy`, `tsc --noEmit`)
 - AWS CLI commands (`aws`, `cdk synth`, `cdk deploy`, `cdk diff`)
 - Running scripts (`python3 backend/scripts/...`, `bash scripts/...`)
-- Package management (`pip`, `npm`, `npx`)
+- Package management (`uv`, `npm`, `npx`)
 - Git operations (`git`, `gh`)
 - Docker builds (`docker build`)
 - Any command that imports project dependencies or executes project code
@@ -59,4 +59,4 @@ The host `~/Github` is mounted at `/workspace` inside the container. The repo li
 
 ## NO EXCEPTIONS
 
-Do NOT run `python3`, `pip`, `npm`, `node`, `pytest`, `ruff`, `black`, `mypy`, `aws`, `cdk`, or any build/test/lint/deploy command directly on the host. Always use `docker exec -it devcontainer-dev-1 bash -c "..."`. If a command fails inside the container due to missing dependencies, install them inside the container first.
+Do NOT run `python3`, `uv`, `npm`, `node`, `pytest`, `ruff`, `black`, `mypy`, `aws`, `cdk`, or any build/test/lint/deploy command directly on the host. Always use `docker exec -it devcontainer-dev-1 bash -c "..."`. If a command fails inside the container due to missing dependencies, install them inside the container first.

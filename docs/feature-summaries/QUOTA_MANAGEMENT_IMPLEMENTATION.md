@@ -241,8 +241,8 @@ pytest tests/quota/ -v
 
 ```bash
 # Backend dependencies
-cd backend/src
-pip install -r requirements.txt
+cd backend
+uv sync --extra dev
 
 # CDK dependencies
 cd ../../cdk
