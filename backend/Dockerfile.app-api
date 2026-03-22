@@ -20,16 +20,17 @@ COPY backend/uv.lock ./
 
 # Install dependencies only (not the project itself) from the locked versions
 # --frozen: use the lock file as-is, no network resolution, pure replay
+# --extra agentcore: include the agentcore optional dependency group (strands, etc.)
 # --no-install-project: install deps only, skip the project package
 # --no-dev: exclude development dependencies
 # --no-editable: non-editable install for production
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --no-editable
+    uv sync --frozen --extra agentcore --no-install-project --no-dev --no-editable
 
 # Copy source code and install the project itself
 COPY backend/src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --extra agentcore --no-dev --no-editable
 
 # Production stage
 FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
