@@ -4,7 +4,12 @@
 # The Dockerfile uses requirements.lock (not this file) for installation.
 #
 # To regenerate the lockfile with pinned versions and hashes:
-#   uv pip compile requirements.txt -o requirements.lock --generate-hashes --python-version 3.12
+#   uv pip compile requirements.txt -o requirements.lock --generate-hashes --python-version 3.12 \
+#     --no-emit-package torch --no-emit-package torchvision
+#
+# torch and torchvision are excluded because the Dockerfile installs torch+cpu
+# from the PyTorch index separately (step 4). Including them here would cause
+# --require-hashes to fail due to the +cpu variant mismatch.
 #
 # To build Lambda package manually:
 #   uv pip install -r requirements.lock --require-hashes --target ./package
