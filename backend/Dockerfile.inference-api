@@ -1,6 +1,7 @@
 # Multi-stage build for Inference API (AWS Bedrock AgentCore Runtime)
 # Platform: linux/arm64 required for AgentCore Runtime
-FROM --platform=linux/arm64 python:3.13-slim AS builder
+# Pin base image to digest for reproducible builds
+FROM --platform=linux/arm64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d AS builder
 
 # Install uv (pinned to specific version for reproducibility)
 COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /uvx /bin/
@@ -11,7 +12,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (layer caching)
@@ -33,11 +33,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra agentcore --no-dev --no-editable
 
 # Production stage
-FROM --platform=linux/arm64 python:3.13-slim
+FROM --platform=linux/arm64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (curl required for HEALTHCHECK)
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -68,8 +68,11 @@ ENV PYTHONPATH=/app/src
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Set AWS region environment variables (required for AgentCore Runtime)
-ENV AWS_REGION=${AWS_REGION:-us-east-1}
-ENV AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+# ARG provides the build-time default; ENV bakes it into the image.
+# At runtime, ECS task definition or docker run -e overrides these.
+ARG AWS_REGION=us-east-1
+ENV AWS_REGION=${AWS_REGION}
+ENV AWS_DEFAULT_REGION=${AWS_REGION}
 
 # Expose port 8080 (AgentCore Runtime standard port)
 EXPOSE 8080

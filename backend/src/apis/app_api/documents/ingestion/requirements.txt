@@ -1,10 +1,13 @@
 # Lambda deployment requirements for document ingestion pipeline
 #
-# This file is used for packaging the Lambda function.
-# It includes only the dependencies needed for the Lambda runtime.
+# This file is the SOURCE for dependency resolution.
+# The Dockerfile uses requirements.lock (not this file) for installation.
 #
-# To build Lambda package:
-#   uv pip install -r requirements.txt --target ./package
+# To regenerate the lockfile with pinned versions and hashes:
+#   uv pip compile requirements.txt -o requirements.lock --generate-hashes --python-version 3.12
+#
+# To build Lambda package manually:
+#   uv pip install -r requirements.lock --require-hashes --target ./package
 #   zip -r lambda-package.zip package/
 
 # NumPy and SciPy - AL2023 has glibc 2.34 so modern wheels work fine
@@ -16,7 +19,7 @@ boto3>=1.40.1
 
 # Document processing libraries
 # transformers 4.45+ has RTDetrImageProcessor needed by docling
-# We install torch 2.5.1 CPU explicitly in Dockerfile before this
+# We install torch CPU explicitly in Dockerfile before this
 transformers>=4.45.0  # Required for RTDetrImageProcessor used by docling
 docling>=1.0.0  # Core Docling library for PDF, DOCX, PPTX, TXT, MD, RTF processing
 docling-core[chunking-openai]  # Chunking with OpenAI tokenizer
