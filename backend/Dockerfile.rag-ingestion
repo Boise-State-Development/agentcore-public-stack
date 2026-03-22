@@ -51,6 +51,7 @@ RUN uv pip install \
   --target /tmp/packages \
   --no-cache \
   --require-hashes \
+  --no-deps \
   -r requirements.lock
 
 # 6. Download Tiktoken Vocabulary (Offline Support)
