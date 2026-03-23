@@ -87,7 +87,7 @@ import { UserCostSummary } from './models/cost-summary.model';
       <!-- Cost Summary Cards -->
       @else if (activeData()) {
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
             <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Cost</h3>
             <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
               {{ formatCurrency(totalCost()) }}
@@ -100,7 +100,7 @@ import { UserCostSummary } from './models/cost-summary.model';
             }
           </div>
 
-          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
             <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Requests</h3>
             <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
               {{ formatNumber(totalRequests()) }}
@@ -110,7 +110,7 @@ import { UserCostSummary } from './models/cost-summary.model';
             </p>
           </div>
 
-          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
             <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Tokens</h3>
             <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
               {{ formatNumber(totalTokens()) }}
@@ -120,7 +120,7 @@ import { UserCostSummary } from './models/cost-summary.model';
             </p>
           </div>
 
-          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
             <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Token Breakdown</h3>
             <div class="mt-2 flex flex-col gap-1">
               <p class="text-sm/6 text-gray-700 dark:text-gray-300">
@@ -147,7 +147,7 @@ import { UserCostSummary } from './models/cost-summary.model';
                     <th scope="col" class="px-4 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-200 bg-white dark:divide-white/10 dark:bg-gray-900">
+                <tbody class="divide-y divide-gray-200 bg-white dark:divide-white/10 dark:bg-gray-800">
                   @for (model of models(); track model.modelId) {
                     <tr>
                       <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-900 dark:text-white">{{ model.modelName }}</td>
@@ -161,7 +161,7 @@ import { UserCostSummary } from './models/cost-summary.model';
             </div>
           </div>
         } @else {
-          <div class="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-white/10 dark:bg-gray-900">
+          <div class="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-white/10 dark:bg-gray-800">
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">No cost data available for this period</p>
           </div>
         }

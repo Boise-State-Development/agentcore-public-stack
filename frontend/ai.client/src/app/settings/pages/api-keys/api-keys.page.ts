@@ -55,7 +55,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 <div class="rounded-sm border-2 border-dashed border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
                   <div class="mx-auto h-5 w-40 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
                 </div>
-                <div class="mt-5 rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+                <div class="mt-5 rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
                   <div class="p-4">
                     <div class="h-5 w-32 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
                     <div class="mt-2 h-4 w-24 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
@@ -71,11 +71,11 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
               </div>
             } @else if (!showCreateDialog()) {
               <button (click)="handleCreateClick()"
-                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-orange-300 bg-white px-4 py-3 text-sm/6 font-semibold text-orange-600 transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:border-orange-600/40 dark:bg-gray-900 dark:text-orange-400 dark:hover:border-orange-500 dark:hover:bg-orange-950/30">
+                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-orange-300 bg-white px-4 py-3 text-sm/6 font-semibold text-orange-600 transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:border-orange-600/40 dark:bg-gray-800 dark:text-orange-400 dark:hover:border-orange-500 dark:hover:bg-orange-950/30">
                 <ng-icon name="heroPlus" class="size-4" /> Create New API Key
               </button>
             } @else {
-              <div class="rounded-sm border border-orange-300 bg-white p-5 shadow-sm dark:border-orange-700/50 dark:bg-gray-900">
+              <div class="rounded-sm border border-orange-300 bg-white p-5 shadow-sm dark:border-orange-700/50 dark:bg-gray-800">
                 <div class="flex items-center justify-between">
                   <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">New API Key</h3>
                   <button (click)="closeCreateDialog()" class="rounded-xs p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" aria-label="Close">
@@ -124,7 +124,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             <!-- Confirm replace modal -->
             @if (showConfirmReplace()) {
               <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" (click)="showConfirmReplace.set(false)">
-                <div class="mx-4 w-full max-w-sm rounded-sm border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-900" (click)="$event.stopPropagation()">
+                <div class="mx-4 w-full max-w-sm rounded-sm border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800" (click)="$event.stopPropagation()">
                   <div class="flex items-start gap-3">
                     <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/30">
                       <ng-icon name="heroExclamationTriangle" class="size-5 text-orange-600 dark:text-orange-400" />
@@ -148,7 +148,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             @if (loading()) {
               <!-- handled above -->
             } @else if (apiKey(); as key) {
-              <div class="rounded-sm border bg-white shadow-xs dark:bg-gray-900"
+              <div class="rounded-sm border bg-white shadow-xs dark:bg-gray-800"
                 [class]="!isExpired() ? 'border-gray-200 dark:border-gray-700' : 'border-red-200 dark:border-red-900/50'">
                 <div class="flex items-start justify-between p-4">
                   <div class="min-w-0">
@@ -187,7 +187,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 </div>
               </div>
             } @else if (!showCreateDialog()) {
-              <div class="rounded-sm border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-900">
+              <div class="rounded-sm border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
                 <ng-icon name="heroKey" class="mx-auto size-10 text-gray-300 dark:text-gray-600" />
                 <p class="mt-3 text-sm/6 font-medium text-gray-900 dark:text-white">No API key yet</p>
                 <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">Create your first key to get started with the API.</p>
@@ -195,7 +195,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             }
 
             <!-- Available Models -->
-            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="modelsExpanded.set(!modelsExpanded())"
                 class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="modelsExpanded()">
@@ -241,7 +241,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             </div>
 
             <!-- Important Information -->
-            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="infoExpanded.set(!infoExpanded())"
                 class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="infoExpanded()">
@@ -283,7 +283,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
           <!-- RIGHT COLUMN -->
           <div class="flex flex-col gap-5">
-            <div class="rounded-sm border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+            <div class="rounded-sm border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <p class="text-xs/5 font-semibold uppercase tracking-wider text-orange-500 dark:text-orange-400">Interactive examples with your available models</p>
               <div class="mt-2 flex items-center gap-3">
                 <ng-icon name="heroCodeBracket" class="size-6 text-orange-500" />
@@ -407,7 +407,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
             <!-- Code examples -->
             <div class="flex flex-col gap-3">
-              <div class="flex gap-1 rounded-sm border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-900">
+              <div class="flex gap-1 rounded-sm border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-800">
                 @for (lang of languages; track lang.id) {
                   <button (click)="selectedLanguage.set(lang.id)"
                     [class]="selectedLanguage() === lang.id

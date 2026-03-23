@@ -31,7 +31,7 @@ import { ThemeService, ThemePreference } from '../../../components/topnav/compon
       </div>
 
       <!-- Theme selection -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <div class="p-6">
           <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Theme</h3>
           <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">Choose your preferred color scheme.</p>

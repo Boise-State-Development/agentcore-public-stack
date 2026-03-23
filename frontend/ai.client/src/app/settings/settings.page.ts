@@ -43,9 +43,9 @@ interface NavItem {
   ],
   host: { class: 'block' },
   template: `
-    <div class="min-h-dvh bg-gray-50 dark:bg-gray-950">
+    <div class="min-h-dvh">
       <!-- Top bar -->
-      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-950/80">
+      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-900/50">
         <div class="flex h-14 items-center gap-4 px-4 sm:px-6 lg:px-8">
           <a
             routerLink="/"

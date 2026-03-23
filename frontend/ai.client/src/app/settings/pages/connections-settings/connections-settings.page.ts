@@ -89,7 +89,7 @@ import { ToastService } from '../../../services/toast/toast.service';
         } @else {
           <div class="grid gap-4 sm:grid-cols-2">
             @for (connection of connections(); track connection.providerId) {
-              <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
+              <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
                 <!-- Provider Info -->
                 <div class="flex items-start gap-4">
                   <div [class]="getProviderIconClasses(connection.providerType)">

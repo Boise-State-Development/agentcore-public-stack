@@ -26,7 +26,7 @@ import { UserService } from '../../../auth/user.service';
         </p>
       </div>
 
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <!-- Avatar + name section -->
         <div class="flex items-center gap-6 p-6">
           @if (userService.currentUser()?.picture; as picture) {
@@ -73,7 +73,7 @@ import { UserService } from '../../../auth/user.service';
       </div>
 
       <!-- My Files -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <a
           routerLink="/files"
           class="flex items-center justify-between gap-4 p-6 transition-colors hover:bg-gray-50 dark:hover:bg-white/5"

@@ -31,7 +31,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
       </div>
 
       <!-- Default model -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <div class="p-6">
           <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Default model</h3>
           <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
@@ -68,7 +68,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
       </div>
 
       <!-- Show Token Count toggle -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <div class="flex items-center justify-between gap-4 p-6">
           <div class="flex items-start gap-3">
             <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
@@ -100,7 +100,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
       </div>
 
       <!-- Manage Conversations -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <a
           routerLink="/manage-sessions"
           class="flex items-center justify-between gap-4 p-6 transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
@@ -121,7 +121,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
       </div>
 
       <!-- Memories -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <a
           routerLink="/memories"
           class="flex items-center justify-between gap-4 p-6 transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
