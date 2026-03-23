@@ -242,7 +242,7 @@ jobs:
           key: infrastructure-build-${{ github.sha }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sagemaker-fine-tuning-cdk-synth
           path: infrastructure/cdk.out/
@@ -320,7 +320,7 @@ jobs:
           key: infrastructure-build-${{ github.sha }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: sagemaker-fine-tuning-cdk-synth
           path: infrastructure/cdk.out/

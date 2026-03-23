@@ -183,7 +183,7 @@ jobs:
             gateway-node-
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gateway-cdk-build
           path: infrastructure
@@ -256,7 +256,7 @@ jobs:
             gateway-node-
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out
@@ -327,7 +327,7 @@ jobs:
             gateway-node-
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out

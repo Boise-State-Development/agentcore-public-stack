@@ -226,7 +226,7 @@ jobs:
         uses: actions/checkout@v5
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: inference-api-docker-image
           path: ${{ runner.temp }}
@@ -364,7 +364,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: inference-api-cdk-synth
           path: infrastructure/cdk.out/
@@ -424,7 +424,7 @@ jobs:
         uses: actions/checkout@v5
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: inference-api-docker-image
           path: ${{ runner.temp }}
@@ -497,7 +497,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: inference-api-cdk-synth
           path: infrastructure/cdk.out/

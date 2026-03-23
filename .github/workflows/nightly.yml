@@ -1725,13 +1725,13 @@ jobs:
           python-version: '3.13'
 
       - name: Download backend coverage
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: backend-coverage
           path: backend/
 
       - name: Download frontend coverage
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -1781,7 +1781,7 @@ jobs:
           python-version: '3.13'
 
       - name: Download coverage comparison report
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: coverage-comparison
           path: .

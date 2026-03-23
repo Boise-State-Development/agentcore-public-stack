@@ -174,7 +174,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure-cdk-build
           path: infrastructure
@@ -247,13 +247,13 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure-cdk-build
           path: infrastructure
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
@@ -332,13 +332,13 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure-cdk-build
           path: infrastructure
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
