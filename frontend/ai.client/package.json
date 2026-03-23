@@ -54,7 +54,7 @@
     "@vitest/coverage-v8": "^4.0.8",
     "fast-check": "^3.23.2",
     "jsdom": "^27.1.0",
-    "postcss": "^8.5.3",
+    "postcss": "^8.5.8",
     "tailwindcss": "^4.1.12",
     "typescript": "~5.9.2",
     "vitest": "^4.0.8"
