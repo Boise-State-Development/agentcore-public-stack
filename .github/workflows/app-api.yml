@@ -168,7 +168,7 @@ jobs:
           echo "Image size: ${IMAGE_SIZE} bytes"
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: app-api-docker-image
           path: ${{ runner.temp }}/app-api-image.tar
@@ -314,7 +314,7 @@ jobs:
           bash scripts/stack-app-api/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: app-api-cdk-synth
           path: infrastructure/cdk.out/
@@ -521,7 +521,7 @@ jobs:
           bash scripts/stack-app-api/tag-latest.sh
      
       - name: Upload stack outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: app-api-deployment-outputs

@@ -186,7 +186,7 @@ jobs:
           bash scripts/stack-sagemaker-fine-tuning/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sagemaker-fine-tuning-cdk-synth
           path: infrastructure/cdk.out/
@@ -343,7 +343,7 @@ jobs:
           bash scripts/stack-sagemaker-fine-tuning/deploy.sh
 
       - name: Upload stack outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sagemaker-fine-tuning-deployment-outputs

@@ -193,7 +193,7 @@ jobs:
         run: bash scripts/stack-app-api/test.sh
 
       - name: Upload backend coverage artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: |
@@ -233,7 +233,7 @@ jobs:
         run: bash scripts/stack-frontend/test.sh
 
       - name: Upload frontend coverage artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -1744,7 +1744,7 @@ jobs:
         run: python3 scripts/nightly/compare-coverage.py
 
       - name: Upload coverage comparison report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-comparison
           path: coverage-comparison.json
