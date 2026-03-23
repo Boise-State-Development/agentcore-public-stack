@@ -14,7 +14,7 @@ license = {text = "MIT"}
 dependencies = [
     # FastAPI and web framework
     "fastapi==0.116.1",
-    "uvicorn[standard]==0.35.0",
+    "uvicorn[standard]==0.42.0",
 
     # AWS and cloud services
     "boto3>=1.40.1",
