@@ -1,5 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
 
+export interface CognitoConfig {
+  domainPrefix?: string;       // Custom Cognito domain prefix (defaults to projectPrefix)
+  callbackUrls?: string[];     // Additional callback URLs beyond auto-derived
+  logoutUrls?: string[];       // Additional logout URLs beyond auto-derived
+  passwordMinLength?: number;  // Override default 8
+}
+
 export interface AppConfig {
   projectPrefix: string;
   awsAccount: string;
@@ -12,6 +19,7 @@ export interface AppConfig {
   infrastructureHostedZoneDomain?: string;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
   certificateArn?: string; // ACM certificate ARN for HTTPS on ALB
+  cognito: CognitoConfig;
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
@@ -157,6 +165,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
     infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
     certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
+    cognito: {
+      domainPrefix: process.env.CDK_COGNITO_DOMAIN_PREFIX
+        || scope.node.tryGetContext('cognito')?.domainPrefix
+        || projectPrefix,
+      callbackUrls: process.env.CDK_COGNITO_CALLBACK_URLS?.split(',')
+        || scope.node.tryGetContext('cognito')?.callbackUrls,
+      logoutUrls: process.env.CDK_COGNITO_LOGOUT_URLS?.split(',')
+        || scope.node.tryGetContext('cognito')?.logoutUrls,
+      passwordMinLength: parseIntEnv(process.env.CDK_COGNITO_PASSWORD_MIN_LENGTH)
+        || scope.node.tryGetContext('cognito')?.passwordMinLength
+        || 8,
+    },
     frontend: {
       certificateArn: process.env.CDK_FRONTEND_CERTIFICATE_ARN || scope.node.tryGetContext('frontend').certificateArn,
       enabled: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLED) ?? scope.node.tryGetContext('frontend')?.enabled,

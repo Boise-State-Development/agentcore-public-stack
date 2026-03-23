@@ -50,6 +50,8 @@ class AuthProvider:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
     created_by: Optional[str] = None
+    # Cognito federated identity provider name
+    cognito_provider_name: Optional[str] = None
     # AgentCore Runtime tracking
     agentcore_runtime_arn: Optional[str] = None
     agentcore_runtime_id: Optional[str] = None
@@ -123,6 +125,10 @@ class AuthProvider:
         if self.created_by:
             item["createdBy"] = self.created_by
 
+        # Cognito federated identity provider name
+        if self.cognito_provider_name:
+            item["cognitoProviderName"] = self.cognito_provider_name
+
         # AgentCore Runtime tracking fields
         if self.agentcore_runtime_arn:
             item["agentcoreRuntimeArn"] = self.agentcore_runtime_arn
@@ -170,6 +176,7 @@ class AuthProvider:
             created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
             updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
             created_by=item.get("createdBy"),
+            cognito_provider_name=item.get("cognitoProviderName"),
             agentcore_runtime_arn=item.get("agentcoreRuntimeArn"),
             agentcore_runtime_id=item.get("agentcoreRuntimeId"),
             agentcore_runtime_endpoint_url=item.get("agentcoreRuntimeEndpointUrl"),
@@ -224,6 +231,11 @@ class AuthProviderCreate(BaseModel):
     )
     required_scopes: Optional[List[str]] = None
     allowed_audiences: Optional[List[str]] = None
+    # Discovery
+    auto_discover: bool = Field(
+        default=True,
+        description="When True, fetch .well-known/openid-configuration from issuer URL to auto-populate missing endpoints",
+    )
     # Appearance
     logo_url: Optional[str] = None
     button_color: Optional[str] = Field(
@@ -295,6 +307,7 @@ class AuthProviderResponse(BaseModel):
     created_at: str
     updated_at: str
     created_by: Optional[str] = None
+    cognito_provider_name: Optional[str] = None
     agentcore_runtime_arn: Optional[str] = None
     agentcore_runtime_id: Optional[str] = None
     agentcore_runtime_endpoint_url: Optional[str] = None
@@ -335,6 +348,7 @@ class AuthProviderResponse(BaseModel):
             created_at=provider.created_at,
             updated_at=provider.updated_at,
             created_by=provider.created_by,
+            cognito_provider_name=provider.cognito_provider_name,
             agentcore_runtime_arn=provider.agentcore_runtime_arn,
             agentcore_runtime_id=provider.agentcore_runtime_id,
             agentcore_runtime_endpoint_url=provider.agentcore_runtime_endpoint_url,

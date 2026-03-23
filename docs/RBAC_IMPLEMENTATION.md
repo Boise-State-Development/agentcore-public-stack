@@ -11,7 +11,7 @@ This document describes the RBAC implementation for the AgentCore Public Stack b
 ```
 JWT Token (from OIDC Provider)
     ↓
-GenericOIDCJWTValidator (validates & extracts roles)
+CognitoJWTValidator (validates & extracts roles)
     ↓
 User Model (email, user_id, name, roles[])
     ↓
@@ -22,11 +22,11 @@ Protected Route Handler
 
 ## Components
 
-### 1. JWT Validator (`apis/shared/auth/generic_jwt_validator.py`)
+### 1. JWT Validator (`apis/shared/auth/cognito_jwt_validator.py`)
 
-- Validates JWT tokens from any configured OIDC provider
-- Extracts user information including roles array
-- Dynamically matches token issuer to configured providers
+- Validates JWT tokens against the Cognito User Pool
+- Extracts user information including roles from Cognito groups
+- Single-issuer validation against Cognito JWKS endpoint
 
 ### 2. User Model (`apis/shared/auth/models.py`)
 
@@ -263,7 +263,7 @@ ENABLE_AUTHENTICATION=true
 
 The validator checks the `roles` claim in the JWT payload:
 ```python
-roles = payload.get('roles', [])  # In generic_jwt_validator.py
+roles = payload.get('cognito:groups', [])  # In cognito_jwt_validator.py
 ```
 
 ## Adding New Role-Protected Endpoints
@@ -339,7 +339,7 @@ Potential improvements to the RBAC system:
 **Solution:**
 1. Verify `ENTRA_CLIENT_ID` matches app registration
 2. Check token was issued for correct application
-3. See `generic_jwt_validator.py` for audience validation logic
+3. See `cognito_jwt_validator.py` for audience validation logic
 
 ### Issue: "Authentication service misconfigured"
 
@@ -353,7 +353,7 @@ Potential improvements to the RBAC system:
 ## File References
 
 - RBAC utilities: `backend/src/apis/shared/auth/rbac.py`
-- JWT validation: `backend/src/apis/shared/auth/generic_jwt_validator.py`
+- JWT validation: `backend/src/apis/shared/auth/cognito_jwt_validator.py`
 - User model: `backend/src/apis/shared/auth/models.py`
 - Auth dependencies: `backend/src/apis/shared/auth/dependencies.py`
 - Admin routes: `backend/src/apis/app_api/admin/routes.py`

@@ -3,12 +3,11 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from .models import (
     LoginResponse,
     LogoutResponse,
-    RuntimeEndpointResponse,
     TokenExchangeRequest,
     TokenExchangeResponse,
     TokenRefreshRequest,
@@ -19,8 +18,7 @@ from apis.shared.auth_providers.models import (
     AuthProviderPublicInfo,
     AuthProviderPublicListResponse,
 )
-from apis.shared.auth.dependencies import get_current_user
-from apis.shared.auth.models import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -306,100 +304,3 @@ def _peek_provider_from_state(state: str) -> Optional[str]:
 
     return None
 
-
-# Redefine the endpoint with proper dependency injection
-@router.get(
-    "/runtime-endpoint",
-    response_model=RuntimeEndpointResponse,
-    summary="Get AgentCore Runtime endpoint URL for user's provider",
-)
-async def get_runtime_endpoint_impl(
-    current_user: User = Depends(get_current_user)
-) -> RuntimeEndpointResponse:
-    """
-    Get the AgentCore Runtime endpoint URL for the authenticated user's auth provider.
-
-    This endpoint requires authentication. The provider ID is extracted from the
-    user's JWT token by resolving the issuer to a configured auth provider.
-
-    Returns:
-        RuntimeEndpointResponse with the runtime endpoint URL and status
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 404 if provider not found or runtime not ready
-            - 500 if runtime endpoint not configured
-    """
-    from apis.shared.auth.generic_jwt_validator import GenericOIDCJWTValidator
-    from apis.shared.auth_providers.repository import get_auth_provider_repository
-
-    try:
-        repo = get_auth_provider_repository()
-        if not repo.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Auth provider repository not configured"
-            )
-
-        validator = GenericOIDCJWTValidator(repo)
-
-        # Get the raw token from the user object
-        token = getattr(current_user, 'raw_token', None)
-        if not token:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token not available"
-            )
-
-        # Resolve provider from token
-        provider = await validator.resolve_provider_from_token(token)
-        if not provider:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Auth provider not found for this token"
-            )
-
-        # Check if runtime endpoint is configured
-        if not provider.agentcore_runtime_endpoint_url:
-            if provider.agentcore_runtime_status == "PENDING":
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Runtime is being provisioned for provider '{provider.provider_id}'. Please try again in a few minutes."
-                )
-            elif provider.agentcore_runtime_status == "CREATING":
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Runtime is currently being created for provider '{provider.provider_id}'. Please try again in a few minutes."
-                )
-            elif provider.agentcore_runtime_status == "FAILED":
-                error_msg = provider.agentcore_runtime_error or "Unknown error"
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Runtime provisioning failed for provider '{provider.provider_id}': {error_msg}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Runtime endpoint not configured for provider '{provider.provider_id}'"
-                )
-
-        logger.info(
-            f"Resolved runtime endpoint for user {current_user.user_id} "
-            f"(provider: {provider.provider_id}): {provider.agentcore_runtime_endpoint_url}"
-        )
-
-        return RuntimeEndpointResponse(
-            runtime_endpoint_url=provider.agentcore_runtime_endpoint_url,
-            provider_id=provider.provider_id,
-            runtime_status=provider.agentcore_runtime_status,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error resolving runtime endpoint: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to resolve runtime endpoint"
-        )

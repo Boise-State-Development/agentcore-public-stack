@@ -148,13 +148,14 @@ Deploys Lambda-based MCP tool endpoints behind API Gateway. These provide the ag
 <summary>6. Seed Bootstrap Data</summary>
 
 Seeds your application with initial configuration:
-- Auth provider (from your `SEED_AUTH_*` variables)
 - Default AI models and pricing
 - Application roles and permissions
 - Default tool configurations
-- Admin role mapping (if `SEED_ADMIN_JWT_ROLE` is set)
 
 You can re-run this workflow later to update seed data.
+
+> [!NOTE]
+> Authentication is handled by Cognito's first-boot flow — no auth provider seeding is needed. The first person to access the application will create the admin account directly.
 
 </details>
 

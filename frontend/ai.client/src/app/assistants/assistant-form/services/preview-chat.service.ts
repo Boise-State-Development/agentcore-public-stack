@@ -1,9 +1,8 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
-import { firstValueFrom } from 'rxjs';
 import { fetchEventSource, EventSourceMessage } from '@microsoft/fetch-event-source';
 import { AuthService } from '../../../auth/auth.service';
-import { AuthApiService } from '../../../auth/auth-api.service';
+import { ConfigService } from '../../../services/config.service';
 import { Message } from '../../../session/services/models/message.model';
 import { PREVIEW_SESSION_PREFIX } from '../../../shared/constants/session.constants';
 import {
@@ -28,7 +27,7 @@ import {
 @Injectable()
 export class PreviewChatService {
   private authService = inject(AuthService);
-  private authApiService = inject(AuthApiService);
+  private config = inject(ConfigService);
 
   // Local state signals (isolated from global ChatStateService)
   private readonly messagesSignal = signal<Message[]>([]);
@@ -191,14 +190,12 @@ export class PreviewChatService {
     try {
       const token = await this.getBearerTokenForStreamingResponse();
 
-      // Resolve runtime endpoint dynamically via App API
-      const runtimeEndpoint = await firstValueFrom(
-        this.authApiService.getRuntimeEndpoint()
-      );
-      if (!runtimeEndpoint || !runtimeEndpoint.runtime_endpoint_url) {
-        throw new Error('Invalid runtime endpoint response from server');
+      // Single runtime endpoint from configuration
+      const runtimeEndpointUrl = this.config.inferenceApiUrl();
+      if (!runtimeEndpointUrl) {
+        throw new Error('Inference API URL not configured. Please check your configuration.');
       }
-      const url = `${runtimeEndpoint.runtime_endpoint_url}?qualifier=DEFAULT`;
+      const url = `${runtimeEndpointUrl}?qualifier=DEFAULT`;
 
       // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
       // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)

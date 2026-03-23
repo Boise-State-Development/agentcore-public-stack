@@ -23,5 +23,9 @@
 export const environment = {
     production: false,
     appApiUrl: 'http://localhost:8000',
-    version: 'dev'
+    version: 'dev',
+    cognitoDomainUrl: '',
+    cognitoAppClientId: '',
+    cognitoRegion: 'us-east-1',
+    inferenceApiUrl: 'http://localhost:8001',
 };

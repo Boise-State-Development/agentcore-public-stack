@@ -125,7 +125,7 @@ class AuthProviderRepository:
             logger.error(f"Error listing auth providers: {e}")
             raise
 
-    async def create_provider(self, data: AuthProviderCreate, created_by: Optional[str] = None) -> AuthProvider:
+    async def create_provider(self, data: AuthProviderCreate, created_by: Optional[str] = None, cognito_provider_name: Optional[str] = None) -> AuthProvider:
         """Create a new auth provider. Stores client secret in Secrets Manager."""
         if not self._enabled:
             raise RuntimeError("Auth provider repository is not enabled")
@@ -168,6 +168,7 @@ class AuthProviderRepository:
                 created_at=now,
                 updated_at=now,
                 created_by=created_by,
+                cognito_provider_name=cognito_provider_name,
             )
 
             # Store client secret in Secrets Manager

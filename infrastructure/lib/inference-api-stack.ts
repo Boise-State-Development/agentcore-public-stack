@@ -17,18 +17,19 @@ export interface InferenceApiStackProps extends cdk.StackProps {
  * Inference API Stack - AWS Bedrock AgentCore Shared Resources
  * 
  * This stack creates shared resources used by all AgentCore Runtimes:
+ * - Single CDK-managed AgentCore Runtime with Cognito JWT Authorizer
  * - AgentCore Memory for conversation context and memory
  * - Code Interpreter Custom for Python code execution
  * - Browser Custom for web browsing capabilities
  * - IAM roles with appropriate permissions
  * 
- * Note: Individual runtimes are created dynamically by Lambda when auth providers are added.
  * Note: ECR repository is created by the build pipeline, not by CDK.
  */
 export class InferenceApiStack extends cdk.Stack {
   public readonly memory: bedrock.CfnMemory;
   public readonly codeInterpreter: bedrock.CfnCodeInterpreterCustom;
   public readonly browser: bedrock.CfnBrowserCustom;
+  public readonly runtime: bedrock.CfnRuntime;
 
   constructor(scope: Construct, id: string, props: InferenceApiStackProps) {
     super(scope, id, props);
@@ -763,6 +764,44 @@ export class InferenceApiStack extends cdk.Stack {
     }));
 
     // ============================================================
+    // Import Cognito SSM Parameters for JWT Authorizer
+    // ============================================================
+
+    const cognitoUserPoolId = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/auth/cognito/user-pool-id`
+    );
+    const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/auth/cognito/app-client-id`
+    );
+
+    // Construct Cognito OIDC discovery URL
+    const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
+
+    // ============================================================
+    // Single CDK-Managed AgentCore Runtime with Cognito JWT Authorizer
+    // ============================================================
+
+    this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
+      agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
+      agentRuntimeArtifact: {
+        containerConfiguration: {
+          containerUri: containerImageUri,
+        },
+      },
+      authorizerConfiguration: {
+        customJwtAuthorizer: {
+          discoveryUrl: cognitoDiscoveryUrl,
+          allowedClients: [cognitoAppClientId],
+        },
+      },
+      roleArn: runtimeExecutionRole.roleArn,
+      networkConfiguration: {
+        networkMode: 'PUBLIC',
+      },
+    });
+    this.runtime.node.addDependency(runtimeExecutionRole);
+
+    // ============================================================
     // Observability: CloudWatch Log Group for Runtime
     // ============================================================
 
@@ -782,8 +821,6 @@ export class InferenceApiStack extends cdk.Stack {
     // ============================================================
     // Uses CloudWatch Logs vended logs API (CfnDeliverySource/Destination/Delivery)
     // to configure APPLICATION_LOGS and TRACES for CDK-managed resources.
-    // Runtime log deliveries are configured in the runtime-provisioner Lambda
-    // since runtimes are created dynamically per auth provider.
 
     // --- Memory: APPLICATION_LOGS ---
     const memoryLogsLogGroup = new logs.LogGroup(this, 'MemoryLogsLogGroup', {
@@ -1009,6 +1046,33 @@ export class InferenceApiStack extends cdk.Stack {
       description: 'Runtime execution role ARN for Lambda-created AgentCore Runtimes',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    new ssm.StringParameter(this, 'RuntimeArnParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-arn`,
+      stringValue: this.runtime.attrAgentRuntimeArn,
+      description: 'AgentCore Runtime ARN',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'RuntimeIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-id`,
+      stringValue: this.runtime.attrAgentRuntimeId,
+      description: 'AgentCore Runtime ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Construct the full runtime endpoint URL for frontend consumption
+    const runtimeEndpointUrl = cdk.Fn.sub(
+      'https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/${RuntimeArn}',
+      { RuntimeArn: this.runtime.attrAgentRuntimeArn }
+    );
+
+    new ssm.StringParameter(this, 'InferenceApiRuntimeEndpointUrlParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-endpoint-url`,
+      stringValue: runtimeEndpointUrl,
+      description: 'Inference API AgentCore Runtime Endpoint URL',
+      tier: ssm.ParameterTier.STANDARD,
+    });
     
     new ssm.StringParameter(this, 'InferenceApiMemoryArnParameter', {
       parameterName: `/${config.projectPrefix}/inference-api/memory-arn`,
@@ -1077,6 +1141,18 @@ export class InferenceApiStack extends cdk.Stack {
       value: this.memory.attrMemoryArn,
       description: 'Inference API AgentCore Memory ARN',
       exportName: `${config.projectPrefix}-InferenceApiMemoryArn`,
+    });
+
+    new cdk.CfnOutput(this, 'AgentCoreRuntimeArn', {
+      value: this.runtime.attrAgentRuntimeArn,
+      description: 'AgentCore Runtime ARN',
+      exportName: `${config.projectPrefix}-AgentCoreRuntimeArn`,
+    });
+
+    new cdk.CfnOutput(this, 'AgentCoreRuntimeId', {
+      value: this.runtime.attrAgentRuntimeId,
+      description: 'AgentCore Runtime ID',
+      exportName: `${config.projectPrefix}-AgentCoreRuntimeId`,
     });
 
     new cdk.CfnOutput(this, 'InferenceApiMemoryId', {

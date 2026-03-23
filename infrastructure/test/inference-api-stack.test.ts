@@ -189,8 +189,8 @@ describe('InferenceApiStack', () => {
   });
 
   describe('SSM Parameters', () => {
-    test('creates 8 SSM parameters', () => {
-      template.resourceCountIs('AWS::SSM::Parameter', 8);
+    test('creates 11 SSM parameters', () => {
+      template.resourceCountIs('AWS::SSM::Parameter', 11);
     });
 
     test('exports runtime execution role ARN', () => {
@@ -278,8 +278,8 @@ describe('InferenceApiStack', () => {
   // SSM Parameters (Required for Deploy Script)
   // ============================================================
 
-  describe('SSM Parameters for Runtime Updates', () => {
-    test('creates image-tag parameter for runtime-updater trigger', () => {
+  describe('SSM Parameters', () => {
+    test('creates image-tag parameter', () => {
       template.hasResourceProperties('AWS::SSM::Parameter', {
         Name: `/${config.projectPrefix}/inference-api/image-tag`,
         Type: 'String',
@@ -287,8 +287,8 @@ describe('InferenceApiStack', () => {
       });
     });
 
-    test('runtime-updater Lambda has permission to read image-tag parameter', () => {
-      // The runtime-updater needs to read this parameter when triggered
+    test('ECS task role has permission to read image-tag parameter', () => {
+      // The App API task needs to read this parameter
       template.hasResourceProperties('AWS::IAM::Policy', {
         PolicyDocument: Match.objectLike({
           Statement: Match.arrayWith([

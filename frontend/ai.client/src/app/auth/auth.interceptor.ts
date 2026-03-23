@@ -12,12 +12,12 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const configService = inject(ConfigService);
 
-  // Skip adding token for auth endpoints (login, token exchange, refresh) and config bootstrap
-  const authEndpoints = ['/auth/login', '/auth/token', '/auth/refresh', '/auth/providers', '/config.json'];
-  const isAuthEndpoint = authEndpoints.some(endpoint => req.url.includes(endpoint));
+  // Skip adding token for config bootstrap and auth provider listing
+  const skipEndpoints = ['/auth/providers', '/config.json'];
+  const isSkipEndpoint = skipEndpoints.some(endpoint => req.url.includes(endpoint));
 
-  // If it's an auth endpoint, proceed without modification
-  if (isAuthEndpoint) {
+  // If it's a skip endpoint, proceed without modification
+  if (isSkipEndpoint) {
     return next(req);
   }
 
@@ -71,7 +71,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   // Handle 401 errors - token might have expired during request
   return request$.pipe(
     catchError((error: HttpErrorResponse) => {
-      if (error.status === 401 && !isAuthEndpoint) {
+      if (error.status === 401 && !isSkipEndpoint) {
         // Try refreshing token one more time
         return from(authService.refreshAccessToken()).pipe(
           switchMap(() => {

@@ -20,24 +20,8 @@ main() {
     local prefix="${CDK_PROJECT_PREFIX}"
     local region="${CDK_AWS_REGION}"
 
-    # Resolve DynamoDB table names and Secrets Manager ARN from SSM
+    # Resolve DynamoDB table names from SSM
     log_info "Resolving resource names from SSM Parameter Store..."
-
-    export DDB_AUTH_PROVIDERS_TABLE
-    DDB_AUTH_PROVIDERS_TABLE=$(aws ssm get-parameter \
-        --name "/${prefix}/auth/auth-providers-table-name" \
-        --region "${region}" \
-        --query "Parameter.Value" \
-        --output text)
-    log_info "Auth providers table: ${DDB_AUTH_PROVIDERS_TABLE}"
-
-    export SECRETS_AUTH_ARN
-    SECRETS_AUTH_ARN=$(aws ssm get-parameter \
-        --name "/${prefix}/auth/auth-provider-secrets-arn" \
-        --region "${region}" \
-        --query "Parameter.Value" \
-        --output text)
-    log_info "Auth secrets ARN: ${SECRETS_AUTH_ARN:0:50}..."
 
     export DDB_USER_QUOTAS_TABLE
     DDB_USER_QUOTAS_TABLE=$(aws ssm get-parameter \

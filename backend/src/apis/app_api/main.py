@@ -112,6 +112,7 @@ from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
 from apis.shared.oauth.routes import router as oauth_router
+from apis.app_api.system.routes import router as system_router
 
 # Include routers
 app.include_router(health_router)
@@ -130,6 +131,7 @@ app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
 app.include_router(oauth_router)  # OAuth provider connections
+app.include_router(system_router)  # System status and first-boot endpoints
 
 # Conditionally register fine-tuning routes
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

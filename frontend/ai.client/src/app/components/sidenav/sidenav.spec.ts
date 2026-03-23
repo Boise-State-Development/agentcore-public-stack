@@ -70,9 +70,9 @@ describe('Sidenav', () => {
     expect(mockSidenavService.toggleCollapsed).toHaveBeenCalled();
   });
 
-  it('should handle logout with redirect', async () => {
+  it('should handle logout', async () => {
     const component = await createComponent();
     component.handleLogout();
-    expect(mockAuthService.logout).toHaveBeenCalledWith(window.location.origin);
+    expect(mockAuthService.logout).toHaveBeenCalled();
   });
 });

@@ -72,9 +72,33 @@ export class FrontendStack extends cdk.Stack {
       );
     }
 
+    // ============================================================================
+    // SSM Parameter Imports - Cognito Configuration
+    // ============================================================================
+    // These parameters are exported by InfrastructureStack (Cognito User Pool)
+    // and InferenceApiStack (Runtime endpoint URL).
+    // ============================================================================
+
+    const cognitoDomainUrl = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/cognito/domain-url`
+    );
+
+    const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/cognito/app-client-id`
+    );
+
+    const inferenceApiUrl = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/inference-api/runtime-endpoint-url`
+    );
+
     // Log imported values for debugging (values will be tokens at synth time)
     console.log('📥 Imported backend URLs from SSM:');
     console.log(`   App API URL: ${appApiUrl}`);
+    console.log(`   Cognito Domain URL: ${cognitoDomainUrl}`);
+    console.log(`   Inference API URL: ${inferenceApiUrl}`);
 
     // ============================================================================
     // Runtime Configuration Generation
@@ -91,6 +115,10 @@ export class FrontendStack extends cdk.Stack {
       appApiUrl: appApiUrl,
       environment: config.production ? 'production' : 'development',
       version: config.appVersion,
+      cognitoDomainUrl: cognitoDomainUrl,
+      cognitoAppClientId: cognitoAppClientId,
+      cognitoRegion: config.awsRegion,
+      inferenceApiUrl: inferenceApiUrl,
     };
 
     console.log('🔧 Generated runtime configuration:');

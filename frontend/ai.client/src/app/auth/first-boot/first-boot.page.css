@@ -1,0 +1,5 @@
+/* First-boot page specific styles */
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));

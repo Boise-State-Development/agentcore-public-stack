@@ -78,6 +78,18 @@ if [ "${IS_DEPLOYMENT_BUILD}" = true ]; then
     log_info "Environment configuration:"
     log_info "  APP_API_URL: ${APP_API_URL}"
     log_info "  PRODUCTION: ${PRODUCTION}"
+    if [ -n "${COGNITO_DOMAIN_URL:-}" ]; then
+        log_info "  COGNITO_DOMAIN_URL: ${COGNITO_DOMAIN_URL}"
+    fi
+    if [ -n "${COGNITO_APP_CLIENT_ID:-}" ]; then
+        log_info "  COGNITO_APP_CLIENT_ID: ${COGNITO_APP_CLIENT_ID}"
+    fi
+    if [ -n "${COGNITO_REGION:-}" ]; then
+        log_info "  COGNITO_REGION: ${COGNITO_REGION}"
+    fi
+    if [ -n "${INFERENCE_API_URL:-}" ]; then
+        log_info "  INFERENCE_API_URL: ${INFERENCE_API_URL}"
+    fi
     
     # Backup original environment file
     if [ ! -f "${ENV_FILE}.backup" ]; then
@@ -92,6 +104,20 @@ if [ "${IS_DEPLOYMENT_BUILD}" = true ]; then
     sed -e "s|production: false|production: ${PRODUCTION}|g" \
         -e "s|appApiUrl: 'http://localhost:8000'|appApiUrl: '${APP_API_URL}'|g" \
         "${ENV_FILE}.backup" > "${ENV_FILE}"
+    
+    # Inject optional Cognito and inference API values if set
+    if [ -n "${COGNITO_DOMAIN_URL:-}" ]; then
+        sed -i "s|cognitoDomainUrl: ''|cognitoDomainUrl: '${COGNITO_DOMAIN_URL}'|g" "${ENV_FILE}"
+    fi
+    if [ -n "${COGNITO_APP_CLIENT_ID:-}" ]; then
+        sed -i "s|cognitoAppClientId: ''|cognitoAppClientId: '${COGNITO_APP_CLIENT_ID}'|g" "${ENV_FILE}"
+    fi
+    if [ -n "${COGNITO_REGION:-}" ]; then
+        sed -i "s|cognitoRegion: 'us-east-1'|cognitoRegion: '${COGNITO_REGION}'|g" "${ENV_FILE}"
+    fi
+    if [ -n "${INFERENCE_API_URL:-}" ]; then
+        sed -i "s|inferenceApiUrl: 'http://localhost:8001'|inferenceApiUrl: '${INFERENCE_API_URL}'|g" "${ENV_FILE}"
+    fi
     
     log_info "Environment values injected successfully"
 else

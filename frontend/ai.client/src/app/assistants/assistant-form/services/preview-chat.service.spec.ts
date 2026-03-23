@@ -1,9 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { signal } from '@angular/core';
 import { PreviewChatService } from './preview-chat.service';
 import { AuthService } from '../../../auth/auth.service';
-import { AuthApiService } from '../../../auth/auth-api.service';
-import { of } from 'rxjs';
+import { ConfigService } from '../../../services/config.service';
 
 // Mock fetchEventSource
 vi.mock('@microsoft/fetch-event-source', () => ({
@@ -13,7 +13,6 @@ vi.mock('@microsoft/fetch-event-source', () => ({
 describe('PreviewChatService', () => {
   let service: PreviewChatService;
   let authService: any;
-  let authApiService: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -24,21 +23,20 @@ describe('PreviewChatService', () => {
       refreshAccessToken: vi.fn(),
     };
 
-    const authApiServiceMock = {
-      getRuntimeEndpoint: vi.fn(),
+    const configServiceMock = {
+      inferenceApiUrl: signal('http://localhost:8001'),
     };
 
     TestBed.configureTestingModule({
       providers: [
         PreviewChatService,
         { provide: AuthService, useValue: authServiceMock },
-        { provide: AuthApiService, useValue: authApiServiceMock },
+        { provide: ConfigService, useValue: configServiceMock },
       ],
     });
 
     service = TestBed.inject(PreviewChatService);
     authService = TestBed.inject(AuthService);
-    authApiService = TestBed.inject(AuthApiService);
   });
 
   afterEach(() => {
@@ -57,9 +55,6 @@ describe('PreviewChatService', () => {
   });
 
   it('should send message', async () => {
-    const mockEndpoint = { runtime_endpoint_url: 'http://test.com' };
-    authApiService.getRuntimeEndpoint.mockReturnValue(of(mockEndpoint));
-
     const { fetchEventSource } = await import('@microsoft/fetch-event-source');
     (fetchEventSource as any).mockResolvedValue(undefined);
 
@@ -112,9 +107,6 @@ describe('PreviewChatService', () => {
   it('should handle auth token refresh', async () => {
     authService.isTokenExpired.mockReturnValue(true);
     authService.refreshAccessToken.mockResolvedValue(undefined);
-    
-    const mockEndpoint = { runtime_endpoint_url: 'http://test.com' };
-    authApiService.getRuntimeEndpoint.mockReturnValue(of(mockEndpoint));
 
     const { fetchEventSource } = await import('@microsoft/fetch-event-source');
     (fetchEventSource as any).mockResolvedValue(undefined);

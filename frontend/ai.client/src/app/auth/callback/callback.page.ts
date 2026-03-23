@@ -29,7 +29,6 @@ export class CallbackPage implements OnInit {
       const queryParams = this.route.snapshot.queryParams;
       const code = queryParams['code'];
       const state = queryParams['state'];
-      const redirectUri = queryParams['redirect_uri'];
 
       // Validate required parameters
       if (!code || !state) {
@@ -41,7 +40,7 @@ export class CallbackPage implements OnInit {
 
       // Exchange code for tokens
       this.statusMessage.set('Exchanging authorization code for tokens...');
-      await this.callbackService.exchangeCodeForTokens(code, state, redirectUri);
+      await this.callbackService.exchangeCodeForTokens(code, state);
 
       // Success - redirect to return URL or home
       this.statusMessage.set('Authentication successful! Redirecting...');

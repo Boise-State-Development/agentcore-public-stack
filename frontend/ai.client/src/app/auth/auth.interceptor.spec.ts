@@ -67,47 +67,8 @@ describe('authInterceptor', () => {
 
   /**
    * Validates: Requirements 14.3
-   * Skips auth endpoints — passes request through without modification
+   * Skips skip endpoints — passes request through without modification
    */
-  it('should skip adding token for /auth/login endpoint', () => {
-    authService.getAccessToken.mockReturnValue('my-token');
-
-    const req = new HttpRequest('GET', 'http://localhost:8000/auth/login?provider_id=test');
-
-    TestBed.runInInjectionContext(() => {
-      authInterceptor(req, next);
-    });
-
-    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
-    expect(passedReq.headers.has('Authorization')).toBe(false);
-  });
-
-  it('should skip adding token for /auth/token endpoint', () => {
-    authService.getAccessToken.mockReturnValue('my-token');
-
-    const req = new HttpRequest('POST', 'http://localhost:8000/auth/token', {});
-
-    TestBed.runInInjectionContext(() => {
-      authInterceptor(req, next);
-    });
-
-    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
-    expect(passedReq.headers.has('Authorization')).toBe(false);
-  });
-
-  it('should skip adding token for /auth/refresh endpoint', () => {
-    authService.getAccessToken.mockReturnValue('my-token');
-
-    const req = new HttpRequest('POST', 'http://localhost:8000/auth/refresh', {});
-
-    TestBed.runInInjectionContext(() => {
-      authInterceptor(req, next);
-    });
-
-    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
-    expect(passedReq.headers.has('Authorization')).toBe(false);
-  });
-
   it('should skip adding token for /auth/providers endpoint', () => {
     authService.getAccessToken.mockReturnValue('my-token');
 
@@ -119,6 +80,33 @@ describe('authInterceptor', () => {
 
     const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
     expect(passedReq.headers.has('Authorization')).toBe(false);
+  });
+
+  it('should skip adding token for /config.json endpoint', () => {
+    authService.getAccessToken.mockReturnValue('my-token');
+
+    const req = new HttpRequest('GET', '/config.json');
+
+    TestBed.runInInjectionContext(() => {
+      authInterceptor(req, next);
+    });
+
+    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
+    expect(passedReq.headers.has('Authorization')).toBe(false);
+  });
+
+  it('should add token for regular API endpoints', () => {
+    authService.getAccessToken.mockReturnValue('my-token');
+    authService.isTokenExpired.mockReturnValue(false);
+
+    const req = new HttpRequest('GET', 'http://localhost:8000/api/sessions');
+
+    TestBed.runInInjectionContext(() => {
+      authInterceptor(req, next);
+    });
+
+    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
+    expect(passedReq.headers.get('Authorization')).toBe('Bearer my-token');
   });
 
   /**

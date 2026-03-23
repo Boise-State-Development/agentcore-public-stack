@@ -2,34 +2,25 @@
 """
 Bootstrap data seeding script for first-time platform deployment.
 
-Seeds auth providers, quota tiers, quota assignments, Bedrock models,
-and system admin JWT role mappings into DynamoDB and Secrets Manager.
-Designed to be invoked by scripts/stack-bootstrap/seed.sh after
-infrastructure deployment.
+Seeds quota tiers, quota assignments, Bedrock models, system admin role,
+and default tools into DynamoDB. Designed to be invoked by
+scripts/stack-bootstrap/seed.sh after infrastructure deployment.
+
+Auth provider seeding has been removed — admin authentication is now
+handled via the Cognito first-boot flow.
 
 All operations are idempotent: re-running with identical inputs produces
 the same database state.
 
 Environment variables:
-    DDB_AUTH_PROVIDERS_TABLE  - Auth providers DynamoDB table name
     DDB_USER_QUOTAS_TABLE     - User quotas DynamoDB table name
     DDB_MANAGED_MODELS_TABLE  - Managed models DynamoDB table name
     DDB_APP_ROLES_TABLE       - App roles DynamoDB table name
-    SECRETS_AUTH_ARN          - Secrets Manager ARN for auth secrets
     AWS_REGION                - AWS region
-
-    SEED_AUTH_PROVIDER_ID     - Provider slug (e.g., entra-id)
-    SEED_AUTH_DISPLAY_NAME    - Login page display name
-    SEED_AUTH_ISSUER_URL      - OIDC issuer URL
-    SEED_AUTH_CLIENT_ID       - OAuth client ID
-    SEED_AUTH_CLIENT_SECRET   - OAuth client secret
-    SEED_AUTH_BUTTON_COLOR    - Hex color for login button (optional)
-    SEED_ADMIN_JWT_ROLE      - JWT role that grants system admin access (e.g., Admin)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -40,7 +31,6 @@ from decimal import Decimal
 from typing import Any
 
 import boto3
-import httpx
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger("seed_bootstrap_data")
@@ -63,145 +53,6 @@ class SeedResult:
     skipped: int = 0
     failed: int = 0
     details: list[str] = field(default_factory=list)
-
-
-def seed_auth_provider(
-    table_name: str,
-    secrets_arn: str,
-    region: str,
-    provider_id: str,
-    display_name: str,
-    issuer_url: str,
-    client_id: str,
-    client_secret: str,
-    button_color: str | None = None,
-    discover: bool = True,
-) -> SeedResult:
-    """Seed a single OIDC auth provider into DynamoDB and Secrets Manager."""
-    result = SeedResult(category="auth_provider")
-    session = boto3.Session(region_name=region)
-    dynamodb = session.resource("dynamodb")
-    table = dynamodb.Table(table_name)
-    secrets_client = session.client("secretsmanager")
-
-    pk = f"AUTH_PROVIDER#{provider_id}"
-
-    # Check for existing item
-    try:
-        existing = table.get_item(Key={"PK": pk, "SK": pk})
-        if "Item" in existing:
-            msg = f"Auth provider '{provider_id}' already exists — skipped"
-            logger.info(msg)
-            result.skipped = 1
-            result.details.append(msg)
-            return result
-    except ClientError as e:
-        msg = f"Failed to check existing auth provider '{provider_id}': {e}"
-        logger.error(msg)
-        result.failed = 1
-        result.details.append(msg)
-        return result
-
-    # OIDC discovery
-    discovered: dict[str, Any] = {}
-    if discover:
-        discovery_url = issuer_url.rstrip("/") + "/.well-known/openid-configuration"
-        logger.info("Discovering OIDC endpoints from %s", discovery_url)
-        try:
-            resp = httpx.get(discovery_url, timeout=10.0, follow_redirects=True)
-            resp.raise_for_status()
-            discovered = resp.json()
-            logger.info("OIDC discovery successful")
-        except Exception as e:
-            logger.warning("OIDC discovery failed: %s — continuing without discovered endpoints", e)
-
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    item: dict[str, Any] = {
-        "PK": pk,
-        "SK": pk,
-        "GSI1PK": "ENABLED#true",
-        "GSI1SK": pk,
-        "providerId": provider_id,
-        "displayName": display_name,
-        "providerType": "oidc",
-        "enabled": True,
-        "issuerUrl": issuer_url,
-        "clientId": client_id,
-        "scopes": "openid profile email",
-        "responseType": "code",
-        "pkceEnabled": True,
-        "userIdClaim": "sub",
-        "emailClaim": "email",
-        "nameClaim": "name",
-        "rolesClaim": "roles",
-        "pictureClaim": "picture",
-        "firstNameClaim": "given_name",
-        "lastNameClaim": "family_name",
-        "createdAt": now,
-        "updatedAt": now,
-        "createdBy": "bootstrap-seed",
-    }
-
-    # Map discovered endpoints
-    endpoint_mapping = {
-        "authorizationEndpoint": "authorization_endpoint",
-        "tokenEndpoint": "token_endpoint",
-        "jwksUri": "jwks_uri",
-        "userinfoEndpoint": "userinfo_endpoint",
-        "endSessionEndpoint": "end_session_endpoint",
-    }
-    for dynamo_key, oidc_key in endpoint_mapping.items():
-        value = discovered.get(oidc_key)
-        if value:
-            item[dynamo_key] = value
-
-    if button_color:
-        item["buttonColor"] = button_color
-
-    # Write to DynamoDB
-    try:
-        table.put_item(Item=item)
-        logger.info("Auth provider '%s' written to DynamoDB", provider_id)
-    except ClientError as e:
-        msg = f"Failed to write auth provider '{provider_id}' to DynamoDB: {e}"
-        logger.error(msg)
-        result.failed = 1
-        result.details.append(msg)
-        return result
-
-    # Write client secret to Secrets Manager
-    try:
-        try:
-            response = secrets_client.get_secret_value(SecretId=secrets_arn)
-            secrets = json.loads(response["SecretString"])
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                secrets = {}
-            else:
-                raise
-        except (json.JSONDecodeError, KeyError):
-            secrets = {}
-
-        if provider_id not in secrets:
-            secrets[provider_id] = client_secret
-            secrets_client.put_secret_value(
-                SecretId=secrets_arn,
-                SecretString=json.dumps(secrets),
-            )
-            logger.info("Client secret for '%s' stored in Secrets Manager", provider_id)
-        else:
-            logger.info("Client secret for '%s' already in Secrets Manager — kept existing", provider_id)
-    except ClientError as e:
-        msg = f"Failed to write secret for '{provider_id}': {e}"
-        logger.error(msg)
-        result.failed = 1
-        result.details.append(msg)
-        return result
-
-    result.created = 1
-    result.details.append(f"Auth provider '{provider_id}' created")
-    return result
 
 
 def seed_default_quota_tier(
@@ -473,8 +324,8 @@ def seed_system_admin_role(
 ) -> SeedResult:
     """Seed the system_admin role with DEFINITION, MODEL_GRANT#*, and TOOL_GRANT#*.
 
-    This runs unconditionally (no JWT role required). The JWT mapping
-    is handled separately by seed_system_admin_jwt_roles.
+    This runs unconditionally (no JWT role required). Admin access is now
+    granted via the Cognito first-boot flow.
     """
     result = SeedResult(category="system_admin_role")
     session = boto3.Session(region_name=region)
@@ -630,193 +481,6 @@ def seed_default_tools(
     return result
 
 
-def seed_system_admin_jwt_roles(
-    table_name: str,
-    region: str,
-    jwt_role: str,
-) -> SeedResult:
-    """Seed JWT role mapping for the system_admin AppRole.
-
-    Writes a JWT_MAPPING item to the app-roles table so that
-    AppRoleService.resolve_user_permissions() can resolve users with the
-    given JWT role to the system_admin AppRole via the JwtRoleMappingIndex GSI.
-
-    If the system_admin role definition does not yet exist, the full role
-    (DEFINITION + JWT_MAPPING + TOOL_GRANT + MODEL_GRANT items) is created.
-    If the role exists and already has the correct mapping, the operation is
-    skipped.  If it exists with a different mapping, the old mapping items
-    are replaced.
-    """
-    result = SeedResult(category="system_admin_jwt")
-    session = boto3.Session(region_name=region)
-    dynamodb = session.resource("dynamodb")
-    table = dynamodb.Table(table_name)
-
-    role_id = "system_admin"
-    pk = f"ROLE#{role_id}"
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    # Check for existing role definition
-    try:
-        existing = table.get_item(Key={"PK": pk, "SK": "DEFINITION"})
-    except ClientError as e:
-        msg = f"Failed to check existing system_admin role: {e}"
-        logger.error(msg)
-        result.failed = 1
-        result.details.append(msg)
-        return result
-
-    if "Item" in existing:
-        current_mappings = existing["Item"].get("jwtRoleMappings", [])
-        if jwt_role in current_mappings:
-            msg = f"system_admin already has JWT mapping '{jwt_role}' — skipped"
-            logger.info(msg)
-            result.skipped = 1
-            result.details.append(msg)
-            return result
-
-        # Update: replace old JWT mappings with new one
-        logger.info(
-            "Updating system_admin JWT mappings: %s -> ['%s']",
-            current_mappings,
-            jwt_role,
-        )
-
-        # Delete old JWT_MAPPING items
-        try:
-            query_resp = table.query(
-                KeyConditionExpression=(
-                    boto3.dynamodb.conditions.Key("PK").eq(pk)
-                    & boto3.dynamodb.conditions.Key("SK").begins_with("JWT_MAPPING#")
-                ),
-            )
-            with table.batch_writer() as batch:
-                for item in query_resp.get("Items", []):
-                    batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
-        except ClientError as e:
-            msg = f"Failed to delete old JWT_MAPPING items: {e}"
-            logger.error(msg)
-            result.failed = 1
-            result.details.append(msg)
-            return result
-
-        # Update DEFINITION item's jwtRoleMappings
-        try:
-            table.update_item(
-                Key={"PK": pk, "SK": "DEFINITION"},
-                UpdateExpression="SET jwtRoleMappings = :m, updatedAt = :u",
-                ExpressionAttributeValues={
-                    ":m": [jwt_role],
-                    ":u": now,
-                },
-            )
-        except ClientError as e:
-            msg = f"Failed to update system_admin jwtRoleMappings: {e}"
-            logger.error(msg)
-            result.failed = 1
-            result.details.append(msg)
-            return result
-
-        # Write new JWT_MAPPING item
-        try:
-            table.put_item(Item={
-                "PK": pk,
-                "SK": f"JWT_MAPPING#{jwt_role}",
-                "GSI1PK": f"JWT_ROLE#{jwt_role}",
-                "GSI1SK": pk,
-                "roleId": role_id,
-                "enabled": True,
-            })
-        except ClientError as e:
-            msg = f"Failed to write JWT_MAPPING item for '{jwt_role}': {e}"
-            logger.error(msg)
-            result.failed = 1
-            result.details.append(msg)
-            return result
-
-        result.created = 1
-        result.details.append(
-            f"system_admin JWT mapping updated to '{jwt_role}'"
-        )
-        return result
-
-    # Role does not exist — create full system_admin role
-    logger.info("system_admin role not found — creating with JWT mapping '%s'", jwt_role)
-
-    definition_item: dict[str, Any] = {
-        "PK": pk,
-        "SK": "DEFINITION",
-        "roleId": role_id,
-        "displayName": "System Administrator",
-        "description": "Full access to all system features. This role cannot be deleted.",
-        "jwtRoleMappings": [jwt_role],
-        "inheritsFrom": [],
-        "grantedTools": ["*"],
-        "grantedModels": ["*"],
-        "effectivePermissions": {
-            "tools": ["*"],
-            "models": ["*"],
-            "quotaTier": None,
-        },
-        "priority": 1000,
-        "isSystemRole": True,
-        "enabled": True,
-        "createdAt": now,
-        "updatedAt": now,
-        "createdBy": "bootstrap-seed",
-    }
-
-    jwt_mapping_item = {
-        "PK": pk,
-        "SK": f"JWT_MAPPING#{jwt_role}",
-        "GSI1PK": f"JWT_ROLE#{jwt_role}",
-        "GSI1SK": pk,
-        "roleId": role_id,
-        "enabled": True,
-    }
-
-    tool_grant_item = {
-        "PK": pk,
-        "SK": "TOOL_GRANT#*",
-        "GSI2PK": "TOOL#*",
-        "GSI2SK": pk,
-        "roleId": role_id,
-        "displayName": "System Administrator",
-        "enabled": True,
-    }
-
-    model_grant_item = {
-        "PK": pk,
-        "SK": "MODEL_GRANT#*",
-        "GSI3PK": "MODEL#*",
-        "GSI3SK": pk,
-        "roleId": role_id,
-        "displayName": "System Administrator",
-        "enabled": True,
-    }
-
-    try:
-        client = session.client("dynamodb")
-        client.transact_write_items(
-            TransactItems=[
-                {"Put": {"TableName": table_name, "Item": _serialize(definition_item)}},
-                {"Put": {"TableName": table_name, "Item": _serialize(jwt_mapping_item)}},
-                {"Put": {"TableName": table_name, "Item": _serialize(tool_grant_item)}},
-                {"Put": {"TableName": table_name, "Item": _serialize(model_grant_item)}},
-            ]
-        )
-        result.created = 1
-        result.details.append(
-            f"system_admin role created with JWT mapping '{jwt_role}'"
-        )
-    except ClientError as e:
-        msg = f"Failed to create system_admin role: {e}"
-        logger.error(msg)
-        result.failed = 1
-        result.details.append(msg)
-
-    return result
-
 
 def _serialize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a high-level DynamoDB item dict to low-level client format."""
@@ -851,54 +515,12 @@ def print_summary(results: list[SeedResult]) -> None:
 def main() -> None:
     """Entry point: read env vars, dispatch seeders, print summary."""
     # Required env vars for DynamoDB tables and region
-    auth_table = os.environ.get("DDB_AUTH_PROVIDERS_TABLE", "")
     quotas_table = os.environ.get("DDB_USER_QUOTAS_TABLE", "")
     models_table = os.environ.get("DDB_MANAGED_MODELS_TABLE", "")
     app_roles_table = os.environ.get("DDB_APP_ROLES_TABLE", "")
-    secrets_arn = os.environ.get("SECRETS_AUTH_ARN", "")
     region = os.environ.get("AWS_REGION", "us-east-1")
 
-    # Auth provider env vars (all optional — skip seeding if any missing)
-    auth_provider_id = os.environ.get("SEED_AUTH_PROVIDER_ID", "")
-    auth_display_name = os.environ.get("SEED_AUTH_DISPLAY_NAME", "")
-    auth_issuer_url = os.environ.get("SEED_AUTH_ISSUER_URL", "")
-    auth_client_id = os.environ.get("SEED_AUTH_CLIENT_ID", "")
-    auth_client_secret = os.environ.get("SEED_AUTH_CLIENT_SECRET", "")
-    auth_button_color = os.environ.get("SEED_AUTH_BUTTON_COLOR", "") or None
-
     results: list[SeedResult] = []
-
-    # --- Auth provider seeding ---
-    required_auth_vars = {
-        "SEED_AUTH_ISSUER_URL": auth_issuer_url,
-        "SEED_AUTH_CLIENT_ID": auth_client_id,
-        "SEED_AUTH_CLIENT_SECRET": auth_client_secret,
-    }
-    missing_auth = [k for k, v in required_auth_vars.items() if not v]
-
-    if missing_auth:
-        logger.warning(
-            "Skipping auth provider seeding — missing env vars: %s",
-            ", ".join(missing_auth),
-        )
-        result = SeedResult(category="auth_provider", skipped=1)
-        result.details.append(f"Skipped — missing: {', '.join(missing_auth)}")
-        results.append(result)
-    else:
-        results.append(
-            seed_auth_provider(
-                table_name=auth_table,
-                secrets_arn=secrets_arn,
-                region=region,
-                provider_id=auth_provider_id or "default",
-                display_name=auth_display_name or "Default Provider",
-                issuer_url=auth_issuer_url,
-                client_id=auth_client_id,
-                client_secret=auth_client_secret,
-                button_color=auth_button_color,
-                discover=True,
-            )
-        )
 
     # --- Quota tier seeding ---
     results.append(seed_default_quota_tier(table_name=quotas_table, region=region))
@@ -916,24 +538,6 @@ def main() -> None:
 
     # --- Tool seeding ---
     results.append(seed_default_tools(table_name=app_roles_table, region=region))
-
-    # --- System admin JWT role seeding ---
-    admin_jwt_role = os.environ.get("SEED_ADMIN_JWT_ROLE", "")
-    if admin_jwt_role:
-        results.append(
-            seed_system_admin_jwt_roles(
-                table_name=app_roles_table,
-                region=region,
-                jwt_role=admin_jwt_role,
-            )
-        )
-    else:
-        logger.warning(
-            "Skipping system admin JWT role seeding — SEED_ADMIN_JWT_ROLE not set"
-        )
-        r = SeedResult(category="system_admin_jwt", skipped=1)
-        r.details.append("Skipped — SEED_ADMIN_JWT_ROLE not set")
-        results.append(r)
 
     # --- Summary ---
     print_summary(results)

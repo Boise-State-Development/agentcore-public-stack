@@ -10,7 +10,7 @@ The admin module demonstrates how to use the shared authentication RBAC utilitie
 
 ### JWT Role Extraction
 
-Roles are automatically extracted from the JWT token by `GenericOIDCJWTValidator` (`apis/shared/auth/generic_jwt_validator.py`) and populated in the `User` model (`apis/shared/auth/models.py`).
+Roles are automatically extracted from the JWT token by `CognitoJWTValidator` (`apis/shared/auth/cognito_jwt_validator.py`) and populated in the `User` model (`apis/shared/auth/models.py`).
 
 ### RBAC Dependencies
 
@@ -298,7 +298,7 @@ Roles are configured in Entra ID (Azure AD) app registration:
 3. Roles appear in the JWT token's `roles` claim
 4. Backend validates and extracts roles automatically
 
-See `apis/shared/auth/generic_jwt_validator.py` for role extraction logic.
+See `apis/shared/auth/cognito_jwt_validator.py` for role extraction logic.
 
 ## Future Enhancements
 

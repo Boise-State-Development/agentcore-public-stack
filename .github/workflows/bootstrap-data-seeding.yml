@@ -49,18 +49,6 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      # Auth provider config — non-sensitive from variables
-      SEED_AUTH_PROVIDER_ID: ${{ vars.SEED_AUTH_PROVIDER_ID }}
-      SEED_AUTH_DISPLAY_NAME: ${{ vars.SEED_AUTH_DISPLAY_NAME }}
-      SEED_AUTH_ISSUER_URL: ${{ vars.SEED_AUTH_ISSUER_URL }}
-      SEED_AUTH_BUTTON_COLOR: ${{ vars.SEED_AUTH_BUTTON_COLOR }}
-
-      # Auth provider config — client ID is a public identifier (non-sensitive)
-      SEED_AUTH_CLIENT_ID: ${{ vars.SEED_AUTH_CLIENT_ID }}
-      SEED_AUTH_CLIENT_SECRET: ${{ secrets.SEED_AUTH_CLIENT_SECRET }}
-
-      # System admin JWT role mapping
-      SEED_ADMIN_JWT_ROLE: ${{ vars.SEED_ADMIN_JWT_ROLE }}
 
     steps:
       - name: Checkout code

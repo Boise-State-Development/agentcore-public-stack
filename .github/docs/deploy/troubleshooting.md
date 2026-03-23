@@ -149,29 +149,30 @@
 ## Post-Deploy Issues
 
 <details>
-<summary>Login page doesn't show the identity provider button</summary>
+<summary>Login page doesn't load or shows an error</summary>
 
-**Symptom:** The login page loads but there's no button to sign in.
+**Symptom:** The login page doesn't load, or the first-boot setup page doesn't appear on a fresh deployment.
 
-**Cause:** Bootstrap data seeding didn't run or the auth provider config is incorrect.
+**Cause:** The App API may not be running, or the Cognito User Pool wasn't created properly.
 
 **Fix:**
-1. Verify the **Seed Bootstrap Data** workflow (Step 7) completed successfully
-2. Check that `SEED_AUTH_PROVIDER_ID`, `SEED_AUTH_DISPLAY_NAME`, `SEED_AUTH_ISSUER_URL`, `SEED_AUTH_CLIENT_ID`, and `SEED_AUTH_CLIENT_SECRET` are all set
-3. Re-run the **Seed Bootstrap Data** workflow
+1. Check that the App API ECS service is running and healthy
+2. Verify the Infrastructure workflow completed successfully (Cognito User Pool is created there)
+3. Check CloudWatch logs for the App API service for specific errors
+4. If on a fresh deployment, ensure you see the first-boot setup page — if you see a login page instead, first-boot may have already been completed
 
 </details>
 
 <details>
 <summary>Login succeeds but redirects to an error</summary>
 
-**Symptom:** IdP login works, but the redirect back to the app fails.
+**Symptom:** Login works, but the redirect back to the app fails.
 
-**Cause:** Redirect URI mismatch in your IdP's app registration.
+**Cause:** Redirect URI mismatch in the Cognito App Client configuration, or a federated identity provider misconfiguration.
 
 **Fix:**
-1. In your IdP (Entra ID, Cognito, Okta, etc.), add your frontend domain as an allowed redirect URI
-2. The redirect URI format is typically: `https://app.example.com` or `https://app.example.com/auth/callback`
+1. Verify the Cognito App Client callback URLs include your frontend domain (e.g., `https://app.example.com/auth/callback`)
+2. If using a federated provider, check that the provider's app registration includes the Cognito domain as an allowed redirect URI
 3. Check your browser's developer console (Network tab) for the exact redirect URL being used
 
 </details>
@@ -196,13 +197,13 @@
 
 **Symptom:** You're logged in but don't see admin menu items.
 
-**Cause:** Your JWT token doesn't include the expected admin role claim.
+**Cause:** Your account doesn't have the system admin role.
 
 **Fix:**
-1. Verify `SEED_ADMIN_JWT_ROLE` is set to a role that your IdP includes in tokens
-2. In your IdP, check that role/group claims are configured in the token settings
-3. Re-run the **Seed Bootstrap Data** workflow if you changed the value
-4. Log out and log back in to get a fresh token
+1. If this is a fresh deployment, the user who completed the first-boot setup should automatically have admin access
+2. If using a federated identity provider, verify that the user's Cognito groups include the admin role
+3. Log out and log back in to get a fresh token
+4. Check the Users DynamoDB table to verify the user record has the `system_admin` role
 
 </details>
 

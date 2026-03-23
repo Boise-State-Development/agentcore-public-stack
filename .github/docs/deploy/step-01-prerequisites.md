@@ -20,22 +20,19 @@ Confirm you have access to the following before proceeding. Everything on this l
 - [ ] **GitHub account** with a fork of this repository
 - [ ] **Domain name** you control (e.g. `example.com`) with the ability to update nameservers
 
-### Identity Provider
+### Identity Provider (Optional)
 
-You need an OIDC-compatible identity provider for user login. Any of these work:
+Authentication is handled automatically via Amazon Cognito, which is deployed as part of the infrastructure stack. On first access, you'll create an admin account directly — no external identity provider is needed to get started.
 
-- [ ] **Microsoft Entra ID** (Azure AD)
-- [ ] **AWS Cognito**
-- [ ] **Okta**
-- [ ] **Any OIDC-compliant provider**
+If you want federated login (e.g., corporate SSO), you can optionally configure an external OIDC provider later through the admin UI:
 
-You'll need these values from your IdP:
-- Client ID
-- Client Secret
-- Issuer URL (e.g. `https://login.microsoftonline.com/YOUR-TENANT-ID/v2.0`)
+- **Microsoft Entra ID** (Azure AD)
+- **Okta**
+- **Google Workspace**
+- **Any OIDC-compliant provider**
 
 > [!NOTE]
-> Setting up the identity provider itself is outside the scope of this guide. You should have an existing IdP application configured before starting.
+> No identity provider setup is required before deployment. Cognito handles initial authentication, and federated providers can be added post-deployment through the admin dashboard.
 
 <details>
 <summary>What if I don't have a domain yet?</summary>
@@ -45,9 +42,9 @@ You can register a domain through [AWS Route 53](https://docs.aws.amazon.com/Rou
 </details>
 
 <details>
-<summary>What if I don't have an identity provider yet?</summary>
+<summary>What if I want to add a federated identity provider later?</summary>
 
-The quickest option is **AWS Cognito** — you can set up a user pool directly in the AWS Console. For Microsoft environments, **Entra ID** is a natural fit. The key requirement is that your IdP supports OIDC and can provide a client ID, client secret, and issuer URL.
+After deployment, the first-boot flow creates your admin account using Cognito. Once logged in as admin, you can add federated identity providers (Entra ID, Okta, Google, etc.) through the admin dashboard. The system registers them in Cognito automatically — no redeployment needed.
 
 </details>
 

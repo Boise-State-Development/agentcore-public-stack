@@ -19,6 +19,18 @@ export interface RuntimeConfig {
 
   /** Application version from VERSION file (injected via config.json or environment fallback) */
   version: string;
+
+  /** Cognito User Pool domain URL (e.g., https://myprefix.auth.us-east-1.amazoncognito.com) */
+  cognitoDomainUrl: string;
+
+  /** Cognito App Client ID */
+  cognitoAppClientId: string;
+
+  /** AWS region for Cognito (e.g., us-east-1) */
+  cognitoRegion: string;
+
+  /** Single inference API URL (replaces per-provider runtime endpoint resolution) */
+  inferenceApiUrl: string;
 }
 
 /**
@@ -76,6 +88,30 @@ export class ConfigService {
    * Returns 'unknown' if config not loaded or version not set
    */
   readonly version = computed(() => this.config()?.version ?? 'unknown');
+
+  /**
+   * Computed signal for Cognito domain URL
+   * Returns empty string if config not loaded
+   */
+  readonly cognitoDomainUrl = computed(() => this.config()?.cognitoDomainUrl ?? '');
+
+  /**
+   * Computed signal for Cognito App Client ID
+   * Returns empty string if config not loaded
+   */
+  readonly cognitoAppClientId = computed(() => this.config()?.cognitoAppClientId ?? '');
+
+  /**
+   * Computed signal for Cognito region
+   * Returns 'us-east-1' if config not loaded
+   */
+  readonly cognitoRegion = computed(() => this.config()?.cognitoRegion ?? 'us-east-1');
+
+  /**
+   * Computed signal for Inference API URL (single runtime endpoint)
+   * Returns empty string if config not loaded
+   */
+  readonly inferenceApiUrl = computed(() => this.config()?.inferenceApiUrl ?? '');
   
   /**
    * Read-only signal indicating if configuration has been loaded
@@ -131,6 +167,10 @@ export class ConfigService {
         appApiUrl: environment.appApiUrl || 'http://localhost:8000',
         environment: environment.production ? 'production' : 'development',
         version: (environment as any).version || 'unknown',
+        cognitoDomainUrl: (environment as any).cognitoDomainUrl || '',
+        cognitoAppClientId: (environment as any).cognitoAppClientId || '',
+        cognitoRegion: (environment as any).cognitoRegion || 'us-east-1',
+        inferenceApiUrl: (environment as any).inferenceApiUrl || 'http://localhost:8001',
       };
       
       console.log('📋 Using fallback configuration from environment.ts');

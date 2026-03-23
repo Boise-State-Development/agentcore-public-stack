@@ -31,5 +31,9 @@ export const environment = {
     // Runtime values loaded from /config.json
     // These are placeholders for fallback only
     appApiUrl: '',
-    version: ''
+    version: '',
+    cognitoDomainUrl: '',
+    cognitoAppClientId: '',
+    cognitoRegion: 'us-east-1',
+    inferenceApiUrl: '',
 };

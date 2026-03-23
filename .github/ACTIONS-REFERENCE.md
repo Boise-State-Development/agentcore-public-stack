@@ -57,10 +57,4 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_VPC_CIDR | Variable | No | `10.0.0.0/16` | Infrastructure, App API | CIDR block for VPC network |
 | ENV_INFERENCE_API_CORS_ORIGINS | Variable | No | None | Inference API | Comma-separated CORS origins for runtime environment |
 | ENV_INFERENCE_API_LOG_LEVEL | Variable | No | `INFO` | Inference API | Log level for runtime container (DEBUG, INFO, WARNING, ERROR) |
-| SEED_ADMIN_JWT_ROLE | Variable | No | None | Bootstrap Data Seeding | JWT role that grants system admin access (e.g., `Admin`). Maps to the `system_admin` AppRole. |
-| SEED_AUTH_BUTTON_COLOR | Variable | No | None | Bootstrap Data Seeding | Hex color for the auth provider login button (e.g., '#0078D4') |
-| SEED_AUTH_CLIENT_ID | Variable | No | None | Bootstrap Data Seeding | OAuth client ID for the initial OIDC auth provider |
-| SEED_AUTH_CLIENT_SECRET | Secret | No | None | Bootstrap Data Seeding | OAuth client secret for the initial OIDC auth provider |
-| SEED_AUTH_DISPLAY_NAME | Variable | No | None | Bootstrap Data Seeding | Display name shown on the login page (e.g., 'Microsoft Entra ID') |
-| SEED_AUTH_ISSUER_URL | Variable | No | None | Bootstrap Data Seeding | OIDC issuer URL for the auth provider (e.g., 'https://login.microsoftonline.com/TENANT/v2.0') |
-| SEED_AUTH_PROVIDER_ID | Variable | No | None | Bootstrap Data Seeding | Slug identifier for the auth provider (e.g., 'entra-id') |
+| SEED_ADMIN_JWT_ROLE | Variable | No | None | Bootstrap Data Seeding | _(Deprecated)_ Previously used for JWT role mapping. Admin access is now granted automatically via the Cognito first-boot flow. |

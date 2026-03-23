@@ -17,7 +17,7 @@ In this step you'll add all the configuration values from Step 2 (plus a few new
 - Admin access to your forked repository on GitHub
 - The values you noted in Step 2 (role ARN or access keys, domain, certificate ARNs)
 - Your AWS account ID (12-digit number)
-- Your identity provider credentials (client ID, client secret, issuer URL)
+- (Optional) Your identity provider credentials if you plan to add federated login later
 
 ---
 
@@ -103,39 +103,11 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 
 ---
 
-## 3c. Identity Provider Configuration
+## 3c. Authentication
 
-These values configure user login for your deployed application. Add them as a mix of **variables** and **secrets**.
+Authentication is handled automatically by Amazon Cognito, which is deployed as part of the infrastructure stack. No identity provider configuration is needed before deployment.
 
-### Variables
-
-| Variable Name | Example | Description |
-|---------------|---------|-------------|
-| `SEED_AUTH_PROVIDER_ID` | `entra-id` | Slug identifier for your IdP |
-| `SEED_AUTH_DISPLAY_NAME` | `Microsoft Entra ID` | Display name shown on the login page |
-| `SEED_AUTH_ISSUER_URL` | `https://login.microsoftonline.com/TENANT/v2.0` | OIDC issuer URL from your IdP |
-| `SEED_AUTH_CLIENT_ID` | `your-client-id` | OAuth client ID from your IdP |
-
-### Secret
-
-| Secret Name | Description |
-|-------------|-------------|
-| `SEED_AUTH_CLIENT_SECRET` | OAuth client secret from your IdP |
-
-### Optional
-
-| Variable Name | Example | Description |
-|---------------|---------|-------------|
-| `SEED_ADMIN_JWT_ROLE` | `Admin` | JWT role claim that grants system admin access. Maps to the `system_admin` AppRole via the bootstrap seed script. Must match a role your IdP includes in tokens. |
-
-<details>
-<summary>What is SEED_ADMIN_JWT_ROLE and do I need it?</summary>
-
-This is optional but recommended. When set, users whose JWT tokens include this role claim will be granted system admin access in the application. This lets you manage models, tools, roles, and other admin features.
-
-If you skip this, no users will have admin access initially. You can always set it later and re-run the Bootstrap Data Seeding workflow.
-
-</details>
+After deployment, the first person to access the application will complete a first-boot setup to create the initial admin account with username, email, and password. The admin can then add federated identity providers (Entra ID, Okta, Google, etc.) through the admin dashboard.
 
 <details>
 <summary>Quick reference: what values did I note in Step 2?</summary>
@@ -159,8 +131,6 @@ Before proceeding, confirm:
 
 - [ ] AWS credentials are saved as secrets (either `AWS_ROLE_ARN` or the access key pair)
 - [ ] All 8 required variables from section 3b are set
-- [ ] All 4 identity provider variables from section 3c are set
-- [ ] The `SEED_AUTH_CLIENT_SECRET` secret is saved
 
 ---
 

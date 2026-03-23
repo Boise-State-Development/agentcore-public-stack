@@ -1,4 +1,4 @@
-"""Tests for seed_system_admin_jwt_roles in seed_bootstrap_data.py."""
+"""Tests for seed_system_admin_role and seed_default_tools in seed_bootstrap_data.py."""
 
 import sys
 import os
@@ -13,7 +13,6 @@ sys.path.insert(
 )
 
 from seed_bootstrap_data import (  # noqa: E402
-    seed_system_admin_jwt_roles,
     seed_system_admin_role,
     seed_default_tools,
 )
@@ -53,115 +52,6 @@ def dynamodb_table():
         )
         table.meta.client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
         yield table
-
-
-class TestSeedSystemAdminJwtRoles:
-    def test_creates_full_role_when_missing(self, dynamodb_table):
-        """When system_admin role doesn't exist, creates DEFINITION + JWT_MAPPING + grants."""
-        result = seed_system_admin_jwt_roles(TABLE_NAME, REGION, "Admin")
-
-        assert result.created == 1
-        assert result.failed == 0
-
-        # Verify DEFINITION item
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "DEFINITION"}
-        )
-        item = resp["Item"]
-        assert item["roleId"] == "system_admin"
-        assert item["jwtRoleMappings"] == ["Admin"]
-        assert item["grantedTools"] == ["*"]
-        assert item["grantedModels"] == ["*"]
-        assert item["isSystemRole"] is True
-
-        # Verify JWT_MAPPING item with GSI keys
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#Admin"}
-        )
-        mapping = resp["Item"]
-        assert mapping["GSI1PK"] == "JWT_ROLE#Admin"
-        assert mapping["GSI1SK"] == "ROLE#system_admin"
-        assert mapping["roleId"] == "system_admin"
-        assert mapping["enabled"] is True
-
-        # Verify TOOL_GRANT item
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "TOOL_GRANT#*"}
-        )
-        assert "Item" in resp
-
-        # Verify MODEL_GRANT item
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "MODEL_GRANT#*"}
-        )
-        assert "Item" in resp
-
-    def test_skips_when_mapping_already_exists(self, dynamodb_table):
-        """When system_admin already has the correct mapping, skip."""
-        # Seed first
-        seed_system_admin_jwt_roles(TABLE_NAME, REGION, "Admin")
-
-        # Seed again with same value
-        result = seed_system_admin_jwt_roles(TABLE_NAME, REGION, "Admin")
-
-        assert result.skipped == 1
-        assert result.created == 0
-        assert result.failed == 0
-
-    def test_updates_when_mapping_differs(self, dynamodb_table):
-        """When system_admin has a different mapping, replace it."""
-        # Seed with initial value
-        seed_system_admin_jwt_roles(TABLE_NAME, REGION, "OldRole")
-
-        # Verify initial mapping
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#OldRole"}
-        )
-        assert "Item" in resp
-
-        # Update to new value
-        result = seed_system_admin_jwt_roles(TABLE_NAME, REGION, "NewRole")
-
-        assert result.created == 1
-        assert result.failed == 0
-
-        # Old mapping should be gone
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#OldRole"}
-        )
-        assert "Item" not in resp
-
-        # New mapping should exist with correct GSI keys
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#NewRole"}
-        )
-        mapping = resp["Item"]
-        assert mapping["GSI1PK"] == "JWT_ROLE#NewRole"
-        assert mapping["GSI1SK"] == "ROLE#system_admin"
-        assert mapping["roleId"] == "system_admin"
-
-        # DEFINITION should reflect new mapping
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "DEFINITION"}
-        )
-        assert resp["Item"]["jwtRoleMappings"] == ["NewRole"]
-
-    def test_gsi_queryable_after_creation(self, dynamodb_table):
-        """JWT_MAPPING items should be queryable via the GSI."""
-        seed_system_admin_jwt_roles(TABLE_NAME, REGION, "DotNetDevelopers")
-
-        # Query the GSI as AppRoleService would
-        resp = dynamodb_table.query(
-            IndexName="JwtRoleMappingIndex",
-            KeyConditionExpression=(
-                boto3.dynamodb.conditions.Key("GSI1PK").eq("JWT_ROLE#DotNetDevelopers")
-            ),
-        )
-
-        items = resp["Items"]
-        assert len(items) == 1
-        assert items[0]["roleId"] == "system_admin"
-        assert items[0]["GSI1SK"] == "ROLE#system_admin"
 
 
 class TestSeedSystemAdminRole:
@@ -210,25 +100,6 @@ class TestSeedSystemAdminRole:
 
         assert result.skipped == 1
         assert result.created == 0
-
-    def test_jwt_seeder_works_after_role_seeder(self, dynamodb_table):
-        """JWT mapping seeder correctly updates role created without mappings."""
-        seed_system_admin_role(TABLE_NAME, REGION)
-
-        result = seed_system_admin_jwt_roles(TABLE_NAME, REGION, "Admin")
-        assert result.created == 1
-
-        # DEFINITION should now have the JWT mapping
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "DEFINITION"}
-        )
-        assert resp["Item"]["jwtRoleMappings"] == ["Admin"]
-
-        # JWT_MAPPING item should exist
-        resp = dynamodb_table.get_item(
-            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#Admin"}
-        )
-        assert resp["Item"]["GSI1PK"] == "JWT_ROLE#Admin"
 
 
 class TestSeedDefaultTools:

@@ -1,87 +1,31 @@
 import { inject, Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../auth.service';
 import { UserService } from '../user.service';
 import { SessionService } from '../../session/services/session/session.service';
-import { ConfigService } from '../../services/config.service';
-
-export interface TokenExchangeRequest {
-  code: string;
-  state: string;
-  redirect_uri?: string;
-}
-
-export interface TokenExchangeResponse {
-  access_token: string;
-  refresh_token?: string;
-  id_token?: string;
-  token_type: string;
-  expires_in: number;
-  scope?: string;
-}
 
 @Injectable({
   providedIn: 'root'
 })
 export class CallbackService {
-  private http = inject(HttpClient);
   private authService = inject(AuthService);
   private userService = inject(UserService);
   private sessionService = inject(SessionService);
-  private config = inject(ConfigService);
 
-  async exchangeCodeForTokens(code: string, state: string, redirectUri?: string): Promise<TokenExchangeResponse> {
-    // Retrieve stored state token from sessionStorage for CSRF validation
-    const storedState = this.authService.getStoredState();
-    
-    if (!storedState) {
-      throw new Error('No state token found. Please initiate login again.');
-    }
+  /**
+   * Exchange authorization code for tokens via Cognito token endpoint.
+   * Delegates to AuthService.handleCallback() for the actual token exchange.
+   */
+  async exchangeCodeForTokens(code: string, state: string): Promise<void> {
+    // Exchange code for tokens directly with Cognito via AuthService
+    await this.authService.handleCallback(code, state);
 
-    // Validate state token matches (CSRF protection)
-    if (storedState !== state) {
-      // Clear stored state on mismatch
-      this.authService.clearStoredState();
-      throw new Error('State token mismatch. Security validation failed. Please try logging in again.');
-    }
+    // Refresh user data from new token
+    this.userService.refreshUser();
 
-    const request: TokenExchangeRequest = {
-      code,
-      state,
-      ...(redirectUri && { redirect_uri: redirectUri })
-    };
+    // Ensure resolved permissions are available before navigating
+    await this.userService.ensurePermissionsLoaded();
 
-    try {
-      const response = await firstValueFrom(
-        this.http.post<TokenExchangeResponse>(`${this.config.appApiUrl()}/auth/token`, request)
-      );
-
-      if (!response || !response.access_token) {
-        throw new Error('Invalid token response');
-      }
-
-      // Store tokens using AuthService
-      this.authService.storeTokens(response);
-
-      // Refresh user data from new token
-      this.userService.refreshUser();
-
-      // Ensure resolved permissions are available before navigating
-      await this.userService.ensurePermissionsLoaded();
-
-      // Enable sessions loading now that user is authenticated
-      this.sessionService.enableSessionsLoading();
-
-      // Clear state token after successful exchange
-      this.authService.clearStoredState();
-
-      return response;
-    } catch (error) {
-      // Clear state token on error
-      this.authService.clearStoredState();
-      throw error;
-    }
+    // Enable sessions loading now that user is authenticated
+    this.sessionService.enableSessionsLoading();
   }
 }
-

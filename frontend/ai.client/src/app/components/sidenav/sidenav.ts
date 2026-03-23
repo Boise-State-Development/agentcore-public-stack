@@ -52,8 +52,6 @@ export class Sidenav {
   }
 
   handleLogout() {
-    // Redirect to home page after logout
-    const postLogoutRedirectUri = window.location.origin;
-    this.authService.logout(postLogoutRedirectUri);
+    this.authService.logout();
   }
 }

@@ -3,6 +3,7 @@
 import asyncio
 import jwt
 import logging
+import os
 from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -46,36 +47,52 @@ async def _sync_user_background(sync_service, user: User) -> None:
         # Log but don't fail - sync should never break authentication
         logger.warning(f"Failed to sync user {user.user_id}: {e}")
 
-# Lazy-initialized generic validator for multi-provider support
-_generic_validator = None
-_generic_validator_initialized = False
+# Lazy-initialized Cognito validator singleton
+_cognito_validator = None
+_cognito_validator_initialized = False
 
 
-def _get_generic_validator():
+def _get_cognito_validator():
     """
-    Get the GenericOIDCJWTValidator instance.
+    Get the CognitoJWTValidator singleton instance.
 
-    Returns None if the auth providers table is not configured.
+    Reads Cognito configuration from environment variables:
+    - COGNITO_USER_POOL_ID: The Cognito User Pool ID
+    - COGNITO_APP_CLIENT_ID: The Cognito App Client ID
+    - COGNITO_REGION or AWS_REGION: The AWS region
+
+    Returns None if required environment variables are not set.
     """
-    global _generic_validator, _generic_validator_initialized
-    if _generic_validator_initialized:
-        return _generic_validator
+    global _cognito_validator, _cognito_validator_initialized
+    if _cognito_validator_initialized:
+        return _cognito_validator
 
-    _generic_validator_initialized = True
+    _cognito_validator_initialized = True
     try:
-        from apis.shared.auth_providers.repository import get_auth_provider_repository
-        from .generic_jwt_validator import GenericOIDCJWTValidator
+        from .cognito_jwt_validator import CognitoJWTValidator
 
-        repo = get_auth_provider_repository()
-        if repo.enabled:
-            _generic_validator = GenericOIDCJWTValidator(repo)
-            logger.info("GenericOIDCJWTValidator initialized for multi-provider auth")
-        else:
-            logger.debug("Auth providers table not configured, generic validator disabled")
+        user_pool_id = os.environ.get("COGNITO_USER_POOL_ID")
+        app_client_id = os.environ.get("COGNITO_APP_CLIENT_ID")
+        region = os.environ.get("COGNITO_REGION") or os.environ.get("AWS_REGION")
+
+        if not user_pool_id or not app_client_id or not region:
+            logger.warning(
+                "Cognito environment variables not fully configured. "
+                "Required: COGNITO_USER_POOL_ID, COGNITO_APP_CLIENT_ID, "
+                "COGNITO_REGION (or AWS_REGION)"
+            )
+            return None
+
+        _cognito_validator = CognitoJWTValidator(
+            user_pool_id=user_pool_id,
+            app_client_id=app_client_id,
+            region=region,
+        )
+        logger.info("CognitoJWTValidator initialized for Cognito auth")
     except Exception as e:
-        logger.debug(f"Generic validator not available: {e}")
+        logger.error(f"Failed to initialize CognitoJWTValidator: {e}", exc_info=True)
 
-    return _generic_validator
+    return _cognito_validator
 
 
 async def get_current_user(
@@ -84,8 +101,8 @@ async def get_current_user(
     """
     FastAPI dependency to get the current authenticated user.
 
-    Validates the JWT token using the GenericOIDCJWTValidator, which
-    matches the token issuer to configured auth providers.
+    Validates the JWT token using the CognitoJWTValidator against
+    the configured Cognito User Pool.
 
     Args:
         credentials: HTTP Bearer token credentials (None if missing)
@@ -108,21 +125,18 @@ async def get_current_user(
 
     token = credentials.credentials
 
-    # Use generic multi-provider validation
-    generic_validator = _get_generic_validator()
-    if generic_validator:
+    validator = _get_cognito_validator()
+    if validator:
         try:
-            provider = await generic_validator.resolve_provider_from_token(token)
-            if provider:
-                user = generic_validator.validate_token(token, provider)
-                user.raw_token = token
+            user = validator.validate_token(token)
+            user.raw_token = token
 
-                # Fire-and-forget sync to Users table
-                sync_service = _get_user_sync_service()
-                if sync_service and sync_service.enabled:
-                    asyncio.create_task(_sync_user_background(sync_service, user))
+            # Fire-and-forget sync to Users table
+            sync_service = _get_user_sync_service()
+            if sync_service and sync_service.enabled:
+                asyncio.create_task(_sync_user_background(sync_service, user))
 
-                return user
+            return user
         except HTTPException:
             raise
         except Exception as e:
@@ -132,11 +146,11 @@ async def get_current_user(
                 detail="Authentication failed."
             )
 
-    # No validator available - no auth providers configured
-    logger.error("No JWT validator available. Ensure at least one OIDC auth provider is configured.")
+    # No validator available - Cognito not configured
+    logger.error("No JWT validator available. Ensure Cognito environment variables are configured.")
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Authentication service not configured. No OIDC auth providers have been set up."
+        detail="Authentication service not configured. Cognito environment variables are missing."
     )
 
 
@@ -167,8 +181,8 @@ async def get_current_user_trusted(
 
     Use this when JWT validation is already performed at the network level
     (e.g., by AWS Bedrock AgentCore Runtime's JWT authorizer). This method
-    skips expensive signature verification and simply extracts claims from
-    the token using the matching auth provider's claim mappings.
+    skips expensive signature verification and simply extracts standard
+    Cognito/OIDC claims from the token.
 
     Security: Only use this in services where the JWT validation
     is guaranteed. IE AgentCore Runtime with Inbound Auth. For services without pre-validation, use
@@ -202,82 +216,17 @@ async def get_current_user_trusted(
         payload = jwt.decode(token, options={"verify_signature": False})
         logger.debug("[get_current_user_trusted] JWT decoded successfully")
 
-        # Resolve provider for claim mappings
-        generic_validator = _get_generic_validator()
-        if generic_validator:
-            try:
-                provider = await generic_validator.resolve_provider_from_token(token)
-                logger.debug(f"[get_current_user_trusted] Provider resolved: {provider.provider_id if provider else 'None'}")
-                if provider:
-                    # Use provider-specific claim extraction
-                    # Fall back to common OIDC claims if primary claim is absent
-                    email = (
-                        payload.get(provider.email_claim)
-                        or payload.get("preferred_username")
-                        or payload.get("upn")
-                    )
-                    name = payload.get(provider.name_claim)
-                    user_id = payload.get(provider.user_id_claim)
-                    roles = payload.get(provider.roles_claim, [])
-                    picture = payload.get(provider.picture_claim) if provider.picture_claim else None
-
-                    logger.debug("[get_current_user_trusted] Claims extracted from token")
-
-                    if not name and provider.first_name_claim and provider.last_name_claim:
-                        first = payload.get(provider.first_name_claim, "")
-                        last = payload.get(provider.last_name_claim, "")
-                        name = f"{first} {last}".strip()
-
-                    if isinstance(roles, str):
-                        roles = [roles]
-
-                    if not user_id:
-                        logger.error("[get_current_user_trusted] Required user_id claim is missing/empty in token - returning 401")
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid user."
-                        )
-
-                    user = User(
-                        email=str(email).lower() if email else "",
-                        name=str(name) if name else "",
-                        user_id=str(user_id),
-                        roles=roles if isinstance(roles, list) else [],
-                        picture=picture,
-                        raw_token=token,
-                    )
-
-                    logger.debug("[get_current_user_trusted] User authenticated successfully via provider path")
-
-                    sync_service = _get_user_sync_service()
-                    if sync_service and sync_service.enabled:
-                        asyncio.create_task(_sync_user_background(sync_service, user))
-
-                    return user
-                else:
-                    logger.warning("[get_current_user_trusted] Provider resolved to None - falling through to generic extraction")
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"[get_current_user_trusted] Provider-based trusted extraction failed: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication failed."
-                )
-        else:
-            logger.warning("[get_current_user_trusted] No generic validator available (auth providers table not configured?)")
-
-        # No auth providers configured - use standard OIDC claim extraction
-        logger.warning("[get_current_user_trusted] Using standard OIDC claim fallback (no provider matched)")
+        # Extract standard Cognito/OIDC claims
         email = payload.get('email') or payload.get('preferred_username')
         name = payload.get('name') or (
             f"{payload.get('given_name', '')} {payload.get('family_name', '')}"
         ).strip()
         user_id = payload.get('sub')
-        roles = payload.get('roles', [])
+        # Support cognito:groups (list) or roles claim
+        roles = payload.get('cognito:groups') or payload.get('roles', [])
         picture = payload.get('picture')
 
-        logger.debug("[get_current_user_trusted] Using OIDC fallback claim extraction")
+        logger.debug("[get_current_user_trusted] Claims extracted from token")
 
         if not user_id:
             logger.error("[get_current_user_trusted] Missing 'sub' claim in token - returning 401")
@@ -285,6 +234,9 @@ async def get_current_user_trusted(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid user."
             )
+
+        if isinstance(roles, str):
+            roles = [roles]
 
         user = User(
             email=email.lower() if email else "",
@@ -295,7 +247,7 @@ async def get_current_user_trusted(
             raw_token=token,
         )
 
-        logger.debug("[get_current_user_trusted] User authenticated successfully via OIDC fallback")
+        logger.debug("[get_current_user_trusted] User authenticated successfully")
 
         # Fire-and-forget sync to Users table
         sync_service = _get_user_sync_service()

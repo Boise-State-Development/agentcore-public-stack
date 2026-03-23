@@ -392,7 +392,6 @@ describe('Stack Dependency Order', () => {
   test('AppApiStack reads from InferenceApiStack', () => {
     const appReads = reads.get('AppApiStack')!;
     expect(appReads.has('inference-api/memory-id')).toBe(true);
-    expect(appReads.has('inference-api/runtime-execution-role-arn')).toBe(true);
   });
 
   test('AppApiStack reads from RagIngestionStack', () => {

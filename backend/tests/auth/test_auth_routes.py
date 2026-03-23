@@ -6,11 +6,10 @@ Tests the full HTTP request/response cycle for:
 - POST /auth/token
 - POST /auth/refresh
 - GET /auth/logout
-- GET /auth/runtime-endpoint
 
 All service dependencies are mocked to isolate route logic.
 
-Requirements: 11.1–11.10
+Requirements: 11.1–11.8
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +19,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.app_api.auth.routes import router
-from apis.shared.auth.models import User
 
 
 # ---------------------------------------------------------------------------
@@ -301,79 +299,3 @@ class TestLogout:
         body = resp.json()
         assert "logout" in body["logout_url"]
 
-
-# ---------------------------------------------------------------------------
-# Requirement 11.9: GET /auth/runtime-endpoint authenticated
-# ---------------------------------------------------------------------------
-
-
-class TestRuntimeEndpoint:
-    """GET /auth/runtime-endpoint requires authentication."""
-
-    def test_authenticated_returns_runtime_endpoint(self, client, app, make_provider):
-        """Should return runtime endpoint info for an authenticated user."""
-        user = User(
-            email="test@example.com",
-            user_id="user-001",
-            name="Test User",
-            roles=["User"],
-            raw_token="valid-jwt-token",
-        )
-
-        provider = make_provider(
-            provider_id="test-provider",
-            agentcore_runtime_endpoint_url="https://runtime.example.com/invoke",
-            agentcore_runtime_status="READY",
-        )
-
-        # Override the get_current_user dependency
-        from apis.shared.auth.dependencies import get_current_user
-
-        app.dependency_overrides[get_current_user] = lambda: user
-
-        mock_repo = AsyncMock()
-        mock_repo.enabled = True
-
-        mock_validator = MagicMock()
-        mock_validator.resolve_provider_from_token = AsyncMock(return_value=provider)
-
-        with patch(
-            "apis.shared.auth_providers.repository.get_auth_provider_repository",
-            return_value=mock_repo,
-        ), patch(
-            "apis.shared.auth.generic_jwt_validator.GenericOIDCJWTValidator",
-            return_value=mock_validator,
-        ):
-            resp = client.get("/auth/runtime-endpoint")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["runtime_endpoint_url"] == "https://runtime.example.com/invoke"
-        assert body["provider_id"] == "test-provider"
-        assert body["runtime_status"] == "READY"
-
-        # Clean up override
-        app.dependency_overrides.clear()
-
-
-# ---------------------------------------------------------------------------
-# Requirement 11.10: GET /auth/runtime-endpoint unauthenticated 401
-# ---------------------------------------------------------------------------
-
-
-    def test_unauthenticated_returns_401(self, client, app):
-        """Should return 401 when no authentication is provided."""
-        # Override get_current_user to raise 401 (simulating no credentials)
-        from apis.shared.auth.dependencies import get_current_user
-
-        def _raise_401():
-            raise HTTPException(status_code=401, detail="Not authenticated")
-
-        app.dependency_overrides[get_current_user] = _raise_401
-
-        resp = client.get("/auth/runtime-endpoint")
-
-        assert resp.status_code == 401
-
-        # Clean up override
-        app.dependency_overrides.clear()

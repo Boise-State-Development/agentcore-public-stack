@@ -4,7 +4,6 @@ import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { AuthService } from '../../../auth/auth.service';
-import { AuthApiService } from '../../../auth/auth-api.service';
 import { ConfigService } from '../../../services/config.service';
 import { firstValueFrom } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
@@ -42,7 +41,6 @@ export class ChatHttpService {
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
   private authService = inject(AuthService);
-  private authApiService = inject(AuthApiService);
   private config = inject(ConfigService);
   private http = inject(HttpClient);
   private sessionService = inject(SessionService);
@@ -53,9 +51,11 @@ export class ChatHttpService {
 
     const token = await this.getBearerTokenForStreamingResponse();
 
-        // Fetch runtime endpoint URL for the user's provider
-        // The endpoint URL already includes /invocations path
-        const runtimeEndpointUrl = await this.getRuntimeEndpointUrl();
+        // Single runtime endpoint from configuration
+        const runtimeEndpointUrl = this.config.inferenceApiUrl();
+        if (!runtimeEndpointUrl) {
+          throw new FatalError('Inference API URL not configured. Please check your configuration.');
+        }
 
     return fetchEventSource(`${runtimeEndpointUrl}?qualifier=DEFAULT`, {
       method: 'POST',
@@ -240,68 +240,4 @@ export class ChatHttpService {
     return token;
   }
 
-    /**
-     * Get the runtime endpoint URL for the user's authentication provider.
-     * 
-     * This method fetches the provider-specific AgentCore Runtime endpoint URL
-     * from the App API. Each provider has its own dedicated runtime with
-     * provider-specific JWT validation.
-     * 
-     * Flow:
-     * 1. Call App API /auth/runtime-endpoint (authenticated request)
-     * 2. Backend extracts issuer from JWT and matches to provider
-     * 3. Backend returns runtime endpoint URL for that provider
-     * 4. Use this endpoint for all inference API calls
-     * 
-     * @returns Promise resolving to the runtime endpoint URL
-     * @throws FatalError if provider not found or runtime not ready
-     * 
-     * @example
-     * ```typescript
-     * const endpointUrl = await this.getRuntimeEndpointUrl();
-     * // Returns: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/arn%3Aaws%3A.../invocations"
-     * ```
-     */
-    private async getRuntimeEndpointUrl(): Promise<string> {
-        try {
-            // Fetch runtime endpoint from App API
-            const response = await firstValueFrom(
-                this.authApiService.getRuntimeEndpoint()
-            );
-
-      if (!response || !response.runtime_endpoint_url) {
-        throw new FatalError('Invalid runtime endpoint response from server');
-      }
-
-      // Update provider ID in auth service for tracking
-      if (response.provider_id) {
-        // Provider ID is already tracked by auth service during login
-        // This is just for verification/logging
-        const currentProviderId = this.authService.getProviderId();
-        if (currentProviderId !== response.provider_id) {
-          console.warn(
-            `Provider ID mismatch: expected ${currentProviderId}, got ${response.provider_id}`,
-          );
-        }
-      }
-
-      return response.runtime_endpoint_url;
-    } catch (error: any) {
-      // Handle specific HTTP errors
-      if (error?.status === 404) {
-        throw new FatalError(
-          'Runtime not found for your authentication provider. Please contact support.',
-        );
-      } else if (error?.status === 401) {
-        throw new FatalError('Authentication required. Please login again.');
-      } else if (error instanceof FatalError) {
-        // Re-throw FatalError as-is
-        throw error;
-      } else {
-        // Generic error
-        const errorMessage = error?.message || 'Failed to resolve runtime endpoint';
-        throw new FatalError(`Unable to connect to inference service: ${errorMessage}`);
-      }
-    }
-  }
 }

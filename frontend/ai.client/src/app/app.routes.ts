@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { ConversationPage } from './session/session.page';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
+import { firstBootGuard } from './auth/first-boot.guard';
 
 export const routes: Routes = [
     {
@@ -13,6 +14,11 @@ export const routes: Routes = [
         path: 's/:sessionId',
         loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
+    },
+    {
+        path: 'auth/first-boot',
+        loadComponent: () => import('./auth/first-boot/first-boot.page').then(m => m.FirstBootPage),
+        canActivate: [firstBootGuard],
     },
     {
         path: 'auth/login',

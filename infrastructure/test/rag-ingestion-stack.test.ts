@@ -83,6 +83,10 @@ describe('RagIngestionStack', () => {
       fineTuning: {
         enabled: false,
       },
+      cognito: {
+        domainPrefix: 'test-project',
+        passwordMinLength: 8,
+      },
       tags: {
         ManagedBy: 'CDK',
       },

@@ -19,28 +19,29 @@ All workflows have completed. Let's verify everything is working.
 Open your frontend URL in a browser (e.g. `https://app.example.com`).
 
 - [ ] The page loads without errors
-- [ ] You see a login page with your identity provider's name (e.g. "Sign in with Microsoft Entra ID")
+- [ ] You see a first-boot setup page (on fresh deployment) or a login page (if already set up)
 
 > [!NOTE]
 > CloudFront distributions can take a few minutes to fully propagate after the first deploy. If you get a 403 or "distribution not found" error, wait 5 minutes and try again.
 
-### 2. Authentication Works
+### 2. First-Boot Setup (Fresh Deployment)
 
-Click the login button and authenticate with your identity provider.
+On a fresh deployment, you'll see the first-boot setup page. Create your admin account.
 
-- [ ] You're redirected to your IdP's login page
-- [ ] After logging in, you're redirected back to the application
+- [ ] Enter a username, email, and password
+- [ ] Submit the form — you should be redirected to the login page
+- [ ] Log in with your new credentials
 - [ ] You land on the chat interface
 
 <details>
-<summary>Login redirects to an error page</summary>
+<summary>First-boot setup fails</summary>
 
 Common causes:
-- **Redirect URI mismatch:** Your IdP's app registration must include `https://app.example.com` (your frontend domain) as an allowed redirect URI
-- **Client ID/secret incorrect:** Double-check `SEED_AUTH_CLIENT_ID` and `SEED_AUTH_CLIENT_SECRET` in GitHub settings
-- **Issuer URL wrong:** Verify `SEED_AUTH_ISSUER_URL` matches your IdP's OIDC discovery endpoint
+- **Password too weak:** Password must be at least 8 characters with uppercase, lowercase, number, and special character
+- **ECS service not running:** Check that the App API service is healthy in the ECS console
+- **DynamoDB permissions:** Verify the App API task role has write access to the DynamoDB tables
 
-You can re-run the **Seed Bootstrap Data** workflow after fixing any of these values.
+Check CloudWatch logs for the App API service for specific error details.
 
 </details>
 
@@ -61,15 +62,15 @@ Check these in order:
 
 </details>
 
-### 4. Admin Access (Optional)
+### 4. Admin Access
 
-If you configured `SEED_ADMIN_JWT_ROLE` in Step 3, verify admin features:
+The user who completed the first-boot setup is automatically the system admin.
 
 - [ ] Navigate to the admin section
 - [ ] You can see and manage models, tools, and roles
 
 > [!TIP]
-> If admin features aren't visible, verify that your IdP token includes the role claim matching the value you set for `SEED_ADMIN_JWT_ROLE`. You may need to configure role/group claims in your IdP's app registration.
+> To add federated identity providers (Entra ID, Okta, Google, etc.), use the admin dashboard's authentication settings. No redeployment is needed.
 
 ---
 

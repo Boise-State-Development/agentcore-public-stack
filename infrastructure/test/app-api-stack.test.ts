@@ -188,65 +188,6 @@ describe('AppApiStack', () => {
   });
 
   // ============================================================
-  // Lambda Functions
-  // ============================================================
-
-  describe('Lambda Functions', () => {
-    test('creates RuntimeProvisioner function', () => {
-      template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: `${config.projectPrefix}-runtime-provisioner`,
-        Runtime: 'python3.14',
-        Handler: 'lambda_function.lambda_handler',
-        MemorySize: 512,
-        Timeout: 300,
-        Architectures: ['arm64'],
-      });
-    });
-
-    test('creates RuntimeUpdater function', () => {
-      template.hasResourceProperties('AWS::Lambda::Function', {
-        FunctionName: `${config.projectPrefix}-runtime-updater`,
-        Runtime: 'python3.14',
-        Handler: 'lambda_function.lambda_handler',
-        MemorySize: 512,
-        Timeout: 900,
-        Architectures: ['arm64'],
-      });
-    });
-
-    test('creates at least 2 Lambda functions', () => {
-      const lambdas = template.findResources('AWS::Lambda::Function');
-      expect(Object.keys(lambdas).length).toBeGreaterThanOrEqual(2);
-    });
-
-    test('RuntimeProvisioner has DynamoDB event source mapping', () => {
-      template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
-        BatchSize: 1,
-        BisectBatchOnFunctionError: true,
-        MaximumRetryAttempts: 3,
-        StartingPosition: 'LATEST',
-      });
-    });
-  });
-
-  // ============================================================
-  // SNS Topic
-  // ============================================================
-
-  describe('SNS Topic', () => {
-    test('creates runtime update alerts topic', () => {
-      template.hasResourceProperties('AWS::SNS::Topic', {
-        TopicName: `${config.projectPrefix}-runtime-update-alerts`,
-        DisplayName: 'AgentCore Runtime Update Alerts',
-      });
-    });
-
-    test('creates exactly 1 SNS topic', () => {
-      template.resourceCountIs('AWS::SNS::Topic', 1);
-    });
-  });
-
-  // ============================================================
   // ALB Target Group
   // ============================================================
 
@@ -285,29 +226,8 @@ describe('AppApiStack', () => {
   // ============================================================
 
   describe('SSM Parameters', () => {
-    test('exports 3 SSM parameters (file-upload params moved to InfrastructureStack)', () => {
-      template.resourceCountIs('AWS::SSM::Parameter', 3);
-    });
-
-    test('exports lambda/runtime-provisioner-arn', () => {
-      template.hasResourceProperties('AWS::SSM::Parameter', {
-        Name: `/${config.projectPrefix}/lambda/runtime-provisioner-arn`,
-        Type: 'String',
-      });
-    });
-
-    test('exports lambda/runtime-updater-arn', () => {
-      template.hasResourceProperties('AWS::SSM::Parameter', {
-        Name: `/${config.projectPrefix}/lambda/runtime-updater-arn`,
-        Type: 'String',
-      });
-    });
-
-    test('exports sns/runtime-update-alerts-arn', () => {
-      template.hasResourceProperties('AWS::SSM::Parameter', {
-        Name: `/${config.projectPrefix}/sns/runtime-update-alerts-arn`,
-        Type: 'String',
-      });
+    test('exports 0 SSM parameters (runtime provisioner/updater removed)', () => {
+      template.resourceCountIs('AWS::SSM::Parameter', 0);
     });
   });
 
@@ -380,21 +300,6 @@ describe('AppApiStack', () => {
     test('creates ECS security group', () => {
       template.hasResourceProperties('AWS::EC2::SecurityGroup', {
         GroupDescription: 'Security group for App API ECS Fargate tasks',
-      });
-    });
-  });
-
-  // ============================================================
-  // EventBridge Rule
-  // ============================================================
-
-  describe('EventBridge Rule', () => {
-    test('creates rule for SSM parameter change detection', () => {
-      template.hasResourceProperties('AWS::Events::Rule', {
-        EventPattern: Match.objectLike({
-          source: ['aws.ssm'],
-          'detail-type': ['Parameter Store Change'],
-        }),
       });
     });
   });
