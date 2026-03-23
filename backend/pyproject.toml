@@ -13,7 +13,7 @@ license = {text = "MIT"}
 # Core dependencies shared across both APIs
 dependencies = [
     # FastAPI and web framework
-    "fastapi==0.116.1",
+    "fastapi==0.135.2",
     "uvicorn[standard]==0.35.0",
 
     # AWS and cloud services
