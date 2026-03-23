@@ -23,9 +23,9 @@ export const routes: Routes = [
         loadComponent: () => import('./auth/callback/callback.page').then(m => m.CallbackPage),
     },
     {
-        path: 'api-keys',
-        loadComponent: () => import('./auth/api-keys/api-keys.page').then(m => m.ApiKeysPage),
-        canActivate: [authGuard],
+        path: 'connections',
+        redirectTo: 'settings/connections',
+        pathMatch: 'full',
     },
     {
         path: 'admin',
@@ -75,11 +75,6 @@ export const routes: Routes = [
     {
         path: 'assistants',
         loadComponent: () => import('./assistants/assistants.page').then(m => m.AssistantsPage),
-        canActivate: [authGuard],
-    },
-    {
-        path: 'costs',
-        loadComponent: () => import('./costs/cost-dashboard.page').then(m => m.CostDashboardPage),
         canActivate: [authGuard],
     },
     {

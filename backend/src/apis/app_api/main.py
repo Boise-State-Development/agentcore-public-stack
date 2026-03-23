@@ -111,6 +111,7 @@ from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
+from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.shared.oauth.routes import router as oauth_router
 
 # Include routers
@@ -122,6 +123,7 @@ app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(documents_router)
 app.include_router(users_router)
+app.include_router(user_settings_router)
 app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints

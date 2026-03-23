@@ -6,7 +6,6 @@ import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroChevronUpDown,
-  heroCurrencyDollar,
   heroArrowRightOnRectangle,
   heroCommandLine,
   heroSparkles,
@@ -16,8 +15,7 @@ import {
   heroChatBubbleLeftRight,
   heroDocument,
   heroBriefcase,
-  heroLink,
-  heroBeaker,
+  heroCog6Tooth,
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 import { ConfigService } from '../../../services/config.service';
@@ -37,7 +35,6 @@ export interface User {
   providers: [
     provideIcons({
       heroChevronUpDown,
-      heroCurrencyDollar,
       heroArrowRightOnRectangle,
       heroCommandLine,
       heroSparkles,
@@ -47,8 +44,7 @@ export interface User {
       heroComputerDesktop,
       heroChatBubbleLeftRight,
       heroDocument,
-      heroLink,
-      heroBeaker,
+      heroCog6Tooth,
     })
   ],
   template: `
@@ -98,16 +94,13 @@ export interface User {
         >
           <div class="p-1">
             <!-- User info section -->
-            <!-- <div class="px-3 py-2 border-b border-gray-200 dark:border-gray-700">
-              <p class="text-sm/5 font-semibold text-gray-900 dark:text-white">
-                {{ user().fullName }}
-              </p>
+            <div class="border-b border-gray-200 px-3 py-2 dark:border-gray-700">
               @if (user().email) {
-                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                <p class="truncate text-xs/5 lowercase text-gray-500 dark:text-gray-400">
                   {{ user().email }}
                 </p>
               }
-            </div> -->
+            </div>
 
             <!-- Menu items -->
             <div class="py-1">
@@ -127,135 +120,19 @@ export interface User {
                 </a>
               }
 
-              <!-- Assistants (available to all users) -->
+              <!-- Settings -->
               <a
                 cdkMenuItem
-                routerLink="/assistants"
-                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                role="menuitem"
-              >
-                <ng-icon name="heroBriefcase" class="size-5 text-gray-400 dark:text-gray-500" />
-                <span>Assistants</span>
-              </a>
-
-              <!-- Cost Dashboard (available to all users) -->
-              <a
-                cdkMenuItem
-                routerLink="/costs"
+                routerLink="/settings"
                 class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
                 role="menuitem"
               >
                 <ng-icon
-                  name="heroCurrencyDollar"
+                  name="heroCog6Tooth"
                   class="size-5 text-gray-400 dark:text-gray-500"
                 />
-                <span>Cost Dashboard</span>
+                <span>Settings</span>
               </a>
-
-              <!-- Memories (available to all users) -->
-              <a
-                cdkMenuItem
-                routerLink="/memories"
-                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroSparkles"
-                  class="size-5 text-gray-400 dark:text-gray-500"
-                />
-                <span>Memories</span>
-              </a>
-
-              <!-- Manage Conversations (available to all users) -->
-              <a
-                cdkMenuItem
-                routerLink="/manage-sessions"
-                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroChatBubbleLeftRight"
-                  class="size-5 text-gray-400 dark:text-gray-500"
-                />
-                <span>Manage Conversations</span>
-              </a>
-
-              <!-- My Files (available to all users) -->
-              <a
-                cdkMenuItem
-                routerLink="/files"
-                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroDocument"
-                  class="size-5 text-gray-400 dark:text-gray-500"
-                />
-                <span>My Files</span>
-              </a>
-
-              <!-- Connections (available to all users) -->
-              <a
-                cdkMenuItem
-                routerLink="/settings/connections"
-                class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroLink"
-                  class="size-5 text-gray-400 dark:text-gray-500"
-                />
-                <span>Connections</span>
-              </a>
-            </div>
-
-            <!-- Theme section -->
-            <div class="border-t border-gray-200 py-1 dark:border-gray-700">
-              <div class="px-3 py-1.5">
-                <span class="text-xs font-medium text-gray-500 dark:text-gray-400">Theme</span>
-              </div>
-              <button
-                cdkMenuItem
-                type="button"
-                (click)="selectTheme('light')"
-                [class]="'flex w-full items-center gap-3 px-3 py-2 text-sm/6 hover:bg-gray-50 focus:bg-gray-50 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden ' +
-                  (currentPreference() === 'light' ? 'text-[var(--color-primary)] font-medium' : 'text-gray-700 dark:text-gray-300')"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroSun"
-                  [class]="'size-5 ' + (currentPreference() === 'light' ? 'text-[var(--color-primary)]' : 'text-gray-400 dark:text-gray-500')"
-                />
-                <span>Light</span>
-              </button>
-              <button
-                cdkMenuItem
-                type="button"
-                (click)="selectTheme('dark')"
-                [class]="'flex w-full items-center gap-3 px-3 py-2 text-sm/6 hover:bg-gray-50 focus:bg-gray-50 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden ' +
-                  (currentPreference() === 'dark' ? 'text-[var(--color-primary)] font-medium' : 'text-gray-700 dark:text-gray-300')"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroMoon"
-                  [class]="'size-5 ' + (currentPreference() === 'dark' ? 'text-[var(--color-primary)]' : 'text-gray-400 dark:text-gray-500')"
-                />
-                <span>Dark</span>
-              </button>
-              <button
-                cdkMenuItem
-                type="button"
-                (click)="selectTheme('system')"
-                [class]="'flex w-full items-center gap-3 px-3 py-2 text-sm/6 hover:bg-gray-50 focus:bg-gray-50 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden ' +
-                  (currentPreference() === 'system' ? 'text-[var(--color-primary)] font-medium' : 'text-gray-700 dark:text-gray-300')"
-                role="menuitem"
-              >
-                <ng-icon
-                  name="heroComputerDesktop"
-                  [class]="'size-5 ' + (currentPreference() === 'system' ? 'text-[var(--color-primary)]' : 'text-gray-400 dark:text-gray-500')"
-                />
-                <span>System</span>
-              </button>
             </div>
 
             <!-- Logout section -->
@@ -386,7 +263,6 @@ export class UserDropdownComponent {
   }
 
   protected handleLogout(): void {
-    console.log('Logout clicked for user:', this.user().fullName);
     this.logout.emit();
   }
 }

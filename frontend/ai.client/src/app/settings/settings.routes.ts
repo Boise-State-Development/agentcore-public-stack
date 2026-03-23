@@ -29,17 +29,7 @@ export const settingsRoutes: Routes = [
   {
     path: 'api-keys',
     loadComponent: () =>
-      import('./pages/api-keys-settings/api-keys-settings.page').then(m => m.ApiKeysSettingsPage),
-  },
-  {
-    path: 'notifications',
-    loadComponent: () =>
-      import('./pages/notifications/notifications-settings.page').then(m => m.NotificationsSettingsPage),
-  },
-  {
-    path: 'privacy',
-    loadComponent: () =>
-      import('./pages/privacy/privacy-settings.page').then(m => m.PrivacySettingsPage),
+      import('./pages/api-keys/api-keys.page').then(m => m.ApiKeysPage),
   },
   {
     path: 'usage',

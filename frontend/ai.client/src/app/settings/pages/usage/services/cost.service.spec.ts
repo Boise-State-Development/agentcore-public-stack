@@ -3,8 +3,8 @@ import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { CostService } from './cost.service';
-import { ConfigService } from '../../services/config.service';
-import { AuthService } from '../../auth/auth.service';
+import { ConfigService } from '../../../../services/config.service';
+import { AuthService } from '../../../../auth/auth.service';
 
 describe('CostService', () => {
   let service: CostService;

@@ -171,6 +171,26 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // ============================================================
+    // User Settings Table
+    // PK (String) SK (String)
+    // ============================================================
+    const userSettingsTable = new dynamodb.Table(this, "UserSettingsTable", {
+      tableName: getResourceName(config, "user-settings"),
+      partitionKey: {
+        name: "PK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "SK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // ============================================================
     // CORS Origins Helper
     // Build CORS origins from explicit config + auto-derived domain
     // ============================================================
@@ -503,6 +523,7 @@ export class AppApiStack extends cdk.Stack {
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
+        DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTable.tableName,
       },
       portMappings: [
         {
@@ -524,6 +545,9 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for assistants base table (local to this stack)
     assistantsTable.grantReadWriteData(taskDefinition.taskRole);
+
+    // Grant permissions for user settings table
+    userSettingsTable.grantReadWriteData(taskDefinition.taskRole);
     
     // Grant explicit permissions for GSI queries (grantReadWriteData doesn't include GSI Query permissions)
     taskDefinition.taskRole.addToPrincipalPolicy(
