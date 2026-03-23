@@ -5,18 +5,17 @@ import {
   computed,
   inject,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
-  heroArrowLeft, heroKey, heroPlus, heroTrash, heroClipboardDocument,
+  heroKey, heroPlus, heroTrash, heroClipboardDocument,
   heroCheck, heroChevronDown, heroChevronUp, heroShieldCheck,
   heroExclamationTriangle, heroInformationCircle, heroCpuChip,
   heroCodeBracket, heroCommandLine, heroClock, heroXMark,
   heroQuestionMarkCircle,
 } from '@ng-icons/heroicons/outline';
-import { ToastService } from '../../services/toast/toast.service';
-import { ConfigService } from '../../services/config.service';
-import { ModelService } from '../../session/services/model/model.service';
+import { ToastService } from '../../../services/toast/toast.service';
+import { ConfigService } from '../../../services/config.service';
+import { ModelService } from '../../../session/services/model/model.service';
 import { ApiKeyService, ApiKey, CreateApiKeyResponse } from './api-key.service';
 
 type ResponseType = 'non-streaming' | 'streaming';
@@ -26,12 +25,11 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
 @Component({
   selector: 'app-api-keys',
-  standalone: true,
-  imports: [RouterLink, NgIcon],
+  imports: [NgIcon],
   changeDetection: ChangeDetectionStrategy.OnPush,
   providers: [
     provideIcons({
-      heroArrowLeft, heroKey, heroPlus, heroTrash, heroClipboardDocument,
+      heroKey, heroPlus, heroTrash, heroClipboardDocument,
       heroCheck, heroChevronDown, heroChevronUp, heroShieldCheck,
       heroExclamationTriangle, heroInformationCircle, heroCpuChip,
       heroCodeBracket, heroCommandLine, heroClock, heroXMark,
@@ -40,35 +38,44 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
   ],
   host: { class: 'block' },
   template: `
-    <div class="min-h-dvh">
-      <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-
-        <a routerLink="/settings/connections"
-          class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
-          <ng-icon name="heroArrowLeft" class="size-4" /> Back
-        </a>
-
-        <div class="mb-8 flex items-center gap-3">
-          <div class="flex size-10 items-center justify-center rounded-sm bg-orange-500 text-white">
-            <ng-icon name="heroKey" class="size-5" />
-          </div>
-          <div>
-            <h1 class="text-2xl/8 font-bold tracking-tight text-gray-900 dark:text-white">API Keys</h1>
-            <p class="text-sm/5 text-gray-500 dark:text-gray-400">Programmatic access to the chat API</p>
-          </div>
+    <div>
+      <div>
+        <div class="mb-6">
+          <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">API Keys</h2>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">Programmatic access to the chat API</p>
         </div>
 
-        <div class="grid grid-cols-1 gap-8 lg:grid-cols-2">
+        <div class="grid grid-cols-1 gap-8 xl:grid-cols-2">
           <!-- LEFT COLUMN -->
           <div class="flex flex-col gap-5">
 
-            @if (!showCreateDialog()) {
+            @if (loading()) {
+              <!-- Loading skeleton -->
+              <div class="animate-pulse">
+                <div class="rounded-sm border-2 border-dashed border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/50">
+                  <div class="mx-auto h-5 w-40 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                </div>
+                <div class="mt-5 rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+                  <div class="p-4">
+                    <div class="h-5 w-32 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                    <div class="mt-2 h-4 w-24 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                  </div>
+                  <div class="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
+                    <div class="flex flex-col gap-2">
+                      <div class="h-4 w-48 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                      <div class="h-4 w-44 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                      <div class="h-4 w-36 rounded-xs bg-gray-200 dark:bg-gray-700"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            } @else if (!showCreateDialog()) {
               <button (click)="handleCreateClick()"
-                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-orange-300 bg-white px-4 py-3 text-sm/6 font-semibold text-orange-600 transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:border-orange-600/40 dark:bg-gray-900 dark:text-orange-400 dark:hover:border-orange-500 dark:hover:bg-orange-950/30">
+                class="flex items-center justify-center gap-2 rounded-sm border-2 border-dashed border-orange-300 bg-white px-4 py-3 text-sm/6 font-semibold text-orange-600 transition-colors hover:border-orange-400 hover:bg-orange-50 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 dark:border-orange-600/40 dark:bg-gray-800 dark:text-orange-400 dark:hover:border-orange-500 dark:hover:bg-orange-950/30">
                 <ng-icon name="heroPlus" class="size-4" /> Create New API Key
               </button>
             } @else {
-              <div class="rounded-sm border border-orange-300 bg-white p-5 shadow-sm dark:border-orange-700/50 dark:bg-gray-900">
+              <div class="rounded-sm border border-orange-300 bg-white p-5 shadow-sm dark:border-orange-700/50 dark:bg-gray-800">
                 <div class="flex items-center justify-between">
                   <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">New API Key</h3>
                   <button (click)="closeCreateDialog()" class="rounded-xs p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" aria-label="Close">
@@ -79,10 +86,16 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                   <div class="mt-3 flex gap-2">
                     <input id="key-name" type="text" placeholder="Key name, e.g. my-app"
                       [value]="newKeyName()" (input)="newKeyName.set($any($event.target).value)" (keydown.enter)="createKey()"
-                      class="block flex-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
-                    <button (click)="createKey()" [disabled]="!newKeyName().trim()"
-                      class="shrink-0 rounded-sm bg-orange-500 px-4 py-2 text-sm/6 font-semibold text-white transition-colors hover:bg-orange-600 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-                      Generate
+                      [disabled]="creating()"
+                      class="block flex-1 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:outline-hidden focus:ring-2 focus:ring-orange-500/30 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500" />
+                    <button (click)="createKey()" [disabled]="!newKeyName().trim() || creating()"
+                      class="inline-flex shrink-0 items-center gap-2 rounded-sm bg-orange-500 px-4 py-2 text-sm/6 font-semibold text-white transition-colors hover:bg-orange-600 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+                      @if (creating()) {
+                        <div class="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                        Generating...
+                      } @else {
+                        Generate
+                      }
                     </button>
                   </div>
                 } @else {
@@ -111,7 +124,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             <!-- Confirm replace modal -->
             @if (showConfirmReplace()) {
               <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" (click)="showConfirmReplace.set(false)">
-                <div class="mx-4 w-full max-w-sm rounded-sm border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-900" (click)="$event.stopPropagation()">
+                <div class="mx-4 w-full max-w-sm rounded-sm border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800" (click)="$event.stopPropagation()">
                   <div class="flex items-start gap-3">
                     <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/30">
                       <ng-icon name="heroExclamationTriangle" class="size-5 text-orange-600 dark:text-orange-400" />
@@ -132,8 +145,10 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             }
 
             <!-- Current key -->
-            @if (apiKey(); as key) {
-              <div class="rounded-sm border bg-white shadow-xs dark:bg-gray-900"
+            @if (loading()) {
+              <!-- handled above -->
+            } @else if (apiKey(); as key) {
+              <div class="rounded-sm border bg-white shadow-xs dark:bg-gray-800"
                 [class]="!isExpired() ? 'border-gray-200 dark:border-gray-700' : 'border-red-200 dark:border-red-900/50'">
                 <div class="flex items-start justify-between p-4">
                   <div class="min-w-0">
@@ -150,10 +165,14 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                       </div>
                     }
                   </div>
-                  <button (click)="deleteKey()"
-                    class="shrink-0 rounded-sm p-2 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-red-500 dark:hover:bg-red-950/30 dark:hover:text-red-400"
+                  <button (click)="deleteKey()" [disabled]="deleting()"
+                    class="shrink-0 rounded-sm p-2 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-950/30 dark:hover:text-red-400"
                     [attr.aria-label]="'Delete key ' + key.name">
-                    <ng-icon name="heroTrash" class="size-5" />
+                    @if (deleting()) {
+                      <div class="size-5 animate-spin rounded-full border-2 border-gray-300 border-t-red-500"></div>
+                    } @else {
+                      <ng-icon name="heroTrash" class="size-5" />
+                    }
                   </button>
                 </div>
                 <div class="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -168,7 +187,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
                 </div>
               </div>
             } @else if (!showCreateDialog()) {
-              <div class="rounded-sm border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-900">
+              <div class="rounded-sm border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
                 <ng-icon name="heroKey" class="mx-auto size-10 text-gray-300 dark:text-gray-600" />
                 <p class="mt-3 text-sm/6 font-medium text-gray-900 dark:text-white">No API key yet</p>
                 <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">Create your first key to get started with the API.</p>
@@ -176,7 +195,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             }
 
             <!-- Available Models -->
-            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="modelsExpanded.set(!modelsExpanded())"
                 class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="modelsExpanded()">
@@ -222,7 +241,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
             </div>
 
             <!-- Important Information -->
-            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
               <button (click)="infoExpanded.set(!infoExpanded())"
                 class="flex w-full items-center justify-between p-4 text-left focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
                 [attr.aria-expanded]="infoExpanded()">
@@ -264,7 +283,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
           <!-- RIGHT COLUMN -->
           <div class="flex flex-col gap-5">
-            <div class="rounded-sm border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+            <div class="rounded-sm border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <p class="text-xs/5 font-semibold uppercase tracking-wider text-orange-500 dark:text-orange-400">Interactive examples with your available models</p>
               <div class="mt-2 flex items-center gap-3">
                 <ng-icon name="heroCodeBracket" class="size-6 text-orange-500" />
@@ -388,7 +407,7 @@ type TooltipField = 'responseType' | 'exampleFormat' | 'optionalParams' | null;
 
             <!-- Code examples -->
             <div class="flex flex-col gap-3">
-              <div class="flex gap-1 rounded-sm border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-900">
+              <div class="flex gap-1 rounded-sm border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-800">
                 @for (lang of languages; track lang.id) {
                   <button (click)="selectedLanguage.set(lang.id)"
                     [class]="selectedLanguage() === lang.id
@@ -443,9 +462,10 @@ export class ApiKeysPage {
   readonly paramTopP = signal('');
   readonly paramSystemPrompt = signal('');
 
-  // TODO: Replace with service call
   readonly apiKey = signal<ApiKey | null>(null);
   readonly loading = signal(false);
+  readonly creating = signal(false);
+  readonly deleting = signal(false);
 
   readonly isExpired = computed(() => {
     const key = this.apiKey();
@@ -540,7 +560,8 @@ export class ApiKeysPage {
 
   createKey(): void {
     const name = this.newKeyName().trim();
-    if (!name) return;
+    if (!name || this.creating()) return;
+    this.creating.set(true);
     this.apiKeyService.createKey(name).subscribe({
       next: (res: CreateApiKeyResponse) => {
         this.apiKey.set({
@@ -551,22 +572,31 @@ export class ApiKeysPage {
           last_used_at: null,
         });
         this.createdKeySecret.set(res.key);
+        this.creating.set(false);
         this.toast.success('API Key Created', `Key "${name}" has been generated.`);
       },
-      error: () => this.toast.error('Failed to create API key.'),
+      error: () => {
+        this.creating.set(false);
+        this.toast.error('Failed to create API key.');
+      },
     });
   }
 
   deleteKey(): void {
     const key = this.apiKey();
-    if (!key) return;
+    if (!key || this.deleting()) return;
     if (!confirm(`Delete API key "${key.name}"? This action cannot be undone.`)) return;
+    this.deleting.set(true);
     this.apiKeyService.deleteKey(key.key_id).subscribe({
       next: () => {
         this.apiKey.set(null);
+        this.deleting.set(false);
         this.toast.success('Key Deleted', `API key "${key.name}" has been removed.`);
       },
-      error: () => this.toast.error('Failed to delete API key.'),
+      error: () => {
+        this.deleting.set(false);
+        this.toast.error('Failed to delete API key.');
+      },
     });
   }
 

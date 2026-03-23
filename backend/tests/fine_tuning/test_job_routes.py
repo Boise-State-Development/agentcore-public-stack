@@ -159,6 +159,44 @@ class TestCreateJob:
         body = resp.json()
         assert body["model_id"] == "distilgpt2"
 
+    @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
+    def test_sagemaker_job_name_includes_project_prefix(self, make_user):
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+        mock_s3.get_output_s3_prefix.return_value = "output/user-001/job-abc"
+        mock_s3.get_output_s3_uri.return_value = "s3://bucket/output/user-001/job-abc"
+        mock_s3.bucket_name = "test-bucket"
+
+        mock_jobs = MagicMock()
+        mock_jobs.create_job.return_value = SAMPLE_JOB
+        mock_jobs.update_job_status.return_value = {**SAMPLE_JOB, "status": "TRAINING"}
+
+        mock_sm = MagicMock()
+        mock_sm.create_training_job.return_value = {}
+
+        mock_access = MagicMock()
+
+        mock_script = MagicMock()
+        mock_script.ensure_scripts_uploaded.return_value = "s3://test-bucket/scripts/sourcedir.tar.gz"
+
+        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, mock_s3, mock_sm, mock_access, mock_script)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/jobs",
+            json={
+                "model_id": "distilgpt2",
+                "dataset_s3_key": "datasets/user-001/abc/train.jsonl",
+            },
+        )
+
+        assert resp.status_code == 201
+        job_name = mock_sm.create_training_job.call_args[1]["job_name"]
+        assert job_name.startswith("test-prefix-ft-")
+
     def test_returns_400_for_unknown_model(self, make_user):
         app = _create_app()
         user = make_user(email="user@example.com")

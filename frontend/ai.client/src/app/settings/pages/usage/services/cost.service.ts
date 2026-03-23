@@ -1,8 +1,8 @@
 import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { ConfigService } from '../../services/config.service';
-import { AuthService } from '../../auth/auth.service';
+import { ConfigService } from '../../../../services/config.service';
+import { AuthService } from '../../../../auth/auth.service';
 import { UserCostSummary } from '../models/cost-summary.model';
 
 /**

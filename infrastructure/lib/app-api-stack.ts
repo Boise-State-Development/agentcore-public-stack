@@ -382,6 +382,15 @@ export class AppApiStack extends cdk.Stack {
       `/${config.projectPrefix}/admin/managed-models-table-arn`
     );
 
+    const userSettingsTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/settings/user-settings-table-name`
+    );
+    const userSettingsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/settings/user-settings-table-arn`
+    );
+
     const authProvidersTableName = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/auth/auth-providers-table-name`
@@ -518,6 +527,7 @@ export class AppApiStack extends cdk.Stack {
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
+        DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
         // Cognito configuration (imported from Infrastructure Stack)
         COGNITO_USER_POOL_ID: cognitoUserPoolId,
         COGNITO_APP_CLIENT_ID: cognitoAppClientId,
@@ -545,7 +555,29 @@ export class AppApiStack extends cdk.Stack {
 
     // Grant permissions for assistants base table (local to this stack)
     assistantsTable.grantReadWriteData(taskDefinition.taskRole);
-    
+
+    // Grant permissions for user settings table (imported from InfrastructureStack)
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'UserSettingsTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:Scan',
+          'dynamodb:BatchGetItem',
+          'dynamodb:BatchWriteItem',
+        ],
+        resources: [
+          userSettingsTableArn,
+          `${userSettingsTableArn}/index/*`,
+        ],
+      })
+    );
+
     // Grant explicit permissions for GSI queries (grantReadWriteData doesn't include GSI Query permissions)
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
@@ -1132,10 +1164,13 @@ export class AppApiStack extends cdk.Stack {
             'sagemaker:CreateTransformJob',
             'sagemaker:DescribeTransformJob',
             'sagemaker:StopTransformJob',
+            'sagemaker:CreateModel',
+            'sagemaker:DeleteModel',
           ],
           resources: [
-            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:training-job/${config.projectPrefix}-*`,
-            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:transform-job/${config.projectPrefix}-*`,
+            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:training-job/${config.projectPrefix}-ft-*`,
+            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:transform-job/${config.projectPrefix}-inf-*`,
+            `arn:aws:sagemaker:${config.awsRegion}:${config.awsAccount}:model/model-${config.projectPrefix}-inf-*`,
           ],
         })
       );
@@ -1160,7 +1195,7 @@ export class AppApiStack extends cdk.Stack {
         new iam.PolicyStatement({
           sid: 'SageMakerLogsReadAccess',
           effect: iam.Effect.ALLOW,
-          actions: ['logs:GetLogEvents', 'logs:FilterLogEvents'],
+          actions: ['logs:DescribeLogStreams', 'logs:GetLogEvents', 'logs:FilterLogEvents'],
           resources: [
             `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:/aws/sagemaker/*`,
           ],

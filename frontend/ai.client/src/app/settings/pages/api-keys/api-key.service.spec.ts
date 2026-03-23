@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { ApiKeyService, ApiKey, CreateApiKeyResponse } from './api-key.service';
-import { ConfigService } from '../../services/config.service';
+import { ConfigService } from '../../../services/config.service';
 
 describe('ApiKeyService', () => {
   let service: ApiKeyService;

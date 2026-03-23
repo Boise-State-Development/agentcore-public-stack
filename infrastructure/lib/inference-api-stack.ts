@@ -552,6 +552,26 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // DynamoDB User Settings Table permissions (imported from InfrastructureStack)
+    const userSettingsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/settings/user-settings-table-arn`
+    );
+
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'UserSettingsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        userSettingsTableArn,
+        `${userSettingsTableArn}/index/*`,
+      ],
+    }));
+
     // DynamoDB Auth Providers Table permissions (imported from App API Stack)
     const authProvidersTableArn = ssm.StringParameter.valueForStringParameter(
       this,
@@ -813,8 +833,7 @@ export class InferenceApiStack extends cdk.Stack {
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.
-    // Manage it via AWS CLI instead:
-    //   aws xray update-transaction-search-config --indexing-percentage <5|100>
+    // See 2d in .github/docs/deploy/step-02-aws-setup.md for more information
 
     // ============================================================
     // Observability: Vended Log Deliveries for AgentCore Resources

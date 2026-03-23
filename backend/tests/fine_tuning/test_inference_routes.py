@@ -1,7 +1,7 @@
 """Route tests for inference (Batch Transform) endpoints."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
@@ -211,6 +211,44 @@ class TestCreateInferenceJob:
         body = resp.json()
         assert body["job_type"] == "inference"
         assert body["training_job_id"] == "train-abc123"
+
+    @patch.dict("os.environ", {"PROJECT_PREFIX": "test-prefix"})
+    def test_transform_job_name_includes_project_prefix(self, make_user):
+        app = _create_app()
+        user = make_user(email="user@example.com")
+
+        mock_jobs = MagicMock()
+        mock_jobs.get_job.return_value = SAMPLE_COMPLETED_TRAINING_JOB
+
+        mock_inf = MagicMock()
+        mock_inf.create_inference_job.return_value = SAMPLE_INFERENCE_JOB
+        mock_inf.update_inference_status.return_value = {**SAMPLE_INFERENCE_JOB, "status": "TRANSFORMING"}
+
+        mock_s3 = MagicMock()
+        mock_s3.check_object_exists.return_value = True
+        mock_s3.bucket_name = "test-bucket"
+        mock_s3.get_inference_output_s3_prefix.return_value = "inference-output/user-001/job-xyz"
+        mock_s3.get_inference_output_s3_uri.return_value = "s3://test-bucket/inference-output/user-001/job-xyz"
+
+        mock_sm = MagicMock()
+        mock_sm.create_transform_job.return_value = {}
+
+        mock_access = MagicMock()
+
+        _setup_deps(app, user, SAMPLE_GRANT, mock_jobs, mock_inf, mock_s3, mock_sm, mock_access)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/fine-tuning/inference",
+            json={
+                "training_job_id": "train-abc123",
+                "input_s3_key": "inference-input/user-001/xyz/input.txt",
+            },
+        )
+
+        assert resp.status_code == 201
+        job_name = mock_sm.create_transform_job.call_args[1]["job_name"]
+        assert job_name.startswith("test-prefix-inf-")
 
     def test_returns_400_for_nonexistent_training_job(self, make_user):
         app = _create_app()

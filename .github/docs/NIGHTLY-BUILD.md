@@ -2,240 +2,160 @@
 
 ## Overview
 
-The nightly build workflow provides comprehensive validation of the AgentCore Public Stack through automated testing, deployment verification, and AI-powered coverage analysis. It runs every night at 2 AM Mountain Time (9 AM UTC) on the main branch.
+The nightly workflow validates the AgentCore Public Stack through configurable tracks — backend tests, frontend tests, full-stack deploys, and merge validation. It runs every night at 2 AM Mountain Time (9 AM UTC) and can be triggered manually.
+
+**Fork safety**: If the `NIGHTLY_TRACKS` repository variable is not set, no tracks run. Forked repos are safe by default.
+
+## Track System
+
+### Track Vocabulary
+
+Tracks are specified as a comma-separated string in the `NIGHTLY_TRACKS` repo variable (for scheduled runs) or the `tracks` input (for manual runs).
+
+| Track | Description |
+|-------|-------------|
+| `test-backend-<branch>` | Run backend tests against `<branch>` |
+| `test-frontend-<branch>` | Run frontend tests against `<branch>` |
+| `deploy-<branch>` | Deploy full stack from `<branch>` with automatic teardown |
+| `merge-validation:<base>:<overlay>` | Deploy `<base>`, then overlay `<overlay>` on top (colons delimit to avoid branch name ambiguity) |
+| `all` | Run all tracks with defaults: tests + deploy on `develop`, MV `main`→`develop` |
+
+### Examples
+
+```
+test-backend-develop
+test-frontend-main,test-backend-main
+deploy-develop
+deploy-main,deploy-develop
+merge-validation:main:develop
+merge-validation:main:feature/my-branch
+test-backend-develop,deploy-develop,merge-validation:main:develop
+all
+```
+
+### Track Resolution
+
+The `resolve-tracks` job parses the tracks string into boolean flags and branch refs:
+
+- **Scheduled runs**: Read `vars.NIGHTLY_TRACKS`
+- **Manual runs (`workflow_dispatch`)**: Use the `tracks` input only, ignoring the variable
+- **Empty/unset**: Nothing runs
 
 ## Workflow Jobs
 
-### 1. Install Dependencies (3 jobs)
-- **install-backend**: Installs Python dependencies and caches packages
-- **install-frontend**: Installs npm dependencies for Angular frontend
-- **install-infrastructure**: Installs npm dependencies for CDK infrastructure
+### resolve-tracks
+Parses the tracks string and outputs boolean flags (`run_test_backend`, `run_test_frontend`, `run_deploy`, `run_mv`) and branch refs for each enabled track.
 
-### 2. Test with Coverage (2 jobs)
-- **test-backend**: Runs pytest with coverage reporting (JSON + HTML)
-- **test-frontend**: Runs vitest with coverage reporting (JSON + HTML)
+### Test Tracks
 
-Both jobs upload coverage artifacts for later analysis.
+When `test-backend-<branch>` or `test-frontend-<branch>` is specified:
 
-### 3. Deploy Full Stack (6 jobs)
-Deploys all stacks to the development environment with `nightly-agentcore` prefix:
-- **deploy-infrastructure**: VPC, ALB, ECS, DynamoDB tables
-- **deploy-app-api**: FastAPI application on ECS Fargate
-- **deploy-inference-api**: Strands Agent on AgentCore Runtime
-- **deploy-rag-ingestion**: Document ingestion Lambda functions
-- **deploy-frontend**: Angular SPA to S3 + CloudFront
-- **deploy-gateway**: MCP tool Lambda functions
+1. **install-backend / install-frontend**: Install and cache dependencies
+2. **test-backend / test-frontend**: Run test suites with coverage, upload artifacts
+3. **analyze-coverage**: Compare coverage against previous baseline (runs if any test succeeded)
+4. **ai-coverage-analysis**: Uses GitHub Models API (GPT-4o) to analyze coverage gaps and create/update GitHub issues labeled `test-coverage` + `nightly-build`
 
-All deployments use `CDK_RETAIN_DATA_ON_DELETE=false` to ensure clean teardown.
+### Deploy Track
 
-### 4. Smoke Test Deployment
-Validates the deployed infrastructure by testing health endpoints:
-- App API: `http://<alb-url>:8000/health`
-- Inference API: `http://<alb-url>:8001/health`
+When `deploy-<branch>` is specified, calls the reusable `nightly-deploy-pipeline.yml` with:
+- `project-prefix`: `nightly-<branch>`
+- `alb-subdomain`: `nightly-<branch>-api`
+- Automatic teardown (unless `skip_teardown` is set)
 
-### 5. Teardown Stack
-Runs **always** (even if tests fail) to clean up resources:
-1. Lists all S3 buckets with `nightly-agentcore` prefix
-2. Empties each bucket (deletes all objects and versions)
-3. Runs `cdk destroy --all --force` to remove all stacks
+The deploy pipeline runs: install-infra → check-stack-deps → deploy-infra → deploy-rag → deploy-inference → deploy-app → deploy-frontend + deploy-gateway → smoke-test → teardown.
 
-### 6. Analyze Coverage
-Compares current test coverage against previous baseline:
-- Downloads previous night's coverage artifacts (if available)
-- Identifies files in critical paths with decreased coverage
-- Critical paths: `**/apis/**/*.py`, `**/rbac/**/*.py`, `**/auth/**/*.py`, `**/agents/**/*.py`
-- Generates `coverage-comparison.json` report
+### Merge Validation Track
 
-### 7. AI Coverage Gap Analysis
-Uses GitHub Models API (GPT-4o) to analyze coverage gaps:
-- Reads coverage comparison report
-- For each file with decreased coverage:
-  - Calls GPT-4o to analyze the gap and suggest test scenarios
-  - Searches for existing GitHub issues about this file
-  - Creates new issue or updates existing with AI analysis
-- Labels issues with `test-coverage` and `nightly-build`
+When `merge-validation:<base>:<overlay>` is specified:
+
+1. **mv-base**: Deploys `<base>` branch with `nightly-mv` prefix, `skip-teardown: true`. Uses `source-project-prefix: dev-boisestateai-v2` for Docker image promotion (promote-or-build pattern).
+2. **mv-overlay**: Deploys `<overlay>` branch on top of the same `nightly-mv` stack, then tears down.
+
+This simulates a real merge to catch CDK/infra incompatibilities between branches.
+
+### Summary
+
+Generates a GitHub Actions job summary table showing the status of all enabled tracks.
+
+## Deploy Pipeline (`nightly-deploy-pipeline.yml`)
+
+Reusable workflow (`workflow_call`) containing the full deploy pipeline.
+
+### Inputs
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `ref` | yes | Git ref to deploy |
+| `project-prefix` | yes | CDK project prefix (e.g., `nightly-develop`) |
+| `alb-subdomain` | yes | ALB subdomain for the deployment |
+| `skip-teardown` | no | Skip teardown (default: `false`) |
+| `label` | no | Label for job names |
+| `source-project-prefix` | no | If set, Docker jobs try ECR image promotion before building |
+
+### Promote-or-Build Pattern
+
+When `source-project-prefix` is provided, Docker jobs (rag-ingestion, inference-api, app-api) attempt to promote existing images from the source ECR before falling back to a full build. This avoids unnecessary Docker builds when images haven't changed.
 
 ## Manual Triggers
 
-The workflow supports manual execution via `workflow_dispatch` with options:
-- **skip_deployment**: Skip deployment and smoke tests (test coverage only)
-- **skip_teardown**: Leave resources deployed for debugging
+Go to: **Actions** → **Nightly Build & Test** → **Run workflow**
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `tracks` | `all` | Comma-separated tracks to run |
+| `skip_teardown` | `false` | Leave resources deployed for debugging |
 
 ## Configuration
 
-### Environment Variables
-All deployment jobs use the `development` GitHub environment with these overrides:
-- `CDK_PROJECT_PREFIX=nightly-agentcore` (isolates from dev deployment)
+### Repository Variable
+
+Set `NIGHTLY_TRACKS` in your repo's **Settings → Secrets and variables → Actions → Variables** tab.
+
+Example values:
+- `all` — full nightly suite
+- `test-backend-develop,test-frontend-develop` — tests only
+- `deploy-main` — deploy main branch only
+- *(empty/unset)* — nothing runs (fork-safe)
+
+### Environment
+
+Deploy and MV tracks use the `development` GitHub environment with overrides:
 - `CDK_RETAIN_DATA_ON_DELETE=false` (enables clean teardown)
-- Minimal resource sizing (CPU: 512-1024, Memory: 1024-2048, Desired: 1, Max: 2)
+- Minimal resource sizing
 
 ### Required Secrets
 - `AWS_ROLE_ARN` or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
-- `GITHUB_TOKEN` (automatically provided by GitHub Actions)
+- `GITHUB_TOKEN` (automatically provided)
 
 ### Required Variables
-- `AWS_REGION`
-- `CDK_AWS_ACCOUNT`
-- All other CDK configuration variables from development environment
-
-## Scripts
-
-### Backend Test Script
-**Location**: `scripts/stack-app-api/test.sh`
-
-Runs pytest with coverage flags:
-```bash
-python3 -m pytest tests/ \
-    --cov=src \
-    --cov-report=html \
-    --cov-report=json \
-    --cov-report=term
-```
-
-### Frontend Test Script
-**Location**: `scripts/stack-frontend/test.sh`
-
-Runs Angular tests with coverage:
-```bash
-ng test --no-watch --coverage \
-    --coverage.reporter=html \
-    --coverage.reporter=json \
-    --coverage.reporter=text
-```
-
-### Smoke Test Script
-**Location**: `scripts/nightly/smoke-test.sh`
-
-Validates deployed infrastructure:
-1. Retrieves ALB DNS from CloudFormation outputs
-2. Curls health endpoints with 30-second timeout
-3. Validates HTTP 200 responses
-
-### Teardown Script
-**Location**: `scripts/nightly/teardown.sh`
-
-Cleans up nightly deployment:
-1. Lists S3 buckets with `nightly-agentcore` prefix
-2. Empties each bucket (handles versioned objects)
-3. Runs `cdk destroy --all --force`
-
-### Coverage Comparison Script
-**Location**: `scripts/nightly/compare-coverage.py`
-
-Analyzes coverage changes:
-1. Loads current backend and frontend coverage JSON
-2. Downloads previous baseline from GitHub Actions artifacts (simplified)
-3. Compares coverage for files matching critical path patterns
-4. Generates `coverage-comparison.json` with decreases
-
-### AI Coverage Analysis Script
-**Location**: `scripts/nightly/ai-coverage-analysis.py`
-
-Creates/updates GitHub issues:
-1. Reads `coverage-comparison.json`
-2. For each file with decreased coverage:
-   - Calls GitHub Models API (GPT-4o) to analyze gap
-   - Searches for existing issues using GitHub API
-   - Creates new issue or adds comment to existing
-3. Labels issues with `test-coverage` and `nightly-build`
-
-## Coverage Configuration
-
-### Backend (pytest)
-**Location**: `backend/pytest.ini`
-
-```ini
-[coverage:run]
-source = src
-omit = */tests/*, */test_*.py
-
-[coverage:json]
-output = coverage.json
-pretty_print = True
-```
-
-### Frontend (vitest)
-Coverage reporters configured via CLI flags in test script.
+- `AWS_REGION`, `CDK_AWS_ACCOUNT`
+- All CDK configuration variables from the development environment
 
 ## Artifacts
 
-All artifacts are retained for 30 days:
-- **backend-coverage**: `backend/coverage.json` + `backend/htmlcov/`
-- **frontend-coverage**: `frontend/ai.client/coverage/`
-- **coverage-comparison**: `coverage-comparison.json`
-
-## Monitoring
-
-Check workflow status:
-- GitHub Actions UI: `.github/workflows/nightly.yml`
-- Coverage trends: Download artifacts from previous runs
-- Test gaps: GitHub Issues with `test-coverage` label
-
-## Extending the Workflow
-
-### Adding New Test Types
-Add a new job after `test-frontend`:
-```yaml
-test-integration:
-  name: Integration Tests
-  runs-on: ubuntu-latest
-  needs: install-backend
-  steps:
-    - name: Run integration tests
-      run: bash scripts/test-integration.sh
-```
-
-### Adding New Smoke Tests
-Edit `scripts/nightly/smoke-test.sh` to add more endpoint checks.
-
-### Changing Critical Paths
-Edit `scripts/nightly/compare-coverage.py` and update `CRITICAL_PATTERNS`:
-```python
-CRITICAL_PATTERNS = [
-    r".*/apis/.*\.py$",
-    r".*/rbac/.*\.py$",
-    r".*/auth/.*\.py$",
-    r".*/agents/.*\.py$",
-    r".*/your-new-path/.*\.py$",  # Add new pattern
-]
-```
-
-### Customizing AI Analysis
-Edit `scripts/nightly/ai-coverage-analysis.py` to:
-- Change the AI prompt
-- Adjust issue title/body format
-- Add custom labels
-- Change priority thresholds
+| Artifact | Retention | Condition |
+|----------|-----------|-----------|
+| `backend-coverage` | 30 days | Backend test track enabled |
+| `frontend-coverage` | 30 days | Frontend test track enabled |
+| `coverage-comparison` | 30 days | Any test track succeeded |
 
 ## Troubleshooting
 
-### Deployment Fails
-- Check AWS credentials in development environment
-- Verify `nightly-agentcore` prefix doesn't conflict with existing resources
+### No tracks run on schedule
+Check that `NIGHTLY_TRACKS` is set as a repository variable (not a secret). Empty or unset = nothing runs.
+
+### Deploy fails
+- Check AWS credentials in the development environment
+- Verify CDK variables are set
 - Review CloudFormation stack events in AWS Console
 
-### Teardown Fails
-- S3 buckets may have objects that can't be deleted (check bucket policies)
-- CDK destroy may fail if resources are in use (check ECS tasks, Lambda functions)
-- Manually empty buckets and destroy stacks if needed
+### Teardown fails
+- S3 buckets may need manual emptying
+- Run `cd infrastructure && npx cdk destroy --all --force` manually if needed
 
-### Coverage Comparison Fails
-- Ensure coverage JSON files are uploaded as artifacts
-- Check artifact download step logs
-- Verify file paths match expected locations
+### Coverage analysis fails
+- Ensure test jobs uploaded coverage artifacts
+- Check Python script logs for errors
 
-### AI Analysis Fails
-- Check GitHub Models API token (uses `GITHUB_TOKEN`)
-- Verify API rate limits haven't been exceeded
-- Review script logs for API error messages
-
-## Future Enhancements
-
-Potential improvements:
-- Download and extract previous coverage artifacts (currently simplified)
-- Add integration tests against deployed endpoints
-- Generate coverage trend charts
-- Send Slack/email notifications on failures
-- Add performance benchmarking
-- Test database migrations
-- Validate CDK drift detection
+### Merge validation fails on overlay
+This is the intended signal — it means the overlay branch has CDK/infra incompatibilities with the base branch that need to be resolved before merging.

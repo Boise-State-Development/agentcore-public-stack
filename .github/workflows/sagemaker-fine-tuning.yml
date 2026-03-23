@@ -124,6 +124,8 @@ jobs:
     name: Synthesize CloudFormation Template
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
 
     # Select environment based on trigger
     # Manual: workflow_dispatch input
@@ -149,16 +151,28 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
+      - name: Check if fine-tuning is enabled
+        id: check
+        run: |
+          if [ "${{ vars.CDK_FINE_TUNING_ENABLED }}" = "true" ] || [ "${{ vars.CDK_FINE_TUNING_ENABLED }}" = "1" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SageMaker Fine-Tuning is disabled — skipping synth"
+          fi
       - name: Checkout code
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/checkout@v5
 
       - name: Restore node_modules cache
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/cache/restore@v5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Restore build artifacts
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/cache/restore@v5
         with:
           path: |
@@ -169,6 +183,7 @@ jobs:
           key: infrastructure-build-${{ github.sha }}
 
       - name: Configure AWS credentials
+        if: steps.check.outputs.enabled == 'true'
         uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ env.CDK_AWS_REGION }}
@@ -178,14 +193,17 @@ jobs:
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
 
       - name: Install system dependencies
+        if: steps.check.outputs.enabled == 'true'
         run: |
           bash scripts/common/install-deps.sh
 
       - name: Synthesize CloudFormation template
+        if: steps.check.outputs.enabled == 'true'
         run: |
           bash scripts/stack-sagemaker-fine-tuning/synth.sh
 
       - name: Upload synthesized templates
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: sagemaker-fine-tuning-cdk-synth
@@ -196,7 +214,7 @@ jobs:
     name: Validate CloudFormation Template
     runs-on: ubuntu-latest
     needs: synth
-    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    if: ${{ needs.synth.outputs.enabled == 'true' && github.event.inputs.skip_tests != 'true' }}
 
     # Select environment based on trigger
     # Manual: workflow_dispatch input
@@ -268,9 +286,10 @@ jobs:
   deploy:
     name: Deploy SageMaker Fine-Tuning Stack
     runs-on: ubuntu-latest
-    needs: test
+    needs: [synth, test]
     if: |
       always() && !cancelled() &&
+      needs.synth.outputs.enabled == 'true' &&
       !contains(needs.*.result, 'failure') &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_deploy != 'true')

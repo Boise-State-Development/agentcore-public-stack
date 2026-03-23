@@ -34,6 +34,7 @@ Complete inventory of all configuration variables across the AgentCore Public St
 | DYNAMODB_USER_FILES_TABLE_NAME | No | — | `apis/app_api/files/` |
 | DYNAMODB_AUTH_PROVIDERS_TABLE_NAME | No | — | `apis/shared/auth/` |
 | DYNAMODB_ASSISTANTS_TABLE_NAME | No | — | `apis/app_api/assistants/` |
+| DYNAMODB_USER_SETTINGS_TABLE_NAME | No | — | `apis/shared/user_settings/` |
 | DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME | No | — | `apis/app_api/` OAuth management |
 | DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME | No | — | `apis/app_api/` OAuth tokens |
 | AUTH_PROVIDER_SECRETS_ARN | No | — | `apis/shared/auth/` |

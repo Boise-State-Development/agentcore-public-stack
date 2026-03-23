@@ -108,8 +108,6 @@
                 {{ job.model_name }}
               </a>
 
-              <span class="hidden text-sm/6 text-gray-500 sm:block dark:text-gray-400">{{ getRetentionLabel(job.created_at) }}</span>
-
               @if (job.training_progress != null) {
                 <div class="hidden items-center gap-2 sm:flex" role="progressbar" [attr.aria-valuenow]="job.training_progress" aria-valuemin="0" aria-valuemax="100">
                   <div class="h-1.5 w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">

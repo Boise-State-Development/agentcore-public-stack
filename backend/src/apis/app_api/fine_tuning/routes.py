@@ -158,7 +158,8 @@ async def create_job(
     # Generate identifiers
     job_id = uuid.uuid4().hex
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    sagemaker_job_name = f"ft-{job_id[:8]}-{timestamp}"
+    project_prefix = os.environ.get("PROJECT_PREFIX", "agentcore")
+    sagemaker_job_name = f"{project_prefix}-ft-{job_id[:8]}-{timestamp}"
 
     # Add DynamoDB progress reporting hyperparameters
     jobs_table_name = os.environ.get("DYNAMODB_FINE_TUNING_JOBS_TABLE_NAME", "fine-tuning-jobs")
@@ -590,7 +591,8 @@ async def create_inference_job(
     # Generate identifiers
     job_id = uuid.uuid4().hex
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    transform_job_name = f"inf-{job_id[:8]}-{timestamp}"
+    project_prefix = os.environ.get("PROJECT_PREFIX", "agentcore")
+    transform_job_name = f"{project_prefix}-inf-{job_id[:8]}-{timestamp}"
 
     # S3 paths
     output_s3_prefix = s3_service.get_inference_output_s3_prefix(user.user_id, job_id)

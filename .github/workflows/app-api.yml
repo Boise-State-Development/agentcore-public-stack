@@ -276,12 +276,13 @@ jobs:
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
       CDK_FILE_UPLOAD_CORS_ORIGINS: ${{ vars.CDK_FILE_UPLOAD_CORS_ORIGINS }}
       CDK_FILE_UPLOAD_MAX_SIZE_MB: ${{ vars.CDK_FILE_UPLOAD_MAX_SIZE_MB }}
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
 
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -472,12 +473,13 @@ jobs:
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
       CDK_FILE_UPLOAD_CORS_ORIGINS: ${{ vars.CDK_FILE_UPLOAD_CORS_ORIGINS }}
       CDK_FILE_UPLOAD_MAX_SIZE_MB: ${{ vars.CDK_FILE_UPLOAD_MAX_SIZE_MB }}
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
 
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -493,7 +495,7 @@ jobs:
         with:
           name: app-api-cdk-synth
           path: infrastructure/cdk.out/
-      
+
       - name: Configure AWS credentials
         uses: ./.github/actions/configure-aws-credentials
         with:

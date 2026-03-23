@@ -1,168 +1,292 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  inject,
+  signal,
+  computed,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroChartBar,
-  heroArrowTopRightOnSquare,
-  heroSparkles,
-  heroCpuChip,
-  heroChatBubbleLeftRight,
-  heroArrowTrendingUp,
-} from '@ng-icons/heroicons/outline';
+import { DecimalPipe } from '@angular/common';
+import { CostService } from './services/cost.service';
+import { UserCostSummary } from './models/cost-summary.model';
 
 @Component({
   selector: 'app-usage-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, NgIcon],
-  providers: [
-    provideIcons({
-      heroChartBar,
-      heroArrowTopRightOnSquare,
-      heroSparkles,
-      heroCpuChip,
-      heroChatBubbleLeftRight,
-      heroArrowTrendingUp,
-    }),
-  ],
+  imports: [DecimalPipe],
   host: { class: 'block' },
   template: `
-    <div class="space-y-8">
+    <div class="flex flex-col gap-8">
       <!-- Section header -->
-      <div class="flex items-start justify-between">
-        <div>
-          <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Usage</h2>
-          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
-            Overview of your usage this billing period.
-          </p>
-        </div>
-        <a
-          routerLink="/costs"
-          class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+      <div>
+        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Usage</h2>
+        <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+          Track your AI usage costs and token consumption.
+        </p>
+      </div>
+
+      <!-- Period Selector -->
+      <div class="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          (click)="resetToCurrentMonth()"
+          [class]="selectedPeriodType() === 'current'
+            ? 'bg-blue-600 text-white border-blue-600 dark:bg-blue-500 dark:border-blue-500'
+            : 'bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600'"
+          class="rounded-sm border px-3 py-1.5 text-sm/6 font-medium transition-colors"
         >
-          Full dashboard
-          <ng-icon name="heroArrowTopRightOnSquare" class="size-4" />
-        </a>
+          Current Month
+        </button>
+        <button
+          type="button"
+          (click)="loadLast30Days()"
+          [class]="selectedPeriodType() === 'last30'
+            ? 'bg-blue-600 text-white border-blue-600 dark:bg-blue-500 dark:border-blue-500'
+            : 'bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600'"
+          class="rounded-sm border px-3 py-1.5 text-sm/6 font-medium transition-colors"
+        >
+          Last 30 Days
+        </button>
+
+        <div class="h-5 w-px bg-gray-200 dark:bg-white/10"></div>
+
+        <select
+          (change)="loadMonth($any($event.target).value)"
+          [value]="selectedPeriodType() === 'month' ? selectedMonthValue() : ''"
+          class="rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors focus:border-blue-500 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300"
+        >
+          <option value="" disabled [selected]="selectedPeriodType() !== 'month'">Previous month...</option>
+          @for (month of previousMonths; track month.value) {
+            <option [value]="month.value">{{ month.label }}</option>
+          }
+        </select>
       </div>
 
-      <!-- Stats grid -->
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        @for (stat of stats; track stat.label) {
-          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-900">
-            <div class="flex items-center gap-2">
-              <div [class]="stat.iconBg" class="flex size-8 items-center justify-center rounded-md">
-                <ng-icon [name]="stat.icon" class="size-4" />
-              </div>
-              <span class="text-sm/6 text-gray-500 dark:text-gray-400">{{ stat.label }}</span>
-            </div>
-            <p class="mt-3 text-2xl font-semibold tracking-tight text-gray-900 dark:text-white">
-              {{ stat.value }}
+      <!-- Loading State -->
+      @if ((selectedPeriodType() === 'current' && costSummary.isLoading()) || isLoadingCustomReport()) {
+        <div class="flex items-center justify-center py-12">
+          <div class="flex flex-col items-center gap-3">
+            <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600"></div>
+            <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading cost data...</p>
+          </div>
+        </div>
+      }
+
+      <!-- Error State -->
+      @else if (selectedPeriodType() === 'current' && costSummary.error()) {
+        <div class="rounded-lg bg-red-50 p-4 dark:bg-red-900/20">
+          <p class="text-sm/6 font-medium text-red-800 dark:text-red-200">Error loading cost data</p>
+        </div>
+      }
+
+      @else if (customReportError()) {
+        <div class="rounded-lg bg-red-50 p-4 dark:bg-red-900/20">
+          <p class="text-sm/6 text-red-800 dark:text-red-200">{{ customReportError() }}</p>
+        </div>
+      }
+
+      <!-- Cost Summary Cards -->
+      @else if (activeData()) {
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Cost</h3>
+            <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
+              {{ formatCurrency(totalCost()) }}
             </p>
-            <div class="mt-1 flex items-center gap-1">
-              <ng-icon name="heroArrowTrendingUp" class="size-3.5 text-green-500" />
-              <span class="text-xs text-green-600 dark:text-green-400">{{ stat.change }}</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">vs last period</span>
-            </div>
-          </div>
-        }
-      </div>
-
-      <!-- Quota usage -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
-        <div class="p-6">
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Quota usage</h3>
-            <span class="rounded-xs bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-              Standard Tier
-            </span>
-          </div>
-
-          <div class="mt-6 space-y-5">
-            @for (quota of quotas; track quota.label) {
-              <div>
-                <div class="flex items-center justify-between text-sm">
-                  <span class="font-medium text-gray-700 dark:text-gray-300">{{ quota.label }}</span>
-                  <span class="text-gray-500 dark:text-gray-400">{{ quota.used }} / {{ quota.limit }}</span>
-                </div>
-                <div class="mt-2 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-                  <div
-                    [class]="quota.percentage > 80 ? 'bg-amber-500' : 'bg-blue-600 dark:bg-blue-500'"
-                    class="h-full rounded-full transition-all"
-                    [style.width.%]="quota.percentage"
-                  ></div>
-                </div>
-              </div>
+            @if (totalCacheSavings() > 0) {
+              <p class="mt-1 text-xs text-green-600 dark:text-green-400">
+                Saved {{ formatCurrency(totalCacheSavings()) }} with caching
+                ({{ cacheSavingsPercentage() | number: '1.1-1' }}%)
+              </p>
             }
           </div>
-        </div>
-      </div>
 
-      <!-- Top models -->
-      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-900">
-        <div class="border-b border-gray-200 p-6 dark:border-white/10">
-          <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Top models by usage</h3>
-        </div>
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Requests</h3>
+            <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
+              {{ formatNumber(totalRequests()) }}
+            </p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Avg: {{ formatCurrency(averageCostPerRequest()) }} per request
+            </p>
+          </div>
 
-        <div class="divide-y divide-gray-100 dark:divide-white/5">
-          @for (model of topModels; track model.name) {
-            <div class="flex items-center justify-between px-6 py-4">
-              <div class="flex items-center gap-3">
-                <div class="flex size-8 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
-                  <ng-icon name="heroCpuChip" class="size-4 text-gray-500 dark:text-gray-400" />
-                </div>
-                <div>
-                  <p class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.name }}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">{{ model.requests }} requests</p>
-                </div>
-              </div>
-              <div class="text-right">
-                <p class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ model.tokens }}</p>
-                <p class="text-xs text-gray-500 dark:text-gray-400">tokens</p>
-              </div>
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Total Tokens</h3>
+            <p class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
+              {{ formatNumber(totalTokens()) }}
+            </p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Avg: {{ formatNumber(averageTokensPerRequest()) }} per request
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
+            <h3 class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Token Breakdown</h3>
+            <div class="mt-2 flex flex-col gap-1">
+              <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                Input: {{ formatNumber(totalInputTokens()) }}
+              </p>
+              <p class="text-sm/6 text-gray-700 dark:text-gray-300">
+                Output: {{ formatNumber(totalOutputTokens()) }}
+              </p>
             </div>
-          }
+          </div>
         </div>
-      </div>
+
+        <!-- Per-Model Breakdown -->
+        @if (models().length > 0) {
+          <div>
+            <h3 class="mb-3 text-sm/6 font-medium text-gray-900 dark:text-white">Cost by Model</h3>
+            <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-white/10">
+              <table class="min-w-full divide-y divide-gray-200 dark:divide-white/10">
+                <thead class="bg-gray-50 dark:bg-white/5">
+                  <tr>
+                    <th scope="col" class="px-4 py-3 text-left text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Model</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Requests</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Tokens</th>
+                    <th scope="col" class="px-4 py-3 text-right text-xs/5 font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Cost</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white dark:divide-white/10 dark:bg-gray-800">
+                  @for (model of models(); track model.modelId) {
+                    <tr>
+                      <td class="whitespace-nowrap px-4 py-3 text-sm/6 text-gray-900 dark:text-white">{{ model.modelName }}</td>
+                      <td class="whitespace-nowrap px-4 py-3 text-right text-sm/6 text-gray-900 dark:text-white">{{ formatNumber(model.requestCount) }}</td>
+                      <td class="whitespace-nowrap px-4 py-3 text-right text-sm/6 text-gray-900 dark:text-white">{{ formatNumber(model.totalInputTokens + model.totalOutputTokens) }}</td>
+                      <td class="whitespace-nowrap px-4 py-3 text-right text-sm/6 font-medium text-gray-900 dark:text-white">{{ formatCurrency(model.costBreakdown.totalCost) }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        } @else {
+          <div class="rounded-lg border border-gray-200 bg-white p-8 text-center dark:border-white/10 dark:bg-gray-800">
+            <p class="text-sm/6 text-gray-500 dark:text-gray-400">No cost data available for this period</p>
+          </div>
+        }
+      }
     </div>
   `,
 })
 export class UsageSettingsPage {
-  readonly stats = [
-    {
-      label: 'Total tokens',
-      value: '1.2M',
-      change: '+12%',
-      icon: 'heroSparkles',
-      iconBg: 'bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400',
-    },
-    {
-      label: 'Conversations',
-      value: '847',
-      change: '+8%',
-      icon: 'heroChatBubbleLeftRight',
-      iconBg: 'bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400',
-    },
-    {
-      label: 'Est. cost',
-      value: '$24.50',
-      change: '+5%',
-      icon: 'heroChartBar',
-      iconBg: 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400',
-    },
-  ];
+  private costService = inject(CostService);
 
-  readonly quotas = [
-    { label: 'Daily tokens', used: '82K', limit: '500K', percentage: 16 },
-    { label: 'Monthly tokens', used: '1.2M', limit: '5M', percentage: 24 },
-    { label: 'Daily requests', used: '45', limit: '200', percentage: 22 },
-  ];
+  readonly costSummary = this.costService.currentMonthSummary;
+  readonly customReportData = signal<UserCostSummary | null>(null);
+  readonly selectedPeriodType = signal<'current' | 'last30' | 'month'>('current');
+  readonly selectedMonthValue = signal('');
+  readonly isLoadingCustomReport = signal(false);
+  readonly customReportError = signal<string | null>(null);
 
-  readonly topModels = [
-    { name: 'Claude 4.5 Sonnet', requests: '523', tokens: '856K' },
-    { name: 'Claude 4.6 Opus', requests: '189', tokens: '245K' },
-    { name: 'Amazon Nova Pro', requests: '87', tokens: '72K' },
-    { name: 'Claude 4.5 Haiku', requests: '48', tokens: '28K' },
-  ];
+  readonly previousMonths = this.buildPreviousMonths(11);
+
+  readonly activeData = computed(() => {
+    if (this.selectedPeriodType() === 'current') {
+      return this.costSummary.value();
+    }
+    return this.customReportData();
+  });
+
+  readonly periodLabel = computed(() => {
+    const type = this.selectedPeriodType();
+    if (type === 'current') return 'Current Month';
+    if (type === 'last30') return 'Last 30 Days';
+    const match = this.previousMonths.find(m => m.value === this.selectedMonthValue());
+    return match ? match.label : '';
+  });
+
+  readonly totalCost = computed(() => this.activeData()?.totalCost ?? 0);
+  readonly totalRequests = computed(() => this.activeData()?.totalRequests ?? 0);
+  readonly totalInputTokens = computed(() => this.activeData()?.totalInputTokens ?? 0);
+  readonly totalOutputTokens = computed(() => this.activeData()?.totalOutputTokens ?? 0);
+  readonly totalCacheSavings = computed(() => this.activeData()?.totalCacheSavings ?? 0);
+  readonly models = computed(() => this.activeData()?.models ?? []);
+
+  readonly averageCostPerRequest = computed(() => {
+    const total = this.totalCost();
+    const requests = this.totalRequests();
+    return requests > 0 ? total / requests : 0;
+  });
+
+  readonly totalTokens = computed(() => this.totalInputTokens() + this.totalOutputTokens());
+
+  readonly averageTokensPerRequest = computed(() => {
+    const total = this.totalTokens();
+    const requests = this.totalRequests();
+    return requests > 0 ? Math.round(total / requests) : 0;
+  });
+
+  readonly cacheSavingsPercentage = computed(() => {
+    const savings = this.totalCacheSavings();
+    const cost = this.totalCost();
+    const totalWithoutSavings = cost + savings;
+    return totalWithoutSavings > 0 ? (savings / totalWithoutSavings) * 100 : 0;
+  });
+
+  async loadLast30Days(): Promise<void> {
+    this.selectedPeriodType.set('last30');
+    this.selectedMonthValue.set('');
+    this.isLoadingCustomReport.set(true);
+    this.customReportError.set(null);
+
+    try {
+      const summary = await this.costService.getCostSummaryForLastNDays(30);
+      this.customReportData.set(summary);
+    } catch {
+      this.customReportError.set('Failed to load cost data for last 30 days');
+    } finally {
+      this.isLoadingCustomReport.set(false);
+    }
+  }
+
+  async loadMonth(value: string): Promise<void> {
+    if (!value) return;
+    this.selectedPeriodType.set('month');
+    this.selectedMonthValue.set(value);
+    this.isLoadingCustomReport.set(true);
+    this.customReportError.set(null);
+
+    try {
+      const summary = await this.costService.fetchCostSummary(value);
+      this.customReportData.set(summary);
+    } catch {
+      this.customReportError.set('Failed to load cost data for selected month');
+    } finally {
+      this.isLoadingCustomReport.set(false);
+    }
+  }
+
+  resetToCurrentMonth(): void {
+    this.selectedPeriodType.set('current');
+    this.selectedMonthValue.set('');
+    this.customReportError.set(null);
+    this.customReportData.set(null);
+    this.costService.reloadCurrentMonthSummary();
+  }
+
+  formatCurrency(value: number): string {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    }).format(value);
+  }
+
+  formatNumber(value: number): string {
+    return new Intl.NumberFormat('en-US').format(value);
+  }
+
+  private buildPreviousMonths(count: number): { value: string; label: string }[] {
+    const months: { value: string; label: string }[] = [];
+    const now = new Date();
+    for (let i = 1; i <= count; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const value = `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+      const label = d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      months.push({ value, label });
+    }
+    return months;
+  }
 }

@@ -14,8 +14,6 @@ import {
   heroChatBubbleLeftRight,
   heroLink,
   heroKey,
-  heroBell,
-  heroShieldCheck,
   heroChartBar,
   heroCog6Tooth,
 } from '@ng-icons/heroicons/outline';
@@ -39,18 +37,16 @@ interface NavItem {
       heroChatBubbleLeftRight,
       heroLink,
       heroKey,
-      heroBell,
-      heroShieldCheck,
       heroChartBar,
       heroCog6Tooth,
     }),
   ],
   host: { class: 'block' },
   template: `
-    <div class="min-h-dvh bg-gray-50 dark:bg-gray-950">
+    <div class="min-h-dvh">
       <!-- Top bar -->
-      <div class="sticky top-0 z-10 border-b border-gray-200 bg-white/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-900/80">
-        <div class="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
+      <div class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-900/50">
+        <div class="flex h-14 items-center gap-4 px-4 sm:px-6 lg:px-8">
           <a
             routerLink="/"
             class="flex items-center gap-2 text-sm/6 font-medium text-gray-500 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
@@ -69,7 +65,7 @@ interface NavItem {
       <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <div class="lg:grid lg:grid-cols-12 lg:gap-x-8">
           <!-- Sidebar Navigation -->
-          <aside class="lg:col-span-3">
+          <aside class="lg:col-span-2">
             <!-- Mobile dropdown (shown on small screens) -->
             <div class="lg:hidden">
               <label for="settings-nav" class="sr-only">Settings section</label>
@@ -105,7 +101,7 @@ interface NavItem {
           </aside>
 
           <!-- Content area -->
-          <main class="mt-8 lg:col-span-9 lg:mt-0">
+          <main class="mt-8 lg:col-span-10 lg:mt-0">
             <router-outlet />
           </main>
         </div>
@@ -122,8 +118,6 @@ export class SettingsPage {
     { label: 'Chat', icon: 'heroChatBubbleLeftRight', route: '/settings/chat', description: 'Chat preferences' },
     { label: 'Connections', icon: 'heroLink', route: '/settings/connections', description: 'Connected apps' },
     { label: 'API Keys', icon: 'heroKey', route: '/settings/api-keys', description: 'API key management' },
-    { label: 'Notifications', icon: 'heroBell', route: '/settings/notifications', description: 'Notification preferences' },
-    { label: 'Privacy & Data', icon: 'heroShieldCheck', route: '/settings/privacy', description: 'Data and privacy controls' },
     { label: 'Usage', icon: 'heroChartBar', route: '/settings/usage', description: 'Usage and billing' },
   ];
 

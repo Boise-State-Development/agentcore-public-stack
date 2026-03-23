@@ -2,59 +2,44 @@ import {
   Component,
   ChangeDetectionStrategy,
   inject,
-  signal,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroCamera,
-  heroEnvelope,
-  heroBriefcase,
-  heroMapPin,
-  heroGlobeAlt,
-} from '@ng-icons/heroicons/outline';
+import { heroDocument, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { UserService } from '../../../auth/user.service';
 
 @Component({
   selector: 'app-profile-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [RouterLink, NgIcon],
   providers: [
-    provideIcons({ heroCamera, heroEnvelope, heroBriefcase, heroMapPin, heroGlobeAlt }),
+    provideIcons({ heroDocument, heroChevronRight }),
   ],
   host: { class: 'block' },
   template: `
-    <div class="space-y-8">
+    <div class="flex flex-col gap-8">
       <!-- Section header -->
       <div>
         <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Profile</h2>
         <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
-          Your personal information. Some fields are managed by your identity provider.
+          Your personal information managed by your identity provider.
         </p>
       </div>
 
-      <div class="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white dark:divide-white/10 dark:border-white/10 dark:bg-gray-900">
-        <!-- Avatar section -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <!-- Avatar + name section -->
         <div class="flex items-center gap-6 p-6">
-          <div class="relative">
-            @if (userService.currentUser()?.picture; as picture) {
-              <img
-                [src]="picture"
-                alt="Profile photo"
-                class="size-20 rounded-full object-cover ring-2 ring-gray-200 dark:ring-white/10"
-              />
-            } @else {
-              <div class="flex size-20 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-2xl font-bold text-white ring-2 ring-gray-200 dark:ring-white/10">
-                {{ getInitials() }}
-              </div>
-            }
-            <button
-              type="button"
-              class="absolute -bottom-1 -right-1 flex size-8 items-center justify-center rounded-full border-2 border-white bg-gray-100 text-gray-500 shadow-xs transition-colors hover:bg-gray-200 dark:border-gray-900 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600"
-              aria-label="Change profile photo"
-            >
-              <ng-icon name="heroCamera" class="size-4" />
-            </button>
-          </div>
+          @if (userService.currentUser()?.picture; as picture) {
+            <img
+              [src]="picture"
+              alt="Profile photo"
+              class="size-20 rounded-full object-cover ring-2 ring-gray-200 dark:ring-white/10"
+            />
+          } @else {
+            <div class="flex size-20 items-center justify-center rounded-full bg-linear-to-br from-blue-500 to-indigo-600 text-2xl font-bold text-white ring-2 ring-gray-200 dark:ring-white/10">
+              {{ getInitials() }}
+            </div>
+          }
           <div>
             <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white">
               {{ userService.currentUser()?.fullName ?? 'Unknown User' }}
@@ -68,101 +53,44 @@ import { UserService } from '../../../auth/user.service';
           </div>
         </div>
 
-        <!-- Display name -->
-        <div class="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3 sm:items-center">
-          <label for="display-name" class="text-sm/6 font-medium text-gray-900 dark:text-white">
-            Display name
-          </label>
-          <div class="sm:col-span-2">
-            <input
-              id="display-name"
-              type="text"
-              [value]="displayName()"
-              (input)="displayName.set(asInput($event).value)"
-              class="block w-full rounded-sm border-0 bg-white px-3 py-1.5 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
-              placeholder="How you appear to others"
-            />
-          </div>
-        </div>
-
-        <!-- Title / Role -->
-        <div class="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3 sm:items-center">
-          <label for="job-title" class="text-sm/6 font-medium text-gray-900 dark:text-white">
-            Title
-          </label>
-          <div class="sm:col-span-2">
-            <div class="relative">
-              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <ng-icon name="heroBriefcase" class="size-4 text-gray-400" />
-              </div>
-              <input
-                id="job-title"
-                type="text"
-                [value]="jobTitle()"
-                (input)="jobTitle.set(asInput($event).value)"
-                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-9 pr-3 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
-                placeholder="e.g. Software Engineer"
-              />
+        <!-- Read-only details -->
+        <div class="border-t border-gray-200 dark:border-white/10">
+          <dl class="divide-y divide-gray-200 dark:divide-white/10">
+            <div class="grid grid-cols-1 gap-1 px-6 py-4 sm:grid-cols-3 sm:items-center">
+              <dt class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Full name</dt>
+              <dd class="text-sm/6 text-gray-900 sm:col-span-2 dark:text-white">
+                {{ userService.currentUser()?.fullName ?? '-' }}
+              </dd>
             </div>
-          </div>
-        </div>
-
-        <!-- Location -->
-        <div class="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3 sm:items-center">
-          <label for="location" class="text-sm/6 font-medium text-gray-900 dark:text-white">
-            Location
-          </label>
-          <div class="sm:col-span-2">
-            <div class="relative">
-              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <ng-icon name="heroMapPin" class="size-4 text-gray-400" />
-              </div>
-              <input
-                id="location"
-                type="text"
-                [value]="location()"
-                (input)="location.set(asInput($event).value)"
-                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-9 pr-3 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
-                placeholder="e.g. Boise, ID"
-              />
+            <div class="grid grid-cols-1 gap-1 px-6 py-4 sm:grid-cols-3 sm:items-center">
+              <dt class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">Email</dt>
+              <dd class="text-sm/6 text-gray-900 sm:col-span-2 dark:text-white">
+                {{ userService.currentUser()?.email ?? '-' }}
+              </dd>
             </div>
-          </div>
-        </div>
-
-        <!-- Timezone -->
-        <div class="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3 sm:items-center">
-          <label for="timezone" class="text-sm/6 font-medium text-gray-900 dark:text-white">
-            Timezone
-          </label>
-          <div class="sm:col-span-2">
-            <div class="relative">
-              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <ng-icon name="heroGlobeAlt" class="size-4 text-gray-400" />
-              </div>
-              <select
-                id="timezone"
-                class="block w-full rounded-sm border-0 bg-white py-1.5 pl-9 pr-3 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
-              >
-                <option>America/Boise (MST)</option>
-                <option>America/Los_Angeles (PST)</option>
-                <option>America/Denver (MST)</option>
-                <option>America/Chicago (CST)</option>
-                <option>America/New_York (EST)</option>
-                <option>UTC</option>
-              </select>
-            </div>
-          </div>
+          </dl>
         </div>
       </div>
 
-      <!-- Save button -->
-      <div class="flex justify-end">
-        <button
-          type="button"
-          class="rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:bg-blue-500 dark:hover:bg-blue-400"
+      <!-- My Files -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <a
+          routerLink="/files"
+          class="flex items-center justify-between gap-4 p-6 transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
         >
-          Save changes
-        </button>
+          <div class="flex items-start gap-3">
+            <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
+              <ng-icon name="heroDocument" class="size-4 text-gray-500 dark:text-gray-400" />
+            </div>
+            <div>
+              <span class="text-sm/6 font-medium text-gray-900 dark:text-white">My Files</span>
+              <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                Browse and manage your uploaded files.
+              </p>
+            </div>
+          </div>
+          <ng-icon name="heroChevronRight" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" />
+        </a>
       </div>
     </div>
   `,
@@ -170,17 +98,9 @@ import { UserService } from '../../../auth/user.service';
 export class ProfileSettingsPage {
   readonly userService = inject(UserService);
 
-  readonly displayName = signal(this.userService.currentUser()?.fullName ?? '');
-  readonly jobTitle = signal('');
-  readonly location = signal('');
-
   getInitials(): string {
     const user = this.userService.currentUser();
     if (!user) return '?';
     return `${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}`.toUpperCase();
-  }
-
-  asInput(event: Event): HTMLInputElement {
-    return event.target as HTMLInputElement;
   }
 }

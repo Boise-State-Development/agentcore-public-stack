@@ -1,7 +1,7 @@
 import { Injectable, inject, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
-import { ConfigService } from '../../services/config.service';
+import { ConfigService } from '../../../services/config.service';
 
 export interface ApiKey {
   key_id: string;

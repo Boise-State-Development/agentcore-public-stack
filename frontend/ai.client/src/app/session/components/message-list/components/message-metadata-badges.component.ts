@@ -2,8 +2,10 @@ import {
     ChangeDetectionStrategy,
     Component,
     computed,
+    inject,
     input,
 } from '@angular/core';
+import { LocalSettingsService } from '../../../../services/local-settings.service';
 
 interface MessageMetadata {
     latency?: {
@@ -30,7 +32,7 @@ interface MessageMetadata {
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [],
     template: `
-        @if (hasMetadata()) {
+        @if (localSettings.showTokenCount() && hasMetadata()) {
             <!-- TTFT Badge -->
                 @if (ttft()) {
                     <div class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
@@ -123,6 +125,7 @@ interface MessageMetadata {
     `,
 })
 export class MessageMetadataBadgesComponent {
+    readonly localSettings = inject(LocalSettingsService);
     metadata = input<Record<string, unknown> | null>();
 
     // Computed properties to extract metadata values
