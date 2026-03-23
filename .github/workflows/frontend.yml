@@ -65,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Run stack dependency tests
         run: |
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore frontend node_modules cache
         id: cache-frontend
@@ -122,7 +122,7 @@ jobs:
     needs: [install, check-stack-dependencies]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore frontend node_modules cache
         uses: actions/cache/restore@v5
@@ -156,7 +156,7 @@ jobs:
       app-version: ${{ steps.read-version.outputs.APP_VERSION }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Read VERSION file
         id: read-version
@@ -182,7 +182,7 @@ jobs:
     if: ${{ github.event.inputs.skip_tests != 'true' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore frontend node_modules cache
         uses: actions/cache/restore@v5
@@ -236,7 +236,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore CDK node_modules cache
         uses: actions/cache/restore@v5
@@ -294,7 +294,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore CDK node_modules cache
         uses: actions/cache/restore@v5
@@ -364,7 +364,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Restore CDK node_modules cache
         uses: actions/cache/restore@v5
@@ -434,7 +434,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5      
+        uses: actions/checkout@v6      
       
       - name: Download Frontend build artifacts
         uses: actions/download-artifact@v7
