@@ -551,6 +551,26 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // DynamoDB User Settings Table permissions (imported from InfrastructureStack)
+    const userSettingsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/settings/user-settings-table-arn`
+    );
+
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'UserSettingsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+        'dynamodb:Scan',
+      ],
+      resources: [
+        userSettingsTableArn,
+        `${userSettingsTableArn}/index/*`,
+      ],
+    }));
+
     // DynamoDB Auth Providers Table permissions (imported from App API Stack)
     const authProvidersTableArn = ssm.StringParameter.valueForStringParameter(
       this,

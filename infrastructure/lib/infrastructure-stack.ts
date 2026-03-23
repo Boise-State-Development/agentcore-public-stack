@@ -980,6 +980,41 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // User Settings Table
+    // PK (String) SK (String)
+    // ============================================================
+    const userSettingsTable = new dynamodb.Table(this, "UserSettingsTable", {
+      tableName: getResourceName(config, "user-settings"),
+      partitionKey: {
+        name: "PK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "SK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // Store UserSettings table name and ARN in SSM
+    new ssm.StringParameter(this, "UserSettingsTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/settings/user-settings-table-name`,
+      stringValue: userSettingsTable.tableName,
+      description: "User settings DynamoDB table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "UserSettingsTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/settings/user-settings-table-arn`,
+      stringValue: userSettingsTable.tableArn,
+      description: "User settings DynamoDB table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // AuthProviders Table - OIDC authentication provider configuration
     const authProvidersTable = new dynamodb.Table(this, "AuthProvidersTable", {
       tableName: getResourceName(config, "auth-providers"),
