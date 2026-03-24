@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -90,7 +90,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==7.1.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.7" },
-    { name = "starlette", specifier = ">=0.49.1" },
+    { name = "starlette", specifier = "==1.0.0" },
     { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.32.0" },
     { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.2.23" },
     { name = "tiktoken", marker = "extra == 'dev'", specifier = "==0.12.0" },
