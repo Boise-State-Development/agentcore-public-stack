@@ -869,12 +869,14 @@ def main() -> None:
     results: list[SeedResult] = []
 
     # --- Auth provider seeding ---
-    required_auth_vars = {
-        "SEED_AUTH_ISSUER_URL": auth_issuer_url,
-        "SEED_AUTH_CLIENT_ID": auth_client_id,
-        "SEED_AUTH_CLIENT_SECRET": auth_client_secret,
-    }
-    missing_auth = [k for k, v in required_auth_vars.items() if not v]
+    required_auth_var_names = [
+        "SEED_AUTH_ISSUER_URL",
+        "SEED_AUTH_CLIENT_ID",
+        "SEED_AUTH_CLIENT_SECRET",
+    ]
+    missing_auth = [
+        name for name in required_auth_var_names if not os.environ.get(name, "")
+    ]
 
     if missing_auth:
         logger.warning(
