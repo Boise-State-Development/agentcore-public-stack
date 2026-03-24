@@ -49,10 +49,11 @@ main() {
     log_info "Using Node.js ${NODE_VERSION}"
     
     # Install Node.js dependencies
-    if [ -d "node_modules" ]; then
-        log_info "node_modules already exists, skipping npm install"
+    if [ -f "package-lock.json" ]; then
+        log_info "Running npm ci (clean install from package-lock.json)..."
+        npm ci
     else
-        log_info "Installing Node.js dependencies from package.json..."
+        log_info "No package-lock.json found. Running npm install..."
         npm install
     fi
     

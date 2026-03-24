@@ -40,7 +40,7 @@ cd "${PROJECT_ROOT}/infrastructure"
 # Ensure dependencies are installed
 if [ ! -d "node_modules" ]; then
     log_info "node_modules not found in CDK directory. Installing dependencies..."
-    npm install
+    npm ci
 fi
 
 # Synthesize the SageMaker Fine-Tuning Stack
