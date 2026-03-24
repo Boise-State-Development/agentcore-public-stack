@@ -26,7 +26,7 @@ cd "${INFRASTRUCTURE_DIR}"
 # Ensure dependencies are installed
 if [ ! -d "node_modules" ]; then
     log_info "node_modules not found in CDK directory. Installing dependencies..."
-    npm install
+    npm ci
 fi
 
 log_info "Running CDK synth for GatewayStack..."
