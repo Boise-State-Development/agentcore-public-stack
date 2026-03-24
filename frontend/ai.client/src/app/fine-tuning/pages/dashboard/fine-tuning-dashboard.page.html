@@ -168,8 +168,6 @@
                 {{ job.model_name }}
               </a>
 
-              <span class="hidden text-sm/6 text-gray-500 sm:block dark:text-gray-400">{{ getRetentionLabel(job.created_at) }}</span>
-
               <div class="ml-auto shrink-0 rounded-md bg-sky-100/80 px-3 py-1.5 text-center dark:bg-sky-900/30">
                 <div class="font-mono text-base/5 font-bold tracking-tight text-sky-700 dark:text-sky-300">{{ getElapsedInference(job) }}</div>
                 <div class="mt-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-500/80 dark:text-sky-400/60">elapsed</div>

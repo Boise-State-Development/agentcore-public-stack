@@ -21,14 +21,23 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # Sanitize session name: replace illegal chars with '-', truncate to 64
+    - name: Sanitize role session name
+      id: sanitize
+      shell: bash
+      run: |
+        RAW="${{ inputs.role-session-name }}"
+        SAFE=$(echo "$RAW" | sed 's/[^a-zA-Z0-9_=,.@-]/-/g' | cut -c1-64)
+        echo "name=$SAFE" >> "$GITHUB_OUTPUT"
+
     - name: Configure AWS credentials (OIDC)
       if: ${{ inputs.aws-role-arn != '' }}
       uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.aws-role-arn }}
         aws-region: ${{ inputs.aws-region }}
-        role-session-name: ${{ inputs.role-session-name }}
-    
+        role-session-name: ${{ steps.sanitize.outputs.name }}
+
     - name: Configure AWS credentials (Access Keys)
       if: ${{ inputs.aws-role-arn == '' }}
       uses: aws-actions/configure-aws-credentials@v6

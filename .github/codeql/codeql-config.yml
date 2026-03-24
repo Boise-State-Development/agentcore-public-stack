@@ -1,0 +1,51 @@
+name: "AgentCore CodeQL Config"
+
+# ── Threat Models ──
+# Enable GitHub Actions threat model for workflow taint tracking.
+# This activates the 18 Actions-specific queries (code injection,
+# artifact poisoning, cache poisoning, secret exposure, etc.)
+threat-models:
+  - github-actions
+
+paths-ignore:
+  # ── Vendored / third-party ──
+  - "**/node_modules"
+  - "**/.venv"
+  - "**/venv"
+
+  # ── Build artifacts & caches ──
+  - "frontend/ai.client/dist"
+  - "frontend/ai.client/.angular"
+  - "infrastructure/cdk.out"
+  - "**/__pycache__"
+  - "**/.pytest_cache"
+  - "**/.hypothesis"
+  - "**/.mypy_cache"
+  - "**/htmlcov"
+  - "**/coverage"
+  - "**/*.egg-info"
+
+  # ── Generated / runtime data ──
+  - "backend/src/output"
+  - "backend/src/uploads"
+  - "backend/src/generated_images"
+  - "backend/src/sessions"
+  - "backend/src/managed_models"
+  - "backend/src/assistants"
+
+  # ── Test files (not security-relevant) ──
+  - "backend/tests"
+  - "backend/.hypothesis"
+  - "backend/lambda-functions/**/tests"
+  - "infrastructure/test"
+  - "frontend/ai.client/src/**/*.spec.ts"
+
+  # ── IDE / tooling config ──
+  - ".claude"
+  - ".cursor"
+  - ".kiro"
+  - ".vscode"
+
+  # ── Scripts & docs (not application code) ──
+  - "scripts"
+  - "docs"

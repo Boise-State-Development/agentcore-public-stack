@@ -441,6 +441,9 @@ jobs:
   deploy:
     needs: resolve-tracks
     if: needs.resolve-tracks.outputs.run_deploy == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/nightly-deploy-pipeline.yml
     with:
       ref: ${{ needs.resolve-tracks.outputs.deploy_ref }}
@@ -457,6 +460,9 @@ jobs:
   mv-base:
     needs: resolve-tracks
     if: needs.resolve-tracks.outputs.run_mv == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/nightly-deploy-pipeline.yml
     with:
       ref: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
@@ -470,6 +476,9 @@ jobs:
   mv-overlay:
     needs: [resolve-tracks, mv-base]
     if: needs.resolve-tracks.outputs.run_mv == 'true'
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/nightly-deploy-pipeline.yml
     with:
       ref: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}

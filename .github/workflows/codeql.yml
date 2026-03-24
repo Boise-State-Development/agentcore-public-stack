@@ -1,0 +1,67 @@
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches: [ "develop" ]
+    paths:
+      - 'backend/src/**'
+      - 'backend/lambda-functions/**'
+      - 'frontend/ai.client/src/**'
+      - 'infrastructure/lib/**'
+      - 'infrastructure/bin/**'
+      - '.github/workflows/**'
+      - '.github/codeql/**'
+  pull_request:
+    branches: [ "develop" ]
+    paths:
+      - 'backend/src/**'
+      - 'backend/lambda-functions/**'
+      - 'frontend/ai.client/src/**'
+      - 'infrastructure/lib/**'
+      - 'infrastructure/bin/**'
+      - '.github/workflows/**'
+      - '.github/codeql/**'
+  schedule:
+    # Full weekly scan — catches new CVEs even when code hasn't changed
+    - cron: '28 23 * * 5'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
+          # security-and-quality: full security suite + code quality queries
+          # (dead code, unused variables, bad patterns linters miss)
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Upload SARIF database for debugging and audit trail
+          upload: always
