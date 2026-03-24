@@ -70,29 +70,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
-# CORS origins are automatically configured based on FRONTEND_URL environment variable
-allowed_origins = []
-
-# Read frontend URL from environment variable (set by CDK based on frontend.domainName)
-frontend_url = os.getenv('FRONTEND_URL', '')
-if frontend_url:
-    allowed_origins.append(frontend_url)
-    logger.info(f"CORS: Added frontend origin: {frontend_url}")
-
-# Fallback: Add localhost for local development if no frontend URL configured
-if not allowed_origins:
-    allowed_origins.append("http://localhost:4200")
-    logger.info("CORS: Added local development origin (fallback)")
-
-if allowed_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Add CORS middleware - allow all origins for now
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Import routers
