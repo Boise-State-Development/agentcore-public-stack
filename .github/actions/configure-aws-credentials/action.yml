@@ -32,7 +32,7 @@ runs:
 
     - name: Configure AWS credentials (OIDC)
       if: ${{ inputs.aws-role-arn != '' }}
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
       with:
         role-to-assume: ${{ inputs.aws-role-arn }}
         aws-region: ${{ inputs.aws-region }}
@@ -40,7 +40,7 @@ runs:
 
     - name: Configure AWS credentials (Access Keys)
       if: ${{ inputs.aws-role-arn == '' }}
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
       with:
         aws-access-key-id: ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}

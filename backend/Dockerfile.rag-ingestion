@@ -13,7 +13,16 @@ FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a
 # AL2023 uses dnf as package manager
 # Note: curl-minimal is already installed in the Lambda base image, don't install curl (conflicts)
 # Note: We skip dnf update — the base image is patched by AWS, and updates are non-deterministic
-RUN dnf install -y gcc gcc-c++ make mesa-libGL glib2 tar gzip ca-certificates unzip && \
+RUN dnf install -y \
+  gcc-11.5.0-5.amzn2023.0.5 \
+  gcc-c++-11.5.0-5.amzn2023.0.5 \
+  make-1:4.3-5.amzn2023.0.2 \
+  mesa-libGL-24.2.6-1267.amzn2023.0.1 \
+  glib2-2.82.2-769.amzn2023 \
+  tar-2:1.34-1.amzn2023.0.4 \
+  gzip-1.12-1.amzn2023.0.1 \
+  ca-certificates-2025.2.76-1.0.amzn2023.0.2 \
+  unzip-6.0-68.amzn2023.0.1 && \
   dnf clean all
 
 # Install Rust toolchain from a pinned image (avoids curl | sh from the internet)
@@ -88,7 +97,9 @@ FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a
 
 # 1. Install only runtime system libs (GL/Glib for CV2)
 # AL2023 uses dnf as package manager
-RUN dnf install -y mesa-libGL glib2 && \
+RUN dnf install -y \
+  mesa-libGL-24.2.6-1267.amzn2023.0.1 \
+  glib2-2.82.2-769.amzn2023 && \
   dnf clean all
 
 # 2. Copy Python Packages

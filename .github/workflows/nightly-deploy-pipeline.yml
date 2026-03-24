@@ -43,16 +43,16 @@ env:
 jobs:
   install-infrastructure:
     name: "[${{ inputs.label }}] Install Infrastructure"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
         id: cache-infrastructure
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -67,17 +67,17 @@ jobs:
 
       - name: Save infrastructure node_modules cache
         if: steps.cache-infrastructure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
   check-stack-dependencies:
     name: "[${{ inputs.label }}] Check Stack Dependencies"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
@@ -86,7 +86,7 @@ jobs:
 
   deploy-infrastructure:
     name: "[${{ inputs.label }}] Deploy Infrastructure"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [install-infrastructure, check-stack-dependencies]
     environment: development
     outputs:
@@ -110,12 +110,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -164,12 +164,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -196,7 +196,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.promote.outcome != 'success'
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build Docker image
         if: steps.promote.outcome != 'success'
@@ -251,12 +251,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -283,7 +283,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.promote.outcome != 'success'
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build Docker image
         if: steps.promote.outcome != 'success'
@@ -314,7 +314,7 @@ jobs:
 
   deploy-app-api:
     name: "[${{ inputs.label }}] Deploy App API"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: deploy-inference-api
     environment: development
     outputs:
@@ -338,12 +338,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -370,7 +370,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.promote.outcome != 'success'
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build Docker image
         if: steps.promote.outcome != 'success'
@@ -399,7 +399,7 @@ jobs:
 
   deploy-frontend:
     name: "[${{ inputs.label }}] Deploy Frontend"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: deploy-app-api
     environment: development
     outputs:
@@ -426,13 +426,13 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore frontend build cache
         id: cache-frontend-build
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: frontend/ai.client/dist
           key: frontend-build-${{ hashFiles('frontend/ai.client/src/**', 'frontend/ai.client/angular.json', 'frontend/ai.client/tsconfig.json') }}
@@ -446,7 +446,7 @@ jobs:
         run: bash scripts/stack-frontend/build.sh
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -479,7 +479,7 @@ jobs:
 
   deploy-gateway:
     name: "[${{ inputs.label }}] Deploy Gateway"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: deploy-app-api
     environment: development
     outputs:
@@ -499,12 +499,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -534,7 +534,7 @@ jobs:
 
   smoke-test:
     name: "[${{ inputs.label }}] Smoke Test"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [deploy-app-api, deploy-inference-api, deploy-rag-ingestion, deploy-frontend, deploy-gateway]
     environment: development
     outputs:
@@ -553,7 +553,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
@@ -580,7 +580,7 @@ jobs:
 
   teardown:
     name: "[${{ inputs.label }}] Teardown"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: smoke-test
     if: ${{ always() && inputs.skip-teardown != 'true' }}
     environment: development
@@ -598,12 +598,12 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}

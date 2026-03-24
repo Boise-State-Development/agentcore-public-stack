@@ -6,6 +6,7 @@
 #   test-frontend-<branch>             Run frontend tests against <branch>
 #   deploy-<branch>                    Deploy full stack from <branch>
 #   merge-validation:<base>:<overlay>  Deploy <base>, then overlay <overlay>
+#   scan-images-<branch>               Scan Docker images from <branch> for vulnerabilities
 #   all                                Run all tracks with default branches
 #                                      (tests + deploy on develop, MV main→develop)
 #
@@ -62,7 +63,7 @@ jobs:
 
   resolve-tracks:
     name: Resolve Tracks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run_test_backend: ${{ steps.resolve.outputs.run_test_backend }}
       test_backend_ref: ${{ steps.resolve.outputs.test_backend_ref }}
@@ -73,6 +74,8 @@ jobs:
       run_mv: ${{ steps.resolve.outputs.run_mv }}
       mv_base_ref: ${{ steps.resolve.outputs.mv_base_ref }}
       mv_overlay_ref: ${{ steps.resolve.outputs.mv_overlay_ref }}
+      run_scan_images: ${{ steps.resolve.outputs.run_scan_images }}
+      scan_images_ref: ${{ steps.resolve.outputs.scan_images_ref }}
       any_track: ${{ steps.resolve.outputs.any_track }}
     steps:
       - name: Parse tracks
@@ -95,6 +98,8 @@ jobs:
           run_mv=false
           mv_base_ref=""
           mv_overlay_ref=""
+          run_scan_images=false
+          scan_images_ref=""
 
           # Empty tracks = nothing runs (fork-safe default)
           if [ -z "$TRACKS" ]; then
@@ -115,6 +120,8 @@ jobs:
                   run_mv=true
                   mv_base_ref="main"
                   mv_overlay_ref="develop"
+                  run_scan_images=true
+                  scan_images_ref="develop"
                   ;;
                 test-backend-*)
                   run_test_backend=true
@@ -133,6 +140,10 @@ jobs:
                   mv_base_ref="$(echo "$token" | cut -d: -f2)"
                   mv_overlay_ref="$(echo "$token" | cut -d: -f3)"
                   ;;
+                scan-images-*)
+                  run_scan_images=true
+                  scan_images_ref="${token#scan-images-}"
+                  ;;
                 *)
                   echo "::warning::Unknown track token: $token"
                   ;;
@@ -143,7 +154,8 @@ jobs:
           # Determine if any track is enabled
           any_track=false
           if [ "$run_test_backend" = "true" ] || [ "$run_test_frontend" = "true" ] || \
-             [ "$run_deploy" = "true" ] || [ "$run_mv" = "true" ]; then
+             [ "$run_deploy" = "true" ] || [ "$run_mv" = "true" ] || \
+             [ "$run_scan_images" = "true" ]; then
             any_track=true
           fi
 
@@ -158,6 +170,8 @@ jobs:
             echo "run_mv=$run_mv"
             echo "mv_base_ref=$mv_base_ref"
             echo "mv_overlay_ref=$mv_overlay_ref"
+            echo "run_scan_images=$run_scan_images"
+            echo "scan_images_ref=$scan_images_ref"
             echo "any_track=$any_track"
           } >> "$GITHUB_OUTPUT"
 
@@ -167,6 +181,7 @@ jobs:
           echo "  test-frontend: $run_test_frontend (ref: $test_frontend_ref)"
           echo "  deploy:        $run_deploy (ref: $deploy_ref)"
           echo "  mv:            $run_mv (base: $mv_base_ref, overlay: $mv_overlay_ref)"
+          echo "  scan-images:   $run_scan_images (ref: $scan_images_ref)"
           echo "  any_track:     $any_track"
 
   # ── Test Tracks ───────────────────────────────────────────────────────────
@@ -175,21 +190,21 @@ jobs:
     name: Install Backend Dependencies
     needs: resolve-tracks
     if: needs.resolve-tracks.outputs.run_test_backend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_backend_ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
 
       - name: Restore Python packages cache
         id: cache-backend
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cache/uv
@@ -206,7 +221,7 @@ jobs:
 
       - name: Save Python packages cache
         if: steps.cache-backend.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cache/uv
@@ -217,16 +232,16 @@ jobs:
     name: Install Frontend Dependencies
     needs: resolve-tracks
     if: needs.resolve-tracks.outputs.run_test_frontend == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_frontend_ref }}
 
       - name: Restore frontend node_modules cache
         id: cache-frontend
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
@@ -241,14 +256,14 @@ jobs:
 
       - name: Save frontend node_modules cache
         if: steps.cache-frontend.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
 
   test-backend:
     name: Test Backend with Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [resolve-tracks, install-backend]
     if: needs.resolve-tracks.outputs.run_test_backend == 'true'
     outputs:
@@ -256,17 +271,17 @@ jobs:
       duration: ${{ steps.summary.outputs.duration }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_backend_ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
 
       - name: Restore Python packages cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cache/uv
@@ -278,7 +293,7 @@ jobs:
         run: bash scripts/stack-app-api/test.sh
 
       - name: Upload backend coverage artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: backend-coverage
           path: |
@@ -296,7 +311,7 @@ jobs:
 
   test-frontend:
     name: Test Frontend with Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [resolve-tracks, install-frontend]
     if: needs.resolve-tracks.outputs.run_test_frontend == 'true'
     outputs:
@@ -304,12 +319,12 @@ jobs:
       duration: ${{ steps.summary.outputs.duration }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_frontend_ref }}
 
       - name: Restore frontend node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
@@ -319,7 +334,7 @@ jobs:
         run: bash scripts/stack-frontend/test.sh
 
       - name: Upload frontend coverage artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -337,7 +352,7 @@ jobs:
 
   analyze-coverage:
     name: Analyze Coverage Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [resolve-tracks, test-backend, test-frontend]
     if: >-
       always() &&
@@ -347,25 +362,25 @@ jobs:
       duration: ${{ steps.summary.outputs.duration }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.test_frontend_ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
 
       - name: Download backend coverage
         if: needs.test-backend.result == 'success'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: backend-coverage
           path: backend/
 
       - name: Download frontend coverage
         if: needs.test-frontend.result == 'success'
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -378,7 +393,7 @@ jobs:
         run: python3 scripts/nightly/compare-coverage.py
 
       - name: Upload coverage comparison report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage-comparison
           path: coverage-comparison.json
@@ -394,7 +409,7 @@ jobs:
 
   ai-coverage-analysis:
     name: AI Coverage Gap Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [resolve-tracks, analyze-coverage]
     if: >-
       always() && needs.analyze-coverage.result == 'success'
@@ -406,17 +421,17 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.test_frontend_ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
 
       - name: Download coverage comparison report
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: coverage-comparison
           path: .
@@ -488,16 +503,98 @@ jobs:
       label: MV-overlay-${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
     secrets: inherit
 
+  # ── Image Scanning Track ──────────────────────────────────────────────────
+
+  scan-images:
+    name: Scan Docker Images
+    runs-on: ubuntu-24.04
+    needs: resolve-tracks
+    if: needs.resolve-tracks.outputs.run_scan_images == 'true'
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+      duration: ${{ steps.summary.outputs.duration }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.resolve-tracks.outputs.scan_images_ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build app-api image
+        run: docker build -f backend/Dockerfile.app-api -t app-api:scan .
+
+      - name: Build inference-api image
+        run: docker build -f backend/Dockerfile.inference-api -t inference-api:scan .
+
+      - name: Build rag-ingestion image
+        run: docker build -f backend/Dockerfile.rag-ingestion -t rag-ingestion:scan .
+
+      - name: Trivy scan app-api
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01b8e110e21 # v0.28.0
+        with:
+          image-ref: 'app-api:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-app-api.txt
+
+      - name: Trivy scan inference-api
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01b8e110e21 # v0.28.0
+        with:
+          image-ref: 'inference-api:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-inference-api.txt
+
+      - name: Trivy scan rag-ingestion
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7f3b01b8e110e21 # v0.28.0
+        with:
+          image-ref: 'rag-ingestion:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-rag-ingestion.txt
+
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: trivy-scan-reports
+          path: trivy-*.txt
+          retention-days: 30
+
+      - name: Generate summary
+        id: summary
+        if: always()
+        run: |
+          echo "## Docker Image Scan Results" >> "$GITHUB_STEP_SUMMARY"
+          for report in trivy-*.txt; do
+            image_name=$(basename "$report" .txt | sed 's/trivy-//')
+            echo "### $image_name" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "$report" ] && [ -s "$report" ]; then
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat "$report" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "No vulnerabilities found." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
+
   # ── Summary ───────────────────────────────────────────────────────────────
 
   summary:
     name: Nightly Summary
-    runs-on: ubuntu-latest
-    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, mv-base, mv-overlay]
+    runs-on: ubuntu-24.04
+    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, mv-base, mv-overlay, scan-images]
     if: always() && needs.resolve-tracks.outputs.any_track == 'true'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.mv_overlay_ref || 'develop' }}
 
@@ -507,6 +604,7 @@ jobs:
           RUN_TEST_FRONTEND: ${{ needs.resolve-tracks.outputs.run_test_frontend }}
           RUN_DEPLOY: ${{ needs.resolve-tracks.outputs.run_deploy }}
           RUN_MV: ${{ needs.resolve-tracks.outputs.run_mv }}
+          RUN_SCAN_IMAGES: ${{ needs.resolve-tracks.outputs.run_scan_images }}
           DEPLOY_REF: ${{ needs.resolve-tracks.outputs.deploy_ref }}
           MV_BASE_REF: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
           MV_OVERLAY_REF: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
@@ -565,6 +663,13 @@ jobs:
             status="$(map_status "${{ needs.mv-overlay.result }}")"
             ROWS+=("[MV] Overlay (${MV_OVERLAY_REF})|${status}|0")
             [ "$status" = "failure" ] && AGGREGATE="failure"
+          fi
+
+          # Image scan track
+          if [ "$RUN_SCAN_IMAGES" = "true" ]; then
+            status="$(map_status "${{ needs.scan-images.result }}")"
+            ROWS+=("Image Scan|${status}|${{ needs.scan-images.outputs.duration || '0' }}")
+            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 
           write_workflow_header "Nightly Build & Test" "$AGGREGATE"
