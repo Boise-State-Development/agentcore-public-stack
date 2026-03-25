@@ -6,6 +6,7 @@ mock AgentCore Memory components, and message builder helpers.
 """
 
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -109,6 +110,8 @@ def mock_agentcore_config():
     config.session_id = TEST_SESSION_ID
     config.memory_id = TEST_MEMORY_ID
     config.actor_id = TEST_ACTOR_ID
+    config.batch_size = 1
+    config.flush_interval_seconds = None
     return config
 
 
@@ -121,7 +124,7 @@ def compaction_config() -> CompactionConfig:
     return CompactionConfig(
         enabled=True,
         token_threshold=1000,
-        protected_turns=2,
+        protected_turns=3,
         max_tool_content_length=50,
     )
 
@@ -184,6 +187,35 @@ def seed_session_record(table, session_id: str, user_id: str, compaction=None) -
 
 
 # ---------------------------------------------------------------------------
+# Mock parent __init__ — sets required attributes without AWS calls
+# ---------------------------------------------------------------------------
+
+def _mock_parent_init(config):
+    """Return a replacement __init__ for AgentCoreMemorySessionManager."""
+    def _init(self, agentcore_memory_config=None, region_name=None, **kwargs):
+        cfg = agentcore_memory_config or config
+        self.config = cfg
+        self.memory_client = MagicMock()
+        self.session_repository = self
+        self.session_id = cfg.session_id
+        self._is_new_session = True
+        self.session = MagicMock()
+        self._latest_agent_message = {}
+        self._last_synced_internal_state = {}
+        self.has_existing_agent = False
+        self.converter = MagicMock()
+        self._message_buffer = []
+        self._message_lock = threading.Lock()
+        self._agent_state_buffer = []
+        self._agent_state_lock = threading.Lock()
+        self._agent_created_at_cache = {}
+        self._flush_timer = None
+        self._timer_lock = threading.Lock()
+        self._shutdown = False
+    return _init
+
+
+# ---------------------------------------------------------------------------
 # TurnBasedSessionManager factory fixture
 # ---------------------------------------------------------------------------
 
@@ -191,22 +223,26 @@ def seed_session_record(table, session_id: str, user_id: str, compaction=None) -
 def make_session_manager(mock_agentcore_config):
     """
     Factory fixture — returns a callable that creates a TurnBasedSessionManager
-    with the AgentCoreMemorySessionManager mocked out.
+    with AgentCoreMemorySessionManager.__init__ mocked out so no AWS calls are made.
+
+    The resulting manager inherits all TurnBasedSessionManager methods and has
+    the parent's required attributes set via the mock __init__.
     """
     def _factory(compaction_config=None, user_id=TEST_USER_ID, **kwargs):
-        with patch(
-            "agents.main_agent.session.turn_based_session_manager.AgentCoreMemorySessionManager"
-        ) as MockBaseManager:
-            mock_base = MagicMock()
-            mock_base.list_messages.return_value = []
-            MockBaseManager.return_value = mock_base
+        from bedrock_agentcore.memory.integrations.strands.session_manager import (
+            AgentCoreMemorySessionManager,
+        )
+        from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
 
-            from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
+        # Reset class-level state between tests
+        TurnBasedSessionManager._dynamodb_table = None
+        TurnBasedSessionManager._dynamodb_table_name = None
 
-            # Reset class-level state between tests
-            TurnBasedSessionManager._dynamodb_table = None
-            TurnBasedSessionManager._dynamodb_table_name = None
-
+        with patch.object(
+            AgentCoreMemorySessionManager,
+            "__init__",
+            _mock_parent_init(mock_agentcore_config),
+        ):
             mgr = TurnBasedSessionManager(
                 agentcore_memory_config=mock_agentcore_config,
                 region_name=REGION,
@@ -214,7 +250,14 @@ def make_session_manager(mock_agentcore_config):
                 user_id=user_id,
                 **kwargs,
             )
-            mgr._mock_base = mock_base
-            return mgr
+
+        # Set up mock methods for session repository operations
+        # (These are inherited from AgentCoreMemorySessionManager and called via self)
+        mgr.read_agent = MagicMock(return_value=None)
+        mgr.list_messages = MagicMock(return_value=[])
+        mgr.create_agent = MagicMock()
+        mgr.create_message = MagicMock()
+
+        return mgr
 
     return _factory
