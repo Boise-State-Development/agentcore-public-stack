@@ -72,7 +72,8 @@ async def create_share(
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
     except Exception as e:
-        logger.error(f"Error creating share for session {session_id}: {e}", exc_info=True)
+        safe_session_id = session_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error creating share for session {safe_session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create share")
 
 
