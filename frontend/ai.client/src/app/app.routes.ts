@@ -15,6 +15,11 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'shared/:shareId',
+        loadComponent: () => import('./shared/shared-view.page').then(m => m.SharedViewPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'auth/login',
         loadComponent: () => import('./auth/login/login.page').then(m => m.LoginPage),
     },

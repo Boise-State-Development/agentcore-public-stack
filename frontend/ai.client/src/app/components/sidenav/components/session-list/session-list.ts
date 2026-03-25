@@ -5,9 +5,11 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
+import { ShareModalComponent, ShareModalData } from '../../../../session/components/share-modal';
+import { UserService } from '../../../../auth/user.service';
 import { SessionMetadata } from '../../../../session/services/models/session-metadata.model';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
@@ -16,7 +18,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -28,6 +30,7 @@ export class SessionList {
   private dialog = inject(Dialog);
   private router = inject(Router);
   private injector = inject(Injector);
+  private userService = inject(UserService);
 
   /**
    * Signal tracking which session is currently being deleted.
@@ -274,6 +277,24 @@ export class SessionList {
       event.preventDefault();
       this.onRenameCancel();
     }
+  }
+
+  /**
+   * Opens the share modal for a session.
+   *
+   * @param event - Click event (stopped to prevent navigation)
+   * @param session - The session to share
+   */
+  protected onShareClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    this.dialog.open(ShareModalComponent, {
+      data: {
+        sessionId: session.sessionId,
+        ownerEmail: this.userService.currentUser()?.email ?? '',
+      } as ShareModalData,
+    });
   }
 
   /**

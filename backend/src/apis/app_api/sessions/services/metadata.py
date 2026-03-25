@@ -988,9 +988,14 @@ async def _list_user_sessions_cloud(
 
         # No limit trimming needed either - we use exact Limit in query params
 
-        # Generate next_token from LastEvaluatedKey if present
+        # Generate next_token from LastEvaluatedKey if present.
+        # Only return a next_token when we actually filled the requested page.
+        # DynamoDB's Limit caps items *evaluated*, so filtered-out items
+        # (parse failures) can cause fewer results than the limit while still
+        # producing a LastEvaluatedKey. Returning that token to the client
+        # makes it show a "Load More" button with nothing left to load.
         next_page_token = None
-        if 'LastEvaluatedKey' in response:
+        if 'LastEvaluatedKey' in response and (not limit or len(sessions) >= limit):
             next_page_token = base64.b64encode(
                 json.dumps(response['LastEvaluatedKey']).encode('utf-8')
             ).decode('utf-8')

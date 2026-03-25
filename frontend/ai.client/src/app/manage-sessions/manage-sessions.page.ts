@@ -4,7 +4,8 @@ import {
   signal,
   computed,
   inject,
-  OnInit
+  OnInit,
+  HostListener,
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
@@ -15,15 +16,23 @@ import {
   heroArrowPath,
   heroExclamationTriangle,
   heroArrowLeft,
-  heroChatBubbleLeftRight
+  heroChatBubbleLeftRight,
+  heroEllipsisVertical,
+  heroShare,
+  heroClipboard,
 } from '@ng-icons/heroicons/outline';
-import { SessionService } from '../session/services/session/session.service';
+import { SessionService, BulkDeleteSessionResult } from '../session/services/session/session.service';
 import { SessionMetadata } from '../session/services/models/session-metadata.model';
+import { ShareService } from '../session/services/share/share.service';
 import { ToastService } from '../services/toast/toast.service';
 import {
   ConfirmationDialogComponent,
-  ConfirmationDialogData
+  ConfirmationDialogData,
 } from '../components/confirmation-dialog/confirmation-dialog.component';
+import {
+  ManageSharesDialogComponent,
+  ManageSharesDialogData,
+} from './manage-shares-dialog/manage-shares-dialog.component';
 
 /** Maximum number of sessions that can be selected for bulk delete */
 const MAX_SELECTION = 20;
@@ -38,8 +47,11 @@ const MAX_SELECTION = 20;
       heroArrowPath,
       heroExclamationTriangle,
       heroArrowLeft,
-      heroChatBubbleLeftRight
-    })
+      heroChatBubbleLeftRight,
+      heroEllipsisVertical,
+      heroShare,
+      heroClipboard,
+    }),
   ],
   template: `
     <div class="min-h-dvh">
@@ -81,10 +93,10 @@ const MAX_SELECTION = 20;
               type="button"
               (click)="refresh()"
               [disabled]="isLoading()"
-              class="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              class="flex items-center justify-center rounded-lg border border-gray-300 bg-white p-2 text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              aria-label="Refresh conversations"
             >
               <ng-icon name="heroArrowPath" class="size-4" [class.animate-spin]="isLoading()" />
-              Refresh
             </button>
             <button
               type="button"
@@ -140,27 +152,9 @@ const MAX_SELECTION = 20;
               @for (session of sessions(); track session.sessionId) {
                 @let isSelected = selectedSessionIds().has(session.sessionId);
                 @let isDisabled = !isSelected && isAtSelectionLimit();
-                <div class="relative flex gap-3 px-4 pt-3.5 pb-4">
-                  <div class="min-w-0 flex-1">
-                    <label
-                      [for]="'session-' + session.sessionId"
-                      class="block cursor-pointer"
-                      [class.cursor-not-allowed]="isDisabled"
-                      [class.opacity-50]="isDisabled"
-                    >
-                      <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
-                        {{ session.title || 'Untitled Conversation' }}
-                      </span>
-                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                        {{ formatDate(session.lastMessageAt) }}
-                        @if (session.messageCount) {
-                          <span class="mx-1">&middot;</span>
-                          {{ session.messageCount }} {{ session.messageCount === 1 ? 'message' : 'messages' }}
-                        }
-                      </p>
-                    </label>
-                  </div>
-                  <div class="flex h-6 shrink-0 items-center">
+                <div class="relative flex items-center gap-3 px-4 py-3">
+                  <!-- Checkbox (left side) -->
+                  <div class="flex shrink-0 items-center">
                     <div class="group grid size-4 grid-cols-1">
                       <input
                         [id]="'session-' + session.sessionId"
@@ -174,6 +168,75 @@ const MAX_SELECTION = 20;
                         <path d="M3 8L6 11L11 3.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-0 group-has-checked:opacity-100" />
                       </svg>
                     </div>
+                  </div>
+
+                  <!-- Title & meta (center) -->
+                  <div class="min-w-0 flex-1">
+                    <label
+                      [for]="'session-' + session.sessionId"
+                      class="block cursor-pointer"
+                      [class.cursor-not-allowed]="isDisabled"
+                      [class.opacity-50]="isDisabled"
+                    >
+                      <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                        {{ session.title || 'Untitled Conversation' }}
+                      </span>
+                      <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                        {{ formatDate(session.lastMessageAt) }}
+                        @if (session.messageCount) {
+                          <span class="mx-1">&middot;</span>
+                          {{ session.messageCount }} {{ session.messageCount === 1 ? 'message' : 'messages' }}
+                        }
+                      </p>
+                    </label>
+                  </div>
+
+                  <!-- 3-dot menu (right side) -->
+                  <div class="relative shrink-0">
+                    <button
+                      type="button"
+                      (click)="toggleMenu(session.sessionId, $event)"
+                      class="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                      [attr.aria-label]="'Actions for ' + (session.title || 'conversation')"
+                      [attr.aria-expanded]="openMenuId() === session.sessionId"
+                    >
+                      <ng-icon name="heroEllipsisVertical" class="size-5" />
+                    </button>
+
+                    @if (openMenuId() === session.sessionId) {
+                      <div
+                        class="absolute right-0 z-20 mt-1 w-52 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 dark:bg-gray-700 dark:ring-white/10"
+                        role="menu"
+                      >
+                        <button
+                          type="button"
+                          (click)="confirmSingleDelete(session)"
+                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-gray-50 dark:text-red-400 dark:hover:bg-gray-600"
+                          role="menuitem"
+                        >
+                          <ng-icon name="heroTrash" class="size-4" />
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          (click)="openManageShares(session)"
+                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-600"
+                          role="menuitem"
+                        >
+                          <ng-icon name="heroShare" class="size-4" />
+                          Manage Shared Instances
+                        </button>
+                        <button
+                          type="button"
+                          (click)="copyShareLink(session)"
+                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-600"
+                          role="menuitem"
+                        >
+                          <ng-icon name="heroClipboard" class="size-4" />
+                          Copy Share Link
+                        </button>
+                      </div>
+                    }
                   </div>
                 </div>
               }
@@ -206,10 +269,11 @@ const MAX_SELECTION = 20;
     @import "tailwindcss";
 
     @custom-variant dark (&:where(.dark, .dark *));
-  `
+  `,
 })
 export class ManageSessionsPage implements OnInit {
   private sessionService = inject(SessionService);
+  private shareService = inject(ShareService);
   private toastService = inject(ToastService);
   private dialog = inject(Dialog);
   private router = inject(Router);
@@ -228,6 +292,9 @@ export class ManageSessionsPage implements OnInit {
   readonly isLoadingMore = signal(false);
   readonly isDeleting = signal(false);
 
+  /** Currently open context menu session ID */
+  readonly openMenuId = signal<string | null>(null);
+
   /** Pagination token for loading more */
   private nextToken = signal<string | null>(null);
 
@@ -240,65 +307,57 @@ export class ManageSessionsPage implements OnInit {
   /** Whether there are more sessions to load */
   readonly hasMoreSessions = computed(() => this.nextToken() !== null);
 
+  /** Close menu when clicking outside */
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    if (this.openMenuId() !== null) {
+      const target = event.target as HTMLElement;
+      if (!target.closest('[aria-expanded]') && !target.closest('[role="menu"]')) {
+        this.openMenuId.set(null);
+      }
+    }
+  }
+
   ngOnInit(): void {
     this.loadSessions();
   }
 
-  /**
-   * Load sessions from the API
-   */
   async loadSessions(): Promise<void> {
     this.isLoading.set(true);
-
     try {
       const response = await this.sessionService.getSessions({ limit: 50 });
       this.sessions.set(response.sessions);
       this.nextToken.set(response.nextToken);
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
+    } catch {
       this.toastService.error('Failed to load conversations');
     } finally {
       this.isLoading.set(false);
     }
   }
 
-  /**
-   * Load more sessions (pagination)
-   */
   async loadMore(): Promise<void> {
     const token = this.nextToken();
     if (!token || this.isLoadingMore()) return;
 
     this.isLoadingMore.set(true);
-
     try {
-      const response = await this.sessionService.getSessions({
-        limit: 50,
-        next_token: token
-      });
-      this.sessions.update(current => [...current, ...response.sessions]);
+      const response = await this.sessionService.getSessions({ limit: 50, next_token: token });
+      this.sessions.update((current: SessionMetadata[]) => [...current, ...response.sessions]);
       this.nextToken.set(response.nextToken);
-    } catch (error) {
-      console.error('Failed to load more sessions:', error);
+    } catch {
       this.toastService.error('Failed to load more conversations');
     } finally {
       this.isLoadingMore.set(false);
     }
   }
 
-  /**
-   * Refresh the sessions list
-   */
   async refresh(): Promise<void> {
     this.clearSelection();
     await this.loadSessions();
   }
 
-  /**
-   * Toggle selection of a session
-   */
   toggleSession(sessionId: string): void {
-    this.selectedSessionIds.update(ids => {
+    this.selectedSessionIds.update((ids: Set<string>) => {
       const newIds = new Set(ids);
       if (newIds.has(sessionId)) {
         newIds.delete(sessionId);
@@ -309,11 +368,87 @@ export class ManageSessionsPage implements OnInit {
     });
   }
 
-  /**
-   * Clear all selections
-   */
   clearSelection(): void {
     this.selectedSessionIds.set(new Set());
+  }
+
+  toggleMenu(sessionId: string, event: MouseEvent): void {
+    event.stopPropagation();
+    this.openMenuId.update((current: string | null) => (current === sessionId ? null : sessionId));
+  }
+
+  /**
+   * Delete a single session via the context menu
+   */
+  async confirmSingleDelete(session: SessionMetadata): Promise<void> {
+    this.openMenuId.set(null);
+
+    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data: {
+        title: 'Delete Conversation',
+        message: `Are you sure you want to delete "${session.title || 'Untitled Conversation'}"? This action cannot be undone. Your usage data will be preserved for billing purposes.`,
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        destructive: true,
+      } as ConfirmationDialogData,
+    });
+
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (confirmed !== true) return;
+
+    this.isDeleting.set(true);
+    try {
+      await this.sessionService.deleteSession(session.sessionId);
+      this.sessions.update((list: SessionMetadata[]) => list.filter((s: SessionMetadata) => s.sessionId !== session.sessionId));
+      this.selectedSessionIds.update((ids: Set<string>) => {
+        const next = new Set(ids);
+        next.delete(session.sessionId);
+        return next;
+      });
+      this.toastService.success('Conversation deleted');
+    } catch {
+      this.toastService.error('Failed to delete conversation');
+    } finally {
+      this.isDeleting.set(false);
+    }
+  }
+
+  /**
+   * Open the manage shared instances dialog
+   */
+  openManageShares(session: SessionMetadata): void {
+    this.openMenuId.set(null);
+
+    this.dialog.open(ManageSharesDialogComponent, {
+      data: {
+        sessionId: session.sessionId,
+        sessionTitle: session.title,
+      } as ManageSharesDialogData,
+    });
+  }
+
+  /**
+   * Copy the most recent share link for a session to the clipboard.
+   * Shows a toast if no shares exist or if clipboard access fails.
+   */
+  async copyShareLink(session: SessionMetadata): Promise<void> {
+    this.openMenuId.set(null);
+
+    try {
+      const response = await this.shareService.listSharesForSession(session.sessionId);
+      if (!response.shares.length) {
+        this.toastService.info('No shares', 'This conversation has no share links yet. Use "Manage Shared Instances" to create one.');
+        return;
+      }
+
+      const latestShare = response.shares[response.shares.length - 1];
+      const url = `${window.location.origin}/shared/${latestShare.shareId}`;
+
+      await navigator.clipboard.writeText(url);
+      this.toastService.success('Link copied');
+    } catch {
+      this.toastService.error('Failed to copy share link');
+    }
   }
 
   /**
@@ -329,8 +464,8 @@ export class ManageSessionsPage implements OnInit {
         message: `Are you sure you want to delete ${count} conversation${count === 1 ? '' : 's'}? This action cannot be undone. Your usage data will be preserved for billing purposes.`,
         confirmText: 'Delete',
         cancelText: 'Cancel',
-        destructive: true
-      } as ConfirmationDialogData
+        destructive: true,
+      } as ConfirmationDialogData,
     });
 
     const confirmed = await firstValueFrom(dialogRef.closed);
@@ -339,30 +474,20 @@ export class ManageSessionsPage implements OnInit {
     await this.performBulkDelete();
   }
 
-  /**
-   * Perform the bulk delete operation
-   */
   private async performBulkDelete(): Promise<void> {
     const sessionIds = Array.from(this.selectedSessionIds());
     if (sessionIds.length === 0) return;
 
     this.isDeleting.set(true);
-
     try {
       const result = await this.sessionService.bulkDeleteSessions(sessionIds);
 
-      // Remove deleted sessions from the list
       const deletedIds = new Set(
-        result.results.filter(r => r.success).map(r => r.sessionId)
+        result.results.filter((r: BulkDeleteSessionResult) => r.success).map((r: BulkDeleteSessionResult) => r.sessionId)
       );
-      this.sessions.update(sessions =>
-        sessions.filter(s => !deletedIds.has(s.sessionId))
-      );
-
-      // Clear selection
+      this.sessions.update((sessions: SessionMetadata[]) => sessions.filter((s: SessionMetadata) => !deletedIds.has(s.sessionId)));
       this.clearSelection();
 
-      // Show result toast
       if (result.failedCount === 0) {
         this.toastService.success(
           'Conversations Deleted',
@@ -379,46 +504,33 @@ export class ManageSessionsPage implements OnInit {
           `Failed to delete ${result.failedCount} conversation${result.failedCount === 1 ? '' : 's'}.`
         );
       }
-    } catch (error) {
-      console.error('Bulk delete failed:', error);
+    } catch {
       this.toastService.error('Failed to delete conversations');
     } finally {
       this.isDeleting.set(false);
     }
   }
 
-  /**
-   * Navigate back to the previous page
-   */
   goBack(): void {
     this.router.navigate(['/']);
   }
 
-  /**
-   * Format a date string for display
-   */
   formatDate(dateString: string): string {
     if (!dateString) return '';
-
     try {
       const date = new Date(dateString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-      if (diffDays === 0) {
-        return 'Today';
-      } else if (diffDays === 1) {
-        return 'Yesterday';
-      } else if (diffDays < 7) {
-        return `${diffDays} days ago`;
-      } else {
-        return date.toLocaleDateString(undefined, {
-          month: 'short',
-          day: 'numeric',
-          year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
-        });
-      }
+      if (diffDays === 0) return 'Today';
+      if (diffDays === 1) return 'Yesterday';
+      if (diffDays < 7) return `${diffDays} days ago`;
+      return date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+      });
     } catch {
       return '';
     }

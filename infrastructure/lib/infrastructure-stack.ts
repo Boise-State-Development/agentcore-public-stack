@@ -1209,6 +1209,64 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // ============================================================
+    // Shared Conversations Table (Share Feature)
+    // ============================================================
+    // Stores point-in-time snapshots of shared conversations.
+    // Each share is identified by a unique share_id and contains
+    // the conversation metadata and messages at the time of sharing.
+
+    const sharedConversationsTable = new dynamodb.Table(this, "SharedConversationsTable", {
+      tableName: getResourceName(config, "shared-conversations"),
+      partitionKey: {
+        name: "share_id",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    // SessionShareIndex - Lookup shares by original session ID
+    sharedConversationsTable.addGlobalSecondaryIndex({
+      indexName: "SessionShareIndex",
+      partitionKey: {
+        name: "session_id",
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // OwnerShareIndex - List shares by owner, sorted by creation time
+    sharedConversationsTable.addGlobalSecondaryIndex({
+      indexName: "OwnerShareIndex",
+      partitionKey: {
+        name: "owner_id",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "created_at",
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Store SharedConversations table name and ARN in SSM
+    new ssm.StringParameter(this, "SharedConversationsTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/shares/shared-conversations-table-name`,
+      stringValue: sharedConversationsTable.tableName,
+      description: "Shared conversations table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "SharedConversationsTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/shares/shared-conversations-table-arn`,
+      stringValue: sharedConversationsTable.tableArn,
+      description: "Shared conversations table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
     // Route53 Hosted Zone Lookup (Optional)
     // ============================================================
     // The hosted zone and certificates are created outside this stack

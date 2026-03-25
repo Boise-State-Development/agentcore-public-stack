@@ -430,6 +430,10 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
+        SHARED_CONVERSATIONS_TABLE_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/shares/shared-conversations-table-name`
+        ),
       },
       portMappings: [
         {
@@ -944,6 +948,35 @@ export class AppApiStack extends cdk.Stack {
         actions: ['ssm:GetParameter', 'ssm:GetParameters'],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/${config.projectPrefix}/inference-api/image-tag`,
+        ],
+      })
+    );
+
+    // Grant permissions for shared conversations table (imported from Infrastructure Stack)
+    const sharedConversationsTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/shares/shared-conversations-table-name`
+    );
+    const sharedConversationsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/shares/shared-conversations-table-arn`
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'SharedConversationsTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:Scan',
+        ],
+        resources: [
+          sharedConversationsTableArn,
+          `${sharedConversationsTableArn}/index/*`,
         ],
       })
     );

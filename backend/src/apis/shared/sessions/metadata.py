@@ -1004,47 +1004,58 @@ async def _list_user_sessions_cloud(
             query_params['ExclusiveStartKey'] = exclusive_start_key
 
         if limit:
-            # With new schema, we can use exact limit - no over-fetching needed
             query_params['Limit'] = limit
 
-        # Execute query
-        response = table.query(**query_params)
+        # Pagination loop: DynamoDB's Limit caps items *evaluated*, not items
+        # *returned* after application-level filtering (preview sessions, parse
+        # failures). A single query may return fewer valid sessions than the
+        # requested limit while still having more data in the partition. We keep
+        # querying until we fill the page or exhaust the partition.
+        sessions: list[SessionMetadata] = []
+        last_evaluated_key = None
 
-        # Parse items - filter out preview sessions
-        sessions = []
-        for item in response['Items']:
-            try:
-                # Convert Decimal to float
-                item = _convert_decimal_to_float(item)
+        while True:
+            response = table.query(**query_params)
 
-                # Remove DynamoDB keys
-                for key in ['PK', 'SK', 'GSI_PK', 'GSI_SK']:
-                    item.pop(key, None)
+            for item in response['Items']:
+                try:
+                    item = _convert_decimal_to_float(item)
 
-                # Skip preview sessions - they should not appear in user's session list
-                session_id = item.get('sessionId', '')
-                if is_preview_session(session_id):
+                    for key in ['PK', 'SK', 'GSI_PK', 'GSI_SK']:
+                        item.pop(key, None)
+
+                    # Skip preview sessions - they should not appear in user's session list
+                    session_id = item.get('sessionId', '')
+                    if is_preview_session(session_id):
+                        continue
+
+                    metadata = SessionMetadata.model_validate(item)
+                    sessions.append(metadata)
+
+                    # Stop collecting once we have enough
+                    if limit and len(sessions) >= limit:
+                        break
+                except Exception as e:
+                    # JUSTIFICATION: When listing sessions from DynamoDB, individual session parsing
+                    # failures should not break the entire list operation. We skip corrupted sessions
+                    # and continue processing others. This provides better UX than failing completely.
+                    logger.warning(f"Failed to parse session item: {e}")
                     continue
 
-                metadata = SessionMetadata.model_validate(item)
-                sessions.append(metadata)
-            except Exception as e:
-                # JUSTIFICATION: When listing sessions from DynamoDB, individual session parsing
-                # failures should not break the entire list operation. We skip corrupted sessions
-                # and continue processing others. This provides better UX than failing completely.
-                logger.warning(f"Failed to parse session item: {e}")
-                continue
+            last_evaluated_key = response.get('LastEvaluatedKey')
 
-        # No in-memory sorting needed! With new SK pattern S#ACTIVE#{last_message_at}#{session_id},
-        # DynamoDB returns items already sorted by timestamp (via ScanIndexForward=False)
+            # Stop if we've filled the page or there's no more data
+            if (limit and len(sessions) >= limit) or not last_evaluated_key:
+                break
 
-        # No limit trimming needed either - we use exact Limit in query params
+            # Continue querying from where DynamoDB left off
+            query_params['ExclusiveStartKey'] = last_evaluated_key
 
-        # Generate next_token from LastEvaluatedKey if present
+        # Generate next_token only when there is genuinely more data to fetch
         next_page_token = None
-        if 'LastEvaluatedKey' in response:
+        if last_evaluated_key and limit and len(sessions) >= limit:
             next_page_token = base64.b64encode(
-                json.dumps(response['LastEvaluatedKey']).encode('utf-8')
+                json.dumps(last_evaluated_key).encode('utf-8')
             ).decode('utf-8')
 
         logger.info(f"Listed {len(sessions)} sessions for user {user_id} from DynamoDB")
