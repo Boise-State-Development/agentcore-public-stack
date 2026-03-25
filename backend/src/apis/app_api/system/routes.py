@@ -95,6 +95,17 @@ async def first_boot(request: FirstBootRequest) -> FirstBootResponse:
     now_iso = datetime.now(timezone.utc).isoformat()
     email_domain = request.email.split("@")[1] if "@" in request.email else ""
 
+    # Add user to system_admin Cognito group so JWT includes the role
+    try:
+        cognito.add_user_to_group(request.username, "system_admin")
+    except Exception:
+        logger.exception("Failed to add user to system_admin Cognito group — rolling back")
+        cognito.delete_user(request.username)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to assign admin group. Cognito user has been rolled back.",
+        )
+
     try:
         if user_repo.enabled:
             profile = UserProfile(
