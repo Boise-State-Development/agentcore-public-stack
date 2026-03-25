@@ -70,6 +70,7 @@ function createMockState() {
 function createMockHttp() {
   return {
     presignDatasetUpload: vi.fn().mockReturnValue(of(mockPresignResponse)),
+    searchHuggingFaceModels: vi.fn().mockReturnValue(of([])),
   };
 }
 
@@ -312,5 +313,97 @@ describe('CreateTrainingJobPage', () => {
 
     const call = mockState.createTrainingJob.mock.calls[0][0];
     expect(call.max_runtime_seconds).toBe(48 * 3600);
+  });
+
+  // ── Custom HuggingFace Model ─────────────────────────────────────
+
+  it('should enable custom model mode and set defaults', () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    expect(component.useCustomModel()).toBe(true);
+    expect(component.selectedModel()).toBeNull();
+    const values = component.form.getRawValue();
+    expect(values.batchSize).toBe('8');
+  });
+
+  it('should clear custom model state when selecting a catalog model', () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    component.customHuggingFaceId.set('some/model');
+    component.selectModel(mockModel);
+    expect(component.useCustomModel()).toBe(false);
+    expect(component.customHuggingFaceId()).toBe('');
+    expect(component.selectedHfModel()).toBeNull();
+  });
+
+  it('should select HF model from search results', () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    const hfModel = { id: 'bert-base-multilingual-cased', downloads: 5000, likes: 100 };
+    component.selectHfModel(hfModel);
+    expect(component.customHuggingFaceId()).toBe('bert-base-multilingual-cased');
+    expect(component.selectedHfModel()).toEqual(hfModel);
+    expect(component.hfSearchResults()).toEqual([]);
+  });
+
+  it('should clear HF model selection', () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    component.selectHfModel({ id: 'some/model', downloads: 100, likes: 5 });
+    component.clearHfModel();
+    expect(component.selectedHfModel()).toBeNull();
+    expect(component.customHuggingFaceId()).toBe('');
+  });
+
+  it('should toggle compatible-only filter', () => {
+    const component = createComponent();
+    expect(component.compatibleOnly()).toBe(true);
+    component.toggleCompatibleOnly();
+    expect(component.compatibleOnly()).toBe(false);
+    component.toggleCompatibleOnly();
+    expect(component.compatibleOnly()).toBe(true);
+  });
+
+  it('should compute hasModelSelection for custom model with ID', () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    expect(component.hasModelSelection()).toBe(false);
+    component.customHuggingFaceId.set('bert-base-uncased');
+    expect(component.hasModelSelection()).toBe(true);
+  });
+
+  it('should error when submitting custom model without HF ID', async () => {
+    const component = createComponent();
+    component.selectCustomModel();
+    component.uploadState.set({
+      file: new File([''], 'test.jsonl'),
+      progress: 100,
+      status: 'complete',
+      s3Key: 'uploads/test.jsonl',
+    });
+    await component.submitJob();
+    expect(component.submitError()).toBe('Please enter a HuggingFace model ID.');
+  });
+
+  it('should submit custom model job with correct payload', async () => {
+    const component = createComponent();
+    const router = TestBed.inject(Router);
+    vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    component.selectCustomModel();
+    component.customHuggingFaceId.set('bert-base-multilingual-cased');
+    component.uploadState.set({
+      file: new File([''], 'test.jsonl'),
+      progress: 100,
+      status: 'complete',
+      s3Key: 'uploads/test.jsonl',
+    });
+
+    await component.submitJob();
+
+    const call = mockState.createTrainingJob.mock.calls[0][0];
+    expect(call.model_id).toBe('custom');
+    expect(call.custom_huggingface_model_id).toBe('bert-base-multilingual-cased');
+    expect(call.instance_type).toBe('ml.g5.xlarge');
   });
 });
