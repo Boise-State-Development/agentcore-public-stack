@@ -6,6 +6,7 @@ conversation share snapshots.  Supports multiple shares per session.
 
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -97,7 +98,7 @@ class ShareService:
             item["allowed_emails"] = allowed_emails
 
         self._table.put_item(Item=item)
-        logger.info(f"Created share {share_id} for session {session_id}")
+        logger.info(f"Created share {share_id} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
 
@@ -252,8 +253,8 @@ class ShareService:
         )
 
         logger.info(
-            f"Exported share {share_id} to new session {new_session_id} "
-            f"for user {requester.user_id} ({message_count} messages copied)"
+            f"Exported share {self._sanitize_id(share_id)} to new session {self._sanitize_id(new_session_id)} "
+            f"for user {self._sanitize_id(requester.user_id)} ({message_count} messages copied)"
         )
 
         return {"sessionId": new_session_id, "title": new_title}
@@ -362,6 +363,17 @@ class ShareService:
             return None
 
         return {"role": role, "content": converse_content}
+
+    @staticmethod
+    def _sanitize_id(value: str, max_length: int = 128) -> str:
+        """Return a log-safe version of an ID string.
+
+        Strips anything that isn't an alphanumeric character or a hyphen/underscore,
+        then truncates to ``max_length``.  This prevents log-injection attacks where
+        a crafted ID embeds newlines or ANSI escape sequences.
+        """
+        sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "", value)
+        return sanitized[:max_length]
 
     def _ensure_enabled(self) -> None:
         if not self._enabled:

@@ -953,10 +953,6 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // Grant permissions for shared conversations table (imported from Infrastructure Stack)
-    const sharedConversationsTableName = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/${config.projectPrefix}/shares/shared-conversations-table-name`
-    );
     const sharedConversationsTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/shares/shared-conversations-table-arn`

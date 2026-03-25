@@ -91,9 +91,9 @@ async def list_shares_for_session(
         return await get_share_service().get_shares_for_session(session_id, current_user.user_id)
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
+    except Exception as e:
         sanitized_session_id = session_id.replace("\r", "").replace("\n", "")
         logger.error(f"Error listing shares for session {sanitized_session_id}: {e}", exc_info=True)
-        logger.error(f"Error listing shares for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list shares")
 
 
@@ -126,7 +126,8 @@ async def update_share(
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
     except Exception as e:
-        logger.error(f"Error updating share {share_id}: {e}", exc_info=True)
+        sanitized_share_id = share_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error updating share {sanitized_share_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to update share")
 
 
@@ -146,7 +147,8 @@ async def revoke_share(
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
     except Exception as e:
-        logger.error(f"Error revoking share {share_id}: {e}", exc_info=True)
+        sanitized_share_id = share_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error revoking share {sanitized_share_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to revoke share")
 
 
@@ -168,7 +170,8 @@ async def export_shared_conversation(
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
     except Exception as e:
-        logger.error(f"Error exporting share {share_id}: {e}", exc_info=True)
+        sanitized_share_id = share_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error exporting share {sanitized_share_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to export shared conversation")
 
 
@@ -199,5 +202,6 @@ async def get_shared_conversation(
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
     except Exception as e:
-        logger.error(f"Error retrieving shared conversation {share_id}: {e}", exc_info=True)
+        sanitized_share_id = share_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error retrieving shared conversation {sanitized_share_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve shared conversation")
