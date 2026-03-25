@@ -121,13 +121,13 @@ def create_external_mcp_client(
 
     tool_id = tool_definition.tool_id if tool_definition else "unknown"
     requires_oauth = tool_definition.requires_oauth_provider if tool_definition else None
+    has_token = bool(oauth_token)
     logger.info(f"Creating external MCP client for tool: {tool_id}")
-    logger.debug(f"  Server URL: {config.server_url}")
     logger.debug(f"  Transport: {config.transport}")
     logger.debug(f"  Auth Type: {config.auth_type}")
     if requires_oauth:
         logger.debug(f"  Requires OAuth Provider: {requires_oauth}")
-        logger.debug(f"  OAuth Token Provided: {bool(oauth_token)}")
+        logger.debug(f"  OAuth Token Provided: {has_token}")
 
     try:
         # Build list of auth handlers (may combine multiple)

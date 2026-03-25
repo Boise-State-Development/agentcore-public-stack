@@ -352,7 +352,7 @@ Examples:
         print(f"    Button Color:      {item.get('buttonColor')}")
     print()
     print(f"    DynamoDB Table:    {args.table_name}")
-    print(f"    Secrets ARN:       {args.secrets_arn.split(':')[-1] if args.secrets_arn else '(not set)'}")
+    print(f"    Secrets ARN:       {'configured' if args.secrets_arn else '(not set)'}")
     print(f"    Region:            {args.region}")
     if args.profile:
         print(f"    AWS Profile:       {args.profile}")
