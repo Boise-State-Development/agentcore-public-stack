@@ -242,12 +242,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
   // Log loaded configuration for debugging
   console.log('📋 Loaded CDK Configuration:');
   console.log(`   Project Prefix: ${config.projectPrefix}`);
-  console.log(`   AWS Account: ${config.awsAccount}`);
   console.log(`   AWS Region: ${config.awsRegion}`);
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
-  console.log(`   CORS Origins: ${config.corsOrigins || '(not set)'}`);
-  console.log(`   File Upload CORS Origins: ${config.fileUpload.corsOrigins || '(not set)'}`);
   console.log(`   Frontend Enabled: ${config.frontend.enabled}`);
   console.log(`   App API Enabled: ${config.appApi.enabled}`);
   console.log(`   Inference API Enabled: ${config.inferenceApi.enabled}`);

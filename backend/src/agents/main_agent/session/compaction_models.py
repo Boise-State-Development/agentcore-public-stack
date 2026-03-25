@@ -54,17 +54,17 @@ class CompactionConfig:
 
     Can be loaded from environment variables or passed directly.
     """
-    enabled: bool = False
+    enabled: bool = True
     token_threshold: int = 100_000  # Trigger checkpoint when exceeded
-    protected_turns: int = 2  # Recent turns to protect from truncation
+    protected_turns: int = 3  # Recent turns to protect from truncation
     max_tool_content_length: int = 500  # Max chars before truncating tool output
 
     @classmethod
     def from_env(cls) -> "CompactionConfig":
         """Load configuration from environment variables."""
         return cls(
-            enabled=os.environ.get("AGENTCORE_MEMORY_COMPACTION_ENABLED", "false").lower() == "true",
+            enabled=os.environ.get("AGENTCORE_MEMORY_COMPACTION_ENABLED", "true").lower() == "true",
             token_threshold=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_TOKEN_THRESHOLD", "100000")),
-            protected_turns=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_PROTECTED_TURNS", "2")),
+            protected_turns=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_PROTECTED_TURNS", "3")),
             max_tool_content_length=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_MAX_TOOL_CONTENT_LENGTH", "500")),
         )

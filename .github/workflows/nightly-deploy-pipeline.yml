@@ -35,6 +35,9 @@ on:
         default: ''
         type: string
 
+permissions:
+  contents: read
+
 env:
   CDK_REQUIRE_APPROVAL: never
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
