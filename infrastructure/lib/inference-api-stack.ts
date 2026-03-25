@@ -151,6 +151,19 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // AWS Marketplace permissions required for Bedrock model access
+    // Some foundation models (e.g., Anthropic Claude) require marketplace
+    // subscription validation before invocation is allowed.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'MarketplaceModelAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'aws-marketplace:ViewSubscriptions',
+        'aws-marketplace:Subscribe',
+      ],
+      resources: ['*'],
+    }));
+
     // External MCP Lambda Function URL permissions (for external MCP tools with aws-iam auth)
     // This allows the runtime to invoke Lambda Function URLs that require IAM authentication
     // Scoped to mcp-* functions following the naming convention from mcp-servers repo
