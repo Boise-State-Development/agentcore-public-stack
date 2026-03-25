@@ -98,7 +98,7 @@ class ShareService:
             item["allowed_emails"] = allowed_emails
 
         self._table.put_item(Item=item)
-        logger.info(f"Created share {share_id} for session {self._sanitize_id(session_id)}")
+        logger.info(f"Created share {self._sanitize_id(share_id)} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
 
