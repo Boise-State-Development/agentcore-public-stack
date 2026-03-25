@@ -41,6 +41,12 @@ export class CreateTrainingJobPage implements OnInit {
   /** Upload state tracking. */
   readonly uploadState = signal<FileUploadState | null>(null);
 
+  /** Whether the user is dragging a file over the drop zone. */
+  readonly isDraggingOver = signal(false);
+
+  /** Track drag enter/leave depth to handle nested elements. */
+  private dragCounter = 0;
+
   /** Currently selected model. */
   readonly selectedModel = signal<AvailableModel | null>(null);
 
@@ -81,6 +87,14 @@ export class CreateTrainingJobPage implements OnInit {
     const file = input.files?.[0];
     if (!file) return;
 
+    await this.processFileUpload(file);
+
+    // Reset input so the same file can be re-selected
+    input.value = '';
+  }
+
+  /** Upload a file to S3 via presigned URL (shared by file input and drag-drop). */
+  private async processFileUpload(file: File): Promise<void> {
     this.uploadState.set({ file, progress: 0, status: 'uploading' });
     this.submitError.set(null);
 
@@ -114,14 +128,57 @@ export class CreateTrainingJobPage implements OnInit {
         error: message,
       });
     }
-
-    // Reset input so the same file can be re-selected
-    input.value = '';
   }
 
   /** Clear the uploaded file. */
   clearUpload(): void {
     this.uploadState.set(null);
+  }
+
+  // =========================================================================
+  // Drag and Drop Handlers
+  // =========================================================================
+
+  onDragEnter(event: DragEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.dragCounter++;
+
+    if (event.dataTransfer?.types.includes('Files')) {
+      this.isDraggingOver.set(true);
+    }
+  }
+
+  onDragOver(event: DragEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  onDragLeave(event: DragEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.dragCounter--;
+
+    if (this.dragCounter === 0) {
+      this.isDraggingOver.set(false);
+    }
+  }
+
+  async onDrop(event: DragEvent): Promise<void> {
+    event.preventDefault();
+    event.stopPropagation();
+
+    this.dragCounter = 0;
+    this.isDraggingOver.set(false);
+
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+
+    await this.processFileUpload(file);
   }
 
   /** Select a base model and populate hyperparameter defaults. */

@@ -23,7 +23,7 @@
   <section class="mb-8">
     <h2 class="mb-1 text-base/7 font-semibold text-gray-900 dark:text-white">1. Upload Dataset</h2>
     <p class="mb-4 text-sm/6 text-gray-500 dark:text-gray-400">
-      Upload a JSONL file with your training data. Each line should be a JSON object with "text" and "label" fields.
+      Upload your training data as a JSONL, CSV, or TXT file. Each record should include "text" and "label" fields.
     </p>
 
     @if (uploadState(); as upload) {
@@ -71,11 +71,26 @@
       <!-- Drop zone / file picker -->
       <label
         for="dataset-upload"
-        class="flex cursor-pointer flex-col items-center justify-center rounded-sm border-2 border-dashed border-gray-300 bg-white px-6 py-10 transition-colors hover:border-blue-400 hover:bg-blue-50/50 dark:border-gray-600 dark:bg-gray-900 dark:hover:border-blue-500 dark:hover:bg-blue-900/10"
+        class="relative flex cursor-pointer flex-col items-center justify-center rounded-sm border-2 border-dashed px-6 py-10 transition-colors"
+        [class]="isDraggingOver()
+          ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20'
+          : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-blue-50/50 dark:border-gray-600 dark:bg-gray-900 dark:hover:border-blue-500 dark:hover:bg-blue-900/10'"
+        (dragenter)="onDragEnter($event)"
+        (dragover)="onDragOver($event)"
+        (dragleave)="onDragLeave($event)"
+        (drop)="onDrop($event)"
       >
+        @if (isDraggingOver()) {
+          <div class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-blue-50/90 dark:bg-blue-900/80">
+            <div class="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-300">
+              <ng-icon name="heroCloudArrowUp" class="size-10" />
+              <span class="text-sm/6 font-medium">Drop file here</span>
+            </div>
+          </div>
+        }
         <ng-icon name="heroCloudArrowUp" class="size-10 text-gray-400 dark:text-gray-500" />
         <p class="mt-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-          Click to upload your dataset
+          Click or drag &amp; drop your dataset
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">JSONL, CSV, or TXT file</p>
       </label>
