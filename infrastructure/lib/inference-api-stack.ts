@@ -818,6 +818,9 @@ export class InferenceApiStack extends cdk.Stack {
       networkConfiguration: {
         networkMode: 'PUBLIC',
       },
+      requestHeaderConfiguration: {
+        requestHeaderAllowlist: ['Authorization'],
+      },
     });
     this.runtime.node.addDependency(runtimeExecutionRole);
 
