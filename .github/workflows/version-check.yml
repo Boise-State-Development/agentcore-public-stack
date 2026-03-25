@@ -1,5 +1,8 @@
 name: "Version Check"
 
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Suppress repeated config dumps from load-env.sh in CI logs
