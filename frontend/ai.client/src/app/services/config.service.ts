@@ -108,10 +108,24 @@ export class ConfigService {
   readonly cognitoRegion = computed(() => this.config()?.cognitoRegion ?? 'us-east-1');
 
   /**
-   * Computed signal for Inference API URL (single runtime endpoint)
-   * Returns empty string if config not loaded
+   * Computed signal for Inference API URL (single runtime endpoint).
+   * URL-encodes the ARN portion of the path since AgentCore runtime ARNs
+   * contain colons and slashes that break the URL if left raw.
+   * Input:  https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/arn:aws:bedrock-agentcore:...
+   * Output: https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A...
    */
-  readonly inferenceApiUrl = computed(() => this.config()?.inferenceApiUrl ?? '');
+  readonly inferenceApiUrl = computed(() => {
+    const raw = this.config()?.inferenceApiUrl ?? '';
+    if (!raw) return '';
+
+    const marker = '/runtimes/';
+    const idx = raw.indexOf(marker);
+    if (idx === -1) return raw;
+
+    const base = raw.substring(0, idx + marker.length);
+    const arn = raw.substring(idx + marker.length);
+    return base + encodeURIComponent(arn);
+  });
   
   /**
    * Read-only signal indicating if configuration has been loaded
