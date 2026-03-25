@@ -91,7 +91,8 @@ async def list_shares_for_session(
         return await get_share_service().get_shares_for_session(session_id, current_user.user_id)
     except ShareTableNotFoundError:
         raise HTTPException(status_code=503, detail="Share feature unavailable - table not deployed")
-    except Exception as e:
+        sanitized_session_id = session_id.replace("\r", "").replace("\n", "")
+        logger.error(f"Error listing shares for session {sanitized_session_id}: {e}", exc_info=True)
         logger.error(f"Error listing shares for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list shares")
 
