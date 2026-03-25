@@ -5,8 +5,6 @@ Covers default initialization, provider auto-detection, explicit provider overri
 provider-specific config dicts, to_dict, from_params with defaults and invalid provider.
 """
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider, RetryConfig
@@ -102,15 +100,14 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    def test_bedrock_config_with_caching_disabled(self):
-        """Req 1.6 — caching flag set but cache_config commented out due to Bedrock limitations."""
+    def test_bedrock_config_with_caching_disabled_due_to_bedrock_limitation(self):
+        """Req 1.6 — caching_enabled=True but cache_config omitted due to
+        Bedrock limitation with non-PDF document blocks. See model_config.py TODO."""
         cfg = ModelConfig(caching_enabled=True)
         result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
         assert result["temperature"] == cfg.temperature
-        # cache_config is intentionally commented out in to_bedrock_config()
-        # due to Bedrock format incompatibility — see model_config.py
         assert "cache_config" not in result
 
     def test_bedrock_config_without_caching(self):
