@@ -3,17 +3,7 @@
 from .dependencies import get_current_user, security
 from .models import User
 from .state_store import StateStore, InMemoryStateStore, DynamoDBStateStore, create_state_store
-from .rbac import (
-    require_roles,
-    require_all_roles,
-    has_any_role,
-    has_all_roles,
-    require_admin,
-    require_faculty,
-    require_staff,
-    require_developer,
-    require_aws_ai_access,
-)
+from .rbac import require_app_roles, require_admin
 
 __all__ = [
     "get_current_user",
@@ -23,20 +13,6 @@ __all__ = [
     "InMemoryStateStore",
     "DynamoDBStateStore",
     "create_state_store",
-    "require_roles",
-    "require_all_roles",
-    "has_any_role",
-    "has_all_roles",
+    "require_app_roles",
     "require_admin",
-    "require_faculty",
-    "require_staff",
-    "require_developer",
-    "require_aws_ai_access",
 ]
-
-
-
-
-
-
-

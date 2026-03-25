@@ -30,7 +30,7 @@ from apis.shared.models.models import (
     ManagedModelUpdate,
     ManagedModel,
 )
-from apis.shared.auth import User, require_admin, require_roles, has_any_role, get_current_user
+from apis.shared.auth import User, require_admin, get_current_user
 from apis.shared.sessions.metadata import list_user_sessions, get_session_metadata
 from apis.shared.sessions.messages import get_messages
 from apis.shared.models.managed_models import (
