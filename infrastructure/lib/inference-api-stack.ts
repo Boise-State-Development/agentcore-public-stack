@@ -859,15 +859,9 @@ export class InferenceApiStack extends cdk.Stack {
       this, `/${config.projectPrefix}/rag/vector-index-name`
     );
 
-    // Gateway URL
-    const gatewayUrl = ssm.StringParameter.valueForStringParameter(
-      this, `/${config.projectPrefix}/gateway/url`
-    );
-
-    // Frontend CORS origins
-    const corsOrigins = ssm.StringParameter.valueForStringParameter(
-      this, `/${config.projectPrefix}/frontend/cors-origins`
-    );
+    // Frontend CORS origins (constructed from config, not imported from FrontendStack
+    // to avoid circular dependency: InferenceApiStack ↔ FrontendStack)
+    const corsOrigins = config.domainName ? `https://${config.domainName}` : 'http://localhost:4200';
 
     // ============================================================
     // Single CDK-Managed AgentCore Runtime with Cognito JWT Authorizer
@@ -931,7 +925,6 @@ export class InferenceApiStack extends cdk.Stack {
         MEMORY_ARN: this.memory.attrMemoryArn,
         AGENTCORE_CODE_INTERPRETER_ID: this.codeInterpreter.attrCodeInterpreterId,
         BROWSER_ID: this.browser.attrBrowserId,
-        GATEWAY_URL: gatewayUrl,
 
         // S3 storage
         S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
