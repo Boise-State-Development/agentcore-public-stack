@@ -63,7 +63,7 @@ async def request_presigned_url(
     - User storage quota: 1GB
     """
     logger.info(
-        f"User {user.email} requesting presigned URL for {request.filename} "
+        f"User {user.name} requesting presigned URL for {request.filename} "
         f"({request.size_bytes} bytes)"
     )
 
@@ -72,7 +72,7 @@ async def request_presigned_url(
         return response
 
     except InvalidFileTypeError as e:
-        logger.warning(f"Invalid file type from user {user.email}: {e.mime_type}")
+        logger.warning(f"Invalid file type from user {user.name}: {e.mime_type}")
         allowed = ", ".join(ALLOWED_MIME_TYPES.values())
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -81,7 +81,7 @@ async def request_presigned_url(
 
     except FileTooLargeError as e:
         logger.warning(
-            f"File too large from user {user.email}: "
+            f"File too large from user {user.name}: "
             f"{e.size_bytes} > {e.max_size}"
         )
         raise HTTPException(
@@ -91,7 +91,7 @@ async def request_presigned_url(
 
     except QuotaExceededError as e:
         logger.warning(
-            f"Quota exceeded for user {user.email}: "
+            f"Quota exceeded for user {user.name}: "
             f"{e.current_usage}/{e.max_allowed}"
         )
         raise HTTPException(
@@ -116,7 +116,7 @@ async def complete_upload(
     Call this after successfully uploading the file using the pre-signed URL.
     This verifies the S3 object exists and updates the file status to 'ready'.
     """
-    logger.info(f"User {user.email} completing upload {upload_id}")
+    logger.info(f"User {user.name} completing upload {upload_id}")
 
     try:
         response = await service.complete_upload(user.user_id, upload_id)
@@ -177,7 +177,7 @@ async def list_files(
     Supports sorting by date (default), size, or type.
     """
     logger.info(
-        f"User {user.email} listing files"
+        f"User {user.name} listing files"
         + (f" for session {session_id}" if session_id else "")
         + f" (sort: {sort_by.value} {sort_order.value})"
     )
@@ -206,7 +206,7 @@ async def delete_file(
     Use this when a user removes an attached file before sending,
     or when manually deleting from the file browser.
     """
-    logger.info(f"User {user.email} deleting file {upload_id}")
+    logger.info(f"User {user.name} deleting file {upload_id}")
 
     deleted = await service.delete_file(user.user_id, upload_id)
 

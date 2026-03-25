@@ -63,7 +63,7 @@ class CognitoJWTValidator:
             return User(
                 user_id=payload["sub"],
                 email=payload.get("email") or "",
-                name=payload.get("name") or payload.get("cognito:username") or "",
+                name=payload.get("name") or payload.get("cognito:username") or payload.get("username") or "",
                 roles=roles,
                 picture=payload.get("picture"),
             )

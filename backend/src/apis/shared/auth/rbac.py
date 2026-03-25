@@ -34,7 +34,7 @@ def require_roles(*required_roles: str) -> Callable:
     """
     async def role_checker(user: User = Depends(get_current_user)) -> User:
         if not user.roles:
-            logger.warning(f"User {user.email} has no assigned roles, denying access")
+            logger.warning(f"User {user.name} has no assigned roles, denying access")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User has no assigned roles."
@@ -43,14 +43,14 @@ def require_roles(*required_roles: str) -> Callable:
         has_required_role = any(role in user.roles for role in required_roles)
         if not has_required_role:
             logger.warning(
-                f"User {user.email} (roles: {user.roles}) lacks required roles: {required_roles}"
+                f"User {user.name} (roles: {user.roles}) lacks required roles: {required_roles}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required roles: {', '.join(required_roles)}"
             )
 
-        logger.debug(f"User {user.email} authorized with roles: {user.roles}")
+        logger.debug(f"User {user.name} authorized with roles: {user.roles}")
         return user
 
     return role_checker
@@ -80,7 +80,7 @@ def require_all_roles(*required_roles: str) -> Callable:
     """
     async def role_checker(user: User = Depends(get_current_user)) -> User:
         if not user.roles:
-            logger.warning(f"User {user.email} has no assigned roles, denying access")
+            logger.warning(f"User {user.name} has no assigned roles, denying access")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User has no assigned roles."
@@ -90,14 +90,14 @@ def require_all_roles(*required_roles: str) -> Callable:
         if not has_all_roles:
             missing_roles = [role for role in required_roles if role not in user.roles]
             logger.warning(
-                f"User {user.email} (roles: {user.roles}) missing required roles: {missing_roles}"
+                f"User {user.name} (roles: {user.roles}) missing required roles: {missing_roles}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Missing required roles: {', '.join(missing_roles)}"
             )
 
-        logger.debug(f"User {user.email} authorized with all required roles: {required_roles}")
+        logger.debug(f"User {user.name} authorized with all required roles: {required_roles}")
         return user
 
     return role_checker

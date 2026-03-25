@@ -41,7 +41,7 @@ class QuotaEventRecorder:
                 "tier_name": tier.tier_name,
                 "session_id": session_id,
                 "assignment_id": assignment_id,
-                "user_email": user.email,
+                "user_name": user.name,
                 "user_roles": user.roles
             }
         )
@@ -95,7 +95,7 @@ class QuotaEventRecorder:
                 "tier_name": tier.tier_name,
                 "session_id": session_id,
                 "assignment_id": assignment_id,
-                "user_email": user.email,
+                "user_name": user.name,
                 "user_roles": user.roles
             }
         )
@@ -125,7 +125,7 @@ class QuotaEventRecorder:
             metadata={
                 "override_id": override_id,
                 "tier_name": tier.tier_name,
-                "user_email": user.email,
+                "user_name": user.name,
                 "user_roles": user.roles
             }
         )

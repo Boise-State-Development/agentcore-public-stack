@@ -90,7 +90,7 @@ async def get_cost_dashboard(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting cost dashboard for period={period}"
+        f"Admin {admin_user.name} requesting cost dashboard for period={period}"
     )
 
     try:
@@ -155,7 +155,7 @@ async def get_top_users(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting top {limit} users "
+        f"Admin {admin_user.name} requesting top {limit} users "
         f"for period={period}, min_cost={min_cost}"
     )
 
@@ -211,7 +211,7 @@ async def get_system_summary(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting system summary "
+        f"Admin {admin_user.name} requesting system summary "
         f"for {period_type} period={period}"
     )
 
@@ -260,7 +260,7 @@ async def get_usage_by_model(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting model usage for period={period}"
+        f"Admin {admin_user.name} requesting model usage for period={period}"
     )
 
     try:
@@ -304,7 +304,7 @@ async def get_usage_by_tier(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting tier usage for period={period}"
+        f"Admin {admin_user.name} requesting tier usage for period={period}"
     )
 
     try:
@@ -357,7 +357,7 @@ async def get_cost_trends(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting trends "
+        f"Admin {admin_user.name} requesting trends "
         f"from {start_date} to {end_date}"
     )
 
@@ -413,7 +413,7 @@ async def export_cost_data(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} exporting {format} data for period={period}"
+        f"Admin {admin_user.name} exporting {format} data for period={period}"
     )
 
     try:

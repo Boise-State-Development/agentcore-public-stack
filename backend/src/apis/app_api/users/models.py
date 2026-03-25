@@ -29,3 +29,12 @@ class UserPermissionsResponse(BaseModel):
     models: List[str] = Field(..., description="Accessible model IDs")
     quota_tier: Optional[str] = Field(None, alias="quotaTier", description="Assigned quota tier")
     resolved_at: str = Field(..., alias="resolvedAt", description="ISO timestamp of resolution")
+
+
+class UserProfileSyncRequest(BaseModel):
+    """Request to sync user profile from the frontend ID token."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str = Field(..., description="User email from ID token")
+    name: str = Field("", description="User display name from ID token")
+    picture: Optional[str] = Field(None, description="Profile picture URL from ID token")

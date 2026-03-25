@@ -44,7 +44,7 @@ async def list_available_providers(
     Returns:
         OAuthProviderListResponse with available providers
     """
-    logger.info(f"User {current_user.email} listing available OAuth providers")
+    logger.info(f"User {current_user.name} listing available OAuth providers")
 
     # Resolve user's application roles
     permissions = await role_service.resolve_user_permissions(current_user)
@@ -86,7 +86,7 @@ async def list_user_connections(
     Returns:
         OAuthConnectionListResponse with connection statuses
     """
-    logger.info(f"User {current_user.email} listing OAuth connections")
+    logger.info(f"User {current_user.name} listing OAuth connections")
 
     # Resolve user's application roles
     permissions = await role_service.resolve_user_permissions(current_user)
@@ -134,7 +134,7 @@ async def initiate_connection(
             - 403 if user not authorized for provider
     """
     logger.info(
-        f"User {current_user.email} initiating OAuth connection to {provider_id}"
+        f"User {current_user.name} initiating OAuth connection to {provider_id}"
     )
 
     # Resolve user's application roles
@@ -242,7 +242,7 @@ async def disconnect_provider(
     Raises:
         HTTPException: 404 if not connected to provider
     """
-    logger.info(f"User {current_user.email} disconnecting from {provider_id}")
+    logger.info(f"User {current_user.name} disconnecting from {provider_id}")
 
     disconnected = await oauth_service.disconnect(
         user_id=current_user.user_id,

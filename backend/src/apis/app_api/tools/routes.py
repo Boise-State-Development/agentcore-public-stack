@@ -87,7 +87,7 @@ async def get_user_tools(
     Returns:
         UserToolsResponse with user's accessible tools
     """
-    logger.info(f"User {user.email} getting tools with preferences")
+    logger.info(f"User {user.name} getting tools with preferences")
 
     service = get_tool_catalog_service()
     tools = await service.get_user_accessible_tools(user)
@@ -121,7 +121,7 @@ async def update_tool_preferences(
     Returns:
         Success message
     """
-    logger.info(f"User {user.email} updating tool preferences")
+    logger.info(f"User {user.name} updating tool preferences")
 
     service = get_tool_catalog_service()
 
@@ -157,7 +157,7 @@ async def list_all_tools(
     Returns:
         LegacyToolListResponse with list of all tools
     """
-    logger.info(f"User {user.email} listing tool catalog (legacy)")
+    logger.info(f"User {user.name} listing tool catalog (legacy)")
 
     catalog_service = get_legacy_catalog_service()
 
@@ -202,7 +202,7 @@ async def get_my_tool_permissions(
     Returns:
         UserToolPermissionsResponse with user's allowed tools
     """
-    logger.info(f"User {user.email} checking tool permissions")
+    logger.info(f"User {user.name} checking tool permissions")
 
     role_service = get_app_role_service()
     permissions = await role_service.resolve_user_permissions(user)
@@ -235,7 +235,7 @@ async def list_available_tools(
     Returns:
         LegacyToolListResponse with user's available tools
     """
-    logger.info(f"User {user.email} listing available tools (legacy)")
+    logger.info(f"User {user.name} listing available tools (legacy)")
 
     catalog_service = get_legacy_catalog_service()
     role_service = get_app_role_service()
