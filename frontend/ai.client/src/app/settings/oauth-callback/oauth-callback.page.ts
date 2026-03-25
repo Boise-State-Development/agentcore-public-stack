@@ -127,8 +127,6 @@ type CallbackState = 'processing' | 'success' | 'error';
     </div>
   `,
   styles: `
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500;700;900&display=swap');
-
     :host {
       display: block;
       min-height: 100dvh;
