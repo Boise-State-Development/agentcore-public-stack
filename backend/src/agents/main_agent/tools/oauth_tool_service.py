@@ -158,7 +158,7 @@ class OAuthToolService:
             )
 
             if token:
-                logger.info(f"Retrieved OAuth token for user {user_id}, provider {provider_id}")
+                logger.debug(f"Retrieved OAuth token for user, provider {provider_id}")
                 return OAuthTokenResult(
                     connected=True,
                     access_token=token,
@@ -172,7 +172,7 @@ class OAuthToolService:
             user_token = await token_repo.get_user_token(user_id, provider_id)
 
             if user_token and user_token.status in ("expired", "needs_reauth", "revoked"):
-                logger.info(f"User {user_id} needs re-auth for provider {provider_id}")
+                logger.debug(f"User needs re-auth for provider {provider_id}")
                 return OAuthTokenResult(
                     connected=False,
                     provider_id=provider_id,
@@ -182,7 +182,7 @@ class OAuthToolService:
                 )
 
             # User not connected
-            logger.info(f"User {user_id} not connected to provider {provider_id}")
+            logger.debug(f"User not connected to provider {provider_id}")
             return OAuthTokenResult(
                 connected=False,
                 provider_id=provider_id,

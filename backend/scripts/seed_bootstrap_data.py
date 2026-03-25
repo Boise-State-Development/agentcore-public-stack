@@ -96,7 +96,8 @@ def seed_auth_provider(
             result.details.append(msg)
             return result
     except ClientError as e:
-        msg = f"Failed to check existing auth provider '{provider_id}': {e}"
+        error_code = e.response["Error"]["Code"]
+        msg = f"Failed to check existing auth provider '{provider_id}': {error_code}"
         logger.error(msg)
         result.failed = 1
         result.details.append(msg)
@@ -164,7 +165,8 @@ def seed_auth_provider(
         table.put_item(Item=item)
         logger.info("Auth provider '%s' written to DynamoDB", provider_id)
     except ClientError as e:
-        msg = f"Failed to write auth provider '{provider_id}' to DynamoDB: {e}"
+        error_code = e.response["Error"]["Code"]
+        msg = f"Failed to write auth provider '{provider_id}' to DynamoDB: {error_code}"
         logger.error(msg)
         result.failed = 1
         result.details.append(msg)
@@ -193,7 +195,8 @@ def seed_auth_provider(
         else:
             logger.info("Client secret for '%s' already in Secrets Manager — kept existing", provider_id)
     except ClientError as e:
-        msg = f"Failed to write secret for '{provider_id}': {e}"
+        error_code = e.response["Error"]["Code"]
+        msg = f"Failed to write secret for '{provider_id}': {error_code}"
         logger.error(msg)
         result.failed = 1
         result.details.append(msg)

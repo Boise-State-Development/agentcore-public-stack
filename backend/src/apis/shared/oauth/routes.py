@@ -3,7 +3,7 @@
 import logging
 import os
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
@@ -202,8 +202,18 @@ async def oauth_callback(
         state=state,
     )
 
-    # Build redirect URL
-    redirect_base = frontend_redirect or f"{frontend_url}{callback_path}"
+    # Build redirect URL — validate that frontend_redirect is same-origin
+    # to prevent open redirect attacks via manipulated OAuth state
+    redirect_base = f"{frontend_url}{callback_path}"
+    if frontend_redirect:
+        parsed = urlparse(frontend_redirect)
+        parsed_frontend = urlparse(frontend_url)
+        if parsed.scheme == parsed_frontend.scheme and parsed.netloc == parsed_frontend.netloc:
+            redirect_base = frontend_redirect
+        else:
+            logger.warning(
+                f"OAuth callback redirect blocked — origin mismatch: {parsed.netloc} != {parsed_frontend.netloc}"
+            )
 
     if callback_error:
         params = urlencode({"error": callback_error, "provider": provider_id})

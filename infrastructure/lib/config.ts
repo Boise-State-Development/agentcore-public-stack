@@ -222,7 +222,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   // Log loaded configuration for debugging
   console.log('📋 Loaded CDK Configuration:');
   console.log(`   Project Prefix: ${config.projectPrefix}`);
-  console.log(`   AWS Account: ${config.awsAccount}`);
+  console.log(`   AWS Account: ***${config.awsAccount.slice(-4)}`);
   console.log(`   AWS Region: ${config.awsRegion}`);
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
