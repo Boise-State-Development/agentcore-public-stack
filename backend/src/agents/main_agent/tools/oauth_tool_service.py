@@ -202,7 +202,7 @@ class OAuthToolService:
             provider_id=provider_id,
         )
         if token:
-            logger.debug("OAuth token retrieved for provider %s", provider_id)
+            logger.debug("OAuth token successfully retrieved")
             return OAuthTokenResult(
                 connected=True,
                 access_token=token,
