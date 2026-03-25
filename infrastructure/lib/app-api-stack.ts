@@ -4,8 +4,6 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
-import * as s3 from "aws-cdk-lib/aws-s3";
-import * as rds from "aws-cdk-lib/aws-rds";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
@@ -13,8 +11,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as kms from "aws-cdk-lib/aws-kms";
 
 import { Construct } from "constructs";
-import { CfnResource } from "aws-cdk-lib";
-import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy, getAutoDeleteObjects } from "./config";
+import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy } from "./config";
 
 export interface AppApiStackProps extends cdk.StackProps {
   config: AppConfig;
@@ -166,88 +163,8 @@ export class AppApiStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // ============================================================
-    // CORS Origins Helper
-    // Build CORS origins from explicit config + auto-derived domain
-    // ============================================================
-    const buildCorsOrigins = (explicitOrigins?: string): string[] => {
-      const origins = new Set<string>();
-      // Always allow localhost for local development
-      origins.add('http://localhost:4200');
-      // Add domain-based origin if configured
-      if (config.domainName) {
-        origins.add(`https://${config.domainName}`);
-      }
-      // Add any explicitly configured origins
-      if (explicitOrigins) {
-        explicitOrigins.split(',').map(o => o.trim()).filter(Boolean).forEach(o => origins.add(o));
-      }
-      return Array.from(origins);
-    };
-
-    // ============================================================
-    // Assistants Document Drop Bucket (RAG Injestion Drop Bucket)
-    // ============================================================
-    const assistantsCorsOrigins = buildCorsOrigins(config.assistants?.corsOrigins);
-
-    const assistantsDocumentsBucket = new s3.Bucket(this, "AssistantsDocumentBucket", {
-      bucketName: getResourceName(config, "assistants-documents", config.awsAccount),
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      versioned: true,
-      removalPolicy: getRemovalPolicy(config),
-      autoDeleteObjects: getAutoDeleteObjects(config),
-      cors: [
-        {
-          allowedOrigins: assistantsCorsOrigins,
-          allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT, s3.HttpMethods.HEAD],
-          allowedHeaders: ["Content-Type", "Content-Length", "x-amz-*"],
-          exposedHeaders: ["ETag", "Content-Length", "Content-Type"],
-          maxAge: 3600,
-        },
-      ],
-    });
-
-    // ============================================================
-    // Assistants Vector Store Bucket
-    // ============================================================
-    // Create S3 Vector Bucket (not a regular S3 bucket)
-    // Using CfnResource since there are no L2 constructs for S3 Vectors yet
-    // Bucket name: 3-63 chars, lowercase, numbers, hyphens only
-    const assistantsVectorStoreBucketName = getResourceName(config, "assistants-vector-store-v1", config.awsAccount);
-
-    const assistantsVectorBucket = new CfnResource(this, "AssistantsVectorBucket", {
-      type: "AWS::S3Vectors::VectorBucket",
-      properties: {
-        VectorBucketName: assistantsVectorStoreBucketName,
-      },
-    });
-
-    // Create Vector Index within the bucket
-    // Titan V2 embeddings: 1024 dimensions, float32, cosine similarity
-    const assistantsVectorIndexName = getResourceName(config, "assistants-vector-index-v1");
-
-    const assistantsVectorIndex = new CfnResource(this, "AssistantsVectorIndex", {
-      type: "AWS::S3Vectors::Index",
-      properties: {
-        VectorBucketName: assistantsVectorStoreBucketName,
-        IndexName: assistantsVectorIndexName,
-        DataType: "float32", // Only supported type
-        Dimension: 1024, // Titan V2 embedding dimension
-        DistanceMetric: "cosine", // Cosine similarity for embeddings
-        // MetadataConfiguration: Specify which metadata keys are NOT filterable
-        // By default, all metadata keys (assistant_id, document_id, source) are filterable
-        // Only mark 'text' as non-filterable since it's too large for filtering
-        MetadataConfiguration: {
-          NonFilterableMetadataKeys: ["text"],
-        },
-      },
-    });
-
-    // Index depends on bucket
-    assistantsVectorIndex.addDependency(assistantsVectorBucket);
-
-    // Note: Lambda function for document ingestion is now created in RagIngestionStack
+    // Note: RAG resources (documents bucket, vector bucket, vector index, ingestion Lambda)
+    // are created in RagIngestionStack and imported via SSM parameters.
 
 
 
@@ -619,9 +536,6 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
-    // Grant permissions for assistants documents bucket (local to this stack)
-    assistantsDocumentsBucket.grantReadWrite(taskDefinition.taskRole);
-
     // Grant permissions for RAG documents bucket (imported from RagIngestionStack)
     const ragDocumentsBucketArn = ssm.StringParameter.valueForStringParameter(
       this,
@@ -645,9 +559,17 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
-    // Grant S3 Vectors permissions for assistants vector store
+    // Grant S3 Vectors permissions for RAG vector store (imported from RagIngestionStack)
+    // Note: The vector bucket/index are created in RagIngestionStack and imported via SSM.
+    // The App API uses these for document vector operations (query, delete, list).
+    const ragVectorBucketName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/vector-bucket-name`
+    );
+
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        sid: 'RagVectorStoreAccess',
         effect: iam.Effect.ALLOW,
         actions: [
           "s3vectors:ListVectorBuckets",
@@ -662,8 +584,8 @@ export class AppApiStack extends cdk.Stack {
           "s3vectors:QueryVectors",
         ],
         resources: [
-          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorStoreBucketName}`,
-          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${assistantsVectorStoreBucketName}/index/*`,
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${ragVectorBucketName}`,
+          `arn:aws:s3vectors:${config.awsRegion}:${config.awsAccount}:bucket/${ragVectorBucketName}/index/*`,
         ],
       })
     );
@@ -1395,21 +1317,6 @@ export class AppApiStack extends cdk.Stack {
     });
 
     // Note: Lambda function output is now in RagIngestionStack
-
-    new cdk.CfnOutput(this, "AssistantsVectorStoreBucketName", {
-      value: assistantsVectorStoreBucketName,
-      description: "Name of the S3 Vector Bucket for assistants embeddings",
-    });
-
-    new cdk.CfnOutput(this, "AssistantsVectorIndexName", {
-      value: assistantsVectorIndexName,
-      description: "Name of the Vector Index within the assistants vector bucket",
-    });
-
-    new cdk.CfnOutput(this, "AssistantsVectorIndexArn", {
-      value: assistantsVectorIndex.getAtt("IndexArn").toString(),
-      description: "ARN of the assistants vector index",
-    });
 
     new cdk.CfnOutput(this, "AuthProvidersTableName", {
       value: authProvidersTableName,

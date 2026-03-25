@@ -83,10 +83,12 @@ main() {
     log_info "Installing CDK dependencies..."
     cd "${PROJECT_ROOT}/infrastructure"
     
-    if [ -d "node_modules" ]; then
-        log_info "node_modules already exists, skipping npm install"
+    if [ -f "package-lock.json" ]; then
+        log_info "Running npm ci (clean install from package-lock.json)..."
+        npm ci
     else
-        npm install
+        log_error "package-lock.json not found. Cannot run npm ci."
+        exit 1
     fi
     
     log_success "CDK dependencies installed successfully"

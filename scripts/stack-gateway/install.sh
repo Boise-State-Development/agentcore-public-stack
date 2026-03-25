@@ -29,6 +29,11 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
+if [ ! -f "package-lock.json" ]; then
+    log_error "package-lock.json not found. Cannot run npm ci."
+    exit 1
+fi
+
 npm ci --silent || {
     log_error "Failed to install CDK dependencies"
     exit 1

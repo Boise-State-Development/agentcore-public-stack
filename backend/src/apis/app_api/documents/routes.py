@@ -229,7 +229,7 @@ async def delete_document(assistant_id: str, document_id: str, user_id: str = De
 
         # Delete vector store objects
         try:
-            from apis.app_api.documents.ingestion.embeddings.bedrock_embeddings import delete_vectors_for_document
+            from apis.shared.embeddings.bedrock_embeddings import delete_vectors_for_document
 
             deleted_count = await delete_vectors_for_document(document_id)
             logger.info(f"Deleted {deleted_count} vectors for document {document_id}")

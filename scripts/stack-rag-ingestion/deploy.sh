@@ -47,7 +47,7 @@ main() {
     # Check if node_modules exists
     if [ ! -d "node_modules" ]; then
         log_info "node_modules not found in CDK directory. Installing dependencies..."
-        npm install
+        npm ci
     fi
     
     # Bootstrap CDK if needed (idempotent operation)

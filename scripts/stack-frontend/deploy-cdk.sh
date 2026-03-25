@@ -62,7 +62,7 @@ cd "${CDK_DIR}"
 # Check if node_modules exists
 if [ ! -d "node_modules" ]; then
     log_warn "node_modules not found in CDK directory. Installing dependencies..."
-    npm install
+    npm ci
 fi
 
 # Display CDK version

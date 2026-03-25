@@ -10,8 +10,8 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+    gcc=4:14.2.0-1 \
+    g++=4:14.2.0-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (layer caching)
@@ -39,7 +39,7 @@ WORKDIR /app
 
 # Install runtime dependencies (curl required for HEALTHCHECK)
 RUN apt-get update && apt-get install -y \
-    curl \
+    curl=8.14.1-2+deb13u2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from builder

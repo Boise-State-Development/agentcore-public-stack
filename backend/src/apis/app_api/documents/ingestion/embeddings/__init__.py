@@ -1,16 +1,19 @@
-"""Embedding generation for text chunks
+"""Ingestion embedding utilities
 
-Generates vector embeddings using AWS Bedrock models.
+Token validation and chunk splitting for the document ingestion pipeline.
+Core embedding/vector operations are in apis.shared.embeddings.
 """
 
 from .bedrock_embeddings import (
     generate_embeddings,
     store_embeddings_in_s3,
-    search_assistant_knowledgebase
+    search_assistant_knowledgebase,
+    validate_and_split_chunks,
 )
 
 __all__ = [
-    'generate_embeddings',
-    'store_embeddings_in_s3'
-    'search_assistant_knowledgebase'
+    "generate_embeddings",
+    "store_embeddings_in_s3",
+    "search_assistant_knowledgebase",
+    "validate_and_split_chunks",
 ]

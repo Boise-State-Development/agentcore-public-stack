@@ -55,10 +55,10 @@ concurrency:
 jobs:
   check-stack-dependencies:
     name: Check Stack Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Run stack dependency tests
         run: |
@@ -66,14 +66,14 @@ jobs:
 
   install:
     name: Install Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
         id: cache-infrastructure
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -90,7 +90,7 @@ jobs:
 
       - name: Save node_modules cache
         if: steps.cache-infrastructure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -112,7 +112,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set image tag
         id: set-tag
@@ -129,10 +129,10 @@ jobs:
           echo "App version: ${APP_VERSION}"
       
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Build and export Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: .
           file: backend/Dockerfile.rag-ingestion
@@ -152,7 +152,7 @@ jobs:
           echo "Image size: ${IMAGE_SIZE} bytes"
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: rag-ingestion-docker-image
           path: ${{ runner.temp }}/rag-ingestion-image.tar
@@ -160,14 +160,14 @@ jobs:
 
   build-cdk:
     name: Build CDK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [install, check-stack-dependencies]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -191,10 +191,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: rag-ingestion-docker-image
           path: ${{ runner.temp }}
@@ -239,10 +239,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -261,14 +261,14 @@ jobs:
           bash scripts/common/install-deps.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Synthesize CloudFormation template
         run: |
           bash scripts/stack-rag-ingestion/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: rag-ingestion-cdk-synth
           path: infrastructure/cdk.out/
@@ -276,7 +276,7 @@ jobs:
 
   test-cdk:
     name: Test CDK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: synth-cdk
     if: ${{ github.event.inputs.skip_tests != 'true' }}
     
@@ -304,16 +304,16 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: rag-ingestion-cdk-synth
           path: infrastructure/cdk.out/
@@ -338,7 +338,7 @@ jobs:
 
   push-to-ecr:
     name: Push Docker Image to ECR
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-docker, test-docker]
     if: |
       always() && !cancelled() &&
@@ -371,10 +371,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: rag-ingestion-docker-image
           path: ${{ runner.temp }}
@@ -434,16 +434,16 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: rag-ingestion-cdk-synth
           path: infrastructure/cdk.out/
@@ -462,7 +462,7 @@ jobs:
           bash scripts/common/install-deps.sh
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
           
       - name: Deploy infrastructure
         run: |
@@ -473,7 +473,7 @@ jobs:
           bash scripts/stack-rag-ingestion/tag-latest.sh
      
       - name: Upload stack outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: always()
         with:
           name: rag-ingestion-deployment-outputs

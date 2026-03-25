@@ -8,13 +8,13 @@
 **An open-source, production-ready Generative AI platform for institutions**
 *Built by Boise State University, designed for everyone.*
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.17-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.18-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?style=flat&logo=python&logoColor=white)
 ![Angular](https://img.shields.io/badge/Angular-v21-DD0031?style=flat&logo=angular&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-Bedrock_AgentCore-FF9900?style=flat&logo=amazonwebservices&logoColor=white)
-![Tailwind](https://img.shields.io/badge/Tailwind_CSS-v4.1-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
+![Tailwind](https://img.shields.io/badge/Tailwind_CSS-v4.2-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial-blue?style=flat)
 
 [Features](#-key-features) · [Architecture](#-architecture) · [Admin Dashboard](#-admin-dashboard) · [Deployment](#-deployment) · [Release Notes](RELEASE_NOTES.md) · [Contributing](#-contributing)
@@ -126,7 +126,7 @@ The admin dashboard gives institutional administrators full control over the pla
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              User Interface                                 │
-│                     Angular v21 + Tailwind CSS v4.1+                        │
+│                     Angular v21 + Tailwind CSS v4.2+                        │
 └──────────┬──────────────────────────────────────────────┬───────────────────┘
            │ REST (auth, sessions, admin, files)          │ SSE Streaming
            v                                              │
@@ -162,7 +162,7 @@ The admin dashboard gives institutional administrators full control over the pla
 
 | Layer | Technologies |
 |-------|-------------|
-| **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.1+ |
+| **Frontend** | Angular v21, TypeScript, Tailwind CSS v4.2+ |
 | **Backend** | Python 3.13+, FastAPI |
 | **Agent Framework** | Strands Agents SDK |
 | **Cloud Services** | AWS Bedrock AgentCore (Runtime, Memory, Gateway, Code Interpreter, Browser), Amazon SageMaker |
@@ -241,7 +241,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new features, bug fixes, platform upgrades, and deployment notes for each release.
 
-**Current release:** v1.0.0-beta.17
+**Current release:** v1.0.0-beta.18
 
 ---
 

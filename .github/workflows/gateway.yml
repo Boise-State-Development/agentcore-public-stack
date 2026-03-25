@@ -54,10 +54,10 @@ concurrency:
 jobs:
   check-stack-dependencies:
     name: Check Stack Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Run stack dependency tests
         run: |
@@ -65,7 +65,7 @@ jobs:
 
   install:
     name: Install Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     
     # Select environment based on trigger
     # Manual: workflow_dispatch input
@@ -80,11 +80,11 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
         id: cache-gateway
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -101,14 +101,14 @@ jobs:
 
       - name: Save node_modules cache
         if: steps.cache-gateway.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
 
   build-cdk:
     name: Build CDK Code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [install, check-stack-dependencies]
     
     # Select environment based on trigger
@@ -124,10 +124,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -137,7 +137,7 @@ jobs:
           bash scripts/stack-gateway/build-cdk.sh
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gateway-cdk-build
           path: |
@@ -149,7 +149,7 @@ jobs:
 
   synth-cdk:
     name: Synthesize CloudFormation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build-cdk
     
     # Select environment based on trigger
@@ -172,10 +172,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache@v5
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -183,7 +183,7 @@ jobs:
             gateway-node-
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: gateway-cdk-build
           path: infrastructure
@@ -197,7 +197,7 @@ jobs:
           bash scripts/stack-gateway/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out/
@@ -205,7 +205,7 @@ jobs:
 
   test-cdk:
     name: Test CDK Stack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: synth-cdk
     if: github.event.inputs.skip_tests != 'true'
     
@@ -236,7 +236,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Configure AWS credentials
         uses: ./.github/actions/configure-aws-credentials
@@ -248,7 +248,7 @@ jobs:
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
 
       - name: Restore node_modules cache
-        uses: actions/cache@v5
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -256,7 +256,7 @@ jobs:
             gateway-node-
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out
@@ -272,7 +272,7 @@ jobs:
 
   deploy-stack:
     name: Deploy Gateway Stack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [test-cdk]
     if: |
       always() && !cancelled() &&
@@ -307,7 +307,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Configure AWS credentials
         uses: ./.github/actions/configure-aws-credentials
@@ -319,7 +319,7 @@ jobs:
           aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
 
       - name: Restore node_modules cache
-        uses: actions/cache@v5
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: infrastructure/node_modules
           key: gateway-node-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -327,7 +327,7 @@ jobs:
             gateway-node-
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: gateway-cdk-templates
           path: infrastructure/cdk.out
@@ -341,7 +341,7 @@ jobs:
           bash scripts/stack-gateway/deploy.sh
 
       - name: Upload stack outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: always()
         with:
           name: gateway-deployment-outputs
@@ -372,7 +372,7 @@ jobs:
 
   test-gateway:
     name: Test Gateway Connectivity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: deploy-stack
     if: |
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
@@ -398,7 +398,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Configure AWS credentials
         uses: ./.github/actions/configure-aws-credentials

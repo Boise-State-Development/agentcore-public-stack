@@ -1,3 +1,166 @@
+# Release Notes — v1.0.0-beta.18
+
+**Release Date:** March 24, 2026
+**Previous Release:** v1.0.0-beta.17 (March 23, 2026)
+
+---
+
+## Highlights
+
+This release is a **supply chain security hardening** release. Every dependency across all three ecosystems (Python, npm, GitHub Actions) has been pinned to exact versions, all GitHub Actions are SHA-pinned, CI runners are locked to `ubuntu-24.04`, Dockerfile `apt`/`dnf` packages are version-pinned, and a new 11-file property-based test suite enforces these invariants going forward. Alongside the hardening, the release adds **CodeQL Advanced security scanning**, a **flexible nightly track system** that replaces the monolithic nightly pipeline, and migrates **RAG resources out of the App API stack** into the dedicated RAG Ingestion stack.
+
+---
+
+## ⚠️ Deployment Note — RAG Data Loss on Existing Deployments
+
+This release removes the assistants documents S3 bucket (`assistants-documents`), S3 Vector Bucket (`assistants-vector-store-v1`), and Vector Index (`assistants-vector-index-v1`) from `AppApiStack`. These resources are now created in `RagIngestionStack` under new names (`rag-vector-store-v1`, etc.). Because CloudFormation tracks resources by logical ID within a stack, deploying this release will cause CDK to delete the old resources from the App API stack. Any existing assistant documents and vector embeddings stored in those buckets will be lost.
+
+If your deployment has data in these resources, you should manually back up or migrate the contents before deploying. If `CDK_RETAIN_DATA_ON_DELETE` is `true` in your environment, the removal policy may be set to `RETAIN`, which would orphan the resources instead of deleting them — but you should verify this against your configuration before relying on it.
+
+---
+
+## Supply Chain Security Hardening
+
+A comprehensive security audit identified 17 findings across GitHub Actions, dependency manifests, Dockerfiles, and install scripts. This release addresses all of them.
+
+### GitHub Actions SHA Pinning
+
+All third-party GitHub Actions are now pinned to specific commit SHAs with version comments (e.g., `actions/checkout@de0fac2e...  # v6.0.2`). This prevents tag-rewriting supply chain attacks where a compromised action could inject malicious code into CI runs.
+
+### Runner Pinning
+
+All workflow jobs now use `ubuntu-24.04` instead of `ubuntu-latest`, ensuring consistent and reproducible build environments that won't silently change behavior when GitHub rolls forward the `latest` tag.
+
+### Exact Dependency Pinning
+
+All three ecosystems have been migrated from range specifiers (`>=`, `^`, `~`) to exact version pins:
+
+- **Python** (`pyproject.toml`): Every dependency uses `==` pins (e.g., `fastapi==0.135.2`, `boto3==1.42.73`, `strands-agents==1.32.0`)
+- **npm frontend** (`package.json`): All `^` prefixes removed, exact versions throughout (e.g., `@angular/core` `21.2.5`, `tailwindcss` `4.2.1`)
+- **npm infrastructure** (`package.json`): Same treatment (e.g., `aws-cdk-lib` `2.244.0`, `aws-cdk` `2.1113.0`)
+
+### Dockerfile Package Pinning
+
+All `apt-get install` and `dnf install` commands now specify exact package versions:
+
+- App API and Inference API Dockerfiles: `gcc=4:14.2.0-1`, `g++=4:14.2.0-1`, `curl=8.14.1-2+deb13u2`
+- RAG Ingestion Dockerfile: All 9 `dnf` packages pinned (gcc, make, mesa-libGL, glib2, tar, gzip, ca-certificates, unzip)
+
+### Script Hardening
+
+All deployment and install scripts now use `npm ci` exclusively (no `npm install` fallback), ensuring lockfile-driven deterministic installs across all environments.
+
+### Artifact Retention Policy
+
+A new `.github/ARTIFACT_RETENTION.md` defines tiered retention periods: Docker tarballs and CDK build artifacts at 1 day, synthesized templates and test results at 7 days, deployment outputs and Trivy scan reports at 30 days. All workflow `retention-days` values have been aligned to this policy.
+
+### Supply Chain Test Suite
+
+A new `backend/tests/supply_chain/` directory contains 11 property-based test files that validate security invariants:
+
+- Action SHA pinning, runner version pinning, dependency exact pinning
+- Dockerfile package pinning, artifact retention consistency
+- Concurrency configuration, secret scoping, script hardening
+- Dependabot configuration, documentation presence
+
+These tests run as part of the standard `pytest` suite and will catch regressions if anyone reintroduces range specifiers or unpinned actions.
+
+---
+
+## CodeQL Advanced Security Scanning
+
+A new `codeql.yml` workflow provides static analysis across three languages: Python, TypeScript, and GitHub Actions. It uses the `security-and-quality` query suite for broad vulnerability and code quality coverage, plus the `github-actions` threat model for full Actions taint tracking (18 queries covering code injection, artifact poisoning, cache poisoning, and secret exposure).
+
+The workflow runs on push and PR to `develop`, plus a weekly scheduled scan to catch new CVEs even when code hasn't changed. A custom `codeql-config.yml` excludes vendored, generated, test, and build artifact paths to keep scan times reasonable. The first scan already surfaced unused imports and variables in the supply chain test suite, which have been cleaned up in this release.
+
+---
+
+## Flexible Nightly Track Selection
+
+The monolithic nightly pipeline has been replaced with a composable track-based system. Instead of a single `NIGHTLY_ENABLED` boolean, the workflow now reads a `NIGHTLY_TRACKS` variable (or `workflow_dispatch` input) containing comma-separated track tokens:
+
+- `test-backend-<branch>` / `test-frontend-<branch>` — Run tests against any branch
+- `deploy-<branch>` — Deploy full stack from any branch
+- `merge-validation:<base>:<overlay>` — Deploy base, then overlay (simulates merge)
+- `scan-images-<branch>` — Scan Docker images for vulnerabilities
+- `all` — Run everything with default branches
+
+A new `resolve-tracks` job parses the tokens into boolean flags and branch refs consumed by downstream jobs. The deploy pipeline is extracted into a reusable `nightly-deploy-pipeline.yml` called up to 3 times (deploy track, MV base, MV overlay), eliminating all duplication. Fork safety is preserved — if `NIGHTLY_TRACKS` is empty, nothing runs.
+
+---
+
+## RAG Resources Migration
+
+RAG resources (assistants documents bucket, S3 Vector Bucket, Vector Index) have been removed from `AppApiStack` and are now exclusively managed by `RagIngestionStack`. The App API stack imports these resources via SSM parameters, improving separation of concerns and eliminating cross-stack resource ownership issues.
+
+The vector store IAM permissions in the App API task role now reference the RAG vector bucket imported from SSM (`/${projectPrefix}/rag/vector-bucket-name`) instead of a locally-created bucket, with a named SID (`RagVectorStoreAccess`) for better auditability.
+
+---
+
+## Embeddings Refactor
+
+Core embedding and vector store operations have been extracted from the ingestion pipeline into a new shared module at `apis.shared.embeddings`. The functions `generate_embeddings`, `store_embeddings_in_s3`, `search_assistant_knowledgebase`, and `delete_vectors_for_document` now live in `apis.shared.embeddings.bedrock_embeddings`, with the ingestion-specific module re-exporting them for backward compatibility.
+
+A new `skip_token_validation` parameter on `generate_embeddings` allows callers to bypass tiktoken-based token validation for short inputs in environments where tiktoken is unavailable (e.g., search Lambda functions). The ingestion pipeline retains its own token validation and chunk-splitting logic.
+
+---
+
+## Dependabot Configuration
+
+A new `.github/dependabot.yml` monitors all four ecosystems (pip, frontend npm, infrastructure npm, GitHub Actions) on a weekly Monday 9 AM Mountain Time schedule. Minor and patch updates are grouped to reduce PR noise (Angular updates grouped separately from other frontend deps, AWS CDK grouped separately from other infrastructure deps). All PRs target the `develop` branch with ecosystem-specific labels.
+
+---
+
+## CI/CD Improvements
+
+- **AWS credentials action upgraded** to `v6.0.0` with SHA pinning, plus a new sanitization step that replaces illegal characters in OIDC role session names and truncates to the 64-character AWS limit
+- **Explicit OIDC permissions** added to nightly deploy, MV base, and MV overlay jobs (`id-token: write`, `contents: read`)
+- **SageMaker conditional gating** — synth job now outputs an `enabled` flag based on `CDK_FINE_TUNING_ENABLED`; test and deploy jobs skip when fine-tuning is disabled
+- **Node.js 24 action warnings** fixed after SHA-pinning reintroduced older action references
+
+---
+
+## Dependency Upgrades
+
+| Component | From | To |
+|---|---|---|
+| FastAPI | 0.116.1 | 0.135.2 |
+| Starlette | 0.47.3 | 1.0.0 |
+| strands-agents | 1.27.0+ | 1.32.0 |
+| strands-agents-tools | 0.2.20 | 0.2.23 |
+| boto3 | 1.40.1+ | 1.42.73 |
+| bedrock-agentcore | latest | 1.4.7 |
+| Angular packages | 21.0.x | 21.2.5 |
+| @angular/cdk | 21.0.3 | 21.2.3 |
+| Tailwind CSS | 4.1.12+ | 4.2.1 |
+| aws-cdk-lib | 2.235.1 | 2.244.0 |
+| aws-cdk (CLI) | 2.1033.0 | 2.1113.0 |
+| DOMPurify | 3.3.1 | 3.3.3 |
+| undici | 7.22.0 | 7.24.5 |
+| hono | 4.12.2 | 4.12.9 |
+| katex | 0.16.25 | 0.16.33 |
+| mermaid | 11.12.1 | 11.12.3 |
+| Vitest | 4.0.8 | 4.0.18 |
+| mypy target | py3.9 | py3.10 |
+
+---
+
+## Bug Fixes
+
+- **Fine-tuning dashboard** — Removed an incorrect "retention" label from the inference job display on the SageMaker fine-tuning dashboard.
+
+---
+
+## Documentation & Developer Experience
+
+- Added `CONTRIBUTING.md` with prerequisites, clone/install instructions, environment configuration, testing commands, and contribution workflow
+- Supply chain hardening spec (requirements, design, tasks) added under `.kiro/specs/supply-chain-hardening/`
+
+---
+
+
+---
+
 # Release Notes — v1.0.0-beta.17
 
 **Release Date:** March 23, 2026

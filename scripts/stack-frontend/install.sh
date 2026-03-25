@@ -64,9 +64,8 @@ if [ -f "package-lock.json" ]; then
     log_info "Running npm ci (clean install from package-lock.json)..."
     npm ci
 else
-    log_info "No package-lock.json found. Running npm install..."
-    log_info "Note: Consider committing package-lock.json for reproducible builds"
-    npm install
+    log_error "package-lock.json not found. Cannot run npm ci."
+    exit 1
 fi
 
 log_info "Frontend dependencies installed successfully!"

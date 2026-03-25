@@ -226,7 +226,7 @@ async def _process_document_pipeline(bucket: str, key: str, assistant_id: str, d
     Execute the full document processing pipeline
     """
     import boto3
-    from embeddings.bedrock_embeddings import generate_embeddings, store_embeddings_in_s3, test_s3vector_dump
+    from embeddings.bedrock_embeddings import generate_embeddings, store_embeddings_in_s3, validate_and_split_chunks
     from processors import is_docling_supported, process_with_docling
 
     # 1. Download document from S3r
@@ -287,7 +287,8 @@ async def _process_document_pipeline(bucket: str, key: str, assistant_id: str, d
     # Update status to 'embedding' with chunk count
     await status_manager.mark_embedding(assistant_id=assistant_id, document_id=document_id, chunk_count=len(chunks))
 
-    # 4. Generate embeddings (Pass the Docling chunks directly)
+    # 4. Validate token counts and split oversized chunks, then generate embeddings
+    chunks = validate_and_split_chunks(chunks)
     embeddings = await generate_embeddings(chunks)
     logger.info(f"Embeddings generated for {len(embeddings)} chunks")
 

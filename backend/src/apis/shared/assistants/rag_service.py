@@ -7,7 +7,7 @@ knowledge and augmenting user prompts with retrieved context.
 import logging
 from typing import Any, Dict, List
 
-from apis.app_api.documents.ingestion.embeddings.bedrock_embeddings import search_assistant_knowledgebase
+from apis.shared.embeddings.bedrock_embeddings import search_assistant_knowledgebase
 
 logger = logging.getLogger(__name__)
 
