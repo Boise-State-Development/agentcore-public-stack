@@ -42,6 +42,8 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/logout",
     "/oauth/callback",
     "/chat/api-converse",
+    "/system/status",
+    "/system/first-boot",
     "/openapi.json",
     "/docs",
     "/docs/oauth2-redirect",
