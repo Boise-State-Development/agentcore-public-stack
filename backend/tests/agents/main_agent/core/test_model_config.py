@@ -102,22 +102,16 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    @patch("agents.main_agent.core.model_config.CacheConfig", create=True)
-    def test_bedrock_config_with_caching(self, mock_cache_cls):
-        """Req 1.6 — caching enabled → dict has model_id, temperature, cache_config."""
-        mock_cache_instance = MagicMock()
-        mock_cache_cls.return_value = mock_cache_instance
-
-        with patch.dict(
-            "sys.modules",
-            {"strands.models": MagicMock(CacheConfig=mock_cache_cls)},
-        ):
-            cfg = ModelConfig(caching_enabled=True)
-            result = cfg.to_bedrock_config()
+    def test_bedrock_config_with_caching_disabled(self):
+        """Req 1.6 — caching flag set but cache_config commented out due to Bedrock limitations."""
+        cfg = ModelConfig(caching_enabled=True)
+        result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
         assert result["temperature"] == cfg.temperature
-        assert "cache_config" in result
+        # cache_config is intentionally commented out in to_bedrock_config()
+        # due to Bedrock format incompatibility — see model_config.py
+        assert "cache_config" not in result
 
     def test_bedrock_config_without_caching(self):
         """Req 1.6 (negative) — caching disabled → no cache_config key."""
