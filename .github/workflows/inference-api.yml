@@ -49,6 +49,9 @@ on:
         required: false
         default: 'false'
 
+permissions:
+  contents: read
+
 env:
   # Build and Deploy Configuration (non-sensitive, repository-level)
   CDK_REQUIRE_APPROVAL: never

@@ -152,7 +152,7 @@ class TestCompactionConfigDefaults:
         monkeypatch.delenv("AGENTCORE_MEMORY_COMPACTION_MAX_TOOL_CONTENT_LENGTH", raising=False)
 
         config = CompactionConfig.from_env()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.token_threshold == 100_000
-        assert config.protected_turns == 2
+        assert config.protected_turns == 3
         assert config.max_tool_content_length == 500

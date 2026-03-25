@@ -46,6 +46,7 @@ export interface CreateJobRequest {
   instance_type?: string;
   hyperparameters?: Record<string, string>;
   max_runtime_seconds?: number;
+  custom_huggingface_model_id?: string;
 }
 
 export interface JobResponse {
@@ -139,6 +140,18 @@ export interface DownloadResponse {
   download_url: string;
   expires_at: string;
   result_s3_key?: string;
+}
+
+// ── HuggingFace Model Search ────────────────────────────────────────────
+
+export interface HuggingFaceModelResult {
+  id: string;
+  downloads: number;
+  likes: number;
+  pipeline_tag?: string;
+  library_name?: string;
+  author?: string;
+  model_type?: string;
 }
 
 // ── UI-only upload state ────────────────────────────────────────────────

@@ -23,7 +23,7 @@
   <section class="mb-8">
     <h2 class="mb-1 text-base/7 font-semibold text-gray-900 dark:text-white">1. Upload Dataset</h2>
     <p class="mb-4 text-sm/6 text-gray-500 dark:text-gray-400">
-      Upload a JSONL file with your training data. Each line should be a JSON object with "text" and "label" fields.
+      Upload your training data as a JSONL, CSV, or TXT file. Each record should include "text" and "label" fields.
     </p>
 
     @if (uploadState(); as upload) {
@@ -69,23 +69,42 @@
       </div>
     } @else {
       <!-- Drop zone / file picker -->
-      <label
-        for="dataset-upload"
-        class="flex cursor-pointer flex-col items-center justify-center rounded-sm border-2 border-dashed border-gray-300 bg-white px-6 py-10 transition-colors hover:border-blue-400 hover:bg-blue-50/50 dark:border-gray-600 dark:bg-gray-900 dark:hover:border-blue-500 dark:hover:bg-blue-900/10"
+      <div
+        class="relative rounded-sm border-2 border-dashed transition-colors"
+        [class]="isDraggingOver()
+          ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-900/20'
+          : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-blue-50/50 dark:border-gray-600 dark:bg-gray-900 dark:hover:border-blue-500 dark:hover:bg-blue-900/10'"
+        (dragenter)="onDragEnter($event)"
+        (dragover)="onDragOver($event)"
+        (dragleave)="onDragLeave($event)"
+        (drop)="onDrop($event)"
       >
-        <ng-icon name="heroCloudArrowUp" class="size-10 text-gray-400 dark:text-gray-500" />
-        <p class="mt-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-          Click to upload your dataset
-        </p>
-        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">JSONL, CSV, or TXT file</p>
-      </label>
-      <input
-        id="dataset-upload"
-        type="file"
-        class="sr-only"
-        accept=".jsonl,.csv,.txt,.json"
-        (change)="onFileSelected($event)"
-      />
+        @if (isDraggingOver()) {
+          <div class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-blue-50/90 dark:bg-blue-900/80">
+            <div class="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-300">
+              <ng-icon name="heroCloudArrowUp" class="size-10" />
+              <span class="text-sm/6 font-medium">Drop file here</span>
+            </div>
+          </div>
+        }
+        <label
+          for="dataset-upload"
+          class="flex cursor-pointer flex-col items-center justify-center px-6 py-10"
+        >
+          <ng-icon name="heroCloudArrowUp" class="size-10 text-gray-400 dark:text-gray-500" />
+          <p class="mt-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Click or drag &amp; drop your dataset
+          </p>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">JSONL, CSV, or TXT file</p>
+        </label>
+        <input
+          id="dataset-upload"
+          type="file"
+          class="sr-only"
+          accept=".jsonl,.csv,.txt,.json"
+          (change)="onFileSelected($event)"
+        />
+      </div>
     }
 
     <!-- Train / Test Split Slider -->
@@ -108,7 +127,7 @@
           min="70"
           max="95"
           step="5"
-          class="h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-gray-900 dark:bg-gray-700 dark:accent-white
+          class="h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-blue-600 dark:bg-gray-700 dark:accent-blue-400
                  [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-gray-300 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-xs dark:[&::-webkit-slider-thumb]:border-gray-600 dark:[&::-webkit-slider-thumb]:bg-gray-200
                  [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-gray-300 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:shadow-xs dark:[&::-moz-range-thumb]:border-gray-600 dark:[&::-moz-range-thumb]:bg-gray-200
                  [&::-webkit-slider-runnable-track]:rounded-full [&::-moz-range-track]:rounded-full"
@@ -130,7 +149,7 @@
   <section class="mb-8">
     <h2 class="mb-1 text-base/7 font-semibold text-gray-900 dark:text-white">2. Select Base Model</h2>
     <p class="mb-4 text-sm/6 text-gray-500 dark:text-gray-400">
-      Choose a pre-trained model to fine-tune with your dataset.
+      Choose a pre-trained model to fine-tune, or enter any HuggingFace model ID.
     </p>
 
     @if (state.loading() && state.availableModels().length === 0) {
@@ -138,6 +157,174 @@
         <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Loading models"></div>
       </div>
     } @else {
+      <!-- Custom HuggingFace Model — prominent option at top -->
+      <div class="mb-4">
+        <button
+          type="button"
+          (click)="selectCustomModel()"
+          [class]="'flex w-full items-center gap-4 rounded-sm border-2 p-4 text-left transition-all ' +
+            (useCustomModel()
+              ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500 dark:border-blue-400 dark:bg-blue-900/20 dark:ring-blue-400'
+              : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 dark:border-gray-700 dark:bg-gray-900 dark:hover:border-blue-500/50 dark:hover:bg-blue-900/10')"
+        >
+          <div class="flex size-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400">
+            <ng-icon name="heroMagnifyingGlass" class="size-5" />
+          </div>
+          <div class="flex-1">
+            <span class="text-sm/6 font-semibold text-gray-900 dark:text-white">Use a Custom HuggingFace Model</span>
+            <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+              Search the HuggingFace Hub for any model — multilingual, domain-specific, or experimental.
+            </span>
+          </div>
+          <ng-icon name="heroChevronRight" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" />
+        </button>
+      </div>
+
+      <!-- Custom model: selected detail card OR search input -->
+      @if (useCustomModel()) {
+        @if (selectedHfModel(); as hfModel) {
+          <!-- Selected model detail card -->
+          <div class="mb-4 rounded-sm border-2 border-blue-500 bg-blue-50 p-4 dark:border-blue-400 dark:bg-blue-900/20">
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <ng-icon name="heroCheck" class="size-5 text-blue-600 dark:text-blue-400" />
+                  <span class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ hfModel.id }}</span>
+                </div>
+
+                <!-- Model metadata -->
+                <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+                  @if (hfModel.pipeline_tag) {
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                      <span class="font-medium">Task:</span> {{ hfModel.pipeline_tag }}
+                    </span>
+                  }
+                  @if (hfModel.model_type) {
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                      <span class="font-medium">Architecture:</span> {{ hfModel.model_type }}
+                    </span>
+                  }
+                  @if (hfModel.library_name) {
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                      <span class="font-medium">Library:</span> {{ hfModel.library_name }}
+                    </span>
+                  }
+                  @if (hfModel.author) {
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                      <span class="font-medium">Author:</span> {{ hfModel.author }}
+                    </span>
+                  }
+                </div>
+
+                <!-- Stats -->
+                <div class="mt-2 flex items-center gap-4">
+                  <span class="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                    <ng-icon name="heroArrowDown" class="size-3.5" />
+                    {{ hfModel.downloads | number }} downloads
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                    <ng-icon name="heroHeart" class="size-3.5" />
+                    {{ hfModel.likes | number }} likes
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                (click)="clearHfModel()"
+                class="inline-flex items-center gap-1 rounded-sm border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-500 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                <ng-icon name="heroArrowPath" class="size-3.5" />
+                Change
+              </button>
+            </div>
+          </div>
+        } @else {
+          <!-- Search input -->
+          <div class="relative mb-4 rounded-sm border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+            <label for="custom-hf-model" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              HuggingFace Model ID
+            </label>
+            <div class="relative mt-1">
+              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <ng-icon name="heroMagnifyingGlass" class="size-4 text-gray-400 dark:text-gray-500" />
+              </div>
+              <input
+                id="custom-hf-model"
+                type="text"
+                [value]="customHuggingFaceId()"
+                (input)="onCustomModelInput($event)"
+                (focus)="onSearchFocus()"
+                (blur)="onSearchBlur()"
+                placeholder="Search HuggingFace models or enter a model ID..."
+                autocomplete="off"
+                class="block w-full rounded-sm border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              />
+
+              <!-- Search results dropdown -->
+              @if (showSearchResults()) {
+                <div class="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-sm border border-gray-200 bg-white shadow-lg dark:border-gray-600 dark:bg-gray-800">
+                  @if (searchingModels()) {
+                    <div class="flex items-center gap-2 px-3 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                      <div class="size-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Searching"></div>
+                      Searching HuggingFace...
+                    </div>
+                  } @else if (hfSearchResults().length > 0) {
+                    @for (result of hfSearchResults(); track result.id) {
+                      <button
+                        type="button"
+                        (mousedown)="selectHfModel(result)"
+                        class="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ result.id }}</span>
+                        @if (result.downloads !== undefined) {
+                          <span class="text-xs text-gray-500 dark:text-gray-400">
+                            {{ result.downloads | number }} downloads
+                          </span>
+                        }
+                      </button>
+                    }
+                  } @else if (customHuggingFaceId().trim().length >= 2) {
+                    <div class="px-3 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                      No models found. You can still use the ID directly.
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+
+            <!-- Compatible-only toggle -->
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                (click)="toggleCompatibleOnly()"
+                [class]="'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ' +
+                  (compatibleOnly() ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-600')"
+                role="switch"
+                [attr.aria-checked]="compatibleOnly()"
+                aria-label="Show only compatible models"
+              >
+                <span
+                  [class]="'pointer-events-none inline-block size-4 rounded-full bg-white shadow-xs ring-0 transition-transform ' +
+                    (compatibleOnly() ? 'translate-x-4' : 'translate-x-0')"
+                ></span>
+              </button>
+              <span class="text-xs text-gray-600 dark:text-gray-400">
+                Show only compatible models
+              </span>
+            </div>
+
+            <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+              @if (compatibleOnly()) {
+                Showing models compatible with text classification (fill-mask, text-classification, feature-extraction, text-generation).
+              } @else {
+                Showing all models. Some may not be compatible with the training script.
+              }
+            </p>
+          </div>
+        }
+      }
+
       <div class="grid gap-4 sm:grid-cols-3">
         @for (model of state.availableModels(); track model.model_id) {
           <button
@@ -160,7 +347,7 @@
   </section>
 
   <!-- Section 3: Training Configuration -->
-  @if (selectedModel()) {
+  @if (hasModelSelection()) {
     <section class="mb-8">
       <h2 class="mb-1 text-base/7 font-semibold text-gray-900 dark:text-white">3. Training Configuration</h2>
       <p class="mb-4 text-sm/6 text-gray-500 dark:text-gray-400">
@@ -252,7 +439,7 @@
           <div>
             <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Instance Type</label>
             <div class="mt-1 rounded-sm border border-gray-200 bg-gray-50 px-3 py-2 text-sm/6 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300">
-              {{ selectedModel()?.default_instance_type }}
+              {{ selectedModel()?.default_instance_type || 'ml.g5.xlarge' }}
             </div>
           </div>
         </div>

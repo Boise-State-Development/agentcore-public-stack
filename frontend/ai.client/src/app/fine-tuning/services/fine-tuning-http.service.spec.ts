@@ -55,6 +55,28 @@ describe('FineTuningHttpService', () => {
     req.flush(mockModels);
   });
 
+  // ── HuggingFace Model Search ─────────────────────────────────────
+
+  it('should search HuggingFace models with compatible_only=true by default', () => {
+    const mockResults = [{ id: 'bert-base-uncased', downloads: 1000, likes: 50 }];
+    service.searchHuggingFaceModels('bert').subscribe(result => {
+      expect(result).toEqual(mockResults);
+    });
+    const req = httpMock.expectOne(r => r.url === `${BASE}/huggingface-models` && r.params.get('search') === 'bert' && r.params.get('compatible_only') === 'true');
+    expect(req.request.method).toBe('GET');
+    req.flush(mockResults);
+  });
+
+  it('should search HuggingFace models with compatible_only=false', () => {
+    const mockResults = [{ id: 'some-model', downloads: 500, likes: 10 }];
+    service.searchHuggingFaceModels('llama', false).subscribe(result => {
+      expect(result).toEqual(mockResults);
+    });
+    const req = httpMock.expectOne(r => r.url === `${BASE}/huggingface-models` && r.params.get('compatible_only') === 'false');
+    expect(req.request.method).toBe('GET');
+    req.flush(mockResults);
+  });
+
   // ── Training Jobs ─────────────────────────────────────────────────
 
   it('should presign dataset upload via POST /presign', () => {

@@ -5,8 +5,6 @@ Covers default initialization, provider auto-detection, explicit provider overri
 provider-specific config dicts, to_dict, from_params with defaults and invalid provider.
 """
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider, RetryConfig
@@ -102,22 +100,15 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    @patch("agents.main_agent.core.model_config.CacheConfig", create=True)
-    def test_bedrock_config_with_caching(self, mock_cache_cls):
-        """Req 1.6 — caching enabled → dict has model_id, temperature, cache_config."""
-        mock_cache_instance = MagicMock()
-        mock_cache_cls.return_value = mock_cache_instance
-
-        with patch.dict(
-            "sys.modules",
-            {"strands.models": MagicMock(CacheConfig=mock_cache_cls)},
-        ):
-            cfg = ModelConfig(caching_enabled=True)
-            result = cfg.to_bedrock_config()
+    def test_bedrock_config_with_caching_disabled_due_to_bedrock_limitation(self):
+        """Req 1.6 — caching_enabled=True but cache_config omitted due to
+        Bedrock limitation with non-PDF document blocks. See model_config.py TODO."""
+        cfg = ModelConfig(caching_enabled=True)
+        result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
         assert result["temperature"] == cfg.temperature
-        assert "cache_config" in result
+        assert "cache_config" not in result
 
     def test_bedrock_config_without_caching(self):
         """Req 1.6 (negative) — caching disabled → no cache_config key."""

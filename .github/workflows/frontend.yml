@@ -45,10 +45,13 @@ on:
         required: false
         default: 'false'
 
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Build and Deploy Configuration (non-sensitive, repository-level)
-  BUILD_CONFIG: production
+  BUILD_CONFIG: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production') || 'development' }}
   CDK_REQUIRE_APPROVAL: never
   WAIT_FOR_INVALIDATION: false
   # Suppress repeated config dumps from load-env.sh in CI logs

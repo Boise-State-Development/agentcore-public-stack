@@ -4,6 +4,10 @@ Tests for TurnBasedSessionManager — the core runtime loop for agent sessions.
 Covers: initialization, message helpers, truncation (Stage 1), summary injection,
 DynamoDB state persistence, LTM retrieval, initialization flow, post-turn update
 (Stage 2), session interface, and property-based tests.
+
+Architecture: TurnBasedSessionManager inherits from AgentCoreMemorySessionManager.
+Tests mock the parent's __init__ to avoid AWS calls and set up required attributes
+via the make_session_manager fixture in conftest.py.
 """
 
 import copy
@@ -59,6 +63,17 @@ class TestFixturesSmoke:
         assert "image" in make_image_message()["content"][0]
         conv = make_conversation(3)
         assert len(conv) == 6
+
+    def test_has_required_parent_attributes(self, make_session_manager):
+        """Verify the mock parent __init__ sets up all required attributes."""
+        mgr = make_session_manager()
+        assert hasattr(mgr, "config")
+        assert hasattr(mgr, "memory_client")
+        assert hasattr(mgr, "session_id")
+        assert hasattr(mgr, "_latest_agent_message")
+        assert hasattr(mgr, "_is_new_session")
+        assert hasattr(mgr, "has_existing_agent")
+        assert mgr.session_id == TEST_SESSION_ID
 
 
 # ===========================================================================
@@ -413,7 +428,7 @@ class TestGetSummarizationStrategyId:
 
     def test_discovers_from_memory_config(self, make_session_manager):
         mgr = make_session_manager()
-        mgr.base_manager.memory_client.gmcp_client.get_memory.return_value = {
+        mgr.memory_client.gmcp_client.get_memory.return_value = {
             "memory": {
                 "strategies": [
                     {"type": "EXTRACTION", "strategyId": "ext-1"},
@@ -427,14 +442,14 @@ class TestGetSummarizationStrategyId:
 
     def test_returns_none_when_no_summarization_strategy(self, make_session_manager):
         mgr = make_session_manager()
-        mgr.base_manager.memory_client.gmcp_client.get_memory.return_value = {
+        mgr.memory_client.gmcp_client.get_memory.return_value = {
             "memory": {"strategies": [{"type": "EXTRACTION", "strategyId": "ext-1"}]}
         }
         assert mgr._get_summarization_strategy_id() is None
 
     def test_returns_none_on_error(self, make_session_manager):
         mgr = make_session_manager()
-        mgr.base_manager.memory_client.gmcp_client.get_memory.side_effect = Exception("fail")
+        mgr.memory_client.gmcp_client.get_memory.side_effect = Exception("fail")
         assert mgr._get_summarization_strategy_id() is None
 
 
@@ -442,7 +457,7 @@ class TestRetrieveSessionSummaries:
 
     def test_returns_empty_when_no_strategy(self, make_session_manager):
         mgr = make_session_manager()
-        mgr.base_manager.memory_client.gmcp_client.get_memory.return_value = {
+        mgr.memory_client.gmcp_client.get_memory.return_value = {
             "memory": {"strategies": []}
         }
         assert mgr._retrieve_session_summaries() == []
@@ -503,73 +518,195 @@ class TestGenerateFallbackSummary:
         mgr = make_session_manager()
         assert mgr._generate_fallback_summary([]) is None
 
-    def test_limits_to_10_points(self, make_session_manager):
+    def test_limits_to_15_points(self, make_session_manager):
         mgr = make_session_manager()
         messages = [make_user_message(f"Topic {i}") for i in range(20)]
         summary = mgr._generate_fallback_summary(messages)
-        assert summary.count("- User asked about:") == 10
+        # Fallback summary limits key_points to last 15
+        lines = [line for line in summary.split("\n") if line.startswith("- User:")]
+        assert len(lines) == 15
 
 
 # ===========================================================================
-# Task 7 — Initialization flow
+# Task 7 — Initialization flow (SDK override)
 # ===========================================================================
 
 class TestInitialize:
+    """Test the initialize() override which handles compaction on session restore."""
 
-    def test_compaction_disabled_delegates_only(self, make_session_manager):
-        mgr = make_session_manager()
+    def _make_mock_agent(self, messages=None):
+        """Create a mock agent for initialize() tests."""
         agent = MagicMock()
-        agent.messages = [make_user_message("hi")]
-        mgr.initialize(agent)
-        mgr._mock_base.initialize.assert_called_once_with(agent)
+        agent.agent_id = "default"
+        agent.messages = messages or []
+        agent.state = MagicMock()
+        agent.conversation_manager.restore_from_session.return_value = []
+        agent.conversation_manager.removed_message_count = 0
+        return agent
 
-    def test_compaction_enabled_empty_messages(self, make_session_manager, compaction_config):
+    def _make_mock_session_agent(self):
+        """Create a mock SessionAgent for the existing-agent path."""
+        session_agent = MagicMock()
+        session_agent.state = {}
+        session_agent.conversation_manager_state = {}
+        return session_agent
+
+    def _make_mock_session_messages(self, messages):
+        """Convert raw message dicts to mock SessionMessage objects."""
+        session_messages = []
+        for msg in messages:
+            sm = MagicMock()
+            sm.to_message.return_value = msg
+            session_messages.append(sm)
+        return session_messages
+
+    def test_new_agent_creates_session(self, make_session_manager, compaction_config):
+        """When session_agent is None, should create agent and set empty compaction state."""
         mgr = make_session_manager(compaction_config=compaction_config)
-        agent = MagicMock()
-        agent.messages = []
+        mgr.read_agent = MagicMock(return_value=None)
+
+        agent = self._make_mock_agent()
         mgr.initialize(agent)
+
+        mgr.create_agent.assert_called_once()
         assert mgr.compaction_state is not None
         assert mgr.compaction_state.checkpoint == 0
+        assert mgr._valid_cutoff_indices == []
 
-    def test_compaction_no_checkpoint_applies_truncation(self, make_session_manager, compaction_config):
+    def test_existing_agent_no_compaction_loads_all_messages(self, make_session_manager):
+        """Without compaction config, should load all messages from session."""
+        mgr = make_session_manager()  # no compaction_config
+        messages = make_conversation(3)  # 6 messages
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        assert len(agent.messages) == 6
+        assert mgr.message_count == 6
+
+    def test_existing_agent_compaction_no_checkpoint(self, make_session_manager, compaction_config):
+        """Compaction enabled with checkpoint=0 should load all messages with truncation."""
         mgr = make_session_manager(compaction_config=compaction_config)
-        # Patch _load_compaction_state to return default (no checkpoint)
-        mgr._load_compaction_state = lambda: CompactionState()
-        agent = MagicMock()
-        agent.messages = [
+        mgr._load_compaction_state = MagicMock(return_value=CompactionState())
+
+        messages = [
             make_user_message("q1"),
-            make_tool_result_message("t1", "x" * 200),
+            make_assistant_message("a1"),
+            make_user_message("q2"),
+            make_tool_result_message("t1", "x" * 200),  # will be truncated
         ]
-        mgr.initialize(agent)
-        # Messages should still be length 2 (truncation doesn't remove messages)
-        assert len(agent.messages) == 2
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
 
-    def test_compaction_with_checkpoint_slices_messages(self, make_session_manager, compaction_config):
-        mgr = make_session_manager(compaction_config=compaction_config)
-        mgr._load_compaction_state = lambda: CompactionState(checkpoint=4, summary="old context")
-        agent = MagicMock()
-        agent.messages = make_conversation(4)  # 8 messages
+        agent = self._make_mock_agent()
         mgr.initialize(agent)
-        # Should have sliced from index 4 onward = 4 messages
+
+        # All 4 messages kept (checkpoint=0), but truncation applied
         assert len(agent.messages) == 4
-        # Summary should be prepended to first message
+        # Valid cutoffs cached for user text messages (indices 0, 2)
+        assert mgr._valid_cutoff_indices == [0, 2]
+
+    def test_existing_agent_compaction_with_checkpoint_slices_messages(self, make_session_manager, compaction_config):
+        """Checkpoint > 0 should skip old messages and prepend summary."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(checkpoint=4, summary="old context")
+        )
+
+        messages = make_conversation(4)  # 8 messages
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        # Should slice from index 4: 4 messages remain
+        assert len(agent.messages) == 4
+        # Summary prepended to first user message
         first_text = agent.messages[0]["content"][0]["text"]
         assert "old context" in first_text
+        assert "<conversation_summary>" in first_text
 
-    def test_compaction_checkpoint_plus_truncation(self, make_session_manager, compaction_config):
+    def test_existing_agent_compaction_checkpoint_plus_truncation(self, make_session_manager, compaction_config):
+        """Both checkpoint slicing and truncation should apply."""
         mgr = make_session_manager(compaction_config=compaction_config)
-        mgr._load_compaction_state = lambda: CompactionState(checkpoint=2)
-        agent = MagicMock()
-        # Build messages where post-checkpoint messages have truncatable content
-        agent.messages = [
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(checkpoint=2)
+        )
+
+        messages = [
             make_user_message("old1"),
             make_assistant_message("old2"),
             make_user_message("new1"),
-            make_tool_result_message("t1", "r" * 200),
+            make_tool_result_message("t1", "r" * 200),  # truncatable
         ]
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
         mgr.initialize(agent)
+
         # Sliced from index 2: 2 messages remain
         assert len(agent.messages) == 2
+
+    def test_duplicate_agent_id_raises(self, make_session_manager):
+        """Second initialize with same agent_id should raise SessionException."""
+        from strands.types.exceptions import SessionException
+
+        mgr = make_session_manager()
+        mgr.read_agent = MagicMock(return_value=None)
+        agent = self._make_mock_agent()
+
+        mgr.initialize(agent)
+
+        with pytest.raises(SessionException, match="unique"):
+            mgr.initialize(agent)
+
+    def test_sets_has_existing_agent_flag(self, make_session_manager):
+        """initialize() should mark has_existing_agent = True."""
+        mgr = make_session_manager()
+        mgr.read_agent = MagicMock(return_value=None)
+        agent = self._make_mock_agent()
+
+        assert mgr.has_existing_agent is False
+        mgr.initialize(agent)
+        assert mgr.has_existing_agent is True
+
+    def test_sets_is_new_session_false(self, make_session_manager):
+        """initialize() should mark _is_new_session = False."""
+        mgr = make_session_manager()
+        mgr.read_agent = MagicMock(return_value=None)
+        agent = self._make_mock_agent()
+
+        mgr.initialize(agent)
+        assert mgr._is_new_session is False
+
+    def test_caches_all_messages_for_summary(self, make_session_manager, compaction_config):
+        """Compaction path should cache shallow copies of all messages for summary generation."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr._load_compaction_state = MagicMock(return_value=CompactionState())
+
+        messages = make_conversation(3)
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        # Should have cached 6 messages for summary generation
+        assert len(mgr._all_messages_for_summary) == 6
 
 
 # ===========================================================================
@@ -601,14 +738,15 @@ class TestUpdateAfterTurn:
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
-        # Return 5 turns of messages (10 messages) as dicts
+        # Simulate 5 turns cached during initialize
         messages = make_conversation(5)
-        mgr._mock_base.list_messages.return_value = messages
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]  # 5 user message indices
+        mgr._all_messages_for_summary = messages
 
         await mgr.update_after_turn(2000)  # above 1000 threshold
 
-        # With 5 turns and protected_turns=2, checkpoint should be at turn 3 start (index 6)
-        assert mgr.compaction_state.checkpoint == 6
+        # With 5 turns and protected_turns=3, checkpoint should be at turn 2 start (index 4)
+        assert mgr.compaction_state.checkpoint == 4
         assert mgr.compaction_state.last_input_tokens == 2000
 
     @pytest.mark.asyncio
@@ -617,24 +755,51 @@ class TestUpdateAfterTurn:
         mgr.compaction_state = CompactionState()
         mgr._save_compaction_state = MagicMock()
 
-        # Only 2 turns = protected_turns, so no compaction possible
-        mgr._mock_base.list_messages.return_value = make_conversation(2)
+        # Only 3 turns = protected_turns, so no compaction possible
+        mgr._valid_cutoff_indices = [0, 2, 4]
 
         await mgr.update_after_turn(2000)
         assert mgr.compaction_state.checkpoint == 0
 
     @pytest.mark.asyncio
-    async def test_checkpoint_unchanged_no_update(self, make_session_manager, compaction_config):
+    async def test_empty_cutoff_indices_skips_checkpoint(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
-        mgr.compaction_state = CompactionState(checkpoint=6)
+        mgr.compaction_state = CompactionState()
         mgr._save_compaction_state = MagicMock()
 
-        # Same 5 turns — checkpoint would be 6 again, same as current
-        mgr._mock_base.list_messages.return_value = make_conversation(5)
+        mgr._valid_cutoff_indices = []  # no valid cutoffs (e.g., new session)
 
         await mgr.update_after_turn(2000)
-        # Checkpoint should remain 6 (no update)
-        assert mgr.compaction_state.checkpoint == 6
+        assert mgr.compaction_state.checkpoint == 0
+        mgr._save_compaction_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_unchanged_no_update(self, make_session_manager, compaction_config):
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(checkpoint=4)
+        mgr._save_compaction_state = MagicMock()
+
+        # 5 turns — checkpoint would be at index 4 again, same as current
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
+
+        await mgr.update_after_turn(2000)
+        # Checkpoint should remain 4 (no update)
+        assert mgr.compaction_state.checkpoint == 4
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_advances_when_more_turns(self, make_session_manager, compaction_config):
+        """New turns should advance the checkpoint."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(checkpoint=4)
+        mgr._save_compaction_state = MagicMock()
+        mgr._retrieve_session_summaries = MagicMock(return_value=["Updated summary"])
+
+        # 6 turns now — checkpoint should advance
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8, 10]
+        mgr._all_messages_for_summary = make_conversation(6)
+
+        await mgr.update_after_turn(2000)
+        assert mgr.compaction_state.checkpoint == 6  # [-3] = index 6
 
     @pytest.mark.asyncio
     async def test_uses_ltm_summaries_when_available(self, make_session_manager, compaction_config):
@@ -643,7 +808,8 @@ class TestUpdateAfterTurn:
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=["LTM summary 1", "LTM summary 2"])
 
-        mgr._mock_base.list_messages.return_value = make_conversation(5)
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
+        mgr._all_messages_for_summary = make_conversation(5)
 
         await mgr.update_after_turn(2000)
         assert "LTM summary 1" in mgr.compaction_state.summary
@@ -656,33 +822,12 @@ class TestUpdateAfterTurn:
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
-        mgr._mock_base.list_messages.return_value = make_conversation(5)
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
+        mgr._all_messages_for_summary = make_conversation(5)
 
         await mgr.update_after_turn(2000)
         assert mgr.compaction_state.summary is not None
-        assert "Previous conversation topics" in mgr.compaction_state.summary
-
-    @pytest.mark.asyncio
-    async def test_message_fetch_failure_graceful(self, make_session_manager, compaction_config):
-        mgr = make_session_manager(compaction_config=compaction_config)
-        mgr.compaction_state = CompactionState()
-        mgr._save_compaction_state = MagicMock()
-        mgr._mock_base.list_messages.side_effect = Exception("network error")
-
-        await mgr.update_after_turn(2000)
-        # Should save state and not raise
-        mgr._save_compaction_state.assert_called_once()
-        assert mgr.compaction_state.checkpoint == 0
-
-    @pytest.mark.asyncio
-    async def test_no_messages_skips_checkpoint(self, make_session_manager, compaction_config):
-        mgr = make_session_manager(compaction_config=compaction_config)
-        mgr.compaction_state = CompactionState()
-        mgr._save_compaction_state = MagicMock()
-        mgr._mock_base.list_messages.return_value = []
-
-        await mgr.update_after_turn(2000)
-        assert mgr.compaction_state.checkpoint == 0
+        assert "Previous conversation" in mgr.compaction_state.summary
 
     @pytest.mark.asyncio
     async def test_initializes_compaction_state_if_none(self, make_session_manager, compaction_config):
@@ -713,94 +858,192 @@ class TestFlush:
 
 class TestAppendMessage:
 
-    def test_delegates_and_increments(self, make_session_manager):
+    def test_increments_message_count(self, make_session_manager):
         mgr = make_session_manager()
         agent = MagicMock()
         msg = {"role": "user", "content": [{"text": "hi"}]}
-        mgr.append_message(msg, agent)
-        mgr._mock_base.append_message.assert_called_once_with(msg, agent)
+        with patch(
+            "agents.main_agent.session.turn_based_session_manager.AgentCoreMemorySessionManager.append_message"
+        ):
+            mgr.append_message(msg, agent)
         assert mgr.message_count == 1
 
-    def test_cancelled_skips_delegation(self, make_session_manager):
+    def test_cancelled_skips(self, make_session_manager):
         mgr = make_session_manager()
         mgr.cancelled = True
         agent = MagicMock()
         msg = {"role": "user", "content": [{"text": "hi"}]}
         mgr.append_message(msg, agent)
-        mgr._mock_base.append_message.assert_not_called()
         assert mgr.message_count == 0
 
     def test_increments_multiple_times(self, make_session_manager):
         mgr = make_session_manager()
         agent = MagicMock()
-        for i in range(3):
-            mgr.append_message({"role": "user", "content": [{"text": f"m{i}"}]}, agent)
+        with patch(
+            "agents.main_agent.session.turn_based_session_manager.AgentCoreMemorySessionManager.append_message"
+        ):
+            for i in range(3):
+                mgr.append_message({"role": "user", "content": [{"text": f"m{i}"}]}, agent)
         assert mgr.message_count == 3
 
-
-class TestRegisterHooks:
-
-    def test_registers_all_event_types(self, make_session_manager):
+    def test_filters_empty_text_blocks(self, make_session_manager):
         mgr = make_session_manager()
-        registry = MagicMock()
-        mgr.register_hooks(registry)
+        agent = MagicMock()
+        msg = {"role": "user", "content": [{"text": "  "}]}  # whitespace-only
+        mgr.append_message(msg, agent)
+        # Empty after filtering — should not increment
+        assert mgr.message_count == 0
 
-        # Should have 5 add_callback calls:
-        # AgentInitializedEvent, MessageAddedEvent (append), MessageAddedEvent (sync),
-        # AfterInvocationEvent (sync), MessageAddedEvent (LTM)
-        assert registry.add_callback.call_count == 5
-
-    def test_init_hook_calls_our_initialize(self, make_session_manager):
+    def test_keeps_tool_use_blocks(self, make_session_manager):
         mgr = make_session_manager()
-        registry = MagicMock()
-        mgr.register_hooks(registry)
+        agent = MagicMock()
+        msg = make_tool_use_message("t1", "calc", {"x": 1})
+        with patch(
+            "agents.main_agent.session.turn_based_session_manager.AgentCoreMemorySessionManager.append_message"
+        ):
+            mgr.append_message(msg, agent)
+        assert mgr.message_count == 1
 
-        # First callback registered is for AgentInitializedEvent
-        first_call = registry.add_callback.call_args_list[0]
-        callback = first_call[0][1]
 
-        # Simulate the event
-        event = MagicMock()
-        event.agent = MagicMock()
-        event.agent.messages = []
+class TestFilterEmptyText:
 
-        with patch.object(mgr, "initialize") as mock_init:
-            callback(event)
-            mock_init.assert_called_once_with(event.agent)
-
-    def test_message_hook_calls_our_append(self, make_session_manager):
+    def test_removes_empty_text_blocks(self, make_session_manager):
         mgr = make_session_manager()
-        registry = MagicMock()
-        mgr.register_hooks(registry)
+        msg = {"role": "user", "content": [{"text": ""}, {"text": "keep"}]}
+        result = mgr._filter_empty_text(msg)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["text"] == "keep"
 
-        # Second callback is MessageAddedEvent -> append_message
-        second_call = registry.add_callback.call_args_list[1]
-        callback = second_call[0][1]
-
-        event = MagicMock()
-        event.message = {"role": "user", "content": [{"text": "hi"}]}
-        event.agent = MagicMock()
-
-        with patch.object(mgr, "append_message") as mock_append:
-            callback(event)
-            mock_append.assert_called_once_with(event.message, event.agent)
-
-
-class TestGetattr:
-
-    def test_delegates_unknown_attributes(self, make_session_manager):
+    def test_removes_whitespace_only_text(self, make_session_manager):
         mgr = make_session_manager()
-        mgr._mock_base.some_method.return_value = "delegated"
-        assert mgr.some_method() == "delegated"
+        msg = {"role": "user", "content": [{"text": "   \n  "}]}
+        result = mgr._filter_empty_text(msg)
+        assert len(result["content"]) == 0
 
-    def test_delegates_unknown_property(self, make_session_manager):
+    def test_keeps_non_text_blocks(self, make_session_manager):
         mgr = make_session_manager()
-        mgr._mock_base.some_prop = 42
-        assert mgr.some_prop == 42
+        msg = {"role": "assistant", "content": [
+            {"text": ""},
+            {"toolUse": {"toolUseId": "t1", "name": "calc", "input": {}}},
+        ]}
+        result = mgr._filter_empty_text(msg)
+        assert len(result["content"]) == 1
+        assert "toolUse" in result["content"][0]
+
+    def test_no_content_key_unchanged(self, make_session_manager):
+        mgr = make_session_manager()
+        msg = {"role": "user"}
+        assert mgr._filter_empty_text(msg) == msg
+
+    def test_non_list_content_unchanged(self, make_session_manager):
+        mgr = make_session_manager()
+        msg = {"role": "user", "content": "string"}
+        assert mgr._filter_empty_text(msg) == msg
 
 
 # ===========================================================================
-# Task 10 — Property-based tests
+# Task 10 — End-to-end compaction lifecycle
+# ===========================================================================
+
+class TestCompactionLifecycle:
+    """Integration-style tests that exercise the full init → stream → update cycle."""
+
+    def _make_mock_agent(self, messages=None):
+        agent = MagicMock()
+        agent.agent_id = "default"
+        agent.messages = messages or []
+        agent.state = MagicMock()
+        agent.conversation_manager.restore_from_session.return_value = []
+        agent.conversation_manager.removed_message_count = 0
+        return agent
+
+    def _make_mock_session_messages(self, messages):
+        session_messages = []
+        for msg in messages:
+            sm = MagicMock()
+            sm.to_message.return_value = msg
+            session_messages.append(sm)
+        return session_messages
+
+    def _make_mock_session_agent(self):
+        session_agent = MagicMock()
+        session_agent.state = {}
+        session_agent.conversation_manager_state = {}
+        return session_agent
+
+    @pytest.mark.asyncio
+    async def test_turn1_new_session_no_checkpoint(self, make_session_manager, compaction_config):
+        """Turn 1: New session — no messages, no checkpoint."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.read_agent = MagicMock(return_value=None)
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        assert mgr._valid_cutoff_indices == []
+        assert mgr.compaction_state.checkpoint == 0
+
+        # Simulate under-threshold turn
+        mgr._save_compaction_state = MagicMock()
+        await mgr.update_after_turn(500)
+        assert mgr.compaction_state.checkpoint == 0
+
+    @pytest.mark.asyncio
+    async def test_turn6_creates_checkpoint(self, make_session_manager, compaction_config):
+        """Turn 6: Enough turns to create a checkpoint (>3 protected)."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr._load_compaction_state = MagicMock(return_value=CompactionState())
+        mgr._retrieve_session_summaries = MagicMock(return_value=["Session summary"])
+
+        # Simulate 5 prior turns of history
+        messages = make_conversation(5)  # 10 messages
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        # Verify cutoff indices cached
+        assert mgr._valid_cutoff_indices == [0, 2, 4, 6, 8]
+
+        # Simulate above-threshold turn
+        mgr._save_compaction_state = MagicMock()
+        await mgr.update_after_turn(2000)
+
+        # 5 cutoffs, protected=3 → checkpoint at [-3] = index 4
+        assert mgr.compaction_state.checkpoint == 4
+        assert "Session summary" in mgr.compaction_state.summary
+
+    @pytest.mark.asyncio
+    async def test_turn5_applies_checkpoint(self, make_session_manager, compaction_config):
+        """Turn 5: Checkpoint was set — messages should be sliced."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr._load_compaction_state = MagicMock(
+            return_value=CompactionState(checkpoint=4, summary="Prior discussion summary")
+        )
+
+        messages = make_conversation(5)  # 10 messages
+        session_agent = self._make_mock_session_agent()
+        mgr.read_agent = MagicMock(return_value=session_agent)
+        mgr.list_messages = MagicMock(return_value=self._make_mock_session_messages(messages))
+        mgr._is_new_session = False
+
+        agent = self._make_mock_agent()
+        mgr.initialize(agent)
+
+        # Messages 0-3 skipped (checkpoint=4), messages 4-9 kept = 6 messages
+        assert len(agent.messages) == 6
+        # Summary prepended to first message
+        first_text = agent.messages[0]["content"][0]["text"]
+        assert "Prior discussion summary" in first_text
+        # original=10, final=6 (compaction working!)
+        assert mgr._total_message_count_at_init == 10
+
+
+# ===========================================================================
+# Task 11 — Property-based tests
 # ===========================================================================
 
 try:

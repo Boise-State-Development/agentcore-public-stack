@@ -243,6 +243,7 @@ class CreateJobRequest(BaseModel):
     instance_type: Optional[str] = None
     hyperparameters: Optional[Dict[str, str]] = None
     max_runtime_seconds: int = Field(default=86400, le=432000, gt=0)
+    custom_huggingface_model_id: Optional[str] = None
 
 
 class JobResponse(BaseModel):

@@ -121,13 +121,13 @@ def create_external_mcp_client(
 
     tool_id = tool_definition.tool_id if tool_definition else "unknown"
     requires_oauth = tool_definition.requires_oauth_provider if tool_definition else None
+    has_token = bool(oauth_token)
     logger.info(f"Creating external MCP client for tool: {tool_id}")
-    logger.info(f"  Server URL: {config.server_url}")
-    logger.info(f"  Transport: {config.transport}")
-    logger.info(f"  Auth Type: {config.auth_type}")
+    logger.debug(f"  Transport: {config.transport}")
+    logger.debug(f"  Auth Type: {config.auth_type}")
     if requires_oauth:
-        logger.info(f"  Requires OAuth Provider: {requires_oauth}")
-        logger.info(f"  OAuth Token Provided: {bool(oauth_token)}")
+        logger.debug("  Requires OAuth Provider: yes")
+        logger.debug(f"  OAuth Token Provided: {has_token}")
 
     try:
         # Build list of auth handlers (may combine multiple)
@@ -140,7 +140,7 @@ def create_external_mcp_client(
         if oauth_token:
             oauth_auth = create_oauth_bearer_auth(token=oauth_token)
             auth_handlers.append(oauth_auth)
-            logger.info("  Using OAuth Bearer token auth (skipping SigV4)")
+            logger.debug("  Using OAuth Bearer token auth (skipping SigV4)")
 
         # AWS IAM SigV4 authentication (for Lambda/API Gateway without OAuth)
         elif config.auth_type == MCPAuthType.AWS_IAM or config.auth_type == "aws-iam":
@@ -156,7 +156,7 @@ def create_external_mcp_client(
 
             sigv4_auth = get_sigv4_auth(service=service, region=region)
             auth_handlers.append(sigv4_auth)
-            logger.info(f"  Using AWS IAM SigV4 auth for service: {service}, region: {region}")
+            logger.debug(f"  Using AWS IAM SigV4 auth for service: {service}, region: {region}")
 
         elif config.auth_type == MCPAuthType.API_KEY or config.auth_type == "api-key":
             # API key authentication would be handled via headers
@@ -174,7 +174,7 @@ def create_external_mcp_client(
             auth = auth_handlers[0]
         elif len(auth_handlers) > 1:
             auth = CompositeAuth(*auth_handlers)
-            logger.info(f"  Using composite auth with {len(auth_handlers)} handlers")
+            logger.debug(f"  Using composite auth with {len(auth_handlers)} handlers")
 
         # Create the MCP client based on transport type
         transport = config.transport

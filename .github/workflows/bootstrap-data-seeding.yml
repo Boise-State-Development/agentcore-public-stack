@@ -1,5 +1,8 @@
 name: "6. Seed Bootstrap Data"
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

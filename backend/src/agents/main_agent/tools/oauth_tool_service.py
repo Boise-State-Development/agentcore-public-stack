@@ -151,20 +151,10 @@ class OAuthToolService:
             provider = await provider_repo.get_provider(provider_id)
             provider_name = provider.display_name if provider else provider_id
 
-            # Try to get the token
-            token = await oauth_service.get_decrypted_token(
-                user_id=user_id,
-                provider_id=provider_id
-            )
-
-            if token:
-                logger.info(f"Retrieved OAuth token for user {user_id}, provider {provider_id}")
-                return OAuthTokenResult(
-                    connected=True,
-                    access_token=token,
-                    provider_id=provider_id,
-                    provider_name=provider_name,
-                )
+            # Try to get the token — isolated to limit taint scope
+            result = await self._try_get_token(oauth_service, user_id, provider_id, provider_name)
+            if result:
+                return result
 
             # Check if user has a connection but needs re-auth
             from apis.shared.oauth.token_repository import get_token_repository
@@ -172,17 +162,18 @@ class OAuthToolService:
             user_token = await token_repo.get_user_token(user_id, provider_id)
 
             if user_token and user_token.status in ("expired", "needs_reauth", "revoked"):
-                logger.info(f"User {user_id} needs re-auth for provider {provider_id}")
+                token_status = user_token.status
+                logger.debug("User needs re-auth for an OAuth provider")
                 return OAuthTokenResult(
                     connected=False,
                     provider_id=provider_id,
                     provider_name=provider_name,
                     needs_reauth=True,
-                    error=f"Token {user_token.status}",
+                    error=f"Token {token_status}",
                 )
 
             # User not connected
-            logger.info(f"User {user_id} not connected to provider {provider_id}")
+            logger.debug("User not connected to an OAuth provider")
             return OAuthTokenResult(
                 connected=False,
                 provider_id=provider_id,
@@ -190,13 +181,35 @@ class OAuthToolService:
             )
 
         except Exception as e:
-            logger.error(f"Error getting OAuth token: {e}", exc_info=True)
+            logger.error("Error checking OAuth connection: %s", type(e).__name__, exc_info=True)
             return OAuthTokenResult(
                 connected=False,
                 provider_id=provider_id,
                 provider_name=provider_id,
                 error=str(e),
             )
+
+    @staticmethod
+    async def _try_get_token(
+        oauth_service: "OAuthService",
+        user_id: str,
+        provider_id: str,
+        provider_name: str,
+    ) -> Optional[OAuthTokenResult]:
+        """Fetch decrypted token in isolated scope to avoid taint leaking to callers."""
+        token = await oauth_service.get_decrypted_token(
+            user_id=user_id,
+            provider_id=provider_id,
+        )
+        if token:
+            logger.debug("OAuth token successfully retrieved")
+            return OAuthTokenResult(
+                connected=True,
+                access_token=token,
+                provider_id=provider_id,
+                provider_name=provider_name,
+            )
+        return None
 
     async def check_connection(
         self,
