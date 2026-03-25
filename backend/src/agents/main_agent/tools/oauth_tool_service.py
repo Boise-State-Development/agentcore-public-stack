@@ -163,7 +163,7 @@ class OAuthToolService:
 
             if user_token and user_token.status in ("expired", "needs_reauth", "revoked"):
                 token_status = user_token.status
-                logger.debug("User needs re-auth for provider %s", provider_id)
+                logger.debug("User needs re-auth for an OAuth provider")
                 return OAuthTokenResult(
                     connected=False,
                     provider_id=provider_id,
