@@ -126,7 +126,7 @@ def create_external_mcp_client(
     logger.debug(f"  Transport: {config.transport}")
     logger.debug(f"  Auth Type: {config.auth_type}")
     if requires_oauth:
-        logger.debug(f"  Requires OAuth Provider: {requires_oauth}")
+        logger.debug("  Requires OAuth Provider: yes")
         logger.debug(f"  OAuth Token Provided: {has_token}")
 
     try:
