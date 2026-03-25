@@ -195,7 +195,7 @@ export class PreviewChatService {
       if (!runtimeEndpointUrl) {
         throw new Error('Inference API URL not configured. Please check your configuration.');
       }
-      const url = `${runtimeEndpointUrl}?qualifier=DEFAULT`;
+      const url = `${runtimeEndpointUrl}/invocations?qualifier=DEFAULT`;
 
       // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
       // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
