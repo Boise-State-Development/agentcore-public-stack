@@ -798,6 +798,78 @@ export class InferenceApiStack extends cdk.Stack {
     const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
 
     // ============================================================
+    // Import SSM Parameters for Runtime Environment Variables
+    // ============================================================
+
+    // DynamoDB table names (the ARNs are already imported above for IAM)
+    const usersTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/users/users-table-name`
+    );
+    const appRolesTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/rbac/app-roles-table-name`
+    );
+    const oidcStateTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/auth/oidc-state-table-name`
+    );
+    const apiKeysTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/auth/api-keys-table-name`
+    );
+    const oauthProvidersTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/oauth/providers-table-name`
+    );
+    const oauthUserTokensTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/oauth/user-tokens-table-name`
+    );
+    const assistantsTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/rag/assistants-table-name`
+    );
+    const userQuotasTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/quota/user-quotas-table-name`
+    );
+    const quotaEventsTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/quota/quota-events-table-name`
+    );
+    const sessionsMetadataTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/cost-tracking/sessions-metadata-table-name`
+    );
+    const userCostSummaryTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/cost-tracking/user-cost-summary-table-name`
+    );
+    const systemCostRollupTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/cost-tracking/system-cost-rollup-table-name`
+    );
+    const managedModelsTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/admin/managed-models-table-name`
+    );
+    const userSettingsTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/settings/user-settings-table-name`
+    );
+    const authProvidersTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/auth/auth-providers-table-name`
+    );
+    const userFilesTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/user-file-uploads/table-name`
+    );
+
+    // S3 / RAG
+    const vectorBucketName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/rag/vector-bucket-name`
+    );
+    const vectorIndexName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/rag/vector-index-name`
+    );
+
+    // Gateway URL
+    const gatewayUrl = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/gateway/url`
+    );
+
+    // Frontend CORS origins
+    const corsOrigins = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/frontend/cors-origins`
+    );
+
+    // ============================================================
     // Single CDK-Managed AgentCore Runtime with Cognito JWT Authorizer
     // ============================================================
 
@@ -820,6 +892,63 @@ export class InferenceApiStack extends cdk.Stack {
       },
       requestHeaderConfiguration: {
         requestHeaderAllowlist: ['Authorization'],
+      },
+      environmentVariables: {
+        // Basic configuration
+        LOG_LEVEL: 'INFO',
+        PROJECT_PREFIX: config.projectPrefix,
+        AWS_DEFAULT_REGION: config.awsRegion,
+
+        // DynamoDB tables
+        DYNAMODB_USERS_TABLE_NAME: usersTableName,
+        DYNAMODB_APP_ROLES_TABLE_NAME: appRolesTableName,
+        DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTableName,
+        DYNAMODB_API_KEYS_TABLE_NAME: apiKeysTableName,
+        DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
+        DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: oauthUserTokensTableName,
+        DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTableName,
+
+        // Quota & cost tracking tables
+        DYNAMODB_QUOTA_TABLE: userQuotasTableName,
+        DYNAMODB_QUOTA_EVENTS_TABLE: quotaEventsTableName,
+        DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTableName,
+        DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTableName,
+        DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTableName,
+        DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
+        DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
+        DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
+
+        // Auth providers
+        DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
+        AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
+
+        // OAuth configuration
+        OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
+        OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
+
+        // AgentCore resources
+        AGENTCORE_MEMORY_ID: this.memory.attrMemoryId,
+        MEMORY_ARN: this.memory.attrMemoryArn,
+        AGENTCORE_CODE_INTERPRETER_ID: this.codeInterpreter.attrCodeInterpreterId,
+        BROWSER_ID: this.browser.attrBrowserId,
+        GATEWAY_URL: gatewayUrl,
+
+        // S3 storage
+        S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
+        S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,
+
+        // Authentication
+        ENABLE_AUTHENTICATION: 'true',
+        ENABLE_QUOTA_ENFORCEMENT: 'true',
+
+        // Directories
+        UPLOAD_DIR: '/tmp/uploads',
+        OUTPUT_DIR: '/tmp/output',
+        GENERATED_IMAGES_DIR: '/tmp/generated_images',
+
+        // URLs
+        FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
+        CORS_ORIGINS: corsOrigins,
       },
     });
     this.runtime.node.addDependency(runtimeExecutionRole);
