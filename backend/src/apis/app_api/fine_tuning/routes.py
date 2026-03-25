@@ -7,7 +7,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.shared.auth import User
 from apis.shared.auth.dependencies import get_current_user
@@ -84,6 +85,101 @@ async def list_models(
 
 
 # =========================================================================
+# HuggingFace Model Search (proxy)
+# =========================================================================
+
+# Pipeline tags compatible with AutoModelForSequenceClassification
+COMPATIBLE_PIPELINE_TAGS = [
+    "fill-mask",
+    "text-classification",
+    "feature-extraction",
+    "token-classification",
+    "text-generation",
+]
+
+
+@router.get("/huggingface-models")
+async def search_huggingface_models(
+    search: str = Query(..., min_length=2, max_length=200),
+    compatible_only: bool = Query(True),
+    grant: dict = Depends(require_fine_tuning_access),
+):
+    """Search HuggingFace Hub models. Proxied to avoid CORS issues.
+
+    When compatible_only=True (default), makes parallel requests for each
+    compatible pipeline_tag and merges results sorted by downloads.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if compatible_only:
+                # Query each compatible pipeline_tag in parallel
+                import asyncio
+
+                async def _fetch_tag(tag: str):
+                    resp = await client.get(
+                        "https://huggingface.co/api/models",
+                        params={
+                            "search": search,
+                            "pipeline_tag": tag,
+                            "library": "transformers",
+                            "limit": 5,
+                            "sort": "downloads",
+                            "direction": "-1",
+                        },
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+
+                results = await asyncio.gather(
+                    *[_fetch_tag(tag) for tag in COMPATIBLE_PIPELINE_TAGS],
+                    return_exceptions=True,
+                )
+
+                # Merge, deduplicate, and sort by downloads
+                seen = set()
+                models = []
+                for result in results:
+                    if isinstance(result, Exception):
+                        continue
+                    for m in result:
+                        mid = m.get("id", "")
+                        if mid and mid not in seen:
+                            seen.add(mid)
+                            models.append(m)
+                models.sort(key=lambda m: m.get("downloads", 0), reverse=True)
+                models = models[:15]
+            else:
+                response = await client.get(
+                    "https://huggingface.co/api/models",
+                    params={
+                        "search": search,
+                        "limit": 15,
+                        "sort": "downloads",
+                        "direction": "-1",
+                    },
+                )
+                response.raise_for_status()
+                models = response.json()
+
+        return [
+            {
+                "id": m.get("id", ""),
+                "downloads": m.get("downloads", 0),
+                "likes": m.get("likes", 0),
+                "pipeline_tag": m.get("pipeline_tag"),
+                "library_name": m.get("library_name"),
+                "author": m.get("author"),
+                "model_type": (m.get("config") or {}).get("model_type"),
+            }
+            for m in models
+            if m.get("id")
+        ]
+    except httpx.HTTPError as e:
+        logger.warning(f"HuggingFace API search failed: {e}")
+        raise HTTPException(status_code=502, detail="Failed to search HuggingFace models")
+
+
+# =========================================================================
 # Presigned URL
 # =========================================================================
 
@@ -131,10 +227,16 @@ async def create_job(
     script_service: ScriptPackagingService = Depends(get_script_packaging_service),
 ):
     """Create a new fine-tuning training job."""
-    # Validate model
+    # Validate model — either from catalog or custom HuggingFace model
     model = MODEL_CATALOG.get(request.model_id)
-    if not model:
+    if not model and not request.custom_huggingface_model_id:
         raise HTTPException(status_code=400, detail=f"Unknown model_id: {request.model_id}")
+
+    if request.custom_huggingface_model_id:
+        # Validate the custom HuggingFace model ID format (org/model or just model)
+        hf_id = request.custom_huggingface_model_id.strip()
+        if not hf_id or len(hf_id) > 200:
+            raise HTTPException(status_code=400, detail="Invalid HuggingFace model ID.")
 
     # Verify dataset exists in S3
     if not s3_service.check_object_exists(request.dataset_s3_key):
@@ -149,11 +251,29 @@ async def create_job(
         )
 
     # Resolve instance type and hyperparameters
-    instance_type = request.instance_type or model.default_instance_type
-    hyperparameters = {**model.default_hyperparameters}
+    if model:
+        instance_type = request.instance_type or model.default_instance_type
+        hyperparameters = {**model.default_hyperparameters}
+        model_name = model.model_name
+        huggingface_id = model.huggingface_model_id
+    else:
+        # Custom HuggingFace model — use sensible defaults
+        instance_type = request.instance_type or "ml.g5.xlarge"
+        hyperparameters = {
+            "epochs": "3",
+            "per_device_train_batch_size": "8",
+            "learning_rate": "2e-5",
+            "weight_decay": "0.01",
+            "split_ratio": "0.8",
+            "seed": "42",
+            "context_length": "512",
+        }
+        huggingface_id = request.custom_huggingface_model_id.strip()
+        model_name = huggingface_id
+
     if request.hyperparameters:
         hyperparameters.update(request.hyperparameters)
-    hyperparameters["model_name_or_path"] = model.huggingface_model_id
+    hyperparameters["model_name_or_path"] = huggingface_id
 
     # Generate identifiers
     job_id = uuid.uuid4().hex
@@ -182,7 +302,7 @@ async def create_job(
         email=user.email,
         job_id=job_id,
         model_id=request.model_id,
-        model_name=model.model_name,
+        model_name=model_name,
         dataset_s3_key=request.dataset_s3_key,
         instance_type=instance_type,
         hyperparameters=hyperparameters,

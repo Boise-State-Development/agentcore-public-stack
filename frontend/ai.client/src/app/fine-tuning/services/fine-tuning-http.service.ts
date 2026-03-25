@@ -16,6 +16,7 @@ import {
   TrainedModelResponse,
   LogsResponse,
   DownloadResponse,
+  HuggingFaceModelResult,
 } from '../models/fine-tuning.models';
 
 /**
@@ -42,6 +43,16 @@ export class FineTuningHttpService {
   /** List available base models for fine-tuning. */
   listModels(): Observable<AvailableModel[]> {
     return this.http.get<AvailableModel[]>(`${this.baseUrl()}/models`);
+  }
+
+  // ── HuggingFace Model Search ────────────────────────────────────────
+
+  /** Search HuggingFace Hub models via backend proxy. */
+  searchHuggingFaceModels(query: string, compatibleOnly: boolean = true): Observable<HuggingFaceModelResult[]> {
+    return this.http.get<HuggingFaceModelResult[]>(
+      `${this.baseUrl()}/huggingface-models`,
+      { params: { search: query, compatible_only: compatibleOnly.toString() } },
+    );
   }
 
   // ── Training Jobs ───────────────────────────────────────────────────
