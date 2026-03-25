@@ -173,7 +173,7 @@ class OAuthToolService:
                 )
 
             # User not connected
-            logger.debug("User not connected to provider %s", provider_id)
+            logger.debug("User not connected to an OAuth provider")
             return OAuthTokenResult(
                 connected=False,
                 provider_id=provider_id,
