@@ -117,6 +117,7 @@ class MessageMetadata(BaseModel):
     attribution: Optional[Attribution] = Field(None, description="Attribution for cost tracking and billing")
     cost: Optional[float] = Field(None, description="Total cost in USD for this message (computed from token usage and pricing)")
     citations: Optional[List[Dict[str, str]]] = Field(None, description="RAG citations for this message (stored as dicts for flexible JSON storage)")
+    display_text: Optional[str] = Field(None, alias="displayText", description="Original user message text before RAG augmentation (for clean UI display)")
     # Note: Feedback will be added in future implementation
     # feedback: Optional[Feedback] = None
 

@@ -395,6 +395,7 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
                 augmented_message,  # Use augmented message if assistant RAG was applied
                 session_id=request.session_id,
                 files=files_to_send if files_to_send else None,
+                original_message=request.message if augmented_message != request.message else None,
             )
 
             try:

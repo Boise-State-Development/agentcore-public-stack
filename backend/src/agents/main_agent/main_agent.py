@@ -269,7 +269,7 @@ class MainAgent:
         return hooks
 
     async def stream_async(
-        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None
+        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses
@@ -279,6 +279,7 @@ class MainAgent:
             session_id: Session identifier (defaults to instance session_id)
             files: Optional list of FileContent objects (with base64 bytes)
             citations: Optional list of citation dicts from RAG retrieval
+            original_message: Original user message before RAG augmentation (for clean UI display)
 
         Yields:
             str: SSE formatted events
@@ -299,6 +300,7 @@ class MainAgent:
             user_id=self.user_id,
             main_agent_wrapper=self,  # Pass wrapper for metadata extraction
             citations=citations,  # Pass citations for storage
+            original_message=original_message,  # Pass original message for display text
         ):
             yield event
 

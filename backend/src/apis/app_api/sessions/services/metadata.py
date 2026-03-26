@@ -685,11 +685,11 @@ async def get_all_message_metadata(session_id: str, user_id: str) -> Dict[str, A
 
 async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_name: str) -> Dict[str, Any]:
     """
-    Retrieve all message metadata (cost records) for a session from DynamoDB
+    Retrieve all message metadata (cost records + display text) for a session from DynamoDB
 
-    Uses the SessionLookupIndex GSI to query cost records by session ID.
-    Cost records have SK pattern: C#{timestamp}#{uuid}
-    GSI pattern: GSI_PK=SESSION#{session_id}, GSI_SK=C#{timestamp}
+    Uses the SessionLookupIndex GSI to query records by session ID.
+    Cost records have SK pattern: C#{timestamp}#{uuid}, GSI_SK: C#{timestamp}
+    Display text records have SK pattern: D#{session_id}#{message_id}, GSI_SK: D#{message_id}
 
     Args:
         session_id: Session identifier
@@ -708,18 +708,21 @@ async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_n
 
         logger.info(f"🔍 Querying cost records via GSI for session {session_id}")
 
-        # Query cost records for this session using GSI
-        # GSI_PK: SESSION#{session_id}
-        # GSI_SK: begins_with C# for cost records
-        response = table.query(
+        # Query cost records (C#) and display text records (D#) in parallel
+        cost_response = table.query(
             IndexName='SessionLookupIndex',
             KeyConditionExpression=Key('GSI_PK').eq(f'SESSION#{session_id}') & Key('GSI_SK').begins_with('C#')
         )
+        display_response = table.query(
+            IndexName='SessionLookupIndex',
+            KeyConditionExpression=Key('GSI_PK').eq(f'SESSION#{session_id}') & Key('GSI_SK').begins_with('D#')
+        )
 
-        items = response.get("Items", [])
+        items = cost_response.get("Items", [])
+        display_items = display_response.get("Items", [])
         metadata_index = {}
 
-        logger.info(f"📦 DynamoDB returned {len(items)} cost record items")
+        logger.info(f"📦 DynamoDB returned {len(items)} cost record items, {len(display_items)} display text items")
 
         for item in items:
             # Verify user ownership
@@ -744,6 +747,22 @@ async def _get_all_message_metadata_cloud(session_id: str, user_id: str, table_n
             metadata_index[message_id] = item_float
 
         logger.info(f"📂 Retrieved {len(metadata_index)} cost records from DynamoDB")
+
+        # Merge displayText from D# records into metadata index
+        for item in display_items:
+            if item.get('userId') != user_id:
+                continue
+            item_float = _convert_decimal_to_float(item)
+            message_id_raw = item_float.get("messageId")
+            message_id = str(int(message_id_raw)) if isinstance(message_id_raw, (int, float)) else str(message_id_raw)
+            display_text = item_float.get("displayText")
+            if display_text:
+                if message_id in metadata_index:
+                    metadata_index[message_id]["displayText"] = display_text
+                else:
+                    metadata_index[message_id] = {"displayText": display_text}
+                logger.debug(f"🔗 Merged displayText for user message {message_id}")
+
         logger.info(f"📋 Metadata keys: {sorted(metadata_index.keys())}")
         return metadata_index
 

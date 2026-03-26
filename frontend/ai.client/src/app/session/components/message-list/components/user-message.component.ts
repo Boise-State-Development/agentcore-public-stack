@@ -31,9 +31,13 @@ const MAX_HEIGHT_PX = 200;
                 class="overflow-hidden transition-[max-height] duration-300 ease-in-out"
                 [style.max-height]="expanded() ? 'none' : maxHeightPx + 'px'"
               >
-                @for (block of message().content; track $index) {
-                  @if (block.type === 'text' && block.text) {
-                    <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                @if (displayText()) {
+                  <p class="whitespace-pre-wrap">{{ displayText() }}</p>
+                } @else {
+                  @for (block of message().content; track $index) {
+                    @if (block.type === 'text' && block.text) {
+                      <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                    }
                   }
                 }
               </div>
@@ -82,7 +86,17 @@ export class UserMessageComponent implements AfterViewInit {
 
   readonly maxHeightPx = MAX_HEIGHT_PX;
 
+  /** Original user message before RAG augmentation (if available in metadata) */
+  displayText = computed((): string | null => {
+    const metadata = this.message().metadata;
+    if (metadata && typeof metadata['displayText'] === 'string') {
+      return metadata['displayText'];
+    }
+    return null;
+  });
+
   hasTextContent = computed(() => {
+    if (this.displayText()) return true;
     return this.message().content.some(
       (block: ContentBlock) => block.type === 'text' && block.text
     );
