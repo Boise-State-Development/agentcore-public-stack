@@ -158,7 +158,7 @@ jobs:
           echo "Image size: ${IMAGE_SIZE} bytes"
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: rag-ingestion-docker-image
           path: ${{ runner.temp }}/rag-ingestion-image.tar
@@ -274,7 +274,7 @@ jobs:
           bash scripts/stack-rag-ingestion/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: rag-ingestion-cdk-synth
           path: infrastructure/cdk.out/
@@ -479,7 +479,7 @@ jobs:
           bash scripts/stack-rag-ingestion/tag-latest.sh
      
       - name: Upload stack outputs
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: rag-ingestion-deployment-outputs

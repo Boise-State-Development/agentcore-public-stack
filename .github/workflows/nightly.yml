@@ -296,7 +296,7 @@ jobs:
         run: bash scripts/stack-app-api/test.sh
 
       - name: Upload backend coverage artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: backend-coverage
           path: |
@@ -337,7 +337,7 @@ jobs:
         run: bash scripts/stack-frontend/test.sh
 
       - name: Upload frontend coverage artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -396,7 +396,7 @@ jobs:
         run: python3 scripts/nightly/compare-coverage.py
 
       - name: Upload coverage comparison report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: coverage-comparison
           path: coverage-comparison.json
@@ -563,7 +563,7 @@ jobs:
 
       - name: Upload scan reports
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: trivy-scan-reports
           path: trivy-*.txt
