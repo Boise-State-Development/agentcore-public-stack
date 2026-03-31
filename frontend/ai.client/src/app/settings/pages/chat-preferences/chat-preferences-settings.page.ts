@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../../session/services/model/model.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
@@ -17,7 +17,7 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink],
   providers: [
-    provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight }),
+    provideIcons({ heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt }),
   ],
   host: { class: 'block' },
   template: `
@@ -99,6 +99,38 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
         </div>
       </div>
 
+      <!-- Show Debug Output toggle -->
+      <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
+        <div class="flex items-center justify-between gap-4 p-6">
+          <div class="flex items-start gap-3">
+            <div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-white/10">
+              <ng-icon name="heroBugAnt" class="size-4 text-gray-500 dark:text-gray-400" />
+            </div>
+            <div>
+              <label for="show-debug-output" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                Show debug output
+              </label>
+              <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                Show the full prompt sent to the model instead of the original message.
+              </p>
+            </div>
+          </div>
+
+          <!-- Toggle -->
+          <div class="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-blue-600 transition-colors duration-200 ease-in-out has-checked:bg-blue-600 has-focus-visible:outline-2 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-blue-500 dark:has-checked:bg-blue-500">
+            <span class="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5"></span>
+            <input
+              id="show-debug-output"
+              type="checkbox"
+              [checked]="localSettings.showDebugOutput()"
+              (change)="onDebugOutputToggle($event)"
+              aria-label="Show debug output"
+              class="absolute inset-0 size-full cursor-pointer appearance-none focus:outline-hidden"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- Manage Conversations -->
       <div class="rounded-lg border border-gray-200 bg-white dark:border-white/10 dark:bg-gray-800">
         <a
@@ -174,5 +206,10 @@ export class ChatPreferencesSettingsPage {
   onTokenCountToggle(event: Event): void {
     const checkbox = event.target as HTMLInputElement;
     this.localSettings.setShowTokenCount(checkbox.checked);
+  }
+
+  onDebugOutputToggle(event: Event): void {
+    const checkbox = event.target as HTMLInputElement;
+    this.localSettings.setShowDebugOutput(checkbox.checked);
   }
 }

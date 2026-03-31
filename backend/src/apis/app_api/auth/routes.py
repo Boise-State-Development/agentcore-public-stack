@@ -1,6 +1,7 @@
 """OIDC authentication routes with multi-provider support."""
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -389,8 +390,14 @@ async def get_runtime_endpoint_impl(
             f"(provider: {provider.provider_id}): {provider.agentcore_runtime_endpoint_url}"
         )
 
+        # Allow local override for development (bypass cloud runtime)
+        runtime_url = os.environ.get(
+            "LOCAL_RUNTIME_ENDPOINT_URL",
+            provider.agentcore_runtime_endpoint_url,
+        )
+
         return RuntimeEndpointResponse(
-            runtime_endpoint_url=provider.agentcore_runtime_endpoint_url,
+            runtime_endpoint_url=runtime_url,
             provider_id=provider.provider_id,
             runtime_status=provider.agentcore_runtime_status,
         )

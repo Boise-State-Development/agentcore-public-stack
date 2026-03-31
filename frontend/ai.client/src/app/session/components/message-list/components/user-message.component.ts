@@ -7,9 +7,11 @@ import {
   ElementRef,
   viewChild,
   AfterViewInit,
+  inject,
 } from '@angular/core';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent } from './file-attachment';
+import { LocalSettingsService } from '../../../../services/local-settings.service';
 
 const MAX_HEIGHT_PX = 200;
 
@@ -84,10 +86,13 @@ export class UserMessageComponent implements AfterViewInit {
   expanded = signal(false);
   isOverflowing = signal(false);
 
+  private localSettings = inject(LocalSettingsService);
+
   readonly maxHeightPx = MAX_HEIGHT_PX;
 
-  /** Original user message before RAG augmentation (if available in metadata) */
+  /** Original user message before prompt modification — skipped when debug output is enabled */
   displayText = computed((): string | null => {
+    if (this.localSettings.showDebugOutput()) return null;
     const metadata = this.message().metadata;
     if (metadata && typeof metadata['displayText'] === 'string') {
       return metadata['displayText'];

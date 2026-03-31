@@ -391,11 +391,22 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
 
             # Pass resolved files (from S3) merged with any direct file content
             # Use augmented message if assistant RAG was applied
+            #
+            # Always store the original user message as displayText when the prompt
+            # will be modified before reaching the model. This happens when:
+            #   1. RAG augmentation prepends context chunks to the message
+            #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            # The original text becomes the single source of truth for UI display,
+            # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            message_will_be_modified = (
+                augmented_message != request.message  # RAG augmentation
+                or bool(files_to_send)                # File attachments
+            )
             stream_iterator = agent.stream_async(
-                augmented_message,  # Use augmented message if assistant RAG was applied
+                augmented_message,
                 session_id=request.session_id,
                 files=files_to_send if files_to_send else None,
-                original_message=request.message if augmented_message != request.message else None,
+                original_message=request.message if message_will_be_modified else None,
             )
 
             try:

@@ -98,9 +98,10 @@ async def store_user_display_text(
     """
     Store the original user message text for clean UI display.
 
-    When RAG augmentation modifies the user message, this stores the original
-    so the frontend can show the clean version while the augmented version
-    stays in AgentCore Memory for the LLM.
+    When the prompt sent to the model differs from what the user typed
+    (e.g. RAG augmentation, file attachment content blocks), this stores
+    the original so the frontend can show the clean version. The full
+    augmented prompt stays in AgentCore Memory for the LLM.
 
     Uses a D# (display) prefix SK pattern to separate from C# cost records.
 
@@ -108,7 +109,7 @@ async def store_user_display_text(
         session_id: Session identifier
         user_id: User identifier
         message_id: 0-based message index (user message position)
-        display_text: Original user message before RAG augmentation
+        display_text: Original user message before prompt modification
     """
     sessions_metadata_table = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
     if not sessions_metadata_table:

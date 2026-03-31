@@ -562,11 +562,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Then yield all agent stream events
             # Use augmented message if assistant RAG was applied
             # Use resolved files (from S3) merged with any direct file content
+            #
+            # Always store the original user message as displayText when the prompt
+            # will be modified before reaching the model. This happens when:
+            #   1. RAG augmentation prepends context chunks to the message
+            #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            # The original text becomes the single source of truth for UI display,
+            # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            message_will_be_modified = (
+                augmented_message != input_data.message  # RAG augmentation
+                or bool(files_to_send)                   # File attachments
+            )
             async for event in agent.stream_async(
-                augmented_message,  # Use augmented message if assistant RAG was applied
+                augmented_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
-                citations=citations_for_storage if citations_for_storage else None,  # Pass citations for persistence
+                citations=citations_for_storage if citations_for_storage else None,
+                original_message=input_data.message if message_will_be_modified else None,
             ):
                 yield event
 
