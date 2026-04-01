@@ -17,7 +17,6 @@ from .models import (
     UpdateAssistantRequest,
 )
 from .service import (
-    archive_assistant,
     assistant_exists,
     check_share_access,
     create_assistant,
@@ -51,7 +50,6 @@ __all__ = [
     "AssistantSharesResponse",
     "UpdateAssistantRequest",
     # Service functions
-    "archive_assistant",
     "assistant_exists",
     "check_share_access",
     "create_assistant",

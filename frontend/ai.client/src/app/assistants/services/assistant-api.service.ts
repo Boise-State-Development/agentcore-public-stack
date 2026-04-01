@@ -36,7 +36,6 @@ export class AssistantApiService {
   getAssistants(params?: {
     limit?: number;
     nextToken?: string;
-    includeArchived?: boolean;
     includeDrafts?: boolean;
     includePublic?: boolean;
   }): Observable<AssistantsListResponse> {
@@ -46,9 +45,6 @@ export class AssistantApiService {
     }
     if (params?.nextToken) {
       httpParams = httpParams.set('next_token', params.nextToken);
-    }
-    if (params?.includeArchived !== undefined) {
-      httpParams = httpParams.set('include_archived', params.includeArchived.toString());
     }
     if (params?.includeDrafts !== undefined) {
       httpParams = httpParams.set('include_drafts', params.includeDrafts.toString());
@@ -66,10 +62,6 @@ export class AssistantApiService {
 
   updateAssistant(id: string, request: UpdateAssistantRequest): Observable<Assistant> {
     return this.http.put<Assistant>(`${this.baseUrl()}/${id}`, request);
-  }
-
-  archiveAssistant(id: string): Observable<Assistant> {
-    return this.http.post<Assistant>(`${this.baseUrl()}/${id}/archive`, {});
   }
 
   deleteAssistant(id: string): Observable<void> {

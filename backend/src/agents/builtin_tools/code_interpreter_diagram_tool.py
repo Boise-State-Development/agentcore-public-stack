@@ -167,7 +167,6 @@ Please fix the error and try again."""
                     "status": "error"
                 }
 
-            execution_output = result.get("structuredContent", {}).get("stdout", "")
             execution_success = True
 
         if not execution_success:
@@ -224,7 +223,8 @@ Please try again or simplify your code."""
                                 filename = item.get("name", "")
                                 if filename:
                                     available_files.append(filename)
-            except:
+            except Exception:
+                # Best-effort file listing for error diagnostics; failure is non-critical
                 pass
 
             return {

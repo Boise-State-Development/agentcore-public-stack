@@ -1,7 +1,6 @@
 """
 Configuration management for AgentCore
 """
-import os
 from pathlib import Path
 
 

@@ -1,4 +1,4 @@
-import { Injectable, inject, signal, computed, resource } from '@angular/core';
+import { Injectable, inject, computed, resource } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';

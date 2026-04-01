@@ -8,7 +8,6 @@ import {
   OAuthConnectionListResponse,
   OAuthProvider,
   OAuthProviderListResponse,
-  OAuthConnectResponse,
 } from '../models';
 
 /**

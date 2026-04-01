@@ -151,24 +151,3 @@ class MetadataStorage(ABC):
             List of metadata dictionaries matching the date range
         """
         pass
-
-
-def get_metadata_storage() -> MetadataStorage:
-    """
-    Get DynamoDB storage backend.
-
-    Environment Variables:
-        DYNAMODB_SESSIONS_METADATA_TABLE_NAME: DynamoDB table name for message metadata
-        DYNAMODB_COST_SUMMARY_TABLE_NAME: DynamoDB table for cost summaries
-    """
-    import os
-
-    sessions_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
-    cost_summary_table = os.environ.get("DYNAMODB_COST_SUMMARY_TABLE_NAME")
-
-    logger.info(
-        f"Using DynamoDB metadata storage - "
-        f"sessions_table={sessions_table}, cost_summary_table={cost_summary_table}"
-    )
-    from .dynamodb_storage import DynamoDBStorage
-    return DynamoDBStorage()

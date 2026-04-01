@@ -81,7 +81,7 @@ async def create_tier(
             - 401 if not authenticated
             - 403 if user lacks admin role
     """
-    logger.info(f"Admin {admin_user.email} creating tier {tier_data.tier_id}")
+    logger.info("Admin creating tier")
 
     try:
         tier = await service.create_tier(tier_data, admin_user)
@@ -89,7 +89,7 @@ async def create_tier(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating tier: {e}")
+        logger.error("Error creating tier")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -110,13 +110,13 @@ async def list_tiers(
     Returns:
         List of quota tiers
     """
-    logger.info(f"Admin {admin_user.email} listing tiers (enabled_only={enabled_only})")
+    logger.info("Admin listing tiers")
 
     try:
         tiers = await service.list_tiers(enabled_only=enabled_only)
         return tiers
     except Exception as e:
-        logger.error(f"Error listing tiers: {e}")
+        logger.error("Error listing tiers")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -141,7 +141,7 @@ async def get_tier(
         HTTPException:
             - 404 if tier not found
     """
-    logger.info(f"Admin {admin_user.email} getting tier {tier_id}")
+    logger.info("Admin getting tier")
 
     tier = await service.get_tier(tier_id)
     if not tier:
@@ -173,7 +173,7 @@ async def update_tier(
         HTTPException:
             - 404 if tier not found
     """
-    logger.info(f"Admin {admin_user.email} updating tier {tier_id}")
+    logger.info("Admin updating tier")
 
     try:
         tier = await service.update_tier(tier_id, updates, admin_user)
@@ -183,7 +183,7 @@ async def update_tier(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating tier: {e}")
+        logger.error("Error updating tier")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -208,7 +208,7 @@ async def delete_tier(
             - 400 if tier is in use
             - 404 if tier not found
     """
-    logger.info(f"Admin {admin_user.email} deleting tier {tier_id}")
+    logger.info("Admin deleting tier")
 
     try:
         success = await service.delete_tier(tier_id, admin_user)
@@ -217,7 +217,7 @@ async def delete_tier(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error deleting tier: {e}")
+        logger.error("Error deleting tier")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -246,10 +246,7 @@ async def create_assignment(
             - 401 if not authenticated
             - 403 if user lacks admin role
     """
-    logger.info(
-        f"Admin {admin_user.email} creating {assignment_data.assignment_type.value} "
-        f"assignment for tier {assignment_data.tier_id}"
-    )
+    logger.info("Admin creating assignment")
 
     try:
         assignment = await service.create_assignment(assignment_data, admin_user)
@@ -257,7 +254,7 @@ async def create_assignment(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating assignment: {e}")
+        logger.error("Error creating assignment")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -280,10 +277,7 @@ async def list_assignments(
     Returns:
         List of quota assignments
     """
-    logger.info(
-        f"Admin {admin_user.email} listing assignments "
-        f"(type={assignment_type}, enabled_only={enabled_only})"
-    )
+    logger.info("Admin listing assignments")
 
     try:
         assignments = await service.list_assignments(
@@ -292,7 +286,7 @@ async def list_assignments(
         )
         return assignments
     except Exception as e:
-        logger.error(f"Error listing assignments: {e}")
+        logger.error("Error listing assignments")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -317,7 +311,7 @@ async def get_assignment(
         HTTPException:
             - 404 if assignment not found
     """
-    logger.info(f"Admin {admin_user.email} getting assignment {assignment_id}")
+    logger.info("Admin getting assignment")
 
     assignment = await service.get_assignment(assignment_id)
     if not assignment:
@@ -350,7 +344,7 @@ async def update_assignment(
             - 400 if validation fails
             - 404 if assignment not found
     """
-    logger.info(f"Admin {admin_user.email} updating assignment {assignment_id}")
+    logger.info("Admin updating assignment")
 
     try:
         assignment = await service.update_assignment(assignment_id, updates, admin_user)
@@ -360,7 +354,7 @@ async def update_assignment(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating assignment: {e}")
+        logger.error("Error updating assignment")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -382,14 +376,14 @@ async def delete_assignment(
         HTTPException:
             - 404 if assignment not found
     """
-    logger.info(f"Admin {admin_user.email} deleting assignment {assignment_id}")
+    logger.info("Admin deleting assignment")
 
     try:
         success = await service.delete_assignment(assignment_id, admin_user)
         if not success:
             raise HTTPException(status_code=404, detail=f"Assignment '{assignment_id}' not found")
     except Exception as e:
-        logger.error(f"Error deleting assignment: {e}")
+        logger.error("Error deleting assignment")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -419,7 +413,7 @@ async def get_user_quota_info(
     Returns:
         Comprehensive user quota information
     """
-    logger.info(f"Admin {admin_user.email} inspecting quota for user {user_id}")
+    logger.info("Admin inspecting user quota")
 
     try:
         roles_list = [r.strip() for r in roles.split(",")] if roles else []
@@ -431,7 +425,7 @@ async def get_user_quota_info(
         )
         return info
     except Exception as e:
-        logger.error(f"Error getting user quota info: {e}")
+        logger.error("Error getting user quota info")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -463,7 +457,7 @@ async def create_override(
             - 401 if not authenticated
             - 403 if user lacks admin role
     """
-    logger.info(f"Admin {admin_user.email} creating override for user {override_data.user_id}")
+    logger.info("Admin creating override")
 
     try:
         override = await service.create_override(override_data, admin_user)
@@ -471,7 +465,7 @@ async def create_override(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating override: {e}")
+        logger.error("Error creating override")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -494,7 +488,7 @@ async def list_overrides(
     Returns:
         List of quota overrides
     """
-    logger.info(f"Admin {admin_user.email} listing overrides (user_id={user_id}, active_only={active_only})")
+    logger.info("Admin listing overrides")
 
     try:
         overrides = await service.list_overrides(
@@ -503,7 +497,7 @@ async def list_overrides(
         )
         return overrides
     except Exception as e:
-        logger.error(f"Error listing overrides: {e}")
+        logger.error("Error listing overrides")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -527,7 +521,7 @@ async def get_override(
     Raises:
         HTTPException: 404 if override not found
     """
-    logger.info(f"Admin {admin_user.email} getting override {override_id}")
+    logger.info("Admin getting override")
 
     try:
         override = await service.get_override(override_id)
@@ -537,7 +531,7 @@ async def get_override(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting override: {e}")
+        logger.error("Error getting override")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -563,7 +557,7 @@ async def update_override(
     Raises:
         HTTPException: 404 if override not found
     """
-    logger.info(f"Admin {admin_user.email} updating override {override_id}")
+    logger.info("Admin updating override")
 
     try:
         override = await service.update_override(override_id, updates)
@@ -573,7 +567,7 @@ async def update_override(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating override: {e}")
+        logger.error("Error updating override")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -594,7 +588,7 @@ async def delete_override(
     Raises:
         HTTPException: 404 if override not found
     """
-    logger.info(f"Admin {admin_user.email} deleting override {override_id}")
+    logger.info("Admin deleting override")
 
     try:
         success = await service.delete_override(override_id)
@@ -603,7 +597,7 @@ async def delete_override(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting override: {e}")
+        logger.error("Error deleting override")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -632,10 +626,7 @@ async def get_events(
     Returns:
         List of quota events
     """
-    logger.info(
-        f"Admin {admin_user.email} getting events "
-        f"(user_id={user_id}, tier_id={tier_id}, type={event_type})"
-    )
+    logger.info("Admin getting events")
 
     try:
         events = await service.get_events(
@@ -646,5 +637,5 @@ async def get_events(
         )
         return events
     except Exception as e:
-        logger.error(f"Error getting events: {e}")
+        logger.error("Error getting events")
         raise HTTPException(status_code=500, detail="Internal server error")

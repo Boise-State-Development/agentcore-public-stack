@@ -107,7 +107,7 @@ class QuotaAdminService:
         updated = await self.repository.update_tier(tier_id, update_dict)
 
         if updated:
-            logger.info(f"Updated tier {tier_id} by {admin_user.user_id}")
+            logger.info("Updated tier")
             # Invalidate cache
             self.resolver.invalidate_cache()
 
@@ -137,7 +137,7 @@ class QuotaAdminService:
         success = await self.repository.delete_tier(tier_id)
 
         if success:
-            logger.info(f"Deleted tier {tier_id} by {admin_user.user_id}")
+            logger.info("Deleted tier")
             # Invalidate cache
             self.resolver.invalidate_cache()
 
@@ -256,7 +256,7 @@ class QuotaAdminService:
         updated = await self.repository.update_assignment(assignment_id, update_dict)
 
         if updated:
-            logger.info(f"Updated assignment {assignment_id} by {admin_user.user_id}")
+            logger.info("Updated assignment")
 
             # Invalidate cache for affected users
             if existing.assignment_type.value == "direct_user" and existing.user_id:
@@ -279,7 +279,7 @@ class QuotaAdminService:
         success = await self.repository.delete_assignment(assignment_id)
 
         if success:
-            logger.info(f"Deleted assignment {assignment_id} by {admin_user.user_id}")
+            logger.info("Deleted assignment")
 
             # Invalidate cache
             if assignment.assignment_type.value == "direct_user" and assignment.user_id:
@@ -326,18 +326,17 @@ class QuotaAdminService:
         # Calculate quota info
         if resolved:
             tier = resolved.tier
-            limit = (
+            _limit = (
                 tier.daily_cost_limit
                 if tier.period_type == "daily" and tier.daily_cost_limit
                 else tier.monthly_cost_limit
             )
             # Convert Decimal limit to float for calculations
-            limit_float = float(limit) if limit else 0
+            limit_float = float(_limit) if _limit else 0
             percentage_used = (current_usage / limit_float * 100) if limit_float > 0 else 0
             remaining = max(0, limit_float - current_usage)
         else:
             tier = None
-            limit = None
             percentage_used = 0
             remaining = None
 
@@ -393,7 +392,7 @@ class QuotaAdminService:
         )
 
         created = await self.repository.create_override(override)
-        logger.info(f"Created override {override_id} for user {override_data.user_id}")
+        logger.info("Created override")
 
         # Invalidate cache for this user
         self.resolver.invalidate_cache(user_id=override_data.user_id)
@@ -433,7 +432,7 @@ class QuotaAdminService:
         updated = await self.repository.update_override(override_id, updates_dict)
 
         if updated:
-            logger.info(f"Updated override {override_id}")
+            logger.info("Updated override")
             # Invalidate cache for affected user
             self.resolver.invalidate_cache(user_id=existing.user_id)
 
@@ -449,7 +448,7 @@ class QuotaAdminService:
         success = await self.repository.delete_override(override_id)
 
         if success:
-            logger.info(f"Deleted override {override_id}")
+            logger.info("Deleted override")
             # Invalidate cache for affected user
             self.resolver.invalidate_cache(user_id=existing.user_id)
 

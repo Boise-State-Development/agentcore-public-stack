@@ -122,6 +122,12 @@ export class AdminPage {
       route: '/admin/fine-tuning',
     },
     {
+      title: 'Fine-Tuning Costs',
+      description: 'View per-user GPU compute costs, hours used, and job counts for fine-tuning. Drill into monthly breakdowns.',
+      icon: 'heroChartBar',
+      route: '/admin/fine-tuning/costs',
+    },
+    {
       title: 'Quota Tiers',
       description: 'Create and manage quota tiers with cost limits and soft limit configurations. Define monthly/daily limits and warning thresholds.',
       icon: 'heroScale',

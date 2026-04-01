@@ -6,7 +6,6 @@ import {
   OnDestroy,
   TemplateRef,
   ViewContainerRef,
-  effect,
   signal,
   DestroyRef,
 } from '@angular/core';
@@ -14,11 +13,10 @@ import {
   Overlay,
   OverlayRef,
   ConnectedPosition,
-  ScrollStrategy,
 } from '@angular/cdk/overlay';
 import { ComponentPortal } from '@angular/cdk/portal';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { merge, fromEvent } from 'rxjs';
+import { fromEvent } from 'rxjs';
 import { filter } from 'rxjs/operators';
 import { TooltipComponent } from './tooltip.component';
 

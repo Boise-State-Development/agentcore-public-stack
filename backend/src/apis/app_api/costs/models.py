@@ -1,7 +1,6 @@
 """Cost tracking data models for user cost aggregation and reporting."""
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
 
 
 class CostBreakdown(BaseModel):

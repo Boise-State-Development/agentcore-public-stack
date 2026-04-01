@@ -72,14 +72,12 @@ export class ChatHttpService {
         } else if (response.status === 403) {
           // Handle forbidden (e.g., usage limit exceeded)
           let errorMessage = 'Access forbidden';
-          let errorDetail: string | undefined;
 
           try {
             const errorData = await response.json();
             if (errorData.error) {
               // Structured error from backend
               errorMessage = errorData.error.message || errorMessage;
-              errorDetail = errorData.error.detail;
             } else if (errorData.message) {
               errorMessage = errorData.message;
             }
@@ -91,14 +89,12 @@ export class ChatHttpService {
         } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
           // Client-side errors are usually non-retriable
           let errorMessage = `Request failed with status ${response.status}`;
-          let errorDetail: string | undefined;
 
           try {
             const errorData = await response.json();
             if (errorData.error) {
               // Structured error from backend
               errorMessage = errorData.error.message || errorMessage;
-              errorDetail = errorData.error.detail;
             } else if (errorData.message) {
               errorMessage = errorData.message;
             }

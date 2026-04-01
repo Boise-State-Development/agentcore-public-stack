@@ -81,6 +81,16 @@
                                                 <button
                                                     cdkMenuItem
                                                     type="button"
+                                                    (click)="onShareClick($event, session)"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                                                    role="menuitem"
+                                                >
+                                                    <ng-icon name="heroArrowUpOnSquare" class="size-4" aria-hidden="true" />
+                                                    <span>Share</span>
+                                                </button>
+                                                <button
+                                                    cdkMenuItem
+                                                    type="button"
                                                     (click)="onDeleteClick($event, session)"
                                                     class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-red-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-red-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
                                                     role="menuitem"

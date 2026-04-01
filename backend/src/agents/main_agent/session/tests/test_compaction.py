@@ -8,7 +8,6 @@ AWS services or DynamoDB connections.
 import pytest
 import copy
 from agents.main_agent.session.compaction_models import CompactionState, CompactionConfig
-from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
 
 
 class TestCompactionState:

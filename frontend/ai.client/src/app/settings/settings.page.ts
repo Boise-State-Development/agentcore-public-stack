@@ -2,8 +2,6 @@ import {
   Component,
   ChangeDetectionStrategy,
   inject,
-  signal,
-  computed,
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';

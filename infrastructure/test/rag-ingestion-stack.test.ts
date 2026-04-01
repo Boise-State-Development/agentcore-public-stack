@@ -82,6 +82,7 @@ describe('RagIngestionStack', () => {
       },
       fineTuning: {
         enabled: false,
+        defaultQuotaHours: 0,
       },
       cognito: {
         domainPrefix: 'test-project',

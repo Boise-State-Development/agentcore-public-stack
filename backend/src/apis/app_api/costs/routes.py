@@ -49,7 +49,7 @@ async def get_cost_summary(
     if not period:
         period = datetime.now(timezone.utc).strftime("%Y-%m")
 
-    logger.info(f"GET /costs/summary - User: {user_id}, Period: {period}")
+    logger.info("GET /costs/summary")
 
     try:
         # Get pre-aggregated summary (O(1) lookup)
@@ -59,7 +59,7 @@ async def get_cost_summary(
             period=period
         )
 
-        logger.info(f"Successfully retrieved cost summary for user {user_id}, period {period}")
+        logger.info("Successfully retrieved cost summary")
 
         return summary
 
@@ -102,7 +102,7 @@ async def get_detailed_report(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /costs/detailed-report - User: {user_id}, Start: {start_date}, End: {end_date}")
+    logger.info("GET /costs/detailed-report")
 
     try:
         # Parse dates

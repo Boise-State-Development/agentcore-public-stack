@@ -95,7 +95,7 @@ async def delete_api_key(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete API key {key_id}: {e}", exc_info=True)
+        logger.error("Failed to delete API key", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete API key",

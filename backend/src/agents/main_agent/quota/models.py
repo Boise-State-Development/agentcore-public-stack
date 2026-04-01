@@ -1,6 +1,6 @@
 """Core domain models for quota management system."""
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, Literal, Dict, Any
 from enum import Enum
 from decimal import Decimal

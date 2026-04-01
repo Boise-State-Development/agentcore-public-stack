@@ -46,7 +46,7 @@ async def get_memory_status(
 
     Requires JWT authentication.
     """
-    logger.info(f"GET /memory/status - User: {current_user.user_id}")
+    logger.info("GET /memory/status")
 
     config_info = get_memory_config_info()
 
@@ -81,7 +81,7 @@ async def get_preferences_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /memory/preferences - User: {user_id}, Query: {query}, TopK: {top_k}")
+    logger.info("GET /memory/preferences")
 
     if not is_memory_available():
         raise HTTPException(
@@ -146,7 +146,7 @@ async def get_facts_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /memory/facts - User: {user_id}, Query: {query}, TopK: {top_k}")
+    logger.info("GET /memory/facts")
 
     if not is_memory_available():
         raise HTTPException(
@@ -217,7 +217,7 @@ async def get_summaries_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /memory/summaries/{session_id} - User: {user_id}, Query: {query}, TopK: {top_k}")
+    logger.info("GET /memory/summaries")
 
     if not is_memory_available():
         raise HTTPException(
@@ -277,7 +277,7 @@ async def get_all_memories_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /memory - User: {user_id}, TopK: {top_k}")
+    logger.info("GET /memory")
 
     if not is_memory_available():
         raise HTTPException(
@@ -355,7 +355,7 @@ async def search_memories_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"POST /memory/search - User: {user_id}, Query: {request.query}")
+    logger.info("POST /memory/search")
 
     if not is_memory_available():
         raise HTTPException(
@@ -420,9 +420,7 @@ async def get_strategies_endpoint(
     Returns:
         StrategiesResponse with list of strategies
     """
-    user_id = current_user.user_id
-
-    logger.info(f"GET /memory/strategies - User: {user_id}")
+    logger.info("GET /memory/strategies")
 
     if not is_memory_available():
         raise HTTPException(
@@ -479,7 +477,7 @@ async def delete_memory_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"DELETE /memory/{record_id} - User: {user_id}")
+    logger.info("DELETE /memory")
 
     if not is_memory_available():
         raise HTTPException(

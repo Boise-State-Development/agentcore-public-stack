@@ -28,8 +28,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Lifespan event handler (replaces on_event)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -99,6 +97,7 @@ from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.shared.oauth.routes import router as oauth_router
 from apis.app_api.system.routes import router as system_router
+from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 
 # Include routers
 app.include_router(health_router)
@@ -119,6 +118,9 @@ app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
 app.include_router(oauth_router)  # OAuth provider connections
 app.include_router(system_router)  # System status and first-boot endpoints
+app.include_router(conversations_share_router)  # Share conversations endpoints
+app.include_router(shares_router)  # Share management (update, revoke, export)
+app.include_router(shared_view_router)  # Shared conversation read-only view
 
 # Conditionally register fine-tuning routes
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

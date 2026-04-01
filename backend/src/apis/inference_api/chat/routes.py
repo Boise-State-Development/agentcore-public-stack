@@ -10,22 +10,20 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import AsyncGenerator, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from agents.main_agent.session.session_factory import SessionFactory
-from apis.shared.auth.dependencies import get_current_user, get_current_user_trusted
+from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
 from apis.shared.errors import (
     ConversationalErrorEvent,
     ErrorCode,
     build_conversational_error_event,
-    create_error_response,
 )
-from apis.shared.files.file_resolver import ResolvedFileContent, get_file_resolver
+from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.quota import (
     QuotaExceededEvent,
@@ -92,15 +90,15 @@ async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enable
         managed_models = await list_managed_models()
         for model in managed_models:
             if model.model_id == model_id:
-                logger.debug(f"Found managed model {model_id}, supports_caching={model.supports_caching}")
+                logger.debug("Found managed model, checking supports_caching")
                 return model.supports_caching
 
         # Model not found in managed models - use default
-        logger.debug(f"Model {model_id} not found in managed models, using default caching behavior")
+        logger.debug("Model not found in managed models, using default caching behavior")
         return None
 
     except Exception as e:
-        logger.warning(f"Failed to look up managed model {model_id}: {e}")
+        logger.warning("Failed to look up managed model for caching")
         return None
 
 
@@ -154,7 +152,7 @@ async def stream_conversational_message(
 
     # Skip persistence for preview sessions
     if is_preview_session(session_id):
-        logger.info(f"🔍 Preview session {session_id} - skipping message persistence")
+        logger.info("Preview session - skipping message persistence")
         return
 
     # Save messages to session for persistence
@@ -177,10 +175,10 @@ async def stream_conversational_message(
 
             session_manager.base_manager.create_message(session_id, "default", user_session_msg)
             session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-            logger.info(f"💾 Saved {stop_reason} messages to session {session_id}")
+            logger.info("Saved messages to session")
 
     except Exception as e:
-        logger.error(f"Failed to save {stop_reason} messages to session: {e}", exc_info=True)
+        logger.error("Failed to save messages to session", exc_info=True)
 
 
 # ============================================================
@@ -211,16 +209,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
-    logger.info(f"Invocation request - Session: {input_data.session_id}, User: {user_id}")
-    logger.info(f"Message: {input_data.message[:50]}...")
+    logger.info("Invocation request received")
+    logger.info("Message received")
 
     if input_data.enabled_tools:
-        logger.info(f"Enabled tools ({len(input_data.enabled_tools)}): {input_data.enabled_tools}")
+        logger.info(f"Enabled tools ({len(input_data.enabled_tools)})")
 
     if input_data.files:
         logger.info(f"Files attached: {len(input_data.files)} files")
         for file in input_data.files:
-            logger.info(f"  - {file.filename} ({file.content_type})")
+            logger.info("  - File attached")
 
     if input_data.file_upload_ids:
         logger.info(f"File upload IDs: {len(input_data.file_upload_ids)} IDs to resolve")
@@ -241,7 +239,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 files_to_send.append(FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes))
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
         except Exception as e:
-            logger.warning(f"Failed to resolve file upload IDs: {e}")
+            logger.warning("Failed to resolve file upload IDs")
             # Continue without files rather than failing the request
 
     # Check quota if enforcement is enabled
@@ -254,7 +252,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             if not quota_result.allowed:
                 # Quota blocked - stream as SSE instead of 429 for better UX
-                logger.warning(f"Quota blocked for user {user_id}: {quota_result.message}")
+                logger.warning("Quota blocked for user")
                 if quota_result.tier is None:
                     # No quota tier configured for this user
                     quota_exceeded_event = build_no_quota_configured_event(quota_result)
@@ -265,11 +263,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # Check for warning level
                 quota_warning_event = build_quota_warning_event(quota_result)
                 if quota_warning_event:
-                    logger.info(f"Quota warning for user {user_id}: {quota_result.warning_level}")
+                    logger.info("Quota warning for user")
 
         except Exception as e:
             # Log error but don't block request - fail open for quota errors
-            logger.error(f"Error checking quota for user {user_id}: {e}", exc_info=True)
+            logger.error("Error checking quota for user", exc_info=True)
 
     # If quota exceeded, stream the quota exceeded message instead of agent response
     if quota_exceeded_event:
@@ -303,7 +301,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     system_prompt = input_data.system_prompt  # Start with provided system prompt
 
     logger.info(
-        f"Invocation request - Session: {input_data.session_id}, Assistant ID: {input_data.rag_assistant_id}, Message: {input_data.message[:50]}..."
+        "Invocation request - processing with assistant context"
     )
 
     if input_data.rag_assistant_id:
@@ -326,8 +324,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             SessionPreferences,
         )
 
-        logger.info(f"🔍 DEBUG: Assistant RAG requested - Assistant: {input_data.rag_assistant_id}, Session: {input_data.session_id}")
-        logger.info(f"🔍 DEBUG: User ID: {user_id}, User Email: {current_user.email}")
+        logger.info("Assistant RAG requested")
+        logger.info("Processing for authenticated user")
 
         # 1. Check if session already has an assistant attached
         # If it does, verify it's the same assistant (can't change assistants mid-session)
@@ -342,13 +340,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # Session already has an assistant - verify it's the same one
                     if existing_assistant_id != input_data.rag_assistant_id:
                         logger.warning(
-                            f"Attempted to change assistant from {existing_assistant_id} to {input_data.rag_assistant_id} in session {input_data.session_id}"
+                            "Attempted to change assistant mid-session"
                         )
                         raise HTTPException(
                             status_code=400, detail="Cannot change assistants mid-session. Start a new session to use a different assistant."
                         )
                     # Same assistant - allow it to continue
-                    logger.info(f"Continuing with existing assistant {input_data.rag_assistant_id} in session {input_data.session_id}")
+                    logger.info("Continuing with existing assistant in session")
                 else:
                     # No assistant attached - verify session has no messages (can only attach to new sessions)
                     messages_response = await get_messages(
@@ -358,7 +356,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     )
                     if messages_response.messages and len(messages_response.messages) > 0:
                         logger.warning(
-                            f"Attempted to attach assistant {input_data.rag_assistant_id} to session {input_data.session_id} with existing messages"
+                            "Attempted to attach assistant to session with existing messages"
                         )
                         raise HTTPException(
                             status_code=400, detail="Assistants can only be attached to new sessions, start a new session to chat with this assistant"
@@ -366,74 +364,74 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Error checking session state: {e}", exc_info=True)
+                logger.error("Error checking session state", exc_info=True)
                 # Continue anyway - better to allow than block on error
         else:
-            logger.info(f"🔍 Preview session - skipping session state validation")
+            logger.info("Preview session - skipping session state validation")
 
         # 2. Load assistant with access check
-        logger.info(f"🔍 DEBUG: Loading assistant {input_data.rag_assistant_id} with access check...")
+        logger.info("Loading assistant with access check...")
         assistant = await get_assistant_with_access_check(assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email)
 
         if not assistant:
-            logger.warning(f"🔍 DEBUG: get_assistant_with_access_check returned None for {input_data.rag_assistant_id}")
+            logger.warning("get_assistant_with_access_check returned None")
             # Check if assistant exists at all to provide better error message
             from apis.shared.assistants.service import assistant_exists
 
             exists = await assistant_exists(input_data.rag_assistant_id)
 
             if not exists:
-                logger.warning(f"❌ Assistant {input_data.rag_assistant_id} does not exist (404)")
+                logger.warning("Assistant does not exist (404)")
                 raise HTTPException(status_code=404, detail=f"Assistant not found: {input_data.rag_assistant_id}")
             else:
-                logger.warning(f"🔒 Access denied: user {user_id} ({current_user.email}) cannot access assistant {input_data.rag_assistant_id} (403)")
+                logger.warning("Access denied to assistant (403)")
                 raise HTTPException(status_code=403, detail=f"Access denied: You do not have permission to access this assistant")
 
         # Log assistant details for debugging
-        logger.info(f"🔍 DEBUG: Assistant loaded successfully!")
-        logger.info(f"🔍 DEBUG: Assistant ID: {assistant.assistant_id}")
-        logger.info(f"🔍 DEBUG: Assistant Name: {assistant.name}")
-        logger.info(f"🔍 DEBUG: Assistant Owner ID: {assistant.owner_id}")
-        logger.info(f"🔍 DEBUG: Assistant Visibility: {assistant.visibility}")
-        logger.info(f"🔍 DEBUG: Assistant Instructions: {assistant.instructions[:200] if assistant.instructions else 'NONE'}...")
-        logger.info(f"🔍 DEBUG: Assistant Instructions Length: {len(assistant.instructions) if assistant.instructions else 0}")
-        logger.info(f"🔍 DEBUG: Assistant Vector Index ID: {assistant.vector_index_id}")
+        logger.info("Assistant loaded successfully!")
+        logger.info("Assistant details retrieved")
+        logger.info("Assistant name retrieved")
+        logger.info("Assistant owner retrieved")
+        logger.info("Assistant visibility retrieved")
+        logger.info("Assistant instructions retrieved")
+        logger.info("Assistant instructions length retrieved")
+        logger.info("Assistant vector index retrieved")
 
         # Mark as viewed if this is a shared assistant (not owned)
         if assistant.owner_id != user_id:
             await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
 
         # 3. Search assistant knowledge base
-        logger.info(f"🔍 DEBUG: Starting knowledge base search for assistant {input_data.rag_assistant_id}...")
+        logger.info("Starting knowledge base search for assistant...")
         try:
-            logger.info(f"🔍 DEBUG: Searching knowledge base for assistant {input_data.rag_assistant_id} with query: {input_data.message[:100]}...")
+            logger.info("Searching knowledge base for assistant...")
             context_chunks = await search_assistant_knowledgebase_with_formatting(
                 assistant_id=input_data.rag_assistant_id, query=input_data.message, top_k=5
             )
-            logger.info(f"🔍 DEBUG: Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
+            logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
             if context_chunks:
                 for i, chunk in enumerate(context_chunks):
-                    logger.info(f"🔍 DEBUG: Chunk {i + 1}: {chunk.get('text', '')[:100]}...")
-                    logger.info(f"🔍 DEBUG: Chunk {i + 1} metadata: {chunk.get('metadata', {})}")
+                    logger.info(f"Chunk {i + 1} retrieved")
+                    logger.info(f"Chunk {i + 1} metadata retrieved")
 
             # 4. Augment message with context
             if context_chunks:
                 augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks)
                 logger.info(
-                    f"✅ Augmented message with {len(context_chunks)} context chunks. Original length: {len(input_data.message)}, Augmented length: {len(augmented_message)}"
+                    f"Augmented message with {len(context_chunks)} context chunks"
                 )
-                logger.info(f"🔍 DEBUG: Augmented message preview: {augmented_message[:500]}...")
+                logger.info("Augmented message preview available")
             else:
-                logger.info(f"⚠️ No context chunks found for assistant {input_data.rag_assistant_id} - using original message without augmentation")
+                logger.info("No context chunks found for assistant - using original message without augmentation")
         except Exception as e:
-            logger.error(f"❌ Error searching assistant knowledge base: {e}", exc_info=True)
-            logger.error(f"🔍 DEBUG: Exception type: {type(e).__name__}")
+            logger.error("Error searching assistant knowledge base", exc_info=True)
+            logger.error(f"Exception type: {type(e).__name__}")
             # Continue without RAG context rather than failing
 
         # 5. Append assistant's instructions to the base system prompt (don't replace)
         # For preview sessions, prefer the system_prompt from the request (live form edits)
         # over the saved assistant instructions, so users can test changes before saving.
-        logger.info(f"🔍 DEBUG: Checking assistant instructions... assistant.instructions is {'truthy' if assistant.instructions else 'falsy'}")
+        logger.info("Checking assistant instructions...")
         preview_instructions_override = input_data.system_prompt if is_preview_session(input_data.session_id) and input_data.system_prompt else None
         effective_instructions = preview_instructions_override or assistant.instructions
 
@@ -449,23 +447,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             system_prompt = f"{base_prompt}\n\n## Assistant-Specific Instructions\n\n{effective_instructions}"
             if preview_instructions_override:
                 logger.info(
-                    f"✅ Using live preview instructions override (length: {len(effective_instructions)})"
+                    "Using live preview instructions override"
                 )
             else:
                 logger.info(
-                    f"✅ Appended assistant instructions to base system prompt (base: {len(base_prompt)}, assistant: {len(effective_instructions)}, total: {len(system_prompt)})"
+                    "Appended assistant instructions to base system prompt"
                 )
-            logger.info(f"🔍 DEBUG: Final system prompt preview (last 500 chars): ...{system_prompt[-500:]}")
+            logger.info("Final system prompt built")
         else:
             # No assistant instructions - use base prompt if no system_prompt provided
-            logger.warning(f"🔍 DEBUG: No instructions found on assistant {input_data.rag_assistant_id}!")
+            logger.warning("No instructions found on assistant!")
             if not system_prompt:
                 from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
                 base_prompt_builder = SystemPromptBuilder()
                 system_prompt = base_prompt_builder.build(include_date=True)
             logger.info(
-                f"⚠️ Assistant {input_data.rag_assistant_id} has no instructions - using {'provided' if system_prompt else 'default'} system prompt"
+                "Assistant has no instructions - using fallback system prompt"
             )
 
         # 6. Save assistant_id to session preferences (persist for future loads)
@@ -477,7 +475,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     # Update existing metadata with assistant_id in preferences
                     prefs_dict = existing_metadata.preferences.model_dump(by_alias=False) if existing_metadata.preferences else {}
                     prefs_dict["assistant_id"] = input_data.rag_assistant_id
-                    preferences = SessionPreferences(**prefs_dict)
 
                     updated_metadata = existing_metadata.model_copy(update={"assistant_id": input_data.rag_assistant_id})
 
@@ -504,12 +501,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     )
 
                 await store_session_metadata(session_id=input_data.session_id, user_id=user_id, session_metadata=updated_metadata)
-                logger.info(f"💾 Saved assistant_id {input_data.rag_assistant_id} to session {input_data.session_id} preferences")
+                logger.info("Saved assistant_id to session preferences")
             except Exception as e:
-                logger.error(f"Failed to save assistant_id to session preferences: {e}", exc_info=True)
+                logger.error("Failed to save assistant_id to session preferences", exc_info=True)
                 # Continue - not critical if metadata save fails
         else:
-            logger.info(f"🔍 Preview session - skipping assistant_id persistence")
+            logger.info("Preview session - skipping assistant_id persistence")
 
     try:
         # Resolve caching_enabled based on managed model configuration
@@ -517,7 +514,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         caching_enabled = await _resolve_caching_enabled(model_id=input_data.model_id, explicit_caching_enabled=input_data.caching_enabled)
 
         if caching_enabled is False:
-            logger.info(f"Prompt caching disabled for model {input_data.model_id}")
+            logger.info("Prompt caching disabled for model")
 
         # Get agent instance with user-specific configuration
         # AgentCore Memory tracks preferences across sessions per user_id
@@ -565,11 +562,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Then yield all agent stream events
             # Use augmented message if assistant RAG was applied
             # Use resolved files (from S3) merged with any direct file content
+            #
+            # Always store the original user message as displayText when the prompt
+            # will be modified before reaching the model. This happens when:
+            #   1. RAG augmentation prepends context chunks to the message
+            #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            # The original text becomes the single source of truth for UI display,
+            # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            message_will_be_modified = (
+                augmented_message != input_data.message  # RAG augmentation
+                or bool(files_to_send)                   # File attachments
+            )
             async for event in agent.stream_async(
-                augmented_message,  # Use augmented message if assistant RAG was applied
+                augmented_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
-                citations=citations_for_storage if citations_for_storage else None,  # Pass citations for persistence
+                citations=citations_for_storage if citations_for_storage else None,
+                original_message=input_data.message if message_will_be_modified else None,
             ):
                 yield event
 
@@ -586,7 +595,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         raise
     except Exception as e:
         # Stream error as a conversational assistant message for better UX
-        logger.error(f"Error in invocations: {e}", exc_info=True)
+        logger.error("Error in invocations", exc_info=True)
 
         error_event = build_conversational_error_event(code=ErrorCode.AGENT_ERROR, error=e, session_id=input_data.session_id, recoverable=True)
 

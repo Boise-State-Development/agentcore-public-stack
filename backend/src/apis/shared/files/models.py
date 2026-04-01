@@ -8,7 +8,6 @@ Supports the pre-signed URL upload flow for S3.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
-import time
 
 from pydantic import BaseModel, Field, ConfigDict
 

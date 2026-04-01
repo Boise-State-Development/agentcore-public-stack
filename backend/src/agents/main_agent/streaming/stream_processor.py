@@ -1288,11 +1288,11 @@ async def process_agent_stream(
                     # Yield the metadata event
                     yield processed_event
 
-                # If we've seen result, it's safe to break
-                # Otherwise, continue to next iteration to catch result event
-                if result_seen:
-                    break
-                # Don't break yet - continue to catch result event in next iteration
+                # TODO: result_seen is never set to True — this break is currently dead code.
+                # When result-event tracking is implemented, set result_seen = True on result events
+                # and uncomment the break to exit early once both complete + result are seen.
+                # if result_seen:
+                #     break
 
             # STEP 3: Process lifecycle events
             # NOTE: We process lifecycle events to capture the 'result' event which contains metrics

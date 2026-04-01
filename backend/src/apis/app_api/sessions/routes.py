@@ -21,6 +21,7 @@ from apis.shared.sessions.models import (
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import store_session_metadata, get_session_metadata, list_user_sessions
 from .services.session_service import SessionService
+from apis.app_api.shares.service import get_share_service
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
 
@@ -56,7 +57,7 @@ async def list_user_sessions_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /sessions - User: {user_id}, Limit: {limit}, NextToken: {next_token}")
+    logger.info("GET /sessions - listing user sessions")
 
     try:
         # Retrieve sessions for the user with pagination
@@ -80,7 +81,7 @@ async def list_user_sessions_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"Error listing user sessions: {e}", exc_info=True)
+        logger.error("Error listing user sessions", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list user sessions: {str(e)}"
@@ -112,7 +113,7 @@ async def get_session_metadata_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /sessions/{session_id}/metadata - User: {user_id}")
+    logger.info("GET /sessions/metadata - retrieving session metadata")
 
     try:
         # Retrieve session metadata
@@ -135,7 +136,7 @@ async def get_session_metadata_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving session metadata: {e}", exc_info=True)
+        logger.error("Error retrieving session metadata", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve session metadata: {str(e)}"
@@ -170,7 +171,7 @@ async def update_session_metadata_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"PUT /sessions/{session_id}/metadata - User: {user_id}")
+    logger.info("PUT /sessions/metadata - updating session metadata")
 
     try:
         # Get existing metadata or create new
@@ -280,7 +281,7 @@ async def update_session_metadata_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating session metadata: {e}", exc_info=True)
+        logger.error("Error updating session metadata", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update session metadata: {str(e)}"
@@ -321,7 +322,7 @@ async def delete_session_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"DELETE /sessions/{session_id} - User: {user_id}")
+    logger.info("DELETE /sessions - deleting session")
 
     try:
         service = SessionService()
@@ -352,14 +353,21 @@ async def delete_session_endpoint(
             session_id
         )
 
-        logger.info(f"Successfully deleted session {session_id} for user {user_id}")
+        # 3. Delete share snapshots so share links stop working
+        share_service = get_share_service()
+        background_tasks.add_task(
+            share_service.delete_shares_for_session,
+            session_id
+        )
+
+        logger.info("Successfully deleted session")
 
         return Response(status_code=204)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting session: {e}", exc_info=True)
+        logger.error("Error deleting session", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete session: {str(e)}"
@@ -403,7 +411,7 @@ async def bulk_delete_sessions_endpoint(
     user_id = current_user.user_id
     session_ids = request.session_ids
 
-    logger.info(f"POST /sessions/bulk-delete - User: {user_id}, Count: {len(session_ids)}")
+    logger.info("POST /sessions/bulk-delete - bulk deleting sessions")
 
     results = []
     deleted_count = 0
@@ -411,6 +419,7 @@ async def bulk_delete_sessions_endpoint(
 
     try:
         service = SessionService()
+        share_service = get_share_service()
 
         for session_id in session_ids:
             try:
@@ -430,6 +439,10 @@ async def bulk_delete_sessions_endpoint(
                         service.delete_session_files,
                         session_id
                     )
+                    background_tasks.add_task(
+                        share_service.delete_shares_for_session,
+                        session_id
+                    )
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,
                         success=True,
@@ -445,7 +458,7 @@ async def bulk_delete_sessions_endpoint(
                     failed_count += 1
 
             except Exception as e:
-                logger.warning(f"Failed to delete session {session_id}: {e}")
+                logger.warning("Failed to delete session in bulk operation")
                 results.append(BulkDeleteSessionResult(
                     session_id=session_id,
                     success=False,
@@ -453,10 +466,7 @@ async def bulk_delete_sessions_endpoint(
                 ))
                 failed_count += 1
 
-        logger.info(
-            f"Bulk delete completed for user {user_id}: "
-            f"{deleted_count} deleted, {failed_count} failed"
-        )
+        logger.info("Bulk delete completed")
 
         return BulkDeleteSessionsResponse(
             deleted_count=deleted_count,
@@ -465,7 +475,7 @@ async def bulk_delete_sessions_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"Error in bulk delete sessions: {e}", exc_info=True)
+        logger.error("Error in bulk delete sessions", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to bulk delete sessions: {str(e)}"
@@ -503,7 +513,7 @@ async def get_session_messages_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info(f"GET /sessions/{session_id}/messages - User: {user_id}, Limit: {limit}, NextToken: {next_token}")
+    logger.info("GET /sessions/messages - retrieving session messages")
 
     try:
         # Retrieve messages from storage (cloud or local) with pagination
@@ -514,24 +524,24 @@ async def get_session_messages_endpoint(
             next_token=next_token
         )
 
-        logger.info(f"Successfully retrieved {len(response.messages)} messages for session {session_id}")
+        logger.info("Successfully retrieved session messages")
 
         return response
 
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error("Configuration error retrieving messages")
         raise HTTPException(
             status_code=500,
             detail=f"Server configuration error: {str(e)}"
         )
     except FileNotFoundError as e:
-        logger.warning(f"Session not found: {session_id}")
+        logger.warning("Session not found")
         raise HTTPException(
             status_code=404,
             detail=f"Session not found: {session_id}"
         )
     except Exception as e:
-        logger.error(f"Error retrieving messages: {e}", exc_info=True)
+        logger.error("Error retrieving messages", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve messages: {str(e)}"

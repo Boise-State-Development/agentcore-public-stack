@@ -260,6 +260,36 @@ export class DocumentService {
   }
 
   /**
+   * Report that a client-side S3 upload failed.
+   * Marks the document as 'failed' in the backend so polling stops
+   * and the error is visible on page refresh.
+   *
+   * @param assistantId - The assistant identifier
+   * @param documentId - The document identifier
+   * @param error - User-friendly error message
+   * @param details - Optional technical error details
+   */
+  async reportUploadFailure(
+    assistantId: string,
+    documentId: string,
+    error: string,
+    details?: string,
+  ): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.http.post(
+          `${this.baseUrl()}/${assistantId}/documents/${documentId}/upload-failed`,
+          { error, details },
+        ),
+      );
+    } catch (err) {
+      // Best-effort — don't throw if this fails, the stale document
+      // timeout will eventually catch it
+      console.warn('Failed to report upload failure to backend:', err);
+    }
+  }
+
+  /**
    * Poll document status until it reaches a terminal state (complete or failed).
    * Uses exponential backoff with a maximum interval.
    *

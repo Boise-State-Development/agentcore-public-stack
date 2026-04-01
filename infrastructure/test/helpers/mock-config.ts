@@ -78,6 +78,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     fineTuning: {
       enabled: false,
+      defaultQuotaHours: 0,
     },
     cognito: {
       domainPrefix: MOCK_PREFIX,

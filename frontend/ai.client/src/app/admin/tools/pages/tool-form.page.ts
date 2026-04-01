@@ -21,8 +21,6 @@ import {
 import { AdminToolService } from '../services/admin-tool.service';
 import { OAuthProvidersService } from '../../oauth-providers/services/oauth-providers.service';
 import {
-  AdminTool,
-  ToolFormData,
   TOOL_CATEGORIES,
   TOOL_PROTOCOLS,
   TOOL_STATUSES,

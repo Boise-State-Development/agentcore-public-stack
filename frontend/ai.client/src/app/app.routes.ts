@@ -1,5 +1,4 @@
 import { Routes } from '@angular/router';
-import { ConversationPage } from './session/session.page';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
@@ -19,6 +18,11 @@ export const routes: Routes = [
         path: 'auth/first-boot',
         loadComponent: () => import('./auth/first-boot/first-boot.page').then(m => m.FirstBootPage),
         canActivate: [firstBootGuard],
+    },
+    {
+        path: 'shared/:shareId',
+        loadComponent: () => import('./shared/shared-view.page').then(m => m.SharedViewPage),
+        canActivate: [authGuard],
     },
     {
         path: 'auth/login',
@@ -191,6 +195,11 @@ export const routes: Routes = [
     {
         path: 'admin/fine-tuning',
         loadComponent: () => import('./admin/fine-tuning-access/fine-tuning-access.page').then(m => m.FineTuningAccessPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/fine-tuning/costs',
+        loadComponent: () => import('./admin/fine-tuning-costs/fine-tuning-costs.page').then(m => m.FineTuningCostsPage),
         canActivate: [adminGuard],
     },
     {

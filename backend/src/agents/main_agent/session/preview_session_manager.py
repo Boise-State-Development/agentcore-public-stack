@@ -9,8 +9,7 @@ test their assistant's behavior without cluttering their conversation history.
 """
 
 import logging
-from typing import List, Optional, Any
-from strands.types.content import Message
+from typing import List, Any
 from strands.types.session import SessionMessage
 
 logger = logging.getLogger(__name__)
@@ -55,9 +54,9 @@ class PreviewSessionManager:
         self._messages: List[SessionMessage] = []
         self._message_index = 0
 
-        logger.info(f"🔍 Preview session manager initialized: {session_id}")
-        logger.info(f"   • In-memory storage only (no persistence)")
-        logger.info(f"   • Multi-turn context: Enabled")
+        logger.info("🔍 Preview session manager initialized")
+        logger.info("   • In-memory storage only (no persistence)")
+        logger.info("   • Multi-turn context: Enabled")
 
     def read_session(self, session_id: str, window_id: str = "default") -> List[SessionMessage]:
         """

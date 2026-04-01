@@ -148,7 +148,7 @@ async def get_user_preferences(
     search_query = query or "user preferences settings behavior"
 
     try:
-        logger.info(f"Retrieving preferences for user {user_id} from namespace {namespace}")
+        logger.info("Retrieving preferences from memory")
         memories = client.retrieve_memories(
             memory_id=config.memory_id,
             namespace=namespace,
@@ -193,7 +193,7 @@ async def get_user_facts(
     search_query = query or "information facts knowledge"
 
     try:
-        logger.info(f"Retrieving facts for user {user_id} from namespace {namespace}")
+        logger.info("Retrieving facts from memory")
         memories = client.retrieve_memories(
             memory_id=config.memory_id,
             namespace=namespace,
@@ -244,7 +244,7 @@ async def get_session_summaries(
     search_query = query or "conversation summary topics decisions"
 
     try:
-        logger.info(f"Retrieving summaries for user {user_id}, session {session_id} from namespace {namespace}")
+        logger.info("Retrieving session summaries from memory")
         memories = client.retrieve_memories(
             memory_id=config.memory_id,
             namespace=namespace,
@@ -295,7 +295,7 @@ async def search_memories(
         return []
 
     try:
-        logger.info(f"Searching memories for user {user_id} in namespace {namespace}")
+        logger.info("Searching memories")
         memories = client.retrieve_memories(
             memory_id=config.memory_id,
             namespace=namespace,
@@ -323,7 +323,7 @@ async def get_memory_strategies() -> List[Dict[str, Any]]:
     config = load_memory_config()
 
     try:
-        logger.info(f"Getting memory strategies for memory {config.memory_id}")
+        logger.info("Getting memory strategies")
         strategies = client.get_memory_strategies(memory_id=config.memory_id)
         logger.info(f"Retrieved {len(strategies)} strategies")
         return strategies
@@ -445,7 +445,7 @@ async def delete_memory(
         # Use boto3 directly since MemoryClient doesn't expose delete methods
         client = boto3.client('bedrock-agentcore', region_name=config.region)
 
-        logger.info(f"Attempting to delete memory record {record_id} from memory {config.memory_id}")
+        logger.info("Attempting to delete memory record")
 
         # Use batch_delete_memory_records API
         response = client.batch_delete_memory_records(
@@ -458,16 +458,15 @@ async def delete_memory(
         failed = response.get('failedRecords', [])
 
         if successful:
-            logger.info(f"Successfully deleted memory record {record_id}")
+            logger.info("Successfully deleted memory record")
             return True
         elif failed:
-            error_msg = failed[0].get('errorMessage', 'Unknown error')
-            logger.warning(f"Failed to delete memory record {record_id}: {error_msg}")
+            logger.warning("Failed to delete memory record: %s", failed[0].get('errorMessage', 'Unknown error'))
             return False
         else:
-            logger.info(f"Delete request processed for {record_id}")
+            logger.info("Delete request processed for memory record")
             return True
 
     except Exception as e:
-        logger.error(f"Failed to delete memory {record_id}: {e}", exc_info=True)
+        logger.error("Failed to delete memory record", exc_info=True)
         return False

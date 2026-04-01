@@ -219,7 +219,7 @@ export class SessionService {
     const apiResponse = this.sessionsResource.value();
     const localCache = this.localSessionsCache();
 
-    if (!apiResponse || apiResponse === null) {
+    if (!apiResponse) {
       // Resource hasn't loaded yet or is disabled, return cached sessions only
       return {
         sessions: localCache,

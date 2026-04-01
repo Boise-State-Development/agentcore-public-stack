@@ -20,3 +20,26 @@ class AccessListResponse(BaseModel):
     """Response for listing all access grants."""
     grants: List[FineTuningAccessGrant]
     total_count: int
+
+
+# ========== Cost Dashboard Models ==========
+
+
+class UserCostBreakdown(BaseModel):
+    """Per-user cost breakdown for a billing period."""
+    email: str
+    total_cost_usd: float
+    total_gpu_hours: float
+    training_job_count: int
+    inference_job_count: int
+
+
+class FineTuningCostDashboard(BaseModel):
+    """Aggregated cost dashboard for admin fine-tuning cost view."""
+    period: str = Field(description="YYYY-MM billing period")
+    total_cost_usd: float
+    total_gpu_hours: float
+    active_user_count: int
+    training_job_count: int
+    inference_job_count: int
+    users: List[UserCostBreakdown]

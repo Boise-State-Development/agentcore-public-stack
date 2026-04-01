@@ -2,7 +2,6 @@
 
 import pytest
 from apis.app_api.costs.calculator import CostCalculator
-from apis.app_api.costs.models import CostBreakdown
 
 
 class TestCostCalculator:

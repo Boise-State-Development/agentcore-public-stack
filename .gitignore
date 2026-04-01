@@ -121,3 +121,6 @@ coverage/
 /.vs
 .vs/*
 .kiro/steering/dev-environment.md
+
+# Local dev scripts
+start.sh

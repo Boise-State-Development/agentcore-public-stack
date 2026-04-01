@@ -17,7 +17,7 @@ Example: `1.0.0-beta.1`, `1.1.0`
 2. Run `bash scripts/common/sync-version.sh`
 3. Commit both the `VERSION` file and the updated manifests
 
-The sync script updates `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`, and regenerates `backend/uv.lock` and `package-lock.json` for both npm projects. All updated files (including lockfiles) must be committed.
+The sync script updates `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`, the `README.md` version badge and "Current release" text, and regenerates `backend/uv.lock` and `package-lock.json` for both npm projects. All updated files (including lockfiles) must be committed.
 
 ## PR Gate
 

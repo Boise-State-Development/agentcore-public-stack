@@ -6,7 +6,7 @@ This module handles:
 - Multi-provider cost support (Bedrock, OpenAI, Gemini)
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 from .models import CostBreakdown
 
 

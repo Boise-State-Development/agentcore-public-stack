@@ -92,6 +92,7 @@ class ToolResultProcessor:
                 tool_result = tool_result.copy()
                 tool_result["content"] = parsed_content
             except json.JSONDecodeError:
+                # Content is not valid JSON; leave it as a plain string
                 pass
 
         if "content" in tool_result:
@@ -291,8 +292,6 @@ class ToolResultProcessor:
         try:
             # Pattern to match Base64 data URLs with optional filename attribute
             base64_pattern = r'<download(?:\s+filename="([^"]+)")?>data:([^;]+);base64,([A-Za-z0-9+/=\s]+?)</download>'
-
-            matches = re.findall(base64_pattern, result_text)
 
             def process_base64_match(match):
                 custom_filename = match.group(1)  # May be None if not provided

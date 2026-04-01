@@ -6,16 +6,17 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# Import timezone support (zoneinfo for Python 3.9+, fallback to pytz)
+# Check timezone support availability (zoneinfo for Python 3.9+, fallback to pytz)
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo  # noqa: F401
     TIMEZONE_AVAILABLE = True
 except ImportError:
     try:
-        import pytz
-        TIMEZONE_AVAILABLE = True
-    except ImportError:
+        from importlib.util import find_spec
+        TIMEZONE_AVAILABLE = find_spec("pytz") is not None
+    except Exception:
         TIMEZONE_AVAILABLE = False
+    if not TIMEZONE_AVAILABLE:
         logger.warning("Neither zoneinfo nor pytz available - date will use UTC")
 
 

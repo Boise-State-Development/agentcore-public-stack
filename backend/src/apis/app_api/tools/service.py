@@ -6,8 +6,7 @@ Provides CRUD operations, user access computation, and bidirectional sync.
 """
 
 import logging
-from typing import Dict, List, Optional, Set
-from datetime import datetime
+from typing import Dict, List, Optional
 
 from apis.shared.auth.models import User
 from apis.shared.rbac.models import UserEffectivePermissions
@@ -22,7 +21,6 @@ from .models import (
     ToolProtocol,
     ToolStatus,
     ToolRoleAssignment,
-    AdminToolResponse,
     SyncResult,
 )
 from .repository import ToolCatalogRepository, get_tool_catalog_repository

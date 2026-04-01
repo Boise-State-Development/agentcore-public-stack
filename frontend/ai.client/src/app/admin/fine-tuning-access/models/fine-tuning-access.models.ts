@@ -13,3 +13,23 @@ export interface AccessListResponse {
   grants: FineTuningGrant[];
   total_count: number;
 }
+
+/** Per-user cost breakdown for a billing period. */
+export interface UserCostBreakdown {
+  email: string;
+  total_cost_usd: number;
+  total_gpu_hours: number;
+  training_job_count: number;
+  inference_job_count: number;
+}
+
+/** Aggregated cost dashboard response. */
+export interface FineTuningCostDashboard {
+  period: string;
+  total_cost_usd: number;
+  total_gpu_hours: number;
+  active_user_count: number;
+  training_job_count: number;
+  inference_job_count: number;
+  users: UserCostBreakdown[];
+}

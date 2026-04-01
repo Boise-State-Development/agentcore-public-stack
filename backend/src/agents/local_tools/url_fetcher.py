@@ -3,9 +3,7 @@ Simple URL Fetcher Tool - Strands Native
 Fetches and extracts text content from web pages
 """
 
-import json
 import logging
-from typing import Optional
 from strands import tool
 
 logger = logging.getLogger(__name__)
@@ -115,7 +113,8 @@ async def fetch_url_content(
                 title_tag = soup.find('title')
                 if title_tag:
                     title = title_tag.get_text().strip()
-            except:
+            except Exception:
+                # Title extraction is best-effort; fall back to default
                 pass
 
             # Extract text

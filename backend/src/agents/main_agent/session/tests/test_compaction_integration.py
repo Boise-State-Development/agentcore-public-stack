@@ -22,7 +22,6 @@ import sys
 import uuid
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 # Configure logging
 logging.basicConfig(

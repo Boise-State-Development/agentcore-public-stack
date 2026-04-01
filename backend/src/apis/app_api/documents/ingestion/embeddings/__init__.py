@@ -2,6 +2,7 @@
 
 Token validation and chunk splitting for the document ingestion pipeline.
 Core embedding/vector operations are in apis.shared.embeddings.
+Re-exports are provided for Lambda handler compatibility.
 """
 
 from .bedrock_embeddings import (

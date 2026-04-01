@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import AppRole, EffectivePermissions
+from .models import AppRole
 
 logger = logging.getLogger(__name__)
 

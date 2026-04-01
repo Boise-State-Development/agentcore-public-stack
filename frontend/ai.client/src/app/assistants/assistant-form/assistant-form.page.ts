@@ -375,9 +375,12 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       status: 'uploading',
     });
 
+    let documentId: string | undefined;
+
     try {
       // Step 1: Request presigned URL
       const uploadUrlResponse = await this.documentService.requestUploadUrl(assistantId, file);
+      documentId = uploadUrlResponse.documentId;
 
       // Step 2: Upload to S3 with progress tracking
       await this.documentService.uploadToS3(uploadUrlResponse.uploadUrl, file, (progress) => {
@@ -418,6 +421,17 @@ export class AssistantFormPage implements OnInit, OnDestroy {
         status: 'error',
         error: errorMessage,
       });
+
+      // Report the failure to the backend so the DynamoDB record is marked
+      // as 'failed' instead of stuck in 'uploading'. This prevents infinite
+      // polling on page refresh.
+      if (documentId) {
+        const details =
+          error instanceof DocumentUploadError
+            ? JSON.stringify(error.details)
+            : undefined;
+        this.documentService.reportUploadFailure(assistantId, documentId, errorMessage, details);
+      }
     }
   }
 
@@ -539,8 +553,6 @@ export class AssistantFormPage implements OnInit, OnDestroy {
         return `${baseClasses} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
       case 'DRAFT':
         return `${baseClasses} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`;
-      case 'ARCHIVED':
-        return `${baseClasses} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
       default:
         return `${baseClasses} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
     }

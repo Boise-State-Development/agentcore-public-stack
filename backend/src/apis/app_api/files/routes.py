@@ -116,7 +116,7 @@ async def complete_upload(
     Call this after successfully uploading the file using the pre-signed URL.
     This verifies the S3 object exists and updates the file status to 'ready'.
     """
-    logger.info(f"User {user.name} completing upload {upload_id}")
+    logger.info("User completing upload")
 
     try:
         response = await service.complete_upload(user.user_id, upload_id)
@@ -129,7 +129,7 @@ async def complete_upload(
         )
 
     except FileUploadError as e:
-        logger.warning(f"Upload completion error for {upload_id}: {e}")
+        logger.warning("Upload completion error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
@@ -176,11 +176,7 @@ async def list_files(
     Optionally filter by session/conversation. Returns only files with 'ready' status.
     Supports sorting by date (default), size, or type.
     """
-    logger.info(
-        f"User {user.name} listing files"
-        + (f" for session {session_id}" if session_id else "")
-        + f" (sort: {sort_by.value} {sort_order.value})"
-    )
+    logger.info("User listing files")
 
     response = await service.list_user_files(
         user_id=user.user_id,
@@ -206,7 +202,7 @@ async def delete_file(
     Use this when a user removes an attached file before sending,
     or when manually deleting from the file browser.
     """
-    logger.info(f"User {user.name} deleting file {upload_id}")
+    logger.info("User deleting file")
 
     deleted = await service.delete_file(user.user_id, upload_id)
 

@@ -92,8 +92,6 @@ class ToolAccessService:
                 return list(allowed_tools & all_tool_ids)
 
         # Filter requested tools to only allowed ones
-        requested_set = set(requested_tools)
-
         if has_wildcard:
             # Wildcard: allow all requested tools that exist
             # (allow gateway tools even if not in catalog)

@@ -36,6 +36,7 @@ fi
 PYPROJECT="${REPO_ROOT}/backend/pyproject.toml"
 FE_PKG="${REPO_ROOT}/frontend/ai.client/package.json"
 INFRA_PKG="${REPO_ROOT}/infrastructure/package.json"
+README="${REPO_ROOT}/README.md"
 
 CHECK_MODE=false
 if [ "${1:-}" = "--check" ]; then
@@ -62,6 +63,8 @@ sync_or_check() {
 PY_VER=$(grep -oP '^version\s*=\s*"\K[^"]+' "${PYPROJECT}" || echo "")
 FE_VER=$(grep -oP '"version"\s*:\s*"\K[^"]+' "${FE_PKG}" | head -1 || echo "")
 INFRA_VER=$(grep -oP '"version"\s*:\s*"\K[^"]+' "${INFRA_PKG}" | head -1 || echo "")
+README_BADGE_VER=$(grep -oP 'badge/Release-v\K[^-][^?]*(?=-)' "${README}" | head -1 | sed 's/--/-/g' || echo "")
+README_CURRENT_VER=$(grep -oP '\*\*Current release:\*\* v\K.*' "${README}" | tr -d '[:space:]' || echo "")
 
 # uv.lock uses PEP 440 format (e.g., 1.0.0b16 instead of 1.0.0-beta.16)
 UV_LOCK="${REPO_ROOT}/backend/uv.lock"
@@ -77,6 +80,8 @@ if [ "${CHECK_MODE}" = true ]; then
     sync_or_check "${PYPROJECT}" "${PY_VER}" "backend/pyproject.toml"
     sync_or_check "${FE_PKG}" "${FE_VER}" "frontend/ai.client/package.json"
     sync_or_check "${INFRA_PKG}" "${INFRA_VER}" "infrastructure/package.json"
+    sync_or_check "${README}" "${README_BADGE_VER}" "README.md (badge)"
+    sync_or_check "${README}" "${README_CURRENT_VER}" "README.md (current release)"
     if [ -f "${UV_LOCK}" ]; then
         sync_or_check "${UV_LOCK}" "${UV_LOCK_VER}" "backend/uv.lock" "${PEP440_VERSION}"
     fi
@@ -102,6 +107,13 @@ echo -e "${GREEN}[UPDATED]${NC} frontend/ai.client/package.json"
 
 sed -i "0,/\"version\": \"[^\"]*\"/s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${INFRA_PKG}"
 echo -e "${GREEN}[UPDATED]${NC} infrastructure/package.json"
+
+# README.md: version badge and "Current release" text
+# shields.io uses -- for literal hyphens in badge text
+BADGE_VERSION=$(echo "${VERSION}" | sed 's/-/--/g')
+sed -i "s|badge/Release-v[^?]*|badge/Release-v${BADGE_VERSION}-6366f1|" "${README}"
+sed -i "s|\*\*Current release:\*\* v.*|\*\*Current release:\*\* v${VERSION}|" "${README}"
+echo -e "${GREEN}[UPDATED]${NC} README.md (badge + current release)"
 
 # Regenerate lockfiles so they reflect the new version
 echo -e "\nRegenerating lockfiles..."

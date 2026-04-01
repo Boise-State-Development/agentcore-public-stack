@@ -25,9 +25,90 @@ describe('ToolRailComponent', () => {
   let component: ToolRailComponent;
 
   beforeEach(async () => {
+    TestBed.resetTestingModule();
+
     await TestBed.configureTestingModule({
       imports: [ToolRailComponent],
-    }).compileComponents();
+    })
+      .overrideComponent(ToolRailComponent, {
+        set: {
+          templateUrl: undefined as any,
+          styleUrl: undefined as any,
+          styles: [],
+          template: `
+            <button type="button" (click)="toggleExpanded()" class="flex items-center gap-2 cursor-pointer group w-full text-left">
+              @if (hasSummaries() && group().groupSummary) {
+                <span>{{ group().groupSummary }}</span>
+              } @else {
+                <span class="flex items-center gap-1.5 flex-wrap">
+                  @if (effectiveExpanded()) {
+                    @for (call of group().calls; track call.id; let last = $last) {
+                      <span>{{ call.toolName }}</span>
+                      @if (!last) { <span>&rarr;</span> }
+                    }
+                    <span>({{ group().calls.length }} tools)</span>
+                  } @else {
+                    @for (call of collapsedHeaderCalls(); track call.id; let last = $last) {
+                      <span>{{ call.toolName }}</span>
+                      @if (!last) { <span>&rarr;</span> }
+                    }
+                    @if (overflowCount() > 0) {
+                      <span>and {{ overflowCount() }} more</span>
+                    }
+                  }
+                </span>
+              }
+            </button>
+            <div class="collapsible-content" [class.open]="effectiveExpanded()">
+              <div><div class="pl-4 space-y-3 mt-2 border-l-2">
+                @for (call of group().calls; track call.id) {
+                  <div>
+                    <div class="flex items-center gap-2 mb-0.5">
+                      <span [class]="statusDotClass(call)"></span>
+                      <span class="text-xs font-medium">{{ call.toolName }}</span>
+                      @if (call.durationMs) { <span>{{ formatDuration(call.durationMs) }}</span> }
+                    </div>
+                    @if (hasSummaries() && call.summary) {
+                      <p class="ml-3.5">{{ call.summary }}</p>
+                    }
+                    @if (!hasSummaries()) {
+                      <div class="ml-3.5 space-y-1">
+                        @if (call.input && (call.input | keyvalue)?.length) {
+                          <div><span>input:</span><span class="font-mono">{{ formatInput(call.input) }}</span></div>
+                        }
+                        @if (call.result) {
+                          <div class="flex items-start gap-1.5">
+                            <span>result:</span>
+                            <div class="result-block">
+                              @if (isResultExpanded(call.id)) {
+                                @for (item of call.result.content; track $index) {
+                                  @if (item.json) { <pre><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre> }
+                                  @else if (item.text) { <div>{{ item.text }}</div> }
+                                }
+                              } @else {
+                                <span>{{ truncateResult(getResultText(call)) }}</span>
+                              }
+                              @if (getResultText(call).length > 200) {
+                                <button type="button" (click)="toggleFullResult(call.id)">
+                                  {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
+                                </button>
+                              }
+                            </div>
+                          </div>
+                          @for (item of getResultImages(call); track $index) {
+                            <div><img [src]="getImageDataUrl(item)" alt="Tool result image" /></div>
+                          }
+                        }
+                      </div>
+                    }
+                  </div>
+                }
+              </div></div>
+            </div>
+          `,
+      },
+    })
+    .compileComponents();
 
     fixture = TestBed.createComponent(ToolRailComponent);
     component = fixture.componentInstance;

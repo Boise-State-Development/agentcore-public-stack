@@ -4,10 +4,11 @@ import * as fc from 'fast-check';
 // Shared fast-check arbitraries for auth RBAC property-based tests
 // Feature: auth-rbac-tests
 
-const arbRoleName = fc.stringOf(
-  fc.constantFrom(...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-'.split('')),
-  { minLength: 1, maxLength: 30 }
-);
+const arbRoleName = fc.string({
+  unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-'.split('')),
+  minLength: 1,
+  maxLength: 30,
+});
 
 const arbRoleList = fc.array(arbRoleName, { maxLength: 10 });
 

@@ -5,7 +5,6 @@ import {
   OnInit,
   OnDestroy,
   signal,
-  computed,
 } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';

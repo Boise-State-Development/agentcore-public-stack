@@ -4,7 +4,7 @@ Tool Catalog - Metadata for all available tools
 Provides tool metadata for authorization, UI display, and discovery.
 Tools are identified by their function name (tool_id).
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 

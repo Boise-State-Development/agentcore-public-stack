@@ -7,9 +7,11 @@ import {
   ElementRef,
   viewChild,
   AfterViewInit,
+  inject,
 } from '@angular/core';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
 import { FileAttachmentBadgeComponent } from './file-attachment';
+import { LocalSettingsService } from '../../../../services/local-settings.service';
 
 const MAX_HEIGHT_PX = 200;
 
@@ -31,9 +33,13 @@ const MAX_HEIGHT_PX = 200;
                 class="overflow-hidden transition-[max-height] duration-300 ease-in-out"
                 [style.max-height]="expanded() ? 'none' : maxHeightPx + 'px'"
               >
-                @for (block of message().content; track $index) {
-                  @if (block.type === 'text' && block.text) {
-                    <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                @if (displayText()) {
+                  <p class="whitespace-pre-wrap">{{ displayText() }}</p>
+                } @else {
+                  @for (block of message().content; track $index) {
+                    @if (block.type === 'text' && block.text) {
+                      <p class="whitespace-pre-wrap">{{ block.text }}</p>
+                    }
                   }
                 }
               </div>
@@ -80,9 +86,22 @@ export class UserMessageComponent implements AfterViewInit {
   expanded = signal(false);
   isOverflowing = signal(false);
 
+  private localSettings = inject(LocalSettingsService);
+
   readonly maxHeightPx = MAX_HEIGHT_PX;
 
+  /** Original user message before prompt modification — skipped when debug output is enabled */
+  displayText = computed((): string | null => {
+    if (this.localSettings.showDebugOutput()) return null;
+    const metadata = this.message().metadata;
+    if (metadata && typeof metadata['displayText'] === 'string') {
+      return metadata['displayText'];
+    }
+    return null;
+  });
+
   hasTextContent = computed(() => {
+    if (this.displayText()) return true;
     return this.message().content.some(
       (block: ContentBlock) => block.type === 'text' && block.text
     );

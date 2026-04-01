@@ -109,7 +109,7 @@ export interface Message {
   content: ContentBlock[];
   /** ISO timestamp when the message was created */
   created_at?: string;
-  /** Optional metadata associated with the message */
+  /** Optional metadata associated with the message (may include displayText with the original user input before prompt modification) */
   metadata?: Record<string, unknown> | null;
   /** RAG citations from knowledge base retrieval (assistant messages only) */
   citations?: Citation[];

@@ -10,9 +10,8 @@ AgentCore Runtime API clean. These endpoints handle:
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from agents.main_agent.session.session_factory import SessionFactory
@@ -20,7 +19,7 @@ from agents.main_agent.session.preview_session_manager import is_preview_session
 from apis.app_api.admin.services import get_tool_access_service
 from apis.shared.assistants.service import assistant_exists, get_assistant_with_access_check, mark_share_as_interacted
 from apis.shared.assistants.rag_service import augment_prompt_with_context, search_assistant_knowledgebase_with_formatting
-from apis.shared.files.file_resolver import ResolvedFileContent, get_file_resolver
+from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.sessions.models import SessionMetadata, SessionPreferences
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
@@ -32,9 +31,7 @@ from apis.inference_api.chat.service import generate_conversation_title, get_age
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
 from apis.shared.errors import (
-    ConversationalErrorEvent,
     ErrorCode,
-    StreamErrorEvent,
     build_conversational_error_event,
 )
 from apis.shared.quota import (
@@ -394,10 +391,22 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
 
             # Pass resolved files (from S3) merged with any direct file content
             # Use augmented message if assistant RAG was applied
+            #
+            # Always store the original user message as displayText when the prompt
+            # will be modified before reaching the model. This happens when:
+            #   1. RAG augmentation prepends context chunks to the message
+            #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            # The original text becomes the single source of truth for UI display,
+            # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            message_will_be_modified = (
+                augmented_message != request.message  # RAG augmentation
+                or bool(files_to_send)                # File attachments
+            )
             stream_iterator = agent.stream_async(
-                augmented_message,  # Use augmented message if assistant RAG was applied
+                augmented_message,
                 session_id=request.session_id,
                 files=files_to_send if files_to_send else None,
+                original_message=request.message if message_will_be_modified else None,
             )
 
             try:

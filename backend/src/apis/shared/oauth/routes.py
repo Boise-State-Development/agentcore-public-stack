@@ -134,7 +134,7 @@ async def initiate_connection(
             - 403 if user not authorized for provider
     """
     logger.info(
-        f"User {current_user.name} initiating OAuth connection to {provider_id}"
+        "User initiating OAuth connection"
     )
 
     # Resolve user's application roles
@@ -180,7 +180,7 @@ async def oauth_callback(
 
     # Handle error from provider
     if error:
-        logger.warning(f"OAuth callback error: {error} - {error_description}")
+        logger.warning("OAuth callback error")
         params = urlencode({"error": error, "error_description": error_description or ""})
         return RedirectResponse(
             url=f"{frontend_url}{callback_path}?{params}",
@@ -252,7 +252,7 @@ async def disconnect_provider(
     Raises:
         HTTPException: 404 if not connected to provider
     """
-    logger.info(f"User {current_user.name} disconnecting from {provider_id}")
+    logger.info("User disconnecting from OAuth provider")
 
     disconnected = await oauth_service.disconnect(
         user_id=current_user.user_id,

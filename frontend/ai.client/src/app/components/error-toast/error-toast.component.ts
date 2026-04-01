@@ -1,5 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
-import { ErrorService, ErrorMessage } from '../../services/error/error.service';
+import { ErrorService } from '../../services/error/error.service';
 
 /**
  * Error toast component that displays error messages from ErrorService

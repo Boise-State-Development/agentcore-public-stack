@@ -3,10 +3,9 @@
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Tuple
-from decimal import Decimal
 
 from .models import UserCostSummary, ModelCostSummary, CostBreakdown
-from apis.app_api.storage.metadata_storage import get_metadata_storage
+from apis.app_api.storage import get_metadata_storage
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class CostAggregator:
         if cache_key in self._cache:
             summary, cached_at = self._cache[cache_key]
             if datetime.now(timezone.utc) - cached_at < timedelta(seconds=self.cache_ttl):
-                logger.debug(f"Cost summary cache hit for user {user_id}, period {period}")
+                logger.debug("Cost summary cache hit")
                 return summary
             else:
                 # Expired, remove from cache
@@ -45,7 +44,7 @@ class CostAggregator:
         """Cache a summary"""
         cache_key = self._get_cache_key(user_id, period)
         self._cache[cache_key] = (summary, datetime.now(timezone.utc))
-        logger.debug(f"Cost summary cached for user {user_id}, period {period}")
+        logger.debug("Cost summary cached")
 
     def invalidate_cache(self, user_id: Optional[str] = None, period: Optional[str] = None) -> None:
         """Invalidate cache for specific user/period or all entries.
@@ -280,15 +279,7 @@ class CostAggregator:
         # Parse period to get date range
         try:
             year, month = period.split('-')
-            # Calculate last day of month
-            if month == '12':
-                next_month = 1
-                next_year = int(year) + 1
-            else:
-                next_month = int(month) + 1
-                next_year = int(year)
-
-            # Get last day by going to first day of next month and subtracting a day
+            # Get last day of month
             from calendar import monthrange
             last_day = monthrange(int(year), int(month))[1]
 

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
-from apis.shared.errors import ConversationalErrorEvent, ErrorCode, StreamErrorEvent, build_conversational_error_event
+from apis.shared.errors import ErrorCode, StreamErrorEvent, build_conversational_error_event
 
 from .stream_processor import process_agent_stream
 
@@ -38,6 +38,7 @@ class StreamCoordinator:
         user_id: str,
         main_agent_wrapper: Any = None,
         citations: Optional[List] = None,
+        original_message: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -53,6 +54,7 @@ class StreamCoordinator:
             user_id: User identifier
             main_agent_wrapper: MainAgent wrapper instance (has model_config, enabled_tools, etc.)
             citations: Optional list of citation dicts from RAG retrieval to persist with metadata
+            original_message: Original user message before RAG augmentation (for clean UI display)
 
         Yields:
             str: SSE formatted events
@@ -445,6 +447,21 @@ class StreamCoordinator:
                             logger.error(f"Failed to store metadata for message {message_ids_to_store[idx]}: {result}")
 
                 logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (parallel)")
+
+            # Store displayText for user message if original_message differs from augmented
+            if original_message:
+                user_message_index = initial_message_count  # User message is first in this turn
+                try:
+                    from apis.shared.sessions.metadata import store_user_display_text
+                    await store_user_display_text(
+                        session_id=session_id,
+                        user_id=user_id,
+                        message_id=user_message_index,
+                        display_text=original_message,
+                    )
+                    logger.info(f"💾 Stored displayText for user message {user_message_index}")
+                except Exception as e:
+                    logger.error(f"Failed to store user displayText: {e}", exc_info=True)
 
             # Update compaction state if session manager supports it
             # This tracks input token usage and triggers compaction when threshold exceeded

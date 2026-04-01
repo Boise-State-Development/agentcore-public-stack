@@ -10,7 +10,6 @@ import {
   ToolUpdateRequest,
   ToolRolesResponse,
   ToolRoleAssignment,
-  SetToolRolesRequest,
   SyncResult,
 } from '../models/admin-tool.model';
 

@@ -5,7 +5,6 @@ configuration is a security-sensitive operation.
 """
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -36,7 +35,7 @@ async def list_auth_providers(
     admin_user: User = Depends(require_system_admin),
 ) -> AuthProviderListResponse:
     """List all configured OIDC authentication providers."""
-    logger.info(f"Admin {admin_user.email} listing auth providers (enabled_only={enabled_only})")
+    logger.info("Admin listing auth providers")
 
     service = get_auth_provider_service()
     providers = await service.list_providers(enabled_only=enabled_only)
@@ -64,7 +63,7 @@ async def get_runtime_image_tag(
     import boto3
     from botocore.exceptions import ClientError
     
-    logger.info(f"Admin {admin_user.email} requesting runtime image tag")
+    logger.info("Admin requesting runtime image tag")
     
     project_prefix = os.environ.get("PROJECT_PREFIX", "agentcore")
     param_name = f"/{project_prefix}/inference-api/image-tag"
@@ -105,7 +104,7 @@ async def discover_oidc_endpoints(
     Fetches the .well-known/openid-configuration document and returns
     the discovered endpoints, supported scopes, and claims.
     """
-    logger.info(f"Admin {admin_user.email} discovering OIDC endpoints for: {request.issuer_url}")
+    logger.info("Admin discovering OIDC endpoints")
 
     service = get_auth_provider_service()
     return await service.discover_endpoints(request.issuer_url)
@@ -121,7 +120,7 @@ async def get_auth_provider(
     admin_user: User = Depends(require_system_admin),
 ) -> AuthProviderResponse:
     """Get a specific authentication provider by ID."""
-    logger.info(f"Admin {admin_user.email} requesting auth provider: {provider_id}")
+    logger.info("Admin requesting auth provider")
 
     service = get_auth_provider_service()
     provider = await service.get_provider(provider_id)
@@ -151,7 +150,7 @@ async def create_auth_provider(
     If endpoints are not provided, they will be auto-discovered from
     the issuer URL's .well-known/openid-configuration endpoint.
     """
-    logger.info(f"Admin {admin_user.email} creating auth provider: {data.provider_id}")
+    logger.info("Admin creating auth provider")
 
     try:
         service = get_auth_provider_service()
@@ -180,7 +179,7 @@ async def update_auth_provider(
     Only provided fields are updated. If issuer_url is changed,
     endpoints are re-discovered automatically.
     """
-    logger.info(f"Admin {admin_user.email} updating auth provider: {provider_id}")
+    logger.info("Admin updating auth provider")
 
     try:
         service = get_auth_provider_service()
@@ -210,7 +209,7 @@ async def delete_auth_provider(
     admin_user: User = Depends(require_system_admin),
 ) -> None:
     """Delete an authentication provider and its client secret."""
-    logger.info(f"Admin {admin_user.email} deleting auth provider: {provider_id}")
+    logger.info("Admin deleting auth provider")
 
     service = get_auth_provider_service()
     deleted = await service.delete_provider(provider_id)
@@ -237,7 +236,7 @@ async def discover_oidc_endpoints(
     Fetches the .well-known/openid-configuration document and returns
     the discovered endpoints, supported scopes, and claims.
     """
-    logger.info(f"Admin {admin_user.email} discovering OIDC endpoints for: {request.issuer_url}")
+    logger.info("Admin discovering OIDC endpoints")
 
     service = get_auth_provider_service()
     return await service.discover_endpoints(request.issuer_url)
@@ -255,7 +254,7 @@ async def test_auth_provider(
     Test provider connectivity by verifying JWKS, discovery, and
     token endpoints are reachable.
     """
-    logger.info(f"Admin {admin_user.email} testing auth provider: {provider_id}")
+    logger.info("Admin testing auth provider")
 
     service = get_auth_provider_service()
     return await service.test_provider(provider_id)
