@@ -58,17 +58,28 @@ async def check_access(
     This endpoint does NOT require fine-tuning access — it is used by
     the frontend to decide whether to show the fine-tuning UI.
     """
+    from .dependencies import DEFAULT_MONTHLY_QUOTA_HOURS
+
     grant = repo.check_and_reset_quota(user.email)
 
-    if grant is None:
-        return FineTuningAccessResponse(has_access=False)
+    if grant is not None:
+        return FineTuningAccessResponse(
+            has_access=True,
+            monthly_quota_hours=grant["monthly_quota_hours"],
+            current_month_usage_hours=grant["current_month_usage_hours"],
+            quota_period=grant["quota_period"],
+        )
 
-    return FineTuningAccessResponse(
-        has_access=True,
-        monthly_quota_hours=grant["monthly_quota_hours"],
-        current_month_usage_hours=grant["current_month_usage_hours"],
-        quota_period=grant["quota_period"],
-    )
+    # No explicit grant — check if open-access mode is enabled.
+    if DEFAULT_MONTHLY_QUOTA_HOURS > 0:
+        return FineTuningAccessResponse(
+            has_access=True,
+            monthly_quota_hours=DEFAULT_MONTHLY_QUOTA_HOURS,
+            current_month_usage_hours=0.0,
+            quota_period=None,
+        )
+
+    return FineTuningAccessResponse(has_access=False)
 
 
 # =========================================================================

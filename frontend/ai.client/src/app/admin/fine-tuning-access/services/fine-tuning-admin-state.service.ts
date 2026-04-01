@@ -1,7 +1,7 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { FineTuningAdminHttpService } from './fine-tuning-admin-http.service';
-import { FineTuningGrant } from '../models/fine-tuning-access.models';
+import { FineTuningGrant, FineTuningCostDashboard } from '../models/fine-tuning-access.models';
 
 /**
  * State service for admin fine-tuning access management.
@@ -97,5 +97,43 @@ export class FineTuningAdminStateService {
   /** Clear the current error. */
   clearError(): void {
     this.error.set(null);
+  }
+
+  // ========== Cost Dashboard ==========
+
+  /** Cost dashboard data for the selected period. */
+  readonly costDashboard = signal<FineTuningCostDashboard | null>(null);
+
+  /** Whether cost data is loading. */
+  readonly costLoading = signal(false);
+
+  /** Selected billing period (YYYY-MM). */
+  readonly costPeriod = signal<string>(this.getCurrentPeriod());
+
+  /** Fetch cost dashboard for a given period. */
+  async loadCostDashboard(month?: string): Promise<void> {
+    const period = month ?? this.costPeriod();
+    this.costLoading.set(true);
+    this.error.set(null);
+    try {
+      const data = await firstValueFrom(this.http.getCostDashboard(period));
+      this.costDashboard.set(data);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load cost data';
+      this.error.set(message);
+    } finally {
+      this.costLoading.set(false);
+    }
+  }
+
+  /** Update the selected cost period and reload. */
+  setCostPeriod(period: string): void {
+    this.costPeriod.set(period);
+    this.loadCostDashboard(period);
+  }
+
+  private getCurrentPeriod(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   }
 }

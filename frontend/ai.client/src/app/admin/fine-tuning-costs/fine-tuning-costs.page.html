@@ -1,0 +1,281 @@
+<div class="min-h-dvh bg-gray-50 dark:bg-gray-900">
+  <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Back Button -->
+    <a
+      routerLink="/admin"
+      class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" />
+      Back to Admin
+    </a>
+
+    <!-- Page Header -->
+    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">
+          Fine-Tuning Costs
+        </h1>
+        <p class="mt-1 text-gray-600 dark:text-gray-400">
+          Monitor GPU compute costs and usage across all fine-tuning users.
+        </p>
+      </div>
+
+      <!-- Period Selector -->
+      <div class="relative inline-flex items-center">
+        <ng-icon
+          name="heroCalendar"
+          class="size-5 text-gray-400 dark:text-gray-500 absolute left-3 pointer-events-none"
+        />
+        <select
+          [ngModel]="selectedPeriod()"
+          (ngModelChange)="onPeriodChange($event)"
+          aria-label="Select billing period"
+          class="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-10 pr-10 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        >
+          @for (option of periodOptions(); track option.value) {
+            <option [value]="option.value">{{ option.label }}</option>
+          }
+        </select>
+        <ng-icon
+          name="heroChevronDown"
+          class="size-4 text-gray-400 dark:text-gray-500 absolute right-3 pointer-events-none"
+        />
+      </div>
+    </div>
+
+    @if (loading()) {
+      <!-- Loading State -->
+      <div class="flex items-center justify-center h-64">
+        <div class="flex flex-col items-center gap-4">
+          <div
+            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600"
+            role="status"
+          >
+            <span class="sr-only">Loading cost data</span>
+          </div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Loading cost data...
+          </p>
+        </div>
+      </div>
+    } @else if (error()) {
+      <!-- Error State -->
+      <div
+        class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6"
+        role="alert"
+      >
+        <div class="flex items-start gap-3">
+          <div>
+            <h3 class="text-sm font-medium text-red-800 dark:text-red-200">
+              Failed to load cost data
+            </h3>
+            <p class="mt-1 text-sm text-red-700 dark:text-red-300">
+              {{ error() }}
+            </p>
+            <button
+              type="button"
+              (click)="state.loadCostDashboard()"
+              class="mt-3 text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 focus:outline-hidden focus:underline"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    } @else if (dashboard(); as data) {
+      <!-- Summary Cards -->
+      <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <!-- Total Cost -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6">
+          <div class="flex items-center justify-between">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Total Cost</p>
+              <p class="mt-2 text-3xl font-semibold text-gray-900 dark:text-white">
+                {{ formatCurrency(data.total_cost_usd) }}
+              </p>
+            </div>
+            <div class="flex size-12 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
+              <ng-icon name="heroCurrencyDollar" class="size-6 text-green-600 dark:text-green-400" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Total GPU Hours -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6">
+          <div class="flex items-center justify-between">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">GPU Hours</p>
+              <p class="mt-2 text-3xl font-semibold text-gray-900 dark:text-white">
+                {{ formatHours(data.total_gpu_hours) }}h
+              </p>
+            </div>
+            <div class="flex size-12 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+              <ng-icon name="heroClock" class="size-6 text-blue-600 dark:text-blue-400" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Users -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6">
+          <div class="flex items-center justify-between">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Active Users</p>
+              <p class="mt-2 text-3xl font-semibold text-gray-900 dark:text-white">
+                {{ data.active_user_count }}
+              </p>
+            </div>
+            <div class="flex size-12 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+              <ng-icon name="heroUsers" class="size-6 text-purple-600 dark:text-purple-400" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Avg Cost / User -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6">
+          <div class="flex items-center justify-between">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-500 dark:text-gray-400">Avg Cost / User</p>
+              <p class="mt-2 text-3xl font-semibold text-gray-900 dark:text-white">
+                {{ formatCurrency(avgCostPerUser()) }}
+              </p>
+            </div>
+            <div class="flex size-12 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+              <ng-icon name="heroCpuChip" class="size-6 text-amber-600 dark:text-amber-400" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Job Counts Summary -->
+      <div class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-5 flex items-center gap-4">
+          <div class="text-sm text-gray-500 dark:text-gray-400">Training Jobs</div>
+          <div class="text-xl font-semibold text-gray-900 dark:text-white">{{ data.training_job_count }}</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-5 flex items-center gap-4">
+          <div class="text-sm text-gray-500 dark:text-gray-400">Inference Jobs</div>
+          <div class="text-xl font-semibold text-gray-900 dark:text-white">{{ data.inference_job_count }}</div>
+        </div>
+      </div>
+
+      <!-- Per-User Cost Table -->
+      <div class="mt-8">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Cost by User</h2>
+
+        @if (data.users.length === 0) {
+          <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-12 text-center">
+            <p class="text-gray-500 dark:text-gray-400">No billable jobs found for this period.</p>
+          </div>
+        } @else {
+          <div class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead>
+                <tr class="bg-gray-50 dark:bg-gray-900/50">
+                  <th scope="col" class="px-6 py-3 text-left">
+                    <button
+                      type="button"
+                      (click)="toggleSort('email')"
+                      class="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-hidden focus:underline"
+                    >
+                      User
+                      @if (isSortedBy('email')) {
+                        <ng-icon [name]="sortAsc() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3" />
+                      }
+                    </button>
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right">
+                    <button
+                      type="button"
+                      (click)="toggleSort('total_cost_usd')"
+                      class="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-hidden focus:underline"
+                    >
+                      Cost
+                      @if (isSortedBy('total_cost_usd')) {
+                        <ng-icon [name]="sortAsc() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3" />
+                      }
+                    </button>
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right">
+                    <button
+                      type="button"
+                      (click)="toggleSort('total_gpu_hours')"
+                      class="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-hidden focus:underline"
+                    >
+                      GPU Hours
+                      @if (isSortedBy('total_gpu_hours')) {
+                        <ng-icon [name]="sortAsc() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3" />
+                      }
+                    </button>
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right">
+                    <button
+                      type="button"
+                      (click)="toggleSort('training_job_count')"
+                      class="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-hidden focus:underline"
+                    >
+                      Training
+                      @if (isSortedBy('training_job_count')) {
+                        <ng-icon [name]="sortAsc() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3" />
+                      }
+                    </button>
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-right">
+                    <button
+                      type="button"
+                      (click)="toggleSort('inference_job_count')"
+                      class="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 focus:outline-hidden focus:underline"
+                    >
+                      Inference
+                      @if (isSortedBy('inference_job_count')) {
+                        <ng-icon [name]="sortAsc() ? 'heroChevronUp' : 'heroChevronDown'" class="size-3" />
+                      }
+                    </button>
+                  </th>
+                  <th scope="col" class="px-6 py-3 text-left">
+                    <span class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                      Share
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                @for (user of sortedUsers(); track user.email) {
+                  <tr class="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
+                    <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                      {{ user.email }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-right text-gray-700 dark:text-gray-300 tabular-nums">
+                      {{ formatCurrency(user.total_cost_usd) }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-right text-gray-700 dark:text-gray-300 tabular-nums">
+                      {{ formatHours(user.total_gpu_hours) }}h
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-right text-gray-700 dark:text-gray-300 tabular-nums">
+                      {{ user.training_job_count }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-right text-gray-700 dark:text-gray-300 tabular-nums">
+                      {{ user.inference_job_count }}
+                    </td>
+                    <td class="px-6 py-4">
+                      <div class="flex items-center gap-2">
+                        <div class="h-2 w-24 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                          <div
+                            class="h-full rounded-full bg-blue-500 transition-all"
+                            [style.width.%]="costBarWidth(user)"
+                          ></div>
+                        </div>
+                        <span class="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                          {{ costBarWidth(user) }}%
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+    }
+  </div>
+</div>

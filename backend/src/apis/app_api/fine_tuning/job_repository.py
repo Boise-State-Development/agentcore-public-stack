@@ -249,6 +249,57 @@ class FineTuningJobsRepository:
                 return None
             raise
 
+    def query_jobs_by_status_and_date(
+        self,
+        status_value: str,
+        start_date: str,
+        end_date: str,
+    ) -> List[dict]:
+        """Query the StatusIndex GSI for jobs with a given status in a date range.
+
+        Args:
+            status_value: Job status (e.g. "Completed", "Stopped").
+            start_date: ISO date string (inclusive lower bound on createdAt).
+            end_date: ISO date string (inclusive upper bound on createdAt).
+
+        Returns:
+            List of job dicts.
+        """
+        try:
+            items: List[dict] = []
+            response = self._table.query(
+                IndexName="StatusIndex",
+                KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":status": status_value,
+                    ":start": start_date,
+                    ":end": end_date,
+                },
+                ScanIndexForward=False,
+            )
+            items.extend(response.get("Items", []))
+
+            while "LastEvaluatedKey" in response:
+                response = self._table.query(
+                    IndexName="StatusIndex",
+                    KeyConditionExpression="#s = :status AND createdAt BETWEEN :start AND :end",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={
+                        ":status": status_value,
+                        ":start": start_date,
+                        ":end": end_date,
+                    },
+                    ScanIndexForward=False,
+                    ExclusiveStartKey=response["LastEvaluatedKey"],
+                )
+                items.extend(response.get("Items", []))
+
+            return [self._item_to_dict(item) for item in items]
+        except ClientError as e:
+            logger.error(f"Error querying jobs by status={status_value}: {e}")
+            raise
+
     def delete_job(self, user_id: str, job_id: str) -> bool:
         """Delete a job record. Returns False if not found."""
         try:

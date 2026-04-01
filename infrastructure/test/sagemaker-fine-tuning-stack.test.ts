@@ -17,7 +17,7 @@ describe('SageMakerFineTuningStack', () => {
   let template: Template;
 
   beforeEach(() => {
-    const config = createMockConfig({ fineTuning: { enabled: true } });
+    const config = createMockConfig({ fineTuning: { enabled: true, defaultQuotaHours: 0 } });
     app = new cdk.App();
     mockSsmContext(app, config, ['SageMakerFineTuningStack']);
 
@@ -440,7 +440,7 @@ describe('SageMakerFineTuningStack', () => {
 
     test('sets RETAIN removal policy when retainDataOnDelete is true', () => {
       const retainConfig = createMockConfig({
-        fineTuning: { enabled: true },
+        fineTuning: { enabled: true, defaultQuotaHours: 0 },
         retainDataOnDelete: true,
       });
       const retainApp = new cdk.App();

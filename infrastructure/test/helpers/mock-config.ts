@@ -78,6 +78,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     fineTuning: {
       enabled: false,
+      defaultQuotaHours: 0,
     },
     tags: { ManagedBy: 'CDK', Environment: 'test' },
   };

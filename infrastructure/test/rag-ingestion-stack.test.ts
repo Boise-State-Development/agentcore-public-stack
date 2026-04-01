@@ -82,6 +82,7 @@ describe('RagIngestionStack', () => {
       },
       fineTuning: {
         enabled: false,
+        defaultQuotaHours: 0,
       },
       tags: {
         ManagedBy: 'CDK',

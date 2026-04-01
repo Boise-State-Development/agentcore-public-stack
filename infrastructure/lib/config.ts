@@ -87,6 +87,7 @@ export interface RagIngestionConfig {
 
 export interface FineTuningConfig {
   enabled: boolean;              // Enable/disable SageMaker Fine-Tuning stack
+  defaultQuotaHours: number;     // Default monthly GPU-hour quota for all users (0 = whitelist-only)
 }
 
 /**
@@ -213,6 +214,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     },
     fineTuning: {
       enabled: parseBooleanEnv(process.env.CDK_FINE_TUNING_ENABLED) ?? scope.node.tryGetContext('fineTuning')?.enabled ?? false,
+      defaultQuotaHours: parseIntEnv(process.env.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS) ?? scope.node.tryGetContext('fineTuning')?.defaultQuotaHours ?? 0,
     },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),

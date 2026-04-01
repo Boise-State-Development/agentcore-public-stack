@@ -1020,6 +1020,7 @@ export class AppApiStack extends cdk.Stack {
       container.addEnvironment('SAGEMAKER_EXECUTION_ROLE_ARN', sagemakerRoleArn);
       container.addEnvironment('SAGEMAKER_SECURITY_GROUP_ID', sagemakerSgId);
       container.addEnvironment('SAGEMAKER_SUBNET_IDS', ftPrivateSubnetIds);
+      container.addEnvironment('FINE_TUNING_DEFAULT_QUOTA_HOURS', String(config.fineTuning.defaultQuotaHours));
 
       // Grant ECS task role: DynamoDB access to fine-tuning tables
       taskDefinition.taskRole.addToPrincipalPolicy(
