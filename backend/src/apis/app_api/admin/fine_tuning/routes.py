@@ -236,7 +236,8 @@ async def get_cost_dashboard(
     the requested month, then aggregates costs by user in application code.
     """
     period = month or datetime.now(timezone.utc).strftime("%Y-%m")
-    logger.info("Admin requesting fine-tuning cost dashboard for %s", period)
+    safe_period = period.replace("\n", "").replace("\r", "")
+    logger.info("Admin requesting fine-tuning cost dashboard for %s", safe_period)
 
     try:
         start_iso, end_iso = _date_range_for_period(period)
