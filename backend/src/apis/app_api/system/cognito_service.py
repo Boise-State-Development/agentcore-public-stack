@@ -102,7 +102,7 @@ class CognitoService:
             Permanent=True,
         )
 
-        logger.info("Created Cognito user: %s (sub=%s)", username, user_sub)
+        logger.info("Created Cognito admin user successfully")
         return user_sub
 
     def delete_user(self, username: str) -> None:
