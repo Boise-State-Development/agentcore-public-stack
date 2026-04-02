@@ -60,7 +60,7 @@ export class InferenceApiStack extends cdk.Stack {
       getResourceName(config, 'inference-api')
     );
 
-    const containerImageUri = `${ecrRepository.repositoryUri}:${imageTag}`;
+    const _containerImageUri = `${ecrRepository.repositoryUri}:${imageTag}`;
 
     // ============================================================
     // IAM Execution Role for AgentCore Runtime
@@ -884,7 +884,7 @@ export class InferenceApiStack extends cdk.Stack {
       agentRuntimeName: getResourceName(config, 'agentcore_runtime').replace(/-/g, '_'),
       agentRuntimeArtifact: {
         containerConfiguration: {
-          containerUri: containerImageUri,
+          containerUri: _containerImageUri,
         },
       },
       authorizerConfiguration: {

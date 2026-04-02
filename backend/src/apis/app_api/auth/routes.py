@@ -304,4 +304,3 @@ def _peek_provider_from_state(state: str) -> Optional[str]:
         logger.debug(f"Could not peek provider from state: {e}")
 
     return None
-

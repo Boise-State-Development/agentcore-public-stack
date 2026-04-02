@@ -6,7 +6,6 @@ single source of truth for permissions — no hardcoded group names.
 """
 
 from typing import Callable
-
 from fastapi import Depends, HTTPException, status
 import logging
 

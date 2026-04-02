@@ -58,13 +58,6 @@ echo "AWS_PROFILE=my-profile" >> src/.env
 export AWS_PROFILE=my-profile
 ```
 
-📖 **See [AWS_PROFILE_GUIDE.md](../docs/AWS_PROFILE_GUIDE.md) for detailed configuration options including:**
-- Multiple AWS accounts/profiles
-- AWS SSO (IAM Identity Center)
-- Environment variable fallback
-- CI/CD configuration
-- Troubleshooting
-
 ## Project Structure
 
 ```
