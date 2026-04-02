@@ -2,7 +2,6 @@
 
 import logging
 from typing import List, Optional, Set
-from datetime import datetime
 
 from apis.shared.auth.models import User
 

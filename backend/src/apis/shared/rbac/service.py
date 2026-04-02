@@ -83,7 +83,7 @@ class AppRoleService:
             if default_role and default_role.enabled:
                 matching_roles = [default_role]
                 logger.debug(
-                    f"No matching roles for user {user.email}, using default role"
+                    f"No matching roles for user {user.name}, using default role"
                 )
 
         # Step 4: Merge permissions
@@ -93,7 +93,7 @@ class AppRoleService:
         await self.cache.set_user_permissions(user.user_id, permissions)
 
         logger.debug(
-            f"Resolved permissions for {user.email}: "
+            f"Resolved permissions for {user.name}: "
             f"roles={permissions.app_roles}, "
             f"tools={len(permissions.tools)}, "
             f"models={len(permissions.models)}"

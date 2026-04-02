@@ -1,16 +1,10 @@
 """Admin API routes for AppRole management."""
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 
 from apis.shared.auth import User, require_admin
-from apis.shared.rbac import (
-    AppRoleService,
-    AppRoleAdminService,
-    AppRoleCache,
-)
 from apis.shared.rbac.models import (
     AppRoleCreate,
     AppRoleUpdate,
@@ -19,7 +13,6 @@ from apis.shared.rbac.models import (
     CacheStatsResponse,
 )
 from apis.shared.rbac.system_admin import require_system_admin
-from apis.shared.rbac.service import get_app_role_service
 from apis.shared.rbac.admin_service import get_app_role_admin_service
 from apis.shared.rbac.cache import get_app_role_cache
 
@@ -47,7 +40,7 @@ async def list_roles(
     Returns:
         AppRoleListResponse with list of all roles
     """
-    logger.info(f"Admin {admin.email} listing roles")
+    logger.info("Admin listing roles")
 
     service = get_app_role_admin_service()
     roles = await service.list_roles(enabled_only=enabled_only)
@@ -78,7 +71,7 @@ async def get_role(
     Raises:
         HTTPException: 404 if role not found
     """
-    logger.info(f"Admin {admin.email} getting role: {role_id}")
+    logger.info("Admin getting role")
 
     service = get_app_role_admin_service()
     role = await service.get_role(role_id)
@@ -112,7 +105,7 @@ async def create_role(
     Raises:
         HTTPException: 400 if role already exists or validation fails
     """
-    logger.info(f"Admin {admin.email} creating role: {role_data.role_id}")
+    logger.info("Admin creating role")
 
     try:
         service = get_app_role_admin_service()
@@ -152,7 +145,7 @@ async def update_role(
             - 400 if validation fails
             - 404 if role not found
     """
-    logger.info(f"Admin {admin.email} updating role: {role_id}")
+    logger.info("Admin updating role")
 
     try:
         service = get_app_role_admin_service()
@@ -194,7 +187,7 @@ async def delete_role(
             - 400 if trying to delete a system role
             - 404 if role not found
     """
-    logger.info(f"Admin {admin.email} deleting role: {role_id}")
+    logger.info("Admin deleting role")
 
     try:
         service = get_app_role_admin_service()
@@ -236,7 +229,7 @@ async def sync_role_permissions(
     Raises:
         HTTPException: 404 if role not found
     """
-    logger.info(f"Admin {admin.email} syncing permissions for role: {role_id}")
+    logger.info("Admin syncing permissions for role")
 
     service = get_app_role_admin_service()
     role = await service.sync_effective_permissions(role_id, admin)
@@ -265,7 +258,7 @@ async def get_cache_stats(
     Returns:
         CacheStatsResponse with cache statistics
     """
-    logger.info(f"Admin {admin.email} getting cache stats")
+    logger.info("Admin getting cache stats")
 
     cache = get_app_role_cache()
     stats = cache.get_stats()
@@ -285,7 +278,7 @@ async def invalidate_cache(
     Args:
         admin: Authenticated system admin user (injected)
     """
-    logger.info(f"Admin {admin.email} invalidating all caches")
+    logger.info("Admin invalidating all caches")
 
     cache = get_app_role_cache()
     await cache.invalidate_all()

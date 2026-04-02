@@ -444,6 +444,10 @@ async def list_assistant_documents(
             except Exception as e:
                 logger.error(f"Failed to auto-fail stale document {doc.document_id}: {e}")
             
+            # Skip documents in "deleting" status (soft-deleted, invisible to users)
+            if doc.status == "deleting":
+                continue
+            
             documents.append(doc)
         
         # Generate next_token from LastEvaluatedKey
@@ -525,3 +529,218 @@ async def delete_document(
     except Exception as e:
         logger.error(f"Failed to delete document: {e}", exc_info=True)
         return False
+
+
+async def soft_delete_document(
+    assistant_id: str,
+    document_id: str,
+    owner_id: str,
+    ttl_days: int = 7,
+) -> Optional[Document]:
+    """
+    Atomically mark a document as 'deleting' and set a TTL for auto-expiry.
+
+    Returns the document (with chunk_count, s3_key) needed for cleanup.
+    Returns None if document not found or not owned by user.
+    Re-deleting a document already in "deleting" status is idempotent.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        document_id: Document identifier
+        owner_id: User identifier (for ownership verification)
+        ttl_days: Number of days until DynamoDB TTL auto-expires the record
+
+    Returns:
+        Updated Document object if found and owned, None otherwise
+    """
+    import time
+
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        from apis.shared.assistants.service import get_assistant
+    except ImportError:
+        logger.error("boto3 is required for DynamoDB operations")
+        return None
+
+    # Verify assistant ownership first
+    assistant = await get_assistant(assistant_id, owner_id)
+    if not assistant:
+        logger.warning(f"Access denied: assistant {assistant_id} not owned by user {owner_id}")
+        return None
+
+    table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
+    if not table_name:
+        logger.error("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable not set")
+        return None
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table(table_name)
+
+    now = _get_current_timestamp()
+    ttl_value = int(time.time()) + ttl_days * 86400
+
+    try:
+        response = table.update_item(
+            Key={
+                'PK': f'AST#{assistant_id}',
+                'SK': f'DOC#{document_id}'
+            },
+            UpdateExpression='SET #status = :deleting, updatedAt = :now, #ttl = :ttl_value',
+            ExpressionAttributeNames={
+                '#status': 'status',
+                '#ttl': 'ttl'
+            },
+            ExpressionAttributeValues={
+                ':deleting': 'deleting',
+                ':now': now,
+                ':ttl_value': ttl_value
+            },
+            ConditionExpression='attribute_exists(PK)',
+            ReturnValues='ALL_NEW'
+        )
+
+        if 'Attributes' in response:
+            try:
+                return Document.model_validate(response['Attributes'])
+            except Exception as e:
+                logger.warning(f"Failed to parse document from DynamoDB response: {e}")
+                return None
+
+        return None
+
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        if error_code == 'ConditionalCheckFailedException':
+            logger.info(f"Document {document_id} not found for assistant {assistant_id}")
+            return None
+        logger.error(f"Failed to soft-delete document in DynamoDB: {error_code} - {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to soft-delete document: {e}", exc_info=True)
+        return None
+
+
+async def hard_delete_document(
+    assistant_id: str,
+    document_id: str,
+) -> bool:
+    """
+    Unconditionally remove the DynamoDB record. Called after successful
+    cleanup of S3 and vectors. No ownership check needed — caller has
+    already verified ownership during soft-delete.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        document_id: Document identifier
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+    except ImportError:
+        logger.error("boto3 is required for DynamoDB operations")
+        return False
+
+    table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
+    if not table_name:
+        logger.error("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable not set")
+        return False
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table(table_name)
+
+    try:
+        table.delete_item(
+            Key={
+                'PK': f'AST#{assistant_id}',
+                'SK': f'DOC#{document_id}'
+            }
+        )
+
+        logger.info(f"Hard-deleted document {document_id} for assistant {assistant_id}")
+        return True
+
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        logger.error(f"Failed to hard-delete document from DynamoDB: {error_code} - {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to hard-delete document: {e}", exc_info=True)
+        return False
+
+
+async def batch_soft_delete_documents(
+    assistant_id: str,
+    document_ids: list[str],
+    ttl_days: int = 7,
+) -> int:
+    """
+    Batch soft-delete multiple documents for an assistant.
+    Used during assistant deletion. Returns count of documents marked.
+
+    No ownership check — caller (assistant delete endpoint) has already
+    verified ownership.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        document_ids: List of document IDs to soft-delete
+        ttl_days: Number of days until DynamoDB TTL auto-expires the records
+
+    Returns:
+        Count of documents successfully marked as "deleting"
+    """
+    import time
+
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+    except ImportError:
+        logger.error("boto3 is required for DynamoDB operations")
+        return 0
+
+    table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
+    if not table_name:
+        logger.error("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable not set")
+        return 0
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table(table_name)
+
+    now = _get_current_timestamp()
+    ttl_value = int(time.time()) + ttl_days * 86400
+
+    marked_count = 0
+    for document_id in document_ids:
+        try:
+            table.update_item(
+                Key={
+                    'PK': f'AST#{assistant_id}',
+                    'SK': f'DOC#{document_id}'
+                },
+                UpdateExpression='SET #status = :deleting, updatedAt = :now, #ttl = :ttl_value',
+                ExpressionAttributeNames={
+                    '#status': 'status',
+                    '#ttl': 'ttl'
+                },
+                ExpressionAttributeValues={
+                    ':deleting': 'deleting',
+                    ':now': now,
+                    ':ttl_value': ttl_value
+                },
+                ConditionExpression='attribute_exists(PK)',
+            )
+            marked_count += 1
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            if error_code == 'ConditionalCheckFailedException':
+                logger.info(f"Document {document_id} not found for assistant {assistant_id}, skipping")
+                continue
+            logger.error(f"Failed to soft-delete document {document_id}: {error_code} - {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error soft-deleting document {document_id}: {e}", exc_info=True)
+
+    logger.info(f"Batch soft-deleted {marked_count}/{len(document_ids)} documents for assistant {assistant_id}")
+    return marked_count

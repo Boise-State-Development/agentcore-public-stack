@@ -38,6 +38,74 @@ def _get_user_sync_service():
 security = HTTPBearer(auto_error=False)
 
 
+# ─── User Profile Cache ────────────────────────────────────────────────
+# Cognito access tokens don't contain identity claims (email, name, picture).
+# We cache the user profile from DynamoDB so we only hit the table once per
+# user, not on every request.  TTL keeps it fresh if the profile changes.
+
+_user_profile_cache: dict[str, tuple[float, dict]] = {}
+_USER_PROFILE_CACHE_TTL = 300  # 5 minutes
+
+_user_repository = None
+_user_repository_initialized = False
+
+
+def _get_user_repository():
+    """Get UserRepository instance, creating it lazily on first use."""
+    global _user_repository, _user_repository_initialized
+    if _user_repository_initialized:
+        return _user_repository
+    _user_repository_initialized = True
+    try:
+        from apis.shared.users.repository import UserRepository
+        _user_repository = UserRepository()
+        if not _user_repository.enabled:
+            _user_repository = None
+    except Exception as e:
+        logger.warning(f"Failed to initialize UserRepository for profile cache: {e}")
+        _user_repository = None
+    return _user_repository
+
+
+async def _enrich_user_from_store(user: User) -> None:
+    """Fill in missing identity claims (email, name) from the Users DynamoDB table.
+
+    Cognito access tokens only carry sub, cognito:groups, and username.
+    The Users table (populated during first-boot / user sync) stores the
+    full profile.  Results are cached in-memory to avoid per-request lookups.
+    """
+    import time
+
+    # Nothing to do if the token already has email
+    if user.email:
+        return
+
+    # Check cache
+    now = time.monotonic()
+    cached = _user_profile_cache.get(user.user_id)
+    if cached:
+        ts, profile = cached
+        if now - ts < _USER_PROFILE_CACHE_TTL:
+            user.email = profile.get("email", user.email) or user.email
+            user.name = profile.get("name", user.name) or user.name
+            return
+
+    # Cache miss — query DynamoDB
+    repo = _get_user_repository()
+    if not repo:
+        return
+
+    try:
+        stored = await repo.get_user_by_user_id(user.user_id)
+        if stored:
+            profile = {"email": stored.email, "name": stored.name}
+            _user_profile_cache[user.user_id] = (now, profile)
+            user.email = stored.email or user.email
+            user.name = stored.name or user.name
+    except Exception as e:
+        logger.debug(f"Profile enrichment failed for {user.user_id}: {e}")
+
+
 async def _sync_user_background(sync_service, user: User) -> None:
     """Sync user to DynamoDB in the background (fire-and-forget)."""
     try:
@@ -131,6 +199,9 @@ async def get_current_user(
             user = validator.validate_token(token)
             user.raw_token = token
 
+            # Enrich with stored profile (email, name) when using access tokens
+            await _enrich_user_from_store(user)
+
             # Fire-and-forget sync to Users table
             sync_service = _get_user_sync_service()
             if sync_service and sync_service.enabled:
@@ -220,7 +291,7 @@ async def get_current_user_trusted(
         email = payload.get('email') or payload.get('preferred_username')
         name = payload.get('name') or (
             f"{payload.get('given_name', '')} {payload.get('family_name', '')}"
-        ).strip()
+        ).strip() or payload.get('cognito:username') or payload.get('username') or ""
         user_id = payload.get('sub')
         # Support cognito:groups (list) or roles claim
         roles = payload.get('cognito:groups') or payload.get('roles', [])
@@ -248,6 +319,9 @@ async def get_current_user_trusted(
         )
 
         logger.debug("[get_current_user_trusted] User authenticated successfully")
+
+        # Enrich with stored profile (email, name) when using access tokens
+        await _enrich_user_from_store(user)
 
         # Fire-and-forget sync to Users table
         sync_service = _get_user_sync_service()

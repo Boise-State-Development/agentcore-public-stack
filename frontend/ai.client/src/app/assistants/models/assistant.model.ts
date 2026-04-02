@@ -13,7 +13,7 @@ export interface Assistant {
   usageCount: number;
   createdAt: string;
   updatedAt: string;
-  status: 'DRAFT' | 'COMPLETE' | 'ARCHIVED';
+  status: 'DRAFT' | 'COMPLETE';
   imageUrl?: string;
 
   // Share metadata (only present for shared assistants)
@@ -45,7 +45,7 @@ export interface UpdateAssistantRequest {
   tags?: string[];
   starters?: string[];
   emoji?: string;
-  status?: 'DRAFT' | 'COMPLETE' | 'ARCHIVED';
+  status?: 'DRAFT' | 'COMPLETE';
 }
 
 export interface AssistantsListResponse {

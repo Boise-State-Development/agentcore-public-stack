@@ -20,7 +20,6 @@ from .repository import (
 from .job_models import (
     AVAILABLE_MODELS,
     MODEL_CATALOG,
-    AvailableModel,
     PresignRequest,
     PresignResponse,
     CreateJobRequest,
@@ -59,17 +58,28 @@ async def check_access(
     This endpoint does NOT require fine-tuning access — it is used by
     the frontend to decide whether to show the fine-tuning UI.
     """
+    from .dependencies import DEFAULT_MONTHLY_QUOTA_HOURS
+
     grant = repo.check_and_reset_quota(user.email)
 
-    if grant is None:
-        return FineTuningAccessResponse(has_access=False)
+    if grant is not None:
+        return FineTuningAccessResponse(
+            has_access=True,
+            monthly_quota_hours=grant["monthly_quota_hours"],
+            current_month_usage_hours=grant["current_month_usage_hours"],
+            quota_period=grant["quota_period"],
+        )
 
-    return FineTuningAccessResponse(
-        has_access=True,
-        monthly_quota_hours=grant["monthly_quota_hours"],
-        current_month_usage_hours=grant["current_month_usage_hours"],
-        quota_period=grant["quota_period"],
-    )
+    # No explicit grant — check if open-access mode is enabled.
+    if DEFAULT_MONTHLY_QUOTA_HOURS > 0:
+        return FineTuningAccessResponse(
+            has_access=True,
+            monthly_quota_hours=DEFAULT_MONTHLY_QUOTA_HOURS,
+            current_month_usage_hours=0.0,
+            quota_period=None,
+        )
+
+    return FineTuningAccessResponse(has_access=False)
 
 
 # =========================================================================
@@ -720,7 +730,7 @@ async def create_inference_job(
     input_s3_uri = f"s3://{s3_service.bucket_name}/{request.input_s3_key}"
 
     # Create DynamoDB record
-    job = inf_repo.create_inference_job(
+    inf_repo.create_inference_job(
         user_id=user.user_id,
         email=user.email,
         job_id=job_id,

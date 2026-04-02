@@ -16,7 +16,6 @@ import { AdminCostStateService } from './services';
 import { PeriodSelectorComponent } from './components/period-selector.component';
 import {
   SystemSummaryCardComponent,
-  SummaryCardIcon,
 } from './components/system-summary-card.component';
 import { TopUsersTableComponent } from './components/top-users-table.component';
 import { CostTrendsChartComponent } from './components/cost-trends-chart.component';

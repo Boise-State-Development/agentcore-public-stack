@@ -1,7 +1,6 @@
 """Users API routes for non-admin user operations."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List
 import logging
 
 from apis.shared.auth.dependencies import get_current_user
@@ -9,7 +8,7 @@ from apis.shared.auth.models import User
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.users.repository import UserRepository
 from apis.shared.users.models import UserProfile, UserListItem, UserStatus
-from .models import UserSearchResult, UserSearchResponse, UserPermissionsResponse
+from .models import UserSearchResult, UserSearchResponse, UserPermissionsResponse, UserProfileSyncRequest
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +49,51 @@ async def get_my_permissions(
         )
 
 
+@router.post("/me/sync", status_code=204)
+async def sync_my_profile(
+    body: UserProfileSyncRequest,
+    current_user: User = Depends(get_current_user),
+    user_repo: UserRepository = Depends(get_user_repository),
+):
+    """
+    Sync user profile from the frontend ID token to the Users table.
+
+    Called by the frontend after each login or token refresh. The ID token
+    contains identity claims (email, name, picture) that the access token
+    lacks. This keeps the Users table current so the backend can resolve
+    email for features like assistant sharing and fine-tuning access.
+    """
+    if not user_repo.enabled:
+        return
+
+    email = body.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=422, detail="Email is required")
+
+    email_domain = email.split("@")[1] if "@" in email else ""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat() + "Z"
+
+    profile = UserProfile(
+        user_id=current_user.user_id,
+        email=email,
+        name=body.name or current_user.name,
+        roles=current_user.roles or [],
+        picture=body.picture,
+        email_domain=email_domain,
+        created_at=now,
+        last_login_at=now,
+        status=UserStatus.ACTIVE,
+    )
+
+    try:
+        await user_repo.upsert_user(profile)
+        logger.info(f"Synced profile for user {current_user.user_id} ({email})")
+    except Exception as e:
+        logger.error(f"Failed to sync profile for {current_user.user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to sync profile")
+
+
 @router.get("/search", response_model=UserSearchResponse)
 async def search_users(
     q: str = Query(..., description="Search query (email or name, partial match)"),
@@ -81,7 +125,7 @@ async def search_users(
             - 401 if not authenticated
             - 500 if server error
     """
-    logger.info(f"GET /users/search - User: {current_user.user_id}, Query: {q}, Limit: {limit}")
+    logger.info("GET /users/search")
     
     if not user_repo.enabled:
         logger.debug("User repository not enabled - returning empty results")
@@ -166,11 +210,11 @@ async def search_users(
         # Limit results
         results = results[:limit]
         
-        logger.info(f"Found {len(results)} users matching query '{q}'")
+        logger.info("User search completed")
         return UserSearchResponse(users=results)
     
     except Exception as e:
-        logger.error(f"Error searching users: {e}", exc_info=True)
+        logger.error("Error searching users", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to search users: {str(e)}"

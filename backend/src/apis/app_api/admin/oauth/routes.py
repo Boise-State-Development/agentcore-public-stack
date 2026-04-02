@@ -49,7 +49,7 @@ async def list_providers(
     Returns:
         OAuthProviderListResponse with all providers
     """
-    logger.info(f"Admin {admin.email} listing OAuth providers")
+    logger.info("Admin listing OAuth providers")
 
     providers = await provider_repo.list_providers(enabled_only=enabled_only)
 
@@ -80,7 +80,7 @@ async def get_provider(
     Raises:
         HTTPException: 404 if provider not found
     """
-    logger.info(f"Admin {admin.email} getting OAuth provider: {provider_id}")
+    logger.info("Admin getting OAuth provider")
 
     provider = await provider_repo.get_provider(provider_id)
 
@@ -114,7 +114,7 @@ async def create_provider(
     Raises:
         HTTPException: 400 if provider already exists or validation fails
     """
-    logger.info(f"Admin {admin.email} creating OAuth provider: {provider_data.provider_id}")
+    logger.info("Admin creating OAuth provider")
 
     try:
         provider = await provider_repo.create_provider(provider_data)
@@ -156,7 +156,7 @@ async def update_provider(
             - 400 if validation fails
             - 404 if provider not found
     """
-    logger.info(f"Admin {admin.email} updating OAuth provider: {provider_id}")
+    logger.info("Admin updating OAuth provider")
 
     # Track if scopes changed (will invalidate cached tokens)
     old_provider = await provider_repo.get_provider(provider_id)
@@ -179,7 +179,7 @@ async def update_provider(
         cache = get_token_cache()
         evicted = cache.delete_for_provider(provider_id)
         logger.info(
-            f"Scopes changed for provider {provider_id}, "
+            "Scopes changed for provider, "
             f"evicted {evicted} cached tokens"
         )
 
@@ -215,7 +215,7 @@ async def delete_provider(
             - 400 if users are connected and force=False
             - 404 if provider not found
     """
-    logger.info(f"Admin {admin.email} deleting OAuth provider: {provider_id}")
+    logger.info("Admin deleting OAuth provider")
 
     # Check for connected users
     connected_tokens = await token_repo.list_provider_tokens(provider_id)
@@ -232,7 +232,7 @@ async def delete_provider(
     # Delete user tokens if any
     if connected_tokens:
         deleted_count = await token_repo.delete_provider_tokens(provider_id)
-        logger.info(f"Deleted {deleted_count} user tokens for provider {provider_id}")
+        logger.info(f"Deleted {deleted_count} user tokens for provider")
 
     # Delete provider
     deleted = await provider_repo.delete_provider(provider_id)
@@ -277,7 +277,7 @@ async def get_provider_connection_count(
     Raises:
         HTTPException: 404 if provider not found
     """
-    logger.info(f"Admin {admin.email} getting connection count for: {provider_id}")
+    logger.info("Admin getting connection count for provider")
 
     # Verify provider exists
     provider = await provider_repo.get_provider(provider_id)

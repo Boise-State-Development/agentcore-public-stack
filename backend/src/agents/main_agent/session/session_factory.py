@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 # AgentCore Memory integration (optional, only for cloud deployment)
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
-    from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
     from bedrock_agentcore.memory import MemoryClient
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
@@ -100,7 +99,7 @@ class SessionFactory:
         """
         # Check for preview session first - these use in-memory storage only
         if is_preview_session(session_id):
-            logger.info(f"🔍 Preview session detected: {session_id}")
+            logger.info("🔍 Preview session detected")
             return PreviewSessionManager(session_id=session_id, user_id=user_id)
 
         if not AGENTCORE_MEMORY_AVAILABLE:
@@ -228,15 +227,14 @@ class SessionFactory:
             summarization_strategy_id=summary_id,
         )
 
-        logger.info(f"✅ AgentCore Memory initialized: user_id={user_id}")
-        logger.info(f"   • Session: {session_id}, User: {user_id}")
-        logger.info(f"   • Storage: AWS-managed DynamoDB")
-        logger.info(f"   • Short-term memory: Conversation history (90 days retention)")
-        logger.info(f"   • Long-term memory: {'Enabled' if retrieval_config else 'Disabled'} ({len(retrieval_config)} namespaces)")
+        logger.info("✅ AgentCore Memory initialized")
+        logger.info("   • Storage: AWS-managed DynamoDB")
+        logger.info("   • Short-term memory: Conversation history (90 days retention)")
+        logger.info("   • Long-term memory: %s (%d namespaces)", "Enabled" if retrieval_config else "Disabled", len(retrieval_config))
         if compaction_config.enabled:
-            logger.info(f"   • Compaction: Enabled (threshold={compaction_config.token_threshold:,})")
+            logger.info("   • Compaction: Enabled (threshold=%s)", f"{compaction_config.token_threshold:,}")
         else:
-            logger.info(f"   • Compaction: Disabled")
+            logger.info("   • Compaction: Disabled")
 
         return session_manager
 

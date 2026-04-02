@@ -10,14 +10,14 @@
     },
     {
       "name": "app-api",
-      "runtimeExecutable": "/Users/philmerrell/Repos/agentcore-public-stack/backend/venv/bin/python",
+      "runtimeExecutable": "/Users/philmerrell/Repos/agentcore-public-stack/backend/.venv/bin/python",
       "runtimeArgs": ["main.py"],
       "port": 8000,
       "cwd": "backend/src/apis/app_api"
     },
     {
       "name": "inference-api",
-      "runtimeExecutable": "/Users/philmerrell/Repos/agentcore-public-stack/backend/venv/bin/python",
+      "runtimeExecutable": "/Users/philmerrell/Repos/agentcore-public-stack/backend/.venv/bin/python",
       "runtimeArgs": ["main.py"],
       "port": 8001,
       "cwd": "backend/src/apis/inference_api"

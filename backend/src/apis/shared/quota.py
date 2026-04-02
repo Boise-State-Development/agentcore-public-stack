@@ -7,7 +7,6 @@ FastAPI dependencies for checking user quotas before processing requests.
 import logging
 import os
 from typing import Optional
-from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict
 
 from agents.main_agent.quota.repository import QuotaRepository

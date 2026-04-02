@@ -5,10 +5,8 @@ Contains business logic for chat operations, including agent creation and manage
 
 import logging
 import hashlib
-import json
 import os
 from typing import Optional, List, Tuple
-from functools import lru_cache
 from datetime import datetime, timezone
 
 import boto3
@@ -144,11 +142,11 @@ def get_agent(
 
     # Check cache
     if cache_key in _agent_cache:
-        logger.debug(f"✅ Agent cache hit for session {session_id}")
+        logger.debug("✅ Agent cache hit")
         return _agent_cache[cache_key]
 
     # Cache miss - create new agent
-    logger.debug(f"⚠️ Agent cache miss for session {session_id} - creating new instance")
+    logger.debug("⚠️ Agent cache miss - creating new instance")
 
     # Create agent with multi-provider support
     agent = MainAgent(
@@ -172,7 +170,7 @@ def get_agent(
         logger.debug(f"🗑️ Evicted oldest agent from cache (size={_CACHE_MAX_SIZE})")
 
     _agent_cache[cache_key] = agent
-    logger.debug(f"💾 Cached agent for session {session_id} (cache size={len(_agent_cache)})")
+    logger.debug("💾 Cached agent")
 
     return agent
 

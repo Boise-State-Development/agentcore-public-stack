@@ -93,6 +93,7 @@ main() {
     # Construct ECR repository URI
     REPO_NAME="${CDK_PROJECT_PREFIX}-rag-ingestion"
     ECR_URI="${CDK_AWS_ACCOUNT}.dkr.ecr.${CDK_AWS_REGION}.amazonaws.com/${REPO_NAME}"
+    FUNCTION_NAME="${CDK_PROJECT_PREFIX}-rag-ingestion"
     
     log_info "ECR Repository URI: ${ECR_URI}"
     
@@ -105,13 +106,27 @@ main() {
     log_info "Using pre-built image with version tag: ${IMAGE_TAG}"
     log_info "Image URI: ${ECR_URI}:${IMAGE_TAG}"
     
+    # Force Lambda to use the latest image digest.
+    # CDK uses an SSM-resolved image tag (semver) which doesn't change between
+    # builds, so CloudFormation often reports "no changes" even when the
+    # underlying image has new layers. This explicit update-function-code call
+    # ensures the Lambda always picks up the freshly-pushed image.
+    log_info "Updating Lambda function code to latest image..."
+    aws lambda update-function-code \
+        --function-name "${FUNCTION_NAME}" \
+        --image-uri "${ECR_URI}:${IMAGE_TAG}" \
+        --region "${CDK_AWS_REGION}" \
+        --output json > /dev/null
+    
+    # Wait for the update to complete before declaring success
+    log_info "Waiting for Lambda function update to complete..."
+    aws lambda wait function-updated \
+        --function-name "${FUNCTION_NAME}" \
+        --region "${CDK_AWS_REGION}"
+    
+    log_success "Lambda function updated to image ${ECR_URI}:${IMAGE_TAG}"
+    
     log_success "RAG Ingestion deployment completed successfully!"
-    log_info ""
-    log_info "Next steps:"
-    log_info "  1. Check Lambda function status in AWS Console"
-    log_info "  2. Monitor CloudWatch Logs for Lambda execution"
-    log_info "  3. Test document upload to S3 bucket"
-    log_info "  4. Verify embeddings are stored in vector store"
 }
 
 main "$@"

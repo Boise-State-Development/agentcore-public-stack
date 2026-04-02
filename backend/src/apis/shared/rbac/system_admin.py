@@ -43,15 +43,15 @@ async def require_system_admin(
         app_role_service = get_app_role_service()
         permissions = await app_role_service.resolve_user_permissions(user)
         if "system_admin" in permissions.app_roles:
-            logger.debug(f"User {user.email} authorized as system admin")
+            logger.debug(f"User {user.name} authorized as system admin")
             return user
     except Exception:
         logger.exception(
-            f"Failed to resolve permissions for {user.email}, denying admin access"
+            f"Failed to resolve permissions for {user.name}, denying admin access"
         )
 
     logger.warning(
-        f"User {user.email} (roles: {user.roles}) denied system admin access"
+        f"User {user.name} (roles: {user.roles}) denied system admin access"
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

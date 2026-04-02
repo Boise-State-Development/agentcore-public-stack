@@ -6,7 +6,7 @@ model usage breakdowns, and cost trends for administrators.
 All endpoints require admin authentication via JWT token with Admin or SuperAdmin role.
 """
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
 import logging
@@ -90,7 +90,7 @@ async def get_cost_dashboard(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting cost dashboard for period={period}"
+        "Admin requesting cost dashboard"
     )
 
     try:
@@ -155,8 +155,7 @@ async def get_top_users(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting top {limit} users "
-        f"for period={period}, min_cost={min_cost}"
+        "Admin requesting top users"
     )
 
     try:
@@ -211,8 +210,7 @@ async def get_system_summary(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting system summary "
-        f"for {period_type} period={period}"
+        "Admin requesting system summary"
     )
 
     try:
@@ -260,7 +258,7 @@ async def get_usage_by_model(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting model usage for period={period}"
+        "Admin requesting model usage"
     )
 
     try:
@@ -304,7 +302,7 @@ async def get_usage_by_tier(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting tier usage for period={period}"
+        "Admin requesting tier usage"
     )
 
     try:
@@ -357,8 +355,7 @@ async def get_cost_trends(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} requesting trends "
-        f"from {start_date} to {end_date}"
+        "Admin requesting cost trends"
     )
 
     try:
@@ -413,7 +410,7 @@ async def export_cost_data(
             - 500 if server error
     """
     logger.info(
-        f"Admin {admin_user.email} exporting {format} data for period={period}"
+        "Admin exporting cost data"
     )
 
     try:

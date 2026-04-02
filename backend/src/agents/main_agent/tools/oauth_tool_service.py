@@ -34,7 +34,6 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 

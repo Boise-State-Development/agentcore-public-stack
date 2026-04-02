@@ -35,6 +35,7 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_FILE_UPLOAD_CORS_ORIGINS | Variable | No | `http://localhost:4200` | Infrastructure, App API | Comma-separated CORS origins for file upload S3 bucket |
 | CDK_FILE_UPLOAD_MAX_SIZE_MB | Variable | No | `10` | Infrastructure, App API | Maximum file upload size in megabytes |
 | CDK_FINE_TUNING_ENABLED | Variable | No | `false` | SageMaker Fine-Tuning, App API | Enable SageMaker fine-tuning stack and App API fine-tuning routes. Must be `true` before deploying the SageMaker Fine-Tuning workflow. |
+| CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS | Variable | No | `0` | App API | Default monthly GPU-hour quota for all authenticated users. `0` = whitelist-only (admin must grant each user). Positive value (e.g. `5`) = open access with that default budget. |
 | CDK_FRONTEND_BUCKET_NAME | Variable | No | None | Frontend | S3 bucket name for frontend assets (defaults to generated name with account ID) |
 | CDK_FRONTEND_CERTIFICATE_ARN | Variable | No | None | Frontend | ACM certificate ARN for HTTPS on CloudFront (required for custom domain) |
 | CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS | Variable | No | `PriceClass_100` | Frontend | CloudFront price class (PriceClass_100, PriceClass_200, PriceClass_All) |

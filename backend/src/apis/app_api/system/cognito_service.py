@@ -126,6 +126,41 @@ class CognitoService:
                 f"Failed to delete Cognito user during rollback: {username}"
             )
 
+    def add_user_to_group(self, username: str, group_name: str) -> None:
+        """
+        Add a user to a Cognito User Pool group, creating the group if needed.
+
+        The group membership causes Cognito to include the group name in the
+        ``cognito:groups`` claim of the JWT token, which the RBAC system uses
+        to resolve AppRole permissions.
+
+        Args:
+            username: The Cognito username.
+            group_name: The group to add the user to.
+        """
+        if not self._enabled:
+            return
+
+        # Ensure the group exists (idempotent)
+        try:
+            self._client.create_group(
+                GroupName=group_name,
+                UserPoolId=self._user_pool_id,
+                Description=f"Auto-created group for {group_name} role",
+            )
+            logger.info(f"Created Cognito group: {group_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "GroupExistsException":
+                raise
+            # Group already exists — fine
+
+        self._client.admin_add_user_to_group(
+            UserPoolId=self._user_pool_id,
+            Username=username,
+            GroupName=group_name,
+        )
+        logger.info(f"Added user {username} to Cognito group: {group_name}")
+
     def disable_self_signup(self) -> None:
         """
         Disable self-signup on the User Pool by setting

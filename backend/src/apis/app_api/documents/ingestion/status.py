@@ -6,7 +6,6 @@ Centralized status update logic with error message formatting.
 import logging
 import os
 import traceback
-import uuid
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Literal
 
@@ -118,7 +117,6 @@ def _format_error_message(exception: Exception) -> Tuple[str, str]:
     Returns:
         Tuple of (user_friendly_message, full_traceback_string)
     """
-    exception_type = type(exception).__name__
     exception_message = str(exception)
     
     # Get full traceback for technical details

@@ -91,7 +91,7 @@ class AdminCostService:
             List of TopUserCost sorted by cost descending.
         """
         period = period or self._get_current_period()
-        logger.info(f"Getting top {limit} users by cost for period {period}")
+        logger.info("Getting top users by cost for period")
 
         try:
             users_data = await self.storage.get_top_users_by_cost(
@@ -114,7 +114,7 @@ class AdminCostService:
                     quota_percentage=None
                 ))
 
-            logger.info(f"Retrieved {len(result)} top users for period {period}")
+            logger.info("Retrieved top users for period")
             return result
 
         except Exception as e:
@@ -144,7 +144,7 @@ class AdminCostService:
         else:
             period = period or self._get_current_period()
 
-        logger.info(f"Getting system summary for {period_type} period {period}")
+        logger.info("Getting system summary for period")
 
         try:
             summary_data = await self.storage.get_system_summary(
@@ -154,7 +154,7 @@ class AdminCostService:
 
             if not summary_data:
                 # Return empty summary if no data exists
-                logger.warning(f"No system summary found for {period}")
+                logger.warning("No system summary found for period")
                 return SystemCostSummary(
                     period=period,
                     period_type=period_type,
@@ -201,7 +201,7 @@ class AdminCostService:
             List of ModelUsageSummary sorted by cost descending.
         """
         period = period or self._get_current_period()
-        logger.info(f"Getting model usage for period {period}")
+        logger.info("Getting model usage for period")
 
         try:
             model_data = await self.storage.get_model_usage(period=period)
@@ -248,8 +248,8 @@ class AdminCostService:
         Returns:
             List of TierUsageSummary (currently empty, placeholder).
         """
-        period = period or self._get_current_period()
-        logger.info(f"Getting tier usage for period {period} (placeholder)")
+        _period = period or self._get_current_period()  # TODO: use once tier aggregation is implemented
+        logger.info("Getting tier usage for period")
 
         # TODO: Implement tier usage aggregation
         # This requires:
@@ -277,7 +277,7 @@ class AdminCostService:
         Returns:
             List of CostTrend sorted by date ascending.
         """
-        logger.info(f"Getting daily trends from {start_date} to {end_date}")
+        logger.info("Getting daily trends for date range")
 
         # Validate date range (max 90 days)
         try:
@@ -338,8 +338,7 @@ class AdminCostService:
         """
         period = period or self._get_current_period()
         logger.info(
-            f"Building admin cost dashboard for period {period} "
-            f"(top_users={top_users_limit}, include_trends={include_trends})"
+            "Building admin cost dashboard for period"
         )
 
         # Get system summary

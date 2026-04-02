@@ -24,7 +24,7 @@ class Assistant(BaseModel):
     usage_count: int = Field(0, alias="usageCount", description="Number of times used")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")
-    status: Literal["DRAFT", "COMPLETE", "ARCHIVED"] = Field(..., description="Assistant lifecycle status")
+    status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Assistant lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
 
 
@@ -63,7 +63,7 @@ class UpdateAssistantRequest(BaseModel):
     tags: Optional[List[str]] = Field(None, description="Search keywords")
     starters: Optional[List[str]] = Field(None, description="Conversation starter prompts")
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
-    status: Optional[Literal["DRAFT", "COMPLETE", "ARCHIVED"]] = Field(None, description="Lifecycle status")
+    status: Optional[Literal["DRAFT", "COMPLETE"]] = Field(None, description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
 
 
@@ -85,7 +85,7 @@ class AssistantResponse(BaseModel):
     usage_count: int = Field(..., alias="usageCount", description="Usage count")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
-    status: Literal["DRAFT", "COMPLETE", "ARCHIVED"] = Field(..., description="Lifecycle status")
+    status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
 
     # Share metadata (only present for shared assistants)

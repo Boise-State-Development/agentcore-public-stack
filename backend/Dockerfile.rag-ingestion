@@ -134,4 +134,11 @@ ENV DOCLING_ARTIFACTS_PATH=/opt/ml/models/docling-artifacts \
 # 5. Copy Your Handler Code
 COPY backend/src/apis/app_api/documents/ingestion/ ${LAMBDA_TASK_ROOT}
 
+# 6. Copy shared embeddings module (required by ingestion/embeddings/bedrock_embeddings.py)
+# The ingestion embeddings re-export from apis.shared.embeddings, so we need the
+# full apis.shared.embeddings package available in LAMBDA_TASK_ROOT.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
+RUN touch ${LAMBDA_TASK_ROOT}/apis/__init__.py
+
 CMD [ "handler.lambda_handler" ]

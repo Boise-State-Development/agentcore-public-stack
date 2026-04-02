@@ -54,7 +54,7 @@ async def list_models_for_user(
             - 500 if server error
     """
     logger.info(
-        f"User {current_user.email} requesting available models "
+        f"User {current_user.name} requesting available models "
         f"(roles: {current_user.roles})"
     )
 
@@ -69,7 +69,7 @@ async def list_models_for_user(
 
         logger.info(
             f"✅ Found {len(accessible_models)} models available to user "
-            f"{current_user.email} (out of {len(all_models)} total)"
+            f"{current_user.name} (out of {len(all_models)} total)"
         )
 
         # Convert ManagedModel instances to dicts for Pydantic v2 validation

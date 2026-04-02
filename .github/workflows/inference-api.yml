@@ -129,6 +129,7 @@ jobs:
     name: Build Docker Image
     runs-on: ubuntu-24.04-arm
     needs: [install, check-stack-dependencies]
+    if: github.event_name != 'pull_request'
     
     # Select environment to get project prefix for image naming
     environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production') || (github.ref == 'refs/heads/develop' && 'development') || 'development' }}
@@ -187,7 +188,7 @@ jobs:
           echo "Image size: ${IMAGE_SIZE} bytes"
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: inference-api-docker-image
           path: ${{ runner.temp }}/inference-api-image.tar
@@ -229,7 +230,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: inference-api-docker-image
           path: ${{ runner.temp }}
@@ -326,7 +327,7 @@ jobs:
           bash scripts/stack-inference-api/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: inference-api-cdk-synth
           path: infrastructure/cdk.out/
@@ -367,7 +368,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: inference-api-cdk-synth
           path: infrastructure/cdk.out/
@@ -427,7 +428,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       
       - name: Download Docker image artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: inference-api-docker-image
           path: ${{ runner.temp }}
@@ -500,7 +501,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: inference-api-cdk-synth
           path: infrastructure/cdk.out/
@@ -527,7 +528,7 @@ jobs:
           bash scripts/stack-inference-api/tag-latest.sh
      
       - name: Upload stack outputs
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: inference-api-deployment-outputs

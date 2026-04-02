@@ -22,7 +22,6 @@ from .models import (
     OAuthConnectionStatus,
     OAuthProvider,
     OAuthUserToken,
-    compute_scopes_hash,
 )
 from .provider_repository import OAuthProviderRepository, get_provider_repository
 from .token_cache import TokenCache, get_token_cache

@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { Router, ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';
 import { authGuard } from './auth.guard';
 import { AuthService } from './auth.service';
+import { SystemService } from '../services/system.service';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 describe('authGuard', () => {
@@ -11,6 +12,7 @@ describe('authGuard', () => {
     isTokenExpired: ReturnType<typeof vi.fn>;
     refreshAccessToken: ReturnType<typeof vi.fn>;
   };
+  let systemService: { checkStatus: ReturnType<typeof vi.fn> };
   let router: { navigate: ReturnType<typeof vi.fn> };
   let route: ActivatedRouteSnapshot;
   let state: RouterStateSnapshot;
@@ -28,6 +30,10 @@ describe('authGuard', () => {
       navigate: vi.fn(),
     };
 
+    systemService = {
+      checkStatus: vi.fn().mockResolvedValue(true),
+    };
+
     route = {} as ActivatedRouteSnapshot;
     state = { url: '/dashboard' } as RouterStateSnapshot;
 
@@ -35,6 +41,7 @@ describe('authGuard', () => {
       providers: [
         { provide: AuthService, useValue: authService },
         { provide: Router, useValue: router },
+        { provide: SystemService, useValue: systemService },
       ],
     });
   });

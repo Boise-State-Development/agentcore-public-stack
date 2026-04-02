@@ -8,7 +8,6 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from apis.shared.users.repository import UserRepository
-from apis.shared.users.models import UserProfile, UserListItem
 from apis.app_api.costs.aggregator import CostAggregator
 from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.repository import QuotaRepository
@@ -64,7 +63,8 @@ class UserAdminService:
             try:
                 last_key = json.loads(base64.b64decode(cursor).decode())
             except Exception:
-                pass
+                # Invalid cursor format; start from the beginning
+                logger.warning("Invalid pagination cursor, ignoring")
 
         # Query based on filters
         if domain:

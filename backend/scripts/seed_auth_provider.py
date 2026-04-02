@@ -50,7 +50,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 def discover_oidc_endpoints(issuer_url: str) -> Dict[str, Any]:

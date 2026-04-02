@@ -163,7 +163,13 @@ async def delete_vectors_for_document(document_id: str) -> int:
     """
     Delete all vectors for a specific document from the S3 vector store.
 
-    Vectors are stored with keys formatted as {document_id}#{chunk_index}.
+    Vectors are stored with keys formatted as {document_id}#{chunk_index}
+    where chunk_index is a sequential integer starting at 0.
+
+    Uses a probe-and-delete strategy: generates candidate keys in batches,
+    checks which exist via GetVectors, then deletes them. Stops probing
+    when a batch returns no results. Falls back to a full list scan if
+    the probe finds nothing (handles unexpected key formats).
 
     Args:
         document_id: The document identifier
@@ -175,10 +181,134 @@ async def delete_vectors_for_document(document_id: str) -> int:
     vector_bucket = _get_vector_store_bucket()
     vector_index = _get_vector_store_index()
 
+    existing_keys = []
+    probe_batch_size = 500
+    probe_offset = 0
+    max_probe = 10000  # Safety limit
+
+    # Strategy 1: Probe for keys using the known pattern {document_id}#{index}
+    while probe_offset < max_probe:
+        candidate_keys = [f"{document_id}#{i}" for i in range(probe_offset, probe_offset + probe_batch_size)]
+        try:
+            response = client.get_vectors(
+                vectorBucketName=vector_bucket,
+                indexName=vector_index,
+                keys=candidate_keys,
+            )
+            found = [v["key"] for v in response.get("vectors", [])]
+            if not found:
+                # No more vectors in this range — stop probing
+                break
+            existing_keys.extend(found)
+        except Exception as e:
+            logger.warning(f"GetVectors probe failed at offset {probe_offset}: {e}")
+            break
+
+        probe_offset += probe_batch_size
+
+    # Strategy 2: Fallback to list scan if probe found nothing
+    if not existing_keys:
+        logger.info(f"Key probe found no vectors for {document_id}, falling back to list scan")
+        next_token = None
+        document_prefix = f"{document_id}#"
+
+        while True:
+            list_params = {
+                "vectorBucketName": vector_bucket,
+                "indexName": vector_index,
+                "maxResults": 1000,
+            }
+            if next_token:
+                list_params["nextToken"] = next_token
+
+            response = client.list_vectors(**list_params)
+            for vector in response.get("vectors", []):
+                if vector.get("key", "").startswith(document_prefix):
+                    existing_keys.append(vector["key"])
+
+            next_token = response.get("nextToken")
+            if not next_token:
+                break
+
+    # Delete all found keys in batches
+    if existing_keys:
+        delete_batch_size = 500
+        deleted_count = 0
+
+        for i in range(0, len(existing_keys), delete_batch_size):
+            batch = existing_keys[i : i + delete_batch_size]
+            client.delete_vectors(vectorBucketName=vector_bucket, indexName=vector_index, keys=batch)
+            deleted_count += len(batch)
+
+        logger.info(f"Deleted {deleted_count} vectors for document {document_id}")
+        return deleted_count
+    else:
+        logger.info(f"No vectors found for document {document_id}")
+        return 0
+
+
+async def delete_vectors_for_document_deterministic(
+    document_id: str,
+    chunk_count: int,
+) -> int:
+    """
+    Delete vectors using deterministic keys: {document_id}#{i} for i in range(chunk_count).
+    No probing, no list-scan. O(chunk_count) with a single batch delete call.
+
+    Deletion of non-existent keys is a no-op in the S3 Vectors API.
+
+    Args:
+        document_id: The document identifier
+        chunk_count: Number of chunks to delete
+
+    Returns:
+        Number of keys sent for deletion (= chunk_count)
+
+    Raises:
+        Exception: If S3 Vectors API call fails (caller handles retries)
+    """
+    if chunk_count == 0:
+        return 0
+
+    client = boto3.client("s3vectors", region_name=AWS_REGION)
+    vector_bucket = _get_vector_store_bucket()
+    vector_index = _get_vector_store_index()
+
+    keys = [f"{document_id}#{i}" for i in range(chunk_count)]
+    batch_size = 500
+
+    for i in range(0, len(keys), batch_size):
+        batch = keys[i : i + batch_size]
+        client.delete_vectors(
+            vectorBucketName=vector_bucket,
+            indexName=vector_index,
+            keys=batch,
+        )
+
+    logger.info(f"Deterministic delete: sent {chunk_count} keys for document {document_id}")
+    return chunk_count
+
+
+async def delete_vectors_for_assistant(assistant_id: str) -> int:
+    """
+    Delete ALL vectors belonging to an assistant from the S3 vector store.
+
+    Used when deleting an entire assistant to prevent orphaned vectors.
+    Scans the index filtering by assistant_id metadata via list + client-side filter.
+
+    Args:
+        assistant_id: The assistant identifier
+
+    Returns:
+        Number of vectors deleted
+    """
+    client = boto3.client("s3vectors", region_name=AWS_REGION)
+    vector_bucket = _get_vector_store_bucket()
+    vector_index = _get_vector_store_index()
+
     keys_to_delete = []
     next_token = None
 
-    # List all vectors with pagination, filtering for this document
     while True:
         list_params = {
             "vectorBucketName": vector_bucket,
@@ -186,18 +316,14 @@ async def delete_vectors_for_document(document_id: str) -> int:
             "maxResults": 1000,
             "returnMetadata": True,
         }
-
         if next_token:
             list_params["nextToken"] = next_token
 
         response = client.list_vectors(**list_params)
-        vectors = response.get("vectors", [])
-
-        document_prefix = f"{document_id}#"
-        for vector in vectors:
-            vector_key = vector.get("key", "")
-            if vector_key.startswith(document_prefix):
-                keys_to_delete.append(vector_key)
+        for vector in response.get("vectors", []):
+            metadata = vector.get("metadata", {})
+            if metadata.get("assistant_id") == assistant_id:
+                keys_to_delete.append(vector["key"])
 
         next_token = response.get("nextToken")
         if not next_token:
@@ -206,14 +332,13 @@ async def delete_vectors_for_document(document_id: str) -> int:
     if keys_to_delete:
         batch_size = 500
         deleted_count = 0
-
         for i in range(0, len(keys_to_delete), batch_size):
             batch = keys_to_delete[i : i + batch_size]
             client.delete_vectors(vectorBucketName=vector_bucket, indexName=vector_index, keys=batch)
             deleted_count += len(batch)
 
-        logger.info(f"Deleted {deleted_count} vectors for document {document_id}")
+        logger.info(f"Deleted {deleted_count} vectors for assistant {assistant_id}")
         return deleted_count
     else:
-        logger.info(f"No vectors found for document {document_id}")
+        logger.info(f"No vectors found for assistant {assistant_id}")
         return 0

@@ -6,7 +6,7 @@ The token is retrieved dynamically at request time based on user context.
 """
 
 import logging
-from typing import Generator, Optional, Callable, Awaitable
+from typing import Generator, Optional, Callable
 
 import httpx
 

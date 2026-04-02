@@ -5,8 +5,6 @@ import {
   CreateAssistantDraftRequest,
   CreateAssistantRequest, 
   UpdateAssistantRequest,
-  ShareAssistantRequest,
-  UnshareAssistantRequest,
   AssistantSharesResponse
 } from '../models/assistant.model';
 import { AssistantApiService } from './assistant-api.service';
@@ -44,14 +42,13 @@ export class AssistantService {
     }
   }
 
-  async loadAssistants(includeDrafts = false, includeArchived = false, includePublic = false): Promise<void> {
+  async loadAssistants(includeDrafts = false, includePublic = false): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
 
     try {
       const response = await firstValueFrom(this.apiService.getAssistants({
         includeDrafts,
-        includeArchived,
         includePublic
       }));
 
@@ -107,26 +104,6 @@ export class AssistantService {
       return updatedAssistant;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to update assistant';
-      this.error.set(errorMessage);
-      throw err;
-    } finally {
-      this.loading.set(false);
-    }
-  }
-
-  async archiveAssistant(id: string): Promise<void> {
-    this.loading.set(true);
-    this.error.set(null);
-
-    try {
-      await firstValueFrom(this.apiService.archiveAssistant(id));
-
-      // Remove from local list (archived assistants are hidden by default)
-      this.assistants.update(current =>
-        current.filter(a => a.assistantId !== id)
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to archive assistant';
       this.error.set(errorMessage);
       throw err;
     } finally {

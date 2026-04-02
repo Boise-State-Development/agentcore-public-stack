@@ -18,7 +18,6 @@ describe('AssistantService', () => {
       getAssistants: vi.fn(),
       createAssistant: vi.fn(),
       updateAssistant: vi.fn(),
-      archiveAssistant: vi.fn(),
       deleteAssistant: vi.fn(),
       getAssistant: vi.fn(),
       shareAssistant: vi.fn(),
@@ -61,11 +60,10 @@ describe('AssistantService', () => {
     const mockResponse = { assistants: [{ assistantId: '1', name: 'Assistant 1' }] };
     mockApiService.getAssistants.mockReturnValue(of(mockResponse));
 
-    await service.loadAssistants(true, false, true);
+    await service.loadAssistants(true, true);
 
     expect(mockApiService.getAssistants).toHaveBeenCalledWith({
       includeDrafts: true,
-      includeArchived: false,
       includePublic: true
     });
     expect(service.assistants$()).toEqual(mockResponse.assistants);

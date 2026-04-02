@@ -265,7 +265,10 @@ class AuthProviderRepository:
             response = self._secrets_client.get_secret_value(
                 SecretId=self._secrets_arn
             )
-            secrets = json.loads(response["SecretString"])
+            try:
+                secrets = json.loads(response["SecretString"])
+            except (json.JSONDecodeError, KeyError):
+                secrets = {}
             return secrets.get(provider_id)
         except ClientError as e:
             if e.response["Error"]["Code"] == "ResourceNotFoundException":
@@ -288,7 +291,10 @@ class AuthProviderRepository:
                 response = self._secrets_client.get_secret_value(
                     SecretId=self._secrets_arn
                 )
-                secrets = json.loads(response["SecretString"])
+                try:
+                    secrets = json.loads(response["SecretString"])
+                except (json.JSONDecodeError, KeyError):
+                    secrets = {}
             except ClientError as e:
                 if e.response["Error"]["Code"] == "ResourceNotFoundException":
                     secrets = {}
@@ -315,7 +321,10 @@ class AuthProviderRepository:
             response = self._secrets_client.get_secret_value(
                 SecretId=self._secrets_arn
             )
-            secrets = json.loads(response["SecretString"])
+            try:
+                secrets = json.loads(response["SecretString"])
+            except (json.JSONDecodeError, KeyError):
+                secrets = {}
 
             if provider_id in secrets:
                 del secrets[provider_id]

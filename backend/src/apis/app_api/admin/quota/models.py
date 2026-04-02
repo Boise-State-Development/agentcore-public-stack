@@ -5,9 +5,7 @@ from typing import Optional, List, Literal
 from agents.main_agent.quota.models import (
     QuotaTier,
     QuotaAssignment,
-    QuotaEvent,
     QuotaAssignmentType,
-    QuotaOverride
 )
 
 

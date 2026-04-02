@@ -12,7 +12,7 @@ OAuth Support:
 
 import logging
 import re
-from typing import Optional, List, Any, Callable
+from typing import Optional, List, Any
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -25,7 +25,6 @@ from apis.app_api.tools.models import (
 )
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.oauth_auth import (
-    OAuthBearerAuth,
     CompositeAuth,
     create_oauth_bearer_auth,
 )
@@ -243,7 +242,7 @@ class ExternalMCPIntegration:
             token = await oauth_service.get_decrypted_token(user_id, provider_id)
             return token
         except Exception as e:
-            logger.error(f"Error getting OAuth token for user {user_id}, provider {provider_id}: {e}")
+            logger.error("Error getting OAuth token")
             return None
 
     async def load_external_tools(
@@ -329,8 +328,7 @@ class ExternalMCPIntegration:
 
                     if not token_to_use:
                         logger.warning(
-                            f"User {user_id} not connected to OAuth provider "
-                            f"'{tool.requires_oauth_provider}' for tool {tool_id}"
+                            "User not connected to required OAuth provider for tool"
                         )
                         # Still create the client - it will fail gracefully when used
                         # The MCP server should return an appropriate error

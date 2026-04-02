@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError

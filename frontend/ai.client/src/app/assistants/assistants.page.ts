@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, signal, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, OnInit, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -45,8 +45,8 @@ export class AssistantsPage implements OnInit {
 
   async loadAssistants(): Promise<void> {
     try {
-      // Load COMPLETE assistants (not drafts or archived) and do NOT include public assistants
-      await this.assistantService.loadAssistants(true, false, false);
+      // Load COMPLETE assistants (not drafts) and do NOT include public assistants
+      await this.assistantService.loadAssistants(true, false);
     } catch (error) {
       console.error('Error loading assistants:', error);
     }

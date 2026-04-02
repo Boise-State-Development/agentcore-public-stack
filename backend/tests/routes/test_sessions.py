@@ -262,9 +262,15 @@ class TestDeleteSession:
         mock_service.delete_agentcore_memory = AsyncMock()
         mock_service.delete_session_files = AsyncMock()
 
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
         with patch(
             "apis.app_api.sessions.routes.SessionService",
             return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
         ):
             resp = client.delete("/sessions/sess-001")
 
@@ -286,6 +292,32 @@ class TestDeleteSession:
 
         assert resp.status_code == 404
 
+    def test_queues_share_cleanup_on_delete(self, app, make_user, authenticated_client):
+        """Deleting a session should queue share snapshot cleanup as a background task."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=2)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+        # Background task should have been called with the session id
+        mock_share_service.delete_shares_for_session.assert_called_once_with("sess-001")
+
 
 # ---------------------------------------------------------------------------
 # Requirement 3.7: POST /sessions/bulk-delete returns 200
@@ -304,9 +336,15 @@ class TestBulkDeleteSessions:
         mock_service.delete_agentcore_memory = AsyncMock()
         mock_service.delete_session_files = AsyncMock()
 
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
         with patch(
             "apis.app_api.sessions.routes.SessionService",
             return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
         ):
             resp = client.post(
                 "/sessions/bulk-delete",
@@ -331,9 +369,15 @@ class TestBulkDeleteSessions:
         mock_service.delete_agentcore_memory = AsyncMock()
         mock_service.delete_session_files = AsyncMock()
 
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+
         with patch(
             "apis.app_api.sessions.routes.SessionService",
             return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
         ):
             resp = client.post(
                 "/sessions/bulk-delete",
@@ -344,6 +388,34 @@ class TestBulkDeleteSessions:
         body = resp.json()
         assert body["deletedCount"] == 1
         assert body["failedCount"] == 1
+
+    def test_bulk_delete_queues_share_cleanup(self, app, make_user, authenticated_client):
+        """Bulk delete should queue share cleanup for each successfully deleted session."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(side_effect=[True, True])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-002"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_share_service.delete_shares_for_session.call_count == 2
 
     def test_rejects_empty_list(self, app, make_user, authenticated_client):
         """Req 3.7: Should return 422 for empty session_ids list."""

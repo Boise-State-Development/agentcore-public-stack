@@ -5,7 +5,10 @@ import { AuthService } from './auth.service';
 
 describe('UserService', () => {
   let service: UserService;
-  let mockAuthService: { getAccessToken: ReturnType<typeof vi.fn> };
+  let mockAuthService: {
+    getAccessToken: ReturnType<typeof vi.fn>;
+    getIdToken: ReturnType<typeof vi.fn>;
+  };
 
   // Create base64url-encoded JWT token
   const createJWT = (payload: any) => {
@@ -15,6 +18,7 @@ describe('UserService', () => {
     return `${headerB64}.${payloadB64}.sig`;
   };
 
+  // ID token payload (has email, name, cognito:groups)
   const testPayload = {
     sub: 'user-123',
     email: 'test@example.com',
@@ -27,10 +31,17 @@ describe('UserService', () => {
 
   const testJWT = createJWT(testPayload);
 
+  /** Helper: set both tokens (simulates a real login where both are stored). */
+  function setTokens(idToken: string | null, accessToken?: string | null) {
+    mockAuthService.getIdToken.mockReturnValue(idToken);
+    mockAuthService.getAccessToken.mockReturnValue(accessToken ?? idToken);
+  }
+
   beforeEach(() => {
     TestBed.resetTestingModule();
     mockAuthService = {
-      getAccessToken: vi.fn()
+      getAccessToken: vi.fn(),
+      getIdToken: vi.fn(),
     };
 
     TestBed.configureTestingModule({
@@ -50,16 +61,16 @@ describe('UserService', () => {
 
   describe('getUser', () => {
     it('should return null when no token', () => {
-      mockAuthService.getAccessToken.mockReturnValue(null);
+      setTokens(null);
       service.refreshUser();
-      
+
       expect(service.getUser()).toBeNull();
     });
 
     it('should return User when token exists', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
+      setTokens(testJWT);
       service.refreshUser();
-      
+
       const user = service.getUser();
       expect(user).toEqual({
         email: 'test@example.com',
@@ -75,65 +86,65 @@ describe('UserService', () => {
 
   describe('hasRole', () => {
     it('should return false when no user', () => {
-      mockAuthService.getAccessToken.mockReturnValue(null);
+      setTokens(null);
       service.refreshUser();
-      
+
       expect(service.hasRole('Admin')).toBe(false);
     });
 
     it('should return true when user has role', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
+      setTokens(testJWT);
       service.refreshUser();
-      
+
       expect(service.hasRole('Admin')).toBe(true);
     });
 
     it('should return false when user does not have role', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
+      setTokens(testJWT);
       service.refreshUser();
-      
+
       expect(service.hasRole('User')).toBe(false);
     });
   });
 
   describe('hasAnyRole', () => {
     it('should return false when no user', () => {
-      mockAuthService.getAccessToken.mockReturnValue(null);
+      setTokens(null);
       service.refreshUser();
-      
+
       expect(service.hasAnyRole(['Admin', 'User'])).toBe(false);
     });
 
     it('should return true when user has any role', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
+      setTokens(testJWT);
       service.refreshUser();
-      
+
       expect(service.hasAnyRole(['Admin', 'User'])).toBe(true);
     });
 
     it('should return false when user has no matching roles', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
+      setTokens(testJWT);
       service.refreshUser();
-      
+
       expect(service.hasAnyRole(['User', 'Guest'])).toBe(false);
     });
   });
 
   describe('refreshUser', () => {
     it('should update user when token is available', () => {
-      mockAuthService.getAccessToken.mockReturnValue(testJWT);
-      
+      setTokens(testJWT);
+
       service.refreshUser();
-      
+
       expect(service.getUser()).not.toBeNull();
       expect(service.getUser()?.email).toBe('test@example.com');
     });
 
     it('should set user to null when no token', () => {
-      mockAuthService.getAccessToken.mockReturnValue(null);
-      
+      setTokens(null);
+
       service.refreshUser();
-      
+
       expect(service.getUser()).toBeNull();
     });
   });

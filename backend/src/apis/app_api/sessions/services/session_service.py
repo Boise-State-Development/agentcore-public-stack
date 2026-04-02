@@ -178,14 +178,14 @@ class SessionService:
 
             items = response.get('Items', [])
             if not items:
-                logger.info(f"Session not found: {session_id}")
+                logger.info("Session not found via GSI")
                 return None
 
             item = _convert_decimal_to_float(items[0])
 
             # Verify user ownership
             if item.get('userId') != user_id:
-                logger.warning(f"Session {session_id} belongs to different user")
+                logger.warning("Session belongs to different user")
                 return None
 
             # Remove DynamoDB keys
@@ -195,7 +195,7 @@ class SessionService:
             return SessionMetadata.model_validate(item)
 
         except Exception as e:
-            logger.error(f"Failed to get session {session_id}: {e}", exc_info=True)
+            logger.error("Failed to get session", exc_info=True)
             return None
 
     async def delete_session(self, user_id: str, session_id: str) -> bool:
@@ -224,11 +224,11 @@ class SessionService:
             # Get current session via GSI to find its SK
             session = await self.get_session(user_id, session_id)
             if not session:
-                logger.info(f"Session not found for deletion: {session_id}")
+                logger.info("Session not found for deletion")
                 return False
 
             if session.deleted:
-                logger.info(f"Session {session_id} already deleted")
+                logger.info("Session already deleted")
                 return True
 
             now = datetime.now(timezone.utc)
@@ -272,7 +272,7 @@ class SessionService:
                 Key={'PK': pk, 'SK': old_sk}
             )
 
-            logger.info(f"Soft-deleted session {session_id} for user {user_id}")
+            logger.info("Soft-deleted session")
 
             # Note: AgentCore Memory cleanup is now handled via BackgroundTasks
             # in the route handler for true fire-and-forget behavior
@@ -284,10 +284,10 @@ class SessionService:
 
         except self.dynamodb.meta.client.exceptions.TransactionCanceledException as e:
             # Transaction failed - likely the session was already deleted or modified
-            logger.warning(f"Transaction cancelled for session {session_id}: {e}")
+            logger.warning("Transaction cancelled for session deletion")
             return False
         except Exception as e:
-            logger.error(f"Failed to delete session {session_id}: {e}", exc_info=True)
+            logger.error("Failed to delete session", exc_info=True)
             return False
 
     def delete_agentcore_memory(self, session_id: str, user_id: str) -> None:
@@ -361,14 +361,14 @@ class SessionService:
 
             except client.exceptions.ResourceNotFoundException:
                 # Session doesn't exist in AgentCore Memory - nothing to delete
-                logger.debug(f"Session {session_id} not found in AgentCore Memory")
+                logger.debug("Session not found in AgentCore Memory")
                 return
             except Exception as e:
-                logger.warning(f"Failed to list events for session {session_id}: {e}")
+                logger.warning("Failed to list events for session")
                 return
 
             if not all_event_ids:
-                logger.debug(f"No events found for session {session_id} in AgentCore Memory")
+                logger.debug("No events found for session in AgentCore Memory")
                 return
 
             # Delete events sequentially - this runs in background so no need
@@ -384,18 +384,15 @@ class SessionService:
                     )
                     deleted_count += 1
                 except Exception as e:
-                    logger.warning(f"Failed to delete event {event_id}: {e}")
+                    logger.warning("Failed to delete event from AgentCore Memory")
 
-            logger.info(
-                f"Deleted {deleted_count}/{len(all_event_ids)} events from AgentCore Memory "
-                f"for session {session_id}"
-            )
+            logger.info("Deleted events from AgentCore Memory")
 
         except ImportError:
             logger.debug("AgentCore Memory SDK not available, skipping content deletion")
         except Exception as e:
             # Log but don't raise - content deletion failures shouldn't block session deletion
-            logger.error(f"Failed to delete AgentCore Memory content for session {session_id}: {e}")
+            logger.error("Failed to delete AgentCore Memory content for session")
 
     def delete_session_files(self, session_id: str) -> None:
         """
@@ -424,12 +421,10 @@ class SessionService:
                     file_service.delete_session_files(session_id)
                 )
                 if deleted_count > 0:
-                    logger.info(
-                        f"Background task deleted {deleted_count} files for session {session_id}"
-                    )
+                    logger.info("Background task deleted files for session")
             finally:
                 loop.close()
 
         except Exception as e:
             # Log but don't raise - file deletion failures shouldn't affect session deletion
-            logger.error(f"Failed to delete files for session {session_id}: {e}")
+            logger.error("Failed to delete files for session")

@@ -17,7 +17,7 @@ Example: `1.0.0-beta.1`, `1.1.0`
 2. Run `bash scripts/common/sync-version.sh`
 3. Commit both the `VERSION` file and the updated manifests
 
-The sync script updates `backend/pyproject.toml`, `frontend/ai.client/package.json`, and `infrastructure/package.json`.
+The sync script updates `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`, and the `README.md` version badge and "Current release" text.
 
 ## PR Gate
 

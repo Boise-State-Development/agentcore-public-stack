@@ -3,7 +3,6 @@
 import os
 import logging
 import uuid
-from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 import boto3

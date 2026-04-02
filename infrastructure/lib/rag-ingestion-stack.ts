@@ -69,7 +69,7 @@ export class RagIngestionStack extends cdk.Stack {
       `/${config.projectPrefix}/network/availability-zones`
     );
 
-    const vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
+    const _vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
       vpcId: vpcId,
       vpcCidrBlock: vpcCidr,
       availabilityZones: cdk.Fn.split(',', availabilityZonesString),
@@ -180,6 +180,7 @@ export class RagIngestionStack extends cdk.Stack {
       pointInTimeRecovery: true,
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'ttl',
     });
 
     // Add Global Secondary Indexes
@@ -231,7 +232,7 @@ export class RagIngestionStack extends cdk.Stack {
       getResourceName(config, 'rag-ingestion')
     );
 
-    const containerImageUri = `${ecrRepository.repositoryUri}:${imageTag}`;
+    const _containerImageUri = `${ecrRepository.repositoryUri}:${imageTag}`;
 
     const ingestionLogGroup = new logs.LogGroup(this, 'RagIngestionLogGroup', {
       retention: logs.RetentionDays.ONE_WEEK,

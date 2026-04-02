@@ -56,7 +56,7 @@ def dynamodb_table():
 
 class TestSeedSystemAdminRole:
     def test_creates_role_with_grants(self, dynamodb_table):
-        """Creates DEFINITION + TOOL_GRANT#* + MODEL_GRANT#* without JWT mapping."""
+        """Creates DEFINITION + TOOL_GRANT#* + MODEL_GRANT#* + JWT_MAPPING#system_admin."""
         result = seed_system_admin_role(TABLE_NAME, REGION)
 
         assert result.created == 1
@@ -68,7 +68,7 @@ class TestSeedSystemAdminRole:
         )
         item = resp["Item"]
         assert item["roleId"] == "system_admin"
-        assert item["jwtRoleMappings"] == []
+        assert item["jwtRoleMappings"] == ["system_admin"]
         assert item["grantedTools"] == ["*"]
         assert item["grantedModels"] == ["*"]
         assert item["isSystemRole"] is True
@@ -91,6 +91,16 @@ class TestSeedSystemAdminRole:
         assert grant["GSI3PK"] == "MODEL#*"
         assert grant["GSI3SK"] == "ROLE#system_admin"
         assert grant["enabled"] is True
+
+        # Verify JWT_MAPPING#system_admin (maps Cognito group → AppRole)
+        resp = dynamodb_table.get_item(
+            Key={"PK": "ROLE#system_admin", "SK": "JWT_MAPPING#system_admin"}
+        )
+        mapping = resp["Item"]
+        assert mapping["GSI1PK"] == "JWT_ROLE#system_admin"
+        assert mapping["GSI1SK"] == "ROLE#system_admin"
+        assert mapping["roleId"] == "system_admin"
+        assert mapping["enabled"] is True
 
     def test_skips_when_role_exists(self, dynamodb_table):
         """Skips if system_admin DEFINITION already present."""

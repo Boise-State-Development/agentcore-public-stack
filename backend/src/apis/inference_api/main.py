@@ -13,15 +13,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
+import logging as _logging
+
 # Load .env file from backend/src directory (parent of apis/)
 # override=True so .env values win over shell env vars during local development.
 # In production (containers), there is no .env file, so container-injected env vars are used directly.
 env_path = Path(__file__).parent.parent.parent / '.env'
+_startup_logger = _logging.getLogger(__name__)
 if env_path.exists():
     load_dotenv(dotenv_path=env_path, override=True)
-    print(f"Loaded environment variables from: {env_path}")
+    _startup_logger.info("Loaded environment variables from: %s", env_path)
 else:
-    print(f"Warning: .env file not found at {env_path}")
+    _startup_logger.warning(".env file not found at %s", env_path)
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles

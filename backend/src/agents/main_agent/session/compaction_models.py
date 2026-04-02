@@ -5,8 +5,7 @@ These models define the state and configuration for automatic context window
 compaction, which helps manage token usage in long conversations.
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import os
 

@@ -9,6 +9,8 @@ import {
   heroXMark,
   heroLockClosed,
   heroArrowDownTray,
+  heroInformationCircle,
+  heroChevronRight,
 } from '@ng-icons/heroicons/outline';
 import { heroStopSolid } from '@ng-icons/heroicons/solid';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
@@ -29,6 +31,8 @@ import type { JobResponse, InferenceJobResponse } from '../../models/fine-tuning
       heroStopSolid,
       heroLockClosed,
       heroArrowDownTray,
+      heroInformationCircle,
+      heroChevronRight,
     }),
   ],
   templateUrl: './fine-tuning-dashboard.page.html',

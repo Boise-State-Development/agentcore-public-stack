@@ -9,14 +9,9 @@ from typing import Optional
 import logging
 import os
 import boto3
-from datetime import datetime
 from botocore.exceptions import ClientError, BotoCoreError
 
 from .models import (
-    UserInfo,
-    AllSessionsResponse,
-    SessionDeleteResponse,
-    SystemStatsResponse,
     BedrockModelsResponse,
     FoundationModelSummary,
     GeminiModelsResponse,
@@ -30,7 +25,7 @@ from apis.shared.models.models import (
     ManagedModelUpdate,
     ManagedModel,
 )
-from apis.shared.auth import User, require_admin, require_roles, has_any_role, get_current_user
+from apis.shared.auth import User, require_admin, get_current_user
 from apis.shared.sessions.metadata import list_user_sessions, get_session_metadata
 from apis.shared.sessions.messages import get_messages
 from apis.shared.models.managed_models import (
@@ -39,10 +34,6 @@ from apis.shared.models.managed_models import (
     list_managed_models,
     update_managed_model,
     delete_managed_model,
-)
-from apis.app_api.admin.services.model_access import (
-    ModelAccessService,
-    get_model_access_service,
 )
 from apis.shared.rbac.system_admin import require_system_admin
 
@@ -90,7 +81,7 @@ async def list_bedrock_models(
             - 403 if user lacks admin role
             - 500 if AWS API error or server error
     """
-    logger.info(f"Admin {admin_user.email} listing Bedrock foundation models")
+    logger.info("Admin listing Bedrock foundation models")
 
     try:
         # Initialize Bedrock control plane client (not bedrock-runtime)
@@ -111,7 +102,7 @@ async def list_bedrock_models(
             request_params['byCustomizationType'] = by_customization_type
 
         # Call AWS Bedrock API
-        logger.debug(f"Calling list_foundation_models with params: {request_params}")
+        logger.debug("Calling list_foundation_models")
         response = bedrock_client.list_foundation_models(**request_params)
 
         # Transform AWS response to our response model
@@ -120,7 +111,7 @@ async def list_bedrock_models(
         # Apply client-side limiting if requested
         if max_results and len(all_models) > max_results:
             all_models = all_models[:max_results]
-            logger.debug(f"Limited results to {max_results} models (client-side)")
+            logger.debug("Limited results to max_results models (client-side)")
 
         model_summaries = []
         for model in all_models:
@@ -146,7 +137,7 @@ async def list_bedrock_models(
         # Sort models by ID in reverse order (newest versions typically have higher version numbers/dates)
         model_summaries.sort(key=lambda m: m.model_id, reverse=True)
 
-        logger.info(f"✅ Retrieved {len(model_summaries)} Bedrock foundation models")
+        logger.info("✅ Retrieved Bedrock foundation models")
 
         return BedrockModelsResponse(
             models=model_summaries,
@@ -157,19 +148,19 @@ async def list_bedrock_models(
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code', 'Unknown')
         error_message = e.response.get('Error', {}).get('Message', str(e))
-        logger.error(f"AWS Bedrock API error: {error_code} - {error_message}")
+        logger.error("AWS Bedrock API error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"AWS Bedrock API error: {error_code} - {error_message}"
         )
     except BotoCoreError as e:
-        logger.error(f"Boto3 error calling Bedrock API: {e}", exc_info=True)
+        logger.error("Boto3 error calling Bedrock API", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error connecting to AWS Bedrock: {str(e)}"
         )
     except Exception as e:
-        logger.error(f"Unexpected error listing Bedrock models: {e}", exc_info=True)
+        logger.error("Unexpected error listing Bedrock models", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}"
@@ -200,7 +191,7 @@ async def list_gemini_models(
             - 403 if user lacks admin role
             - 500 if Google API error or server error
     """
-    logger.info(f"Admin {admin_user.email} listing Gemini models")
+    logger.info("Admin listing Gemini models")
 
     try:
         # Check if Google API key is configured
@@ -265,9 +256,9 @@ async def list_gemini_models(
         # Apply client-side limiting if requested
         if max_results and len(all_models) > max_results:
             all_models = all_models[:max_results]
-            logger.debug(f"Limited results to {max_results} models")
+            logger.debug("Limited results to max_results models")
 
-        logger.info(f"✅ Retrieved {len(all_models)} Gemini models")
+        logger.info("✅ Retrieved Gemini models")
 
         return GeminiModelsResponse(
             models=all_models,
@@ -278,7 +269,7 @@ async def list_gemini_models(
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Unexpected error listing Gemini models: {e}", exc_info=True)
+        logger.error("Unexpected error listing Gemini models", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching Gemini models: {str(e)}"
@@ -313,7 +304,7 @@ async def list_openai_models(
             - 403 if user lacks admin role
             - 500 if OpenAI API error or server error
     """
-    logger.info(f"Admin {admin_user.email} listing OpenAI models")
+    logger.info("Admin listing OpenAI models")
 
     try:
         # Check if OpenAI API key is configured
@@ -358,9 +349,9 @@ async def list_openai_models(
         # Apply client-side limiting if requested
         if max_results and len(all_models) > max_results:
             all_models = all_models[:max_results]
-            logger.debug(f"Limited results to {max_results} models")
+            logger.debug("Limited results to max_results models")
 
-        logger.info(f"✅ Retrieved {len(all_models)} OpenAI models")
+        logger.info("✅ Retrieved OpenAI models")
 
         return OpenAIModelsResponse(
             models=all_models,
@@ -371,7 +362,7 @@ async def list_openai_models(
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Unexpected error listing OpenAI models: {e}", exc_info=True)
+        logger.error("Unexpected error listing OpenAI models", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching OpenAI models: {str(e)}"
@@ -405,7 +396,7 @@ async def list_managed_models_endpoint(
             - 403 if user lacks admin role
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} listing all enabled models")
+    logger.info("Admin listing all enabled models")
 
     try:
         models = await list_managed_models(user_roles=None)  # None = no role filtering
@@ -419,7 +410,7 @@ async def list_managed_models_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"Unexpected error listing enabled models: {e}", exc_info=True)
+        logger.error("Unexpected error listing enabled models", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error listing enabled models: {str(e)}"
@@ -451,7 +442,7 @@ async def create_managed_model_endpoint(
             - 400 if model with same modelId already exists
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} creating enabled model: {model_data.model_name}")
+    logger.info("Admin creating enabled model")
 
     try:
         model = await create_managed_model(model_data)
@@ -459,13 +450,13 @@ async def create_managed_model_endpoint(
 
     except ValueError as e:
         # Model already exists
-        logger.warning(f"Model creation failed: {e}")
+        logger.warning("Model creation failed")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
-        logger.error(f"Unexpected error creating enabled model: {e}", exc_info=True)
+        logger.error("Unexpected error creating enabled model", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creating enabled model: {str(e)}"
@@ -494,7 +485,7 @@ async def get_managed_model_endpoint(
             - 404 if model not found
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} requesting enabled model: {model_id}")
+    logger.info("Admin requesting enabled model")
 
     try:
         model = await get_managed_model(model_id)
@@ -510,7 +501,7 @@ async def get_managed_model_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error getting enabled model: {e}", exc_info=True)
+        logger.error("Unexpected error getting enabled model", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting enabled model: {str(e)}"
@@ -544,7 +535,7 @@ async def update_managed_model_endpoint(
             - 404 if model not found
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} updating enabled model: {model_id}")
+    logger.info("Admin updating enabled model")
 
     try:
         model = await update_managed_model(model_id, updates)
@@ -559,7 +550,7 @@ async def update_managed_model_endpoint(
 
     except ValueError as e:
         # Duplicate modelId or other validation error
-        logger.warning(f"Model update failed: {e}")
+        logger.warning("Model update failed")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
@@ -567,7 +558,7 @@ async def update_managed_model_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error updating enabled model: {e}", exc_info=True)
+        logger.error("Unexpected error updating enabled model", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating enabled model: {str(e)}"
@@ -595,7 +586,7 @@ async def delete_managed_model_endpoint(
             - 404 if model not found
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} deleting enabled model: {model_id}")
+    logger.info("Admin deleting enabled model")
 
     try:
         deleted = await delete_managed_model(model_id)
@@ -611,7 +602,7 @@ async def delete_managed_model_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error deleting enabled model: {e}", exc_info=True)
+        logger.error("Unexpected error deleting enabled model", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting enabled model: {str(e)}"
@@ -646,7 +637,7 @@ async def sync_model_roles(
             - 404 if model not found
             - 500 if server error
     """
-    logger.info(f"Admin {admin_user.email} syncing roles for model: {model_id}")
+    logger.info("Admin syncing roles for model")
 
     try:
         # Get the model
@@ -686,7 +677,7 @@ async def sync_model_roles(
             )
 
         logger.info(
-            f"✅ Synced model {model_id}: allowedAppRoles = {granting_roles}"
+            "✅ Synced model allowedAppRoles"
         )
 
         return updated_model
@@ -694,7 +685,7 @@ async def sync_model_roles(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error syncing model roles: {e}", exc_info=True)
+        logger.error("Unexpected error syncing model roles", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error syncing model roles: {str(e)}"

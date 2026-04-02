@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
-from apis.app_api.tools.service import ToolCatalogService, get_tool_catalog_service
+from apis.app_api.tools.service import get_tool_catalog_service
 from apis.app_api.tools.models import (
     ToolCreateRequest,
     ToolUpdateRequest,
@@ -41,7 +41,7 @@ async def admin_list_all_tools(
     Returns:
         AdminToolListResponse with all tools
     """
-    logger.info(f"Admin {admin.email} listing full tool catalog")
+    logger.info("Admin listing full tool catalog")
 
     service = get_tool_catalog_service()
     tools = await service.get_all_tools(status=status, include_roles=True)
@@ -69,7 +69,7 @@ async def admin_get_tool(
     Returns:
         AdminToolResponse for the tool
     """
-    logger.info(f"Admin {admin.email} getting tool: {tool_id}")
+    logger.info("Admin getting tool")
 
     service = get_tool_catalog_service()
     tool = await service.get_tool(tool_id)
@@ -105,7 +105,7 @@ async def admin_create_tool(
     Returns:
         Created AdminToolResponse
     """
-    logger.info(f"Admin {admin.email} creating tool: {request.tool_id}")
+    logger.info("Admin creating tool")
 
     service = get_tool_catalog_service()
 
@@ -157,7 +157,7 @@ async def admin_update_tool(
     Returns:
         Updated AdminToolResponse
     """
-    logger.info(f"Admin {admin.email} updating tool: {tool_id}")
+    logger.info("Admin updating tool")
 
     service = get_tool_catalog_service()
 
@@ -202,7 +202,7 @@ async def admin_delete_tool(
     Returns:
         Success message
     """
-    logger.info(f"Admin {admin.email} deleting tool: {tool_id} (hard={hard})")
+    logger.info("Admin deleting tool")
 
     service = get_tool_catalog_service()
     deleted = await service.delete_tool(tool_id, admin, soft=not hard)
@@ -236,7 +236,7 @@ async def get_tool_roles(
     Returns:
         ToolRolesResponse with role assignments
     """
-    logger.info(f"Admin {admin.email} getting roles for tool: {tool_id}")
+    logger.info("Admin getting roles for tool")
 
     service = get_tool_catalog_service()
 
@@ -272,7 +272,7 @@ async def set_tool_roles(
     Returns:
         Success message
     """
-    logger.info(f"Admin {admin.email} setting roles for tool: {tool_id}")
+    logger.info("Admin setting roles for tool")
 
     service = get_tool_catalog_service()
 
@@ -302,7 +302,7 @@ async def add_roles_to_tool(
     Returns:
         Success message
     """
-    logger.info(f"Admin {admin.email} adding roles to tool: {tool_id}")
+    logger.info("Admin adding roles to tool")
 
     service = get_tool_catalog_service()
 
@@ -332,7 +332,7 @@ async def remove_roles_from_tool(
     Returns:
         Success message
     """
-    logger.info(f"Admin {admin.email} removing roles from tool: {tool_id}")
+    logger.info("Admin removing roles from tool")
 
     service = get_tool_catalog_service()
 
@@ -369,7 +369,7 @@ async def sync_from_registry(
     Returns:
         SyncResult with discovered, orphaned, and unchanged tools
     """
-    logger.info(f"Admin {admin.email} syncing tool catalog (dry_run={dry_run})")
+    logger.info("Admin syncing tool catalog")
 
     service = get_tool_catalog_service()
     result = await service.sync_catalog_from_registry(admin, dry_run=dry_run)

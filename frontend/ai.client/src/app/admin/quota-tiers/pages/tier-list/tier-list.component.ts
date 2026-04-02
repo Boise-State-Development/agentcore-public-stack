@@ -3,7 +3,6 @@ import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DatePipe } from '@angular/common';
 import { QuotaStateService } from '../../services/quota-state.service';
-import { QuotaTier } from '../../models/quota.models';
 
 @Component({
   selector: 'app-tier-list',

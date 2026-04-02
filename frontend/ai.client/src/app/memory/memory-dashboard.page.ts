@@ -11,7 +11,7 @@ import {
   heroTrash,
 } from '@ng-icons/heroicons/outline';
 import { MemoryService } from './services/memory.service';
-import { MemoryRecord, MemoriesResponse } from './models/memory.model';
+import { MemoriesResponse } from './models/memory.model';
 
 /**
  * Represents a parsed preference with structured display

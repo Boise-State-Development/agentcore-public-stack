@@ -19,10 +19,6 @@ import logging
 # available in the SageMaker DLC container.  input_fn, output_fn, and
 # _sanitize_label must remain importable without torch/transformers so they
 # can be unit-tested locally.
-try:
-    import numpy as np
-except ImportError:  # pragma: no cover
-    np = None
 
 logger = logging.getLogger(__name__)
 

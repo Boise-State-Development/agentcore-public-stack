@@ -16,6 +16,7 @@ export interface TokenRefreshResponse {
 export class AuthService {
   private config = inject(ConfigService);
   private readonly tokenKey = 'access_token';
+  private readonly idTokenKey = 'id_token';
   private readonly refreshTokenKey = 'refresh_token';
   private readonly tokenExpiryKey = 'token_expiry';
   private readonly stateKey = 'auth_state';
@@ -280,8 +281,12 @@ export class AuthService {
   /**
    * Store tokens in localStorage.
    */
-  storeTokens(response: { access_token: string; refresh_token?: string; expires_in: number }): void {
+  storeTokens(response: { access_token: string; refresh_token?: string; id_token?: string; expires_in: number }): void {
     localStorage.setItem(this.tokenKey, response.access_token);
+
+    if (response.id_token) {
+      localStorage.setItem(this.idTokenKey, response.id_token);
+    }
 
     if (response.refresh_token) {
       localStorage.setItem(this.refreshTokenKey, response.refresh_token);
@@ -307,6 +312,7 @@ export class AuthService {
    */
   clearTokens(): void {
     localStorage.removeItem(this.tokenKey);
+    localStorage.removeItem(this.idTokenKey);
     localStorage.removeItem(this.refreshTokenKey);
     localStorage.removeItem(this.tokenExpiryKey);
     localStorage.removeItem(this.providerIdKey);
@@ -324,6 +330,13 @@ export class AuthService {
   getAuthorizationHeader(): string | null {
     const token = this.getAccessToken();
     return token ? `Bearer ${token}` : null;
+  }
+
+  /**
+   * Get the stored ID token. Contains user profile claims (email, name, groups).
+   */
+  getIdToken(): string | null {
+    return localStorage.getItem(this.idTokenKey);
   }
 
   // ─── State / Return URL / Provider ID ────────────────────────────────

@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import boto3
 from botocore.exceptions import ClientError
 import logging
-import uuid
 import os
 from .models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType, QuotaOverride
 

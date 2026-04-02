@@ -5,7 +5,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # Type alias for document processing status
-DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "failed"]
+DocumentStatus = Literal["uploading", "chunking", "embedding", "complete", "failed", "deleting"]
 
 
 class Document(BaseModel):
@@ -31,6 +31,7 @@ class Document(BaseModel):
     chunk_count: Optional[int] = Field(None, alias="chunkCount", description="Number of chunks created")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")
+    ttl: Optional[int] = Field(None, alias="ttl", description="DynamoDB TTL epoch timestamp for auto-expiry")
 
 
 class CreateDocumentRequest(BaseModel):
@@ -88,3 +89,12 @@ class DownloadUrlResponse(BaseModel):
     download_url: str = Field(..., alias="downloadUrl", description="Presigned S3 URL for download")
     filename: str = Field(..., description="Original filename")
     expires_in: int = Field(..., alias="expiresIn", description="URL expiration in seconds")
+
+
+class ReportUploadFailureRequest(BaseModel):
+    """Request body for reporting a client-side upload failure"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    error: str = Field(..., description="User-friendly error message")
+    details: Optional[str] = Field(None, description="Technical error details")

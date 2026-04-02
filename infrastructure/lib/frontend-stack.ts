@@ -151,7 +151,7 @@ export class FrontendStack extends cdk.Stack {
     });
 
     // Create Origin Access Control (OAC) for CloudFront
-    const oac = new cloudfront.CfnOriginAccessControl(this, 'FrontendOAC', {
+    const _oac = new cloudfront.CfnOriginAccessControl(this, 'FrontendOAC', {
       originAccessControlConfig: {
         name: getResourceName(config, 'frontend-oac'),
         originAccessControlOriginType: 's3',

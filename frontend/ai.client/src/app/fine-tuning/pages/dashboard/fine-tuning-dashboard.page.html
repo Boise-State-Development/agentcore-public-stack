@@ -36,6 +36,23 @@
     }
   </div>
 
+  <!-- About this tool -->
+  <details class="group mb-6 rounded-sm border border-blue-200 bg-blue-50/50 dark:border-blue-800/40 dark:bg-blue-950/20">
+    <summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium text-blue-700 select-none dark:text-blue-300">
+      <ng-icon name="heroInformationCircle" class="size-5 shrink-0" />
+      What is fine-tuning and how can it help my research?
+      <ng-icon name="heroChevronRight" class="ml-auto size-4 transition-transform group-open:rotate-90" />
+    </summary>
+    <div class="border-t border-blue-200 px-4 py-3 text-sm/6 text-gray-700 dark:border-blue-800/40 dark:text-gray-300">
+      <p>
+        If you have a need for a language model to perform automatic coding or classification for your research, and the input is text, then this is a potentially useful option for you. Fine-tuning takes an existing small language model and helps it become better at coding/classification on the data that you provide.
+      </p>
+      <p class="mt-2">
+        To get started, upload a <strong>.csv</strong> file with two columns: <strong>text</strong> (your input data) and <strong>label</strong> (the code/classification you want the model to predict). You can control the train/test split, and once fine-tuning is complete, download the model for your own use. We also provide the ability to run inference on any future data you collect.
+      </p>
+    </div>
+  </details>
+
   <!-- Error display -->
   @if (state.error(); as errorMsg) {
     <div class="mb-6 flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20" role="alert">

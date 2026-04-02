@@ -119,16 +119,7 @@ curl http://localhost:8000/api/assistants/AST-abc123def456 \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 
-### 5. Archive Assistant (Soft Delete)
-
-```bash
-curl -X POST http://localhost:8000/api/assistants/AST-abc123def456/archive \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-**Result:** Status changes to `ARCHIVED`, file remains on disk but hidden from default listings
-
-### 6. Delete Assistant (Hard Delete)
+### 5. Delete Assistant
 
 ```bash
 curl -X DELETE http://localhost:8000/api/assistants/AST-abc123def456 \
@@ -166,10 +157,6 @@ curl http://localhost:8000/api/assistants \
 
 # Include DRAFT assistants
 curl "http://localhost:8000/api/assistants?include_drafts=true" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-# Include ARCHIVED assistants
-curl "http://localhost:8000/api/assistants?include_archived=true" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 

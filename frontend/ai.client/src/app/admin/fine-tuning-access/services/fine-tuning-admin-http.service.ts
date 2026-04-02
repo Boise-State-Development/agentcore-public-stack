@@ -1,8 +1,12 @@
 import { Injectable, inject, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AccessListResponse, FineTuningGrant } from '../models/fine-tuning-access.models';
+import {
+  AccessListResponse,
+  FineTuningGrant,
+  FineTuningCostDashboard,
+} from '../models/fine-tuning-access.models';
 
 /**
  * HTTP service for admin fine-tuning access management API.
@@ -42,5 +46,14 @@ export class FineTuningAdminHttpService {
     return this.http.delete<void>(
       `${this.baseUrl()}/access/${encodeURIComponent(email)}`,
     );
+  }
+
+  /** Get aggregated cost dashboard for a billing period. */
+  getCostDashboard(month?: string): Observable<FineTuningCostDashboard> {
+    let params = new HttpParams();
+    if (month) {
+      params = params.set('month', month);
+    }
+    return this.http.get<FineTuningCostDashboard>(`${this.baseUrl()}/costs`, { params });
   }
 }

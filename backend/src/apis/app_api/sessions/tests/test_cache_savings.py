@@ -1,7 +1,7 @@
 """Unit tests for cache savings calculation in metadata service"""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 
 from apis.app_api.messages.models import (

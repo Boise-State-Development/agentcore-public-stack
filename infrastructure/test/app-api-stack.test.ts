@@ -135,59 +135,6 @@ describe('AppApiStack', () => {
   });
 
   // ============================================================
-  // S3 Buckets
-  // ============================================================
-
-  describe('S3 Buckets', () => {
-    test('creates AssistantsDocumentBucket with versioning', () => {
-      template.hasResourceProperties('AWS::S3::Bucket', {
-        BucketName: `${config.projectPrefix}-assistants-documents`,
-        VersioningConfiguration: { Status: 'Enabled' },
-      });
-    });
-
-    test('AssistantsDocumentBucket has CORS configuration', () => {
-      template.hasResourceProperties('AWS::S3::Bucket', {
-        BucketName: `${config.projectPrefix}-assistants-documents`,
-        CorsConfiguration: {
-          CorsRules: Match.arrayWith([
-            Match.objectLike({
-              AllowedMethods: ['GET', 'PUT', 'HEAD'],
-              AllowedHeaders: ['Content-Type', 'Content-Length', 'x-amz-*'],
-            }),
-          ]),
-        },
-      });
-    });
-
-    test('creates exactly 1 S3 bucket (UserFiles moved to InfrastructureStack)', () => {
-      template.resourceCountIs('AWS::S3::Bucket', 1);
-    });
-  });
-
-  // ============================================================
-  // S3 Vector Store Resources
-  // ============================================================
-
-  describe('S3 Vector Store', () => {
-    test('creates S3 Vector Bucket', () => {
-      template.hasResourceProperties('AWS::S3Vectors::VectorBucket', {
-        VectorBucketName: `${config.projectPrefix}-assistants-vector-store-v1`,
-      });
-    });
-
-    test('creates S3 Vector Index with correct config', () => {
-      template.hasResourceProperties('AWS::S3Vectors::Index', {
-        VectorBucketName: `${config.projectPrefix}-assistants-vector-store-v1`,
-        IndexName: `${config.projectPrefix}-assistants-vector-index-v1`,
-        DataType: 'float32',
-        Dimension: 1024,
-        DistanceMetric: 'cosine',
-      });
-    });
-  });
-
-  // ============================================================
   // ALB Target Group
   // ============================================================
 

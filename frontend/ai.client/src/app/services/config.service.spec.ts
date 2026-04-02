@@ -8,6 +8,7 @@ describe('ConfigService', () => {
 
   const validConfig: RuntimeConfig = {
     appApiUrl: 'https://api.example.com',
+    inferenceApiUrl: 'https://inference.example.com',
     environment: 'production',
     version: '1.0.0-beta.1',
     cognitoDomainUrl: 'https://myprefix.auth.us-east-1.amazoncognito.com',

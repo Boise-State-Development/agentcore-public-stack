@@ -82,7 +82,7 @@ async def list_users(
     Returns:
         UserListResponse with paginated list of users
     """
-    logger.info(f"Admin {admin_user.email} listing users (status={status}, domain={domain})")
+    logger.info("Admin listing users")
 
     if not service.enabled:
         logger.warning("User admin service is disabled - no table configured")
@@ -111,7 +111,7 @@ async def search_users(
     Returns:
         UserListResponse with matching user (or empty if not found)
     """
-    logger.info(f"Admin {admin_user.email} searching for user by email: {email}")
+    logger.info("Admin searching for user by email")
 
     if not service.enabled:
         logger.warning("User admin service is disabled - no table configured")
@@ -136,7 +136,7 @@ async def list_email_domains(
     Note: Currently returns empty list. Full implementation requires
     maintaining a separate domain aggregation.
     """
-    logger.info(f"Admin {admin_user.email} listing email domains")
+    logger.info("Admin listing email domains")
 
     return await service.list_domains(limit=limit)
 
@@ -163,7 +163,7 @@ async def get_user_detail(
     Raises:
         HTTPException: 404 if user not found
     """
-    logger.info(f"Admin {admin_user.email} requesting user detail: {user_id}")
+    logger.info("Admin requesting user detail")
 
     if not service.enabled:
         raise HTTPException(

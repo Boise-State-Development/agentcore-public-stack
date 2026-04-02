@@ -1,6 +1,9 @@
 import json
+import logging
 from typing import Dict, Any, List, Tuple
 from .tool_result_processor import ToolResultProcessor
+
+logger = logging.getLogger(__name__)
 
 class StreamEventFormatter:
     """Handles formatting of streaming events for SSE"""
@@ -41,7 +44,7 @@ class StreamEventFormatter:
                     result_text = " ".join(text_parts)
         
         except Exception as e:
-            pass
+            logger.warning("Failed to extract final result data: %s", e)
         
         return images, result_text
     

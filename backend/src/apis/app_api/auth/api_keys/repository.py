@@ -17,7 +17,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Key

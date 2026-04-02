@@ -76,17 +76,6 @@ class TestAssistantsService:
         assert await delete_assistant(created.assistant_id, "u1") is True
 
     @pytest.mark.asyncio
-    async def test_archive_assistant(self, assistants_table):
-        from apis.shared.assistants.service import create_assistant, archive_assistant
-        created = await create_assistant(
-            owner_id="u1", owner_name="Alice", name="Bot",
-            description="d", instructions="hi",
-        )
-        archived = await archive_assistant(created.assistant_id, "u1")
-        assert archived is not None
-        assert archived.status == "ARCHIVED"
-
-    @pytest.mark.asyncio
     async def test_share_and_check_access(self, assistants_table):
         from apis.shared.assistants.service import create_assistant, share_assistant, check_share_access
         created = await create_assistant(

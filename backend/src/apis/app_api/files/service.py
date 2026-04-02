@@ -8,7 +8,7 @@ import os
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import boto3
 from botocore.config import Config
@@ -17,7 +17,6 @@ from botocore.exceptions import ClientError
 from apis.shared.files.models import (
     FileMetadata,
     FileStatus,
-    UserFileQuota,
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
@@ -285,14 +284,14 @@ class FileUploadService:
             raise
 
         # Update status to READY
-        updated = await self.repository.update_file_status(
+        await self.repository.update_file_status(
             user_id, upload_id, FileStatus.READY
         )
 
         # Increment quota
         await self.repository.increment_quota(user_id, file_meta.size_bytes)
 
-        logger.info(f"Completed upload {upload_id} for user {user_id}")
+        logger.info("Completed file upload")
 
         return CompleteUploadResponse(
             upload_id=upload_id,
@@ -342,7 +341,7 @@ class FileUploadService:
                 Key=file_meta.s3_key,
             )
         except ClientError as e:
-            logger.warning(f"Failed to delete S3 object for {upload_id}: {e}")
+            logger.warning("Failed to delete S3 object", exc_info=True)
             # Continue with metadata deletion even if S3 fails
 
         # Delete metadata
@@ -352,7 +351,7 @@ class FileUploadService:
         if deleted and file_meta.status == FileStatus.READY:
             await self.repository.decrement_quota(user_id, file_meta.size_bytes)
 
-        logger.info(f"Deleted file {upload_id} for user {user_id}")
+        logger.info("Deleted file")
         return True
 
     async def list_user_files(

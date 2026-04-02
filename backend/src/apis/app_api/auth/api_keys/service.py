@@ -73,9 +73,9 @@ class ApiKeyService:
         """Delete a key belonging to the requesting user."""
         deleted = await self.repo.delete_key(user_id, key_id)
         if deleted:
-            logger.info(f"API key {key_id} deleted by user {user_id}")
+            logger.info("API key deleted")
         else:
-            logger.info(f"API key {key_id} not found for user {user_id} (no-op)")
+            logger.info("API key not found (no-op)")
         return deleted
 
     # ------------------------------------------------------------------

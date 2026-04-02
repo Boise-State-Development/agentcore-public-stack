@@ -7,7 +7,7 @@ import {
   heroInformationCircle,
   heroXMark
 } from '@ng-icons/heroicons/outline';
-import { ToastService, ToastMessage, ToastType } from '../../services/toast/toast.service';
+import { ToastService, ToastType } from '../../services/toast/toast.service';
 
 /**
  * Toast notification component that displays messages from ToastService.

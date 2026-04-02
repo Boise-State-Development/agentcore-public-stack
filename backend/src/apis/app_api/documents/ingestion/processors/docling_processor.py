@@ -1,11 +1,10 @@
-import asyncio
 import logging
 import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Coroutine, List, Optional, Union
+from typing import Any, Callable, Coroutine, List, Optional
 
 logger = logging.getLogger(__name__)
 

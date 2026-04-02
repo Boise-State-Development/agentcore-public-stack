@@ -2,8 +2,8 @@
 Model configuration for multi-provider LLM support (Bedrock, OpenAI, Gemini)
 """
 import os
-from typing import Dict, Any, Optional, Literal
-from dataclasses import dataclass, field
+from typing import Dict, Any, Optional
+from dataclasses import dataclass
 from enum import Enum
 
 

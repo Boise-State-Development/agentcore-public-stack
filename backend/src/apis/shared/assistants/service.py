@@ -559,7 +559,6 @@ async def list_user_assistants(
     owner_id: str,
     limit: Optional[int] = None,
     next_token: Optional[str] = None,
-    include_archived: bool = False,
     include_drafts: bool = False,
     include_public: bool = False,
 ) -> Tuple[List[Assistant], Optional[str]]:
@@ -570,7 +569,6 @@ async def list_user_assistants(
         owner_id: User identifier
         limit: Maximum number of assistants to return (optional)
         next_token: Pagination token for retrieving next page (optional)
-        include_archived: Whether to include archived assistants
         include_drafts: Whether to include draft assistants
         include_public: Deprecated/Ignored. Public assistants are no longer listed in a general index.
 
@@ -590,7 +588,6 @@ async def list_user_assistants(
         table_name=assistants_table,
         limit=limit,
         next_token=next_token,
-        include_archived=include_archived,
         include_drafts=include_drafts,
         include_public=include_public,
     )
@@ -652,7 +649,6 @@ async def _list_user_assistants_cloud(
     table_name: str,
     limit: Optional[int] = None,
     next_token: Optional[str] = None,
-    include_archived: bool = False,
     include_drafts: bool = False,
     include_public: bool = False,
 ) -> Tuple[List[Assistant], Optional[str]]:
@@ -664,7 +660,6 @@ async def _list_user_assistants_cloud(
         table_name: DynamoDB table name
         limit: Maximum number of assistants to return (optional)
         next_token: Pagination token (optional)
-        include_archived: Whether to include archived assistants
         include_drafts: Whether to include draft assistants
         include_public: Ignored.
 
@@ -683,9 +678,6 @@ async def _list_user_assistants_cloud(
         filter_parts = []
         expression_attribute_values = {}
 
-        if not include_archived:
-            filter_parts.append("#status <> :archived")
-            expression_attribute_values[":archived"] = "ARCHIVED"
         if not include_drafts:
             filter_parts.append("#status <> :draft")
             expression_attribute_values[":draft"] = "DRAFT"
@@ -755,20 +747,6 @@ async def _list_user_assistants_cloud(
     except Exception as e:
         logger.error(f"Failed to list user assistants from DynamoDB: {e}", exc_info=True)
         return [], None
-
-
-async def archive_assistant(assistant_id: str, owner_id: str) -> Optional[Assistant]:
-    """
-    Archive an assistant (soft delete - sets status to ARCHIVED)
-
-    Args:
-        assistant_id: Assistant identifier
-        owner_id: User identifier (for ownership verification)
-
-    Returns:
-        Updated Assistant object with status=ARCHIVED, None if not found
-    """
-    return await update_assistant(assistant_id=assistant_id, owner_id=owner_id, status="ARCHIVED")
 
 
 async def delete_assistant(assistant_id: str, owner_id: str) -> bool:

@@ -42,6 +42,8 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/logout",
     "/oauth/callback",
     "/chat/api-converse",
+    "/system/status",
+    "/system/first-boot",
     "/openapi.json",
     "/docs",
     "/docs/oauth2-redirect",
@@ -116,24 +118,26 @@ _ADMIN_ROUTES = [(m, p) for m, p in _PROTECTED_ROUTES if p.startswith("/admin")]
 # Validates: Requirements 7.2, 7.3
 # ---------------------------------------------------------------------------
 
-# Roles that grant admin access (from require_admin definition)
-ADMIN_ROLES = {"Admin", "SuperAdmin", "DotNetDevelopers"}
-
-# Strategy: generate a list of role strings that does NOT contain any admin role.
-NON_ADMIN_ROLE_NAMES = st.text(
-    alphabet=st.characters(whitelist_categories=("L",)),
-    min_size=1,
-    max_size=20,
-).filter(lambda r: r not in ADMIN_ROLES)
-
-non_admin_roles_strategy = st.lists(NON_ADMIN_ROLE_NAMES, min_size=0, max_size=5)
+# Strategy: generate a list of arbitrary role strings for Hypothesis.
+non_admin_roles_strategy = st.lists(
+    st.text(
+        alphabet=st.characters(whitelist_categories=("L",)),
+        min_size=1,
+        max_size=20,
+    ),
+    min_size=0,
+    max_size=5,
+)
 
 
 class TestNonAdminRoleRejection:
     """Property 4: Non-admin role rejection.
 
-    For any User whose roles do not contain "Admin", "SuperAdmin", or
-    "DotNetDevelopers", admin endpoints return HTTP 403.
+    For any User whose JWT roles do not map to the ``system_admin`` AppRole,
+    admin endpoints return HTTP 403.
+
+    Since ``require_admin`` now resolves permissions via the AppRoleService,
+    we mock the service to return no admin AppRoles for the generated users.
     """
 
     @given(roles=non_admin_roles_strategy)
@@ -146,10 +150,8 @@ class TestNonAdminRoleRejection:
 
         **Validates: Requirements 7.2, 7.3**
         """
-        # Build a minimal app with just the admin router so we test the
-        # real require_admin dependency chain without side-effects from
-        # the full app's lifespan.
         from apis.app_api.admin.routes import router as admin_router
+        from apis.shared.rbac.models import UserEffectivePermissions
 
         app = FastAPI()
         app.include_router(admin_router)
@@ -163,10 +165,25 @@ class TestNonAdminRoleRejection:
         )
         app.dependency_overrides[get_current_user] = lambda: user
 
-        client = TestClient(app, raise_server_exceptions=False)
+        # Mock AppRoleService to return no admin AppRoles (simulates
+        # JWT roles that don't map to system_admin in DynamoDB)
+        mock_service = AsyncMock()
+        mock_service.resolve_user_permissions = AsyncMock(
+            return_value=UserEffectivePermissions(
+                user_id="prop4-user",
+                app_roles=["default"],
+                tools=[],
+                models=[],
+                quota_tier=None,
+                resolved_at="2025-01-01T00:00:00Z",
+            )
+        )
 
-        # Pick a representative admin endpoint — GET /admin/managed-models
-        resp = client.get("/admin/managed-models")
+        with patch("apis.shared.rbac.service._service_instance", mock_service):
+            client = TestClient(app, raise_server_exceptions=False)
+
+            # Pick a representative admin endpoint — GET /admin/managed-models
+            resp = client.get("/admin/managed-models")
 
         assert resp.status_code == 403, (
             f"Expected 403 for roles={roles}, got {resp.status_code}: {resp.text}"

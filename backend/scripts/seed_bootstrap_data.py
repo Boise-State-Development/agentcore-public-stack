@@ -358,7 +358,7 @@ def seed_system_admin_role(
         "roleId": role_id,
         "displayName": "System Administrator",
         "description": "Full access to all system features. This role cannot be deleted.",
-        "jwtRoleMappings": [],
+        "jwtRoleMappings": ["system_admin"],
         "inheritsFrom": [],
         "grantedTools": ["*"],
         "grantedModels": ["*"],
@@ -395,6 +395,15 @@ def seed_system_admin_role(
         "enabled": True,
     }
 
+    jwt_mapping_item = {
+        "PK": pk,
+        "SK": "JWT_MAPPING#system_admin",
+        "GSI1PK": "JWT_ROLE#system_admin",
+        "GSI1SK": pk,
+        "roleId": role_id,
+        "enabled": True,
+    }
+
     try:
         client = session.client("dynamodb")
         client.transact_write_items(
@@ -402,10 +411,11 @@ def seed_system_admin_role(
                 {"Put": {"TableName": table_name, "Item": _serialize(definition_item)}},
                 {"Put": {"TableName": table_name, "Item": _serialize(tool_grant_item)}},
                 {"Put": {"TableName": table_name, "Item": _serialize(model_grant_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(jwt_mapping_item)}},
             ]
         )
         result.created = 1
-        result.details.append("system_admin role created with TOOL_GRANT#* and MODEL_GRANT#*")
+        result.details.append("system_admin role created with TOOL_GRANT#*, MODEL_GRANT#*, and JWT_MAPPING#system_admin")
     except ClientError as e:
         msg = f"Failed to create system_admin role: {e}"
         logger.error(msg)

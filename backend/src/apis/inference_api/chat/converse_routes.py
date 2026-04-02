@@ -84,7 +84,7 @@ async def _record_cost(user_id: str, model_id: str, usage: dict, key_id: str) ->
         pricing = await create_pricing_snapshot(model_id)
         if pricing is None:
             logger.warning(
-                f"No pricing snapshot for model {model_id}; skipping cost recording"
+                "No pricing snapshot for model; skipping cost recording"
             )
             return
 
@@ -125,7 +125,7 @@ async def _record_cost(user_id: str, model_id: str, usage: dict, key_id: str) ->
         )
     except Exception as exc:
         logger.error(
-            f"Failed to record cost for user {user_id}, model {model_id}: {exc}",
+            "Failed to record cost",
             exc_info=True,
         )
 
@@ -336,11 +336,7 @@ async def api_converse(
     """
     # 1. Validate API key
     validated_key = await _validate_api_key(x_api_key)
-    logger.info(
-        f"api-converse request from user={validated_key.user_id} "
-        f"key={validated_key.key_id} model={request.model_id} "
-        f"messages={len(request.messages)} stream={request.stream}"
-    )
+    logger.info("api-converse request received")
 
     # 1.5 Per-key rate limit (fail-open)
     from apis.shared.rate_limit import get_rate_limiter

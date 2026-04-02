@@ -41,7 +41,7 @@ export class MessageListComponent implements OnDestroy {
     if (this.isBrowser) {
       // Only recalculate when message count changes, not on every message update
       effect(() => {
-        const messageCount = this.messages().length;
+        this.messages().length;
         this.calculateSpacerHeight();
       });
 

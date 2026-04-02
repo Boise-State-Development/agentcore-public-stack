@@ -4,11 +4,11 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
-import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as kms from "aws-cdk-lib/aws-kms";
+
 
 import { Construct } from "constructs";
 import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy } from "./config";
@@ -68,7 +68,7 @@ export class AppApiStack extends cdk.Stack {
 
     // Import ALB
     const albArn = ssm.StringParameter.valueForStringParameter(this, `/${config.projectPrefix}/network/alb-arn`);
-    const alb = elbv2.ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(this, "ImportedAlb", {
+    const _alb = elbv2.ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(this, "ImportedAlb", {
       loadBalancerArn: albArn,
       securityGroupId: albSecurityGroupId,
     });
@@ -451,6 +451,10 @@ export class AppApiStack extends cdk.Stack {
         COGNITO_ISSUER_URL: cognitoIssuerUrl,
         COGNITO_DOMAIN_URL: cognitoDomainUrl,
         COGNITO_REGION: config.awsRegion,
+        SHARED_CONVERSATIONS_TABLE_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/shares/shared-conversations-table-name`
+        ),
       },
       portMappings: [
         {
@@ -973,6 +977,9 @@ export class AppApiStack extends cdk.Stack {
           'cognito-idp:AdminCreateUser',
           'cognito-idp:AdminSetUserPassword',
           'cognito-idp:AdminGetUser',
+          'cognito-idp:AdminDeleteUser',
+          'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:CreateGroup',
           'cognito-idp:UpdateUserPool',
         ],
         resources: [cognitoUserPoolArn],
@@ -987,6 +994,31 @@ export class AppApiStack extends cdk.Stack {
         actions: ['ssm:GetParameter', 'ssm:GetParameters'],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/${config.projectPrefix}/inference-api/image-tag`,
+        ],
+      })
+    );
+
+    // Grant permissions for shared conversations table (imported from Infrastructure Stack)
+    const sharedConversationsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/shares/shared-conversations-table-arn`
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'SharedConversationsTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:Scan',
+        ],
+        resources: [
+          sharedConversationsTableArn,
+          `${sharedConversationsTableArn}/index/*`,
         ],
       })
     );
@@ -1036,6 +1068,7 @@ export class AppApiStack extends cdk.Stack {
       container.addEnvironment('SAGEMAKER_EXECUTION_ROLE_ARN', sagemakerRoleArn);
       container.addEnvironment('SAGEMAKER_SECURITY_GROUP_ID', sagemakerSgId);
       container.addEnvironment('SAGEMAKER_SUBNET_IDS', ftPrivateSubnetIds);
+      container.addEnvironment('FINE_TUNING_DEFAULT_QUOTA_HOURS', String(config.fineTuning.defaultQuotaHours));
 
       // Grant ECS task role: DynamoDB access to fine-tuning tables
       taskDefinition.taskRole.addToPrincipalPolicy(

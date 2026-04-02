@@ -1,3 +1,396 @@
+# Release Notes — v1.0.0-beta.20
+
+**Release Date:** April 1, 2026
+**Previous Release:** v1.0.0-beta.19 (March 25, 2026)
+
+---
+
+## Highlights
+
+This release delivers **reliable document deletion** with a soft-delete lifecycle and background cleanup, a **displayText system** that preserves original user messages when RAG augmentation or file attachments modify the prompt, a **fine-tuning cost dashboard** for admin visibility into SageMaker training spend, and a major **dependency refresh** across all three ecosystems via Dependabot. The security and code quality hardening from the initial beta.20 scope is also included — all CodeQL findings resolved, four Dependabot security vulnerabilities patched, cyclic imports eliminated, and silent exception swallowing replaced with proper logging.
+
+---
+
+## Reliable Document Deletion
+
+Document deletion has been rearchitected with a soft-delete pattern and background cleanup to prevent orphaned S3 objects and vector embeddings.
+
+### Soft-Delete Lifecycle
+
+Documents now transition through a `deleting` status before removal. The delete endpoint marks the document immediately and returns, while cleanup runs asynchronously. A DynamoDB TTL field (7-day expiry) acts as a backstop for failed cleanups.
+
+### Cleanup Service
+
+A new `cleanup_service.py` handles retry logic for S3 vector deletion and source file removal. Deterministic vector key generation ensures reliable cleanup even if the original ingestion metadata is incomplete.
+
+### Search Filtering
+
+The search path now filters out non-complete documents, preventing stale results from appearing when a document is mid-deletion. The RAG service cross-checks document status during search.
+
+### Assistant Deletion
+
+When an assistant is deleted, all associated documents are batch soft-deleted with background cleanup. A new `delete_vectors_for_assistant` function removes embeddings from the vector store by assistant ID.
+
+### Upload Failure Reporting
+
+A new `POST /{document_id}/upload-failed` endpoint allows the frontend to report client-side upload errors, marking documents as failed with error details for debugging.
+
+### Test Coverage
+
+4,200+ lines of new tests across property-based tests (cleanup service, document deletion, search filtering, vector deletion) and integration tests (delete endpoints, cleanup service, document deletion flows).
+
+---
+
+## DisplayText for RAG-Augmented and File Attachment Messages
+
+When RAG augmentation or file attachments modify the user's prompt before sending it to the agent, the original message text is now preserved and displayed in the UI instead of the augmented version.
+
+### How It Works
+
+- The `stream_async` and `StreamCoordinator` accept an `original_message` parameter to capture the user's input before modification
+- When the original differs from the augmented version, a `displayText` metadata record (`D#` prefix) is stored in DynamoDB alongside the cost record
+- The metadata retrieval path queries both cost records (`C#`) and display text records (`D#`)
+- The frontend `user-message` component renders `displayText` when available, falling back to the stored message content
+
+### Debug Output Toggle
+
+A new `showDebugOutput` setting in Chat Preferences lets users toggle visibility of debug information, useful for inspecting what the agent actually received versus what the UI displays.
+
+---
+
+## Fine-Tuning Cost Dashboard
+
+A new admin page provides visibility into SageMaker fine-tuning costs and usage.
+
+### Admin Cost Endpoint
+
+`GET /admin/fine-tuning/costs` returns aggregated cost data for fine-tuning jobs, with per-user breakdowns showing training hours consumed and quota utilization.
+
+### Default Quota Hours
+
+Fine-tuning access control now supports a default monthly quota for users without explicit grants, configurable via `CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS` in the infrastructure config.
+
+### Frontend
+
+A dedicated `/admin/fine-tuning-costs` page displays cost summaries, per-user breakdowns, and usage statistics with period selection.
+
+### Fine-Tuning Dashboard Polish
+
+The fine-tuning dashboard also received an informational section explaining the fine-tuning workflow and updated icons for better visual clarity.
+
+---
+
+## Assistant Simplification
+
+### Archive Removal
+
+The assistant archive functionality has been removed entirely. The `ARCHIVED` status, `archive_assistant` endpoint, and `include_archived` query parameter are gone. Assistants now have a single delete operation — simpler lifecycle, less code.
+
+---
+
+## Conversation Sharing Fixes
+
+### Shared Conversation Deletion
+
+Deleting a session now properly cascades to associated shared conversations. The shares service cleans up all share records when the parent session is deleted, and the frontend session list reflects the deletion state correctly.
+
+### Message Export Fix
+
+The share export feature (`POST /shares/{share_id}/export`) was failing to persist messages to AgentCore Memory. Fixed by switching from the deprecated `append_message` API to `create_message` with proper `SessionMessage` wrapping and index-based ordering.
+
+### UI Improvements
+
+- Shared conversation header simplified — metadata and export button repositioned for cleaner layout
+- Export button moved to a floating action bar at the bottom of the shared view
+- Icon updates: share icon replaced with `heroAdjustmentsHorizontal` in session management, `heroChatBubbleLeftRight` in shared view header
+
+---
+
+## Testing Infrastructure
+
+### Analog.js Migration
+
+Frontend testing has been migrated to Analog.js tooling (`@analogjs/vite-plugin-angular` and `@analogjs/vitest-angular` v3.0.0-alpha.18). The standalone `vitest.config.ts` has been removed in favor of Analog.js configuration. Analog.js dependencies are pinned to exact versions per the supply chain policy.
+
+### Property-Based Testing
+
+`fast-check` has been added as a dev dependency (v4.6.0, exact pin) for property-based testing in the frontend test suite.
+
+---
+
+## Security Vulnerability Patches
+
+Four Dependabot-flagged vulnerabilities have been patched across all three package ecosystems:
+
+| Package | Version Change | Severity | Issue |
+|---------|---------------|----------|-------|
+| `requests` (Python) | 2.32.5 → 2.33.0 | Medium | Insecure temp file reuse in `extract_zipped_paths()` |
+| `picomatch` (frontend) | 4.0.3 → 4.0.4 | High / Medium | ReDoS via extglob quantifiers; method injection in POSIX character classes |
+| `picomatch` (infrastructure) | 2.3.1 → 2.3.2 | Medium | Method injection in POSIX character classes |
+| `diff` (infrastructure) | patched | Low | DoS in `parsePatch` / `applyPatch` |
+
+Frontend and infrastructure `picomatch` fixes use npm `overrides` to force patched versions through transitive dependency trees (`@angular-devkit/core`, `@angular/build`).
+
+**Known unfixable:** `yaml@1.10.2` is bundled inside `aws-cdk-lib@2.244.0` (latest) — awaiting an AWS CDK update. `Pygments@2.19.2` (latest) has no patched version yet.
+
+---
+
+## CodeQL Remediation — All Findings Resolved
+
+Two passes resolved every open CodeQL finding on `develop`, covering 130+ files across Python, TypeScript, and GitHub Actions.
+
+### Log Injection (180 fixes)
+
+User-controlled values removed from f-string log statements across the entire backend. All logging now uses `%s`-style parameterized formatting, preventing log injection attacks where user input could forge log entries.
+
+### Silent Exception Swallowing (5 fixes)
+
+Empty `except: pass` blocks — a recurring source of hidden bugs — have been eliminated:
+
+- **`event_formatter.py`** — Errors during final result extraction now log a warning instead of vanishing silently. This was masking streaming failures that were impossible to diagnose.
+- **`url_fetcher.py`** — Bare `except:` (catching `BaseException` including `KeyboardInterrupt`) narrowed to `Exception` with an explanatory comment.
+- **`code_interpreter_diagram_tool.py`** — Same bare `except:` fix as above.
+- **`admin/users/service.py`** — Invalid pagination cursors now log a warning instead of silently resetting to page 1.
+- **`tool_result_processor.py`** — `JSONDecodeError` catch annotated with intent comment.
+
+### Cyclic Import Eliminated
+
+The circular dependency between `metadata_storage.py` and `dynamodb_storage.py` has been broken by moving the `get_metadata_storage()` factory function to the package `__init__.py`. The dependency graph is now one-directional:
+
+```
+storage/__init__.py (factory) → dynamodb_storage.py → metadata_storage.py (ABC)
+```
+
+Three callers updated to import from `apis.app_api.storage` instead of `apis.app_api.storage.metadata_storage`.
+
+### Other Fixes
+
+- **Unreachable code** — Dead `if result_seen: break` removed from `stream_processor.py` (`result_seen` was initialized to `False` and never set to `True`)
+- **Redundant assignment** — Unused `job =` on `create_inference_job()` call removed in fine-tuning routes
+- **Print during import** — `print()` statements in `inference_api/main.py` replaced with `logging`
+- **Commented-out code** — Stale `InvocationRequest` class removed from inference API models
+- **Unnecessary lambdas** — `lambda v: int(v)` simplified to `int` in fine-tuning repositories
+- **13 unused local variables** removed across 10 files
+- **3 unused imports** removed (including dead re-exports in `bedrock_embeddings.py`)
+
+### False Positives Dismissed (11 alerts)
+
+- 9× `actions/untrusted-checkout` on nightly workflows — these are schedule/dispatch only, never triggered by PRs
+- 1× `py/non-iterable-in-for-loop` — iterating over `Enum` members is valid Python
+- 1× `py/unused-global-variable` — `_generic_validator_initialized` is used via `global` statement (CodeQL doesn't track this)
+
+---
+
+## RAG Ingestion Fixes
+
+### Lambda Image Digest Refresh
+
+Fixed an issue where RAG ingestion Lambda deployments would report "no changes" even after pushing a fresh Docker image. The root cause: CDK resolves the image tag via SSM at synth time, and if the tag hasn't changed (only the underlying layers), CloudFormation sees no diff. The deploy script now explicitly calls `update-function-code` after image push to force a digest refresh, with a wait condition to ensure the update completes.
+
+### Shared Embeddings Module
+
+Added the shared embeddings package to the RAG ingestion Lambda Docker image, resolving import errors when `bedrock_embeddings.py` attempted to load re-exported functions from `apis.shared.embeddings`.
+
+---
+
+## CI/CD Improvements
+
+### PR Workflow Optimization
+
+CDK synthesis (`synth-cdk`) is now skipped on pull requests in the app-api workflow, matching the existing pattern for Docker builds and deployments. PRs no longer require AWS credentials for the synth step.
+
+### GitHub Actions Updates
+
+- `actions/upload-artifact` upgraded from 6.0.0 to 7.0.0
+- `actions/download-artifact` upgraded from 7.0.0 to 8.0.1
+- `actions/setup-node` upgraded from 5.0.0 to 6.3.0
+- `github/codeql-action` upgraded to latest SHA
+
+---
+
+## Dependency Upgrades
+
+| Component | From | To |
+|---|---|---|
+| uvicorn | 0.35.0 | 0.42.0 |
+| boto3 | 1.42.73 | 1.42.78 |
+| strands-agents | 1.32.0 | 1.33.0 |
+| strands-agents-tools | 0.2.23 | 0.3.0 |
+| aws-opentelemetry-distro | 0.14.2 | 0.16.0 |
+| bedrock-agentcore | 1.4.7 | 1.4.8 |
+| openai | 2.29.0 | 2.30.0 |
+| google-genai | 1.68.0 | 1.69.0 |
+| cachetools | 7.0.5 | 6.2.4 (downgraded for aws-opentelemetry-distro compatibility) |
+| hypothesis | 6.151.9 | 6.151.10 |
+| ruff | 0.15.7 | 0.15.8 |
+| Angular packages | 21.2.5 | 21.2.6 |
+| @angular/cdk | 21.2.3 | 21.2.4 |
+| @angular/build | 21.2.3 | 21.2.5 |
+| @angular/cli | 21.2.3 | 21.2.5 |
+| ng2-charts | bumped | latest |
+| aws-cdk-lib | 2.244.0 | latest |
+| constructs | bumped | latest |
+| jest / @types/jest | bumped | latest |
+| jsdom | bumped | 29.0.1 |
+
+---
+
+## Test Fixes
+
+- Removed stale `AgentCoreMemorySessionManager` mock patch from session factory tests — the previous CodeQL commit correctly removed the unused import, but the test was still patching it at the old module path
+- Updated shared view page spec with expanded test coverage (254 lines rewritten)
+- Updated share export tests to match the new `create_message` API
+
+---
+
+## Deployment Notes
+
+This release includes new backend endpoints and frontend pages but no new infrastructure resources (no new DynamoDB tables or S3 buckets). All changes are backward-compatible.
+
+- **Backend:** Restart App API and Inference API containers to pick up document deletion, displayText, cost dashboard, and dependency upgrades
+- **Frontend:** Rebuild and deploy to pick up Analog.js testing migration, displayText rendering, cost dashboard page, and `picomatch` security patch
+- **Infrastructure:** Run `npm install` to pick up `picomatch` and `diff` patches in lockfile. Redeploy if using fine-tuning to pick up the default quota hours config.
+- **RAG Ingestion:** Redeploy to pick up the Lambda image digest fix and shared embeddings module
+
+---
+
+# Release Notes — v1.0.0-beta.19
+
+**Release Date:** March 25, 2026
+**Previous Release:** v1.0.0-beta.18 (March 24, 2026)
+
+---
+
+## Highlights
+
+This release introduces **Conversation Sharing** — a full-stack feature that lets users share point-in-time snapshots of conversations via URL, with public or email-restricted access controls. Alongside that, **session compaction** has been refactored and enabled by default to automatically manage context window size in long conversations, **fine-tuning** gains drag-and-drop dataset uploads and custom HuggingFace model support, and a round of **security hardening** resolves all remaining CodeQL clear-text logging alerts. The frontend production build is now fully optimized (4.96 MB initial, down from 8.85 MB), and PR workflows have been slimmed down to only run build and test steps.
+
+---
+
+## New Feature: Conversation Sharing
+
+Users can now share conversations with others via shareable URLs. Shares are point-in-time snapshots — the shared view captures the conversation as it existed at the moment of sharing, so subsequent messages don't leak into shared links.
+
+### How It Works
+
+- **Share modal** accessible from the session UI lets users create a share with either `public` (anyone with the link) or `specific` (restricted to a list of email addresses) access
+- **Manage shares dialog** on the session management page shows all active shares with options to update access levels or revoke
+- **Read-only shared view** at `/shared/:shareId` renders the conversation with full markdown formatting, no authentication required for public shares
+- **Export support** for downloading shared conversations
+
+### Backend
+
+Three new API routers handle the sharing lifecycle:
+
+- `POST /conversations/{session_id}/share` — Create a share snapshot
+- `GET /conversations/{session_id}/shares` — List shares for a session
+- `PUT /shares/{share_id}` — Update access level or allowed emails
+- `DELETE /shares/{share_id}` — Revoke a share
+- `GET /shares/{share_id}/export` — Export shared conversation
+- `GET /shared/{share_id}` — Public read-only retrieval
+
+### Infrastructure
+
+A new `shared-conversations` DynamoDB table is provisioned in the Infrastructure stack with two GSIs:
+
+- `SessionShareIndex` — Lookup shares by original session ID
+- `OwnerShareIndex` — List shares by owner, sorted by creation time
+
+The table name and ARN are exported via SSM parameters and imported by the App API stack, which grants full CRUD permissions to the Fargate task role.
+
+### Test Coverage
+
+1,300+ lines of new tests across three test files covering share CRUD operations, access control enforcement, export functionality, and property validation.
+
+---
+
+## Session Compaction — Enabled by Default
+
+The session compaction system has been refactored and is now **enabled by default** for all conversations. Compaction automatically manages context window size by summarizing older turns when the token count exceeds the threshold, keeping conversations responsive without manual intervention.
+
+- **Default configuration:** enabled, 100K token threshold, 3 protected recent turns, 500-char max tool content length
+- **Turn-based session manager** rewritten with cleaner separation of concerns (870-line net reduction)
+- **Expanded test suite** with 481+ new lines of test coverage for compaction behavior
+
+---
+
+## Fine-Tuning Enhancements
+
+### Drag-and-Drop Dataset Upload
+
+The training job creation page now supports drag-and-drop file upload with visual feedback, replacing the basic file picker. Upload instructions have been updated to guide users through dataset formatting requirements.
+
+### Custom HuggingFace Model Support
+
+Users are no longer limited to the preset model list. The training job form now includes a searchable model selector that accepts any valid HuggingFace model identifier. The backend validates and passes custom model IDs through to SageMaker. Frontend tests cover the custom model selection and submission flow.
+
+---
+
+## Security Hardening
+
+### Clear-Text Logging Remediation
+
+All remaining CodeQL clear-text logging alerts have been resolved:
+
+- **`seed_auth_provider`** — Client IDs masked to first 8 characters, Secrets Manager ARNs fully redacted from output
+- **`seed_bootstrap_data`** — Full exception objects replaced with error codes in log messages
+- **`external_mcp_client`** — Server URLs removed from logs, MCP client configuration logging downgraded from info to debug
+- **`oauth_tool_service`** — Decrypted tokens isolated into `_try_get_token()` to prevent taint propagation, lazy log formatting applied
+- **`config.ts`** — AWS account IDs and CORS origins removed from CDK config log output
+
+### OAuth Redirect Validation
+
+The OAuth callback endpoint now validates redirect URLs to prevent open redirect vulnerabilities.
+
+### Workflow Permissions
+
+All 13 GitHub Actions workflows now declare explicit `permissions: contents: read`, implementing the principle of least privilege instead of relying on default token permissions.
+
+---
+
+## Frontend Production Optimization
+
+The Angular production build is now fully optimized:
+
+- Removed `optimization: false` override from base build options that was blocking the production configuration
+- Production config now enables full optimization, disables source maps, and extracts licenses
+- `anyComponentStyle` budget increased from 4 kB to 200 kB to accommodate Tailwind CSS
+- **Result:** 4.96 MB initial bundle (871 KB gzipped), down from 8.85 MB unoptimized
+- `BUILD_CONFIG` is now branch-aware: `main` → production, `develop` → development, manual dispatch → user input
+
+### Google Fonts Fix
+
+Google Fonts `@import` statements moved from component CSS to `index.html` `<link>` tags, fixing a CI build failure where the CSS optimizer couldn't resolve external font URLs.
+
+---
+
+## CI/CD Improvements
+
+### Lighter PR Workflows
+
+Pull request workflow runs have been significantly trimmed across all 7 deployment workflows. PRs now only run:
+
+- Dependency installation and caching
+- Stack dependency validation
+- CDK TypeScript compilation (catches build errors)
+- Python tests (app-api, inference-api)
+- Frontend tests (Vitest)
+
+Skipped on PRs: Docker image builds, Docker image tests, CDK synthesis, CDK validation, ECR push, and deployment. This reduces PR CI time and eliminates the need for AWS credentials on pull requests.
+
+---
+
+## Bug Fixes
+
+- **Bedrock prompt caching** — Caching configuration commented out in model config due to current Bedrock limitations. Tests updated to reflect the change.
+
+---
+
+## Deployment Notes
+
+This release adds a new DynamoDB table (`shared-conversations`) to the Infrastructure stack. Deploy the Infrastructure stack first, then the App API stack. If deploying all stacks simultaneously, the App API deployment may fail on first run due to the SSM parameter dependency — just rerun it after Infrastructure completes.
+
+---
 # Release Notes — v1.0.0-beta.18
 
 **Release Date:** March 24, 2026

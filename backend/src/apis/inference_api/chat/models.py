@@ -38,11 +38,6 @@ class InvocationRequest(BaseModel):
     rag_assistant_id: Optional[str] = None
 
 
-# class InvocationRequest(BaseModel):
-#     """AgentCore Runtime standard request format"""
-#     input: InvocationInput
-
-
 class InvocationResponse(BaseModel):
     """AgentCore Runtime standard response format"""
 

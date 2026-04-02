@@ -125,7 +125,7 @@ jobs:
           bash scripts/stack-infrastructure/build.sh
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: infrastructure-cdk-build
           path: |
@@ -139,6 +139,7 @@ jobs:
     name: Synthesize CloudFormation Template
     runs-on: ubuntu-24.04
     needs: build
+    if: github.event_name != 'pull_request'
     
     # Select environment based on trigger
     # Manual: workflow_dispatch input
@@ -178,7 +179,7 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: infrastructure-cdk-build
           path: infrastructure
@@ -202,7 +203,7 @@ jobs:
           bash scripts/stack-infrastructure/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
@@ -252,13 +253,13 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: infrastructure-cdk-build
           path: infrastructure
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
@@ -338,13 +339,13 @@ jobs:
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
 
       - name: Download build artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: infrastructure-cdk-build
           path: infrastructure
 
       - name: Download synthesized templates
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
@@ -367,7 +368,7 @@ jobs:
           bash scripts/stack-infrastructure/deploy.sh
 
       - name: Upload stack outputs
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: infrastructure-outputs
