@@ -222,27 +222,6 @@ async def delete_auth_provider(
 
 
 @router.post(
-    "/discover",
-    response_model=OIDCDiscoveryResponse,
-    summary="Discover OIDC endpoints",
-)
-async def discover_oidc_endpoints(
-    request: OIDCDiscoveryRequest,
-    admin_user: User = Depends(require_system_admin),
-) -> OIDCDiscoveryResponse:
-    """
-    Discover OIDC endpoints from an issuer URL.
-
-    Fetches the .well-known/openid-configuration document and returns
-    the discovered endpoints, supported scopes, and claims.
-    """
-    logger.info("Admin discovering OIDC endpoints")
-
-    service = get_auth_provider_service()
-    return await service.discover_endpoints(request.issuer_url)
-
-
-@router.post(
     "/{provider_id}/test",
     summary="Test authentication provider connectivity",
 )
