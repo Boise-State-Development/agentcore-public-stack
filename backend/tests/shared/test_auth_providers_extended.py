@@ -44,6 +44,7 @@ class TestAuthProviderServiceExtended:
         create = self._make_create(
             authorization_endpoint=None, token_endpoint=None, jwks_uri=None,
         )
+        create.auto_discover = True
         discovery_data = {
             "issuer": "https://auth.example.com",
             "authorization_endpoint": "https://auth.example.com/authorize",

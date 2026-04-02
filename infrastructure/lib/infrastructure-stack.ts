@@ -1172,7 +1172,7 @@ export class InfrastructureStack extends cdk.Stack {
 
     new ssm.StringParameter(this, 'CognitoDomainUrlParameter', {
       parameterName: `/${config.projectPrefix}/auth/cognito/domain-url`,
-      stringValue: `https://${config.cognito.domainPrefix || config.projectPrefix}.auth.${config.awsRegion}.amazoncognito.com`,
+      stringValue: cognitoDomain.baseUrl(),
       description: 'Cognito hosted UI domain URL',
       tier: ssm.ParameterTier.STANDARD,
     });

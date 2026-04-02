@@ -272,14 +272,25 @@ class TestInvalidSignature:
 class TestMissingSub:
     """Validates: Requirement 10.4"""
 
-    def test_missing_sub_raises_error(self, validator, make_cognito_jwt):
-        token = make_cognito_jwt(claims={"sub": None})
-        # sub is required — accessing payload["sub"] with None should
-        # still work (it returns None), but the User dataclass requires it.
-        # The KeyError from payload["sub"] when sub is missing triggers
-        # the generic exception handler.
-        # We need to actually remove the key, not set it to None
-        pass
+    def test_missing_sub_raises_error(self, validator, make_cognito_jwt, rsa_key_pair):
+        """Token with 'sub' key removed should raise 401."""
+        import time as _time
+        import jwt as pyjwt
+
+        now = int(_time.time())
+        claims = {
+            "email": "test@example.com",
+            "name": "Test",
+            "client_id": APP_CLIENT_ID,
+            "iss": ISSUER,
+            "iat": now,
+            "exp": now + 3600,
+        }
+        private_key = rsa_key_pair["private_pem"]
+        token = pyjwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test-key-id"})
+        with pytest.raises(HTTPException) as exc_info:
+            validator.validate_token(token)
+        assert exc_info.value.status_code == 401
 
     def test_token_without_sub_key_raises_401(self, validator, rsa_key_pair):
         """Token completely missing the 'sub' key."""

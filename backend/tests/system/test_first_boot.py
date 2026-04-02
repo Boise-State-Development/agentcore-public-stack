@@ -1,7 +1,7 @@
 """Unit tests for the POST /system/first-boot endpoint and CognitoService."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.exceptions import ClientError

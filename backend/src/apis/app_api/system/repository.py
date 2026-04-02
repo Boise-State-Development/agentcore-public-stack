@@ -115,7 +115,7 @@ class SystemSettingsRepository:
             ConditionExpression="attribute_not_exists(PK)",
         )
 
-        logger.info(f"First-boot completed by user {username} ({user_id})")
+        logger.info(f"First-boot completed by user_id={user_id}")
 
 
 # Singleton instance

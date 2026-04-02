@@ -47,15 +47,15 @@ _user_profile_cache: dict[str, tuple[float, dict]] = {}
 _USER_PROFILE_CACHE_TTL = 300  # 5 minutes
 
 _user_repository = None
-_user_repository_initialized = False
+_USER_REPO_INIT_DONE = False  # Sentinel: True after first init attempt
 
 
 def _get_user_repository():
     """Get UserRepository instance, creating it lazily on first use."""
-    global _user_repository, _user_repository_initialized
-    if _user_repository_initialized:
+    global _user_repository, _USER_REPO_INIT_DONE
+    if _USER_REPO_INIT_DONE:
         return _user_repository
-    _user_repository_initialized = True
+    _USER_REPO_INIT_DONE = True
     try:
         from apis.shared.users.repository import UserRepository
         _user_repository = UserRepository()
@@ -117,7 +117,7 @@ async def _sync_user_background(sync_service, user: User) -> None:
 
 # Lazy-initialized Cognito validator singleton
 _cognito_validator = None
-_cognito_validator_initialized = False
+_COGNITO_INIT_DONE = False  # Sentinel: True after first init attempt
 
 
 def _get_cognito_validator():
@@ -131,11 +131,11 @@ def _get_cognito_validator():
 
     Returns None if required environment variables are not set.
     """
-    global _cognito_validator, _cognito_validator_initialized
-    if _cognito_validator_initialized:
+    global _cognito_validator, _COGNITO_INIT_DONE
+    if _COGNITO_INIT_DONE:
         return _cognito_validator
 
-    _cognito_validator_initialized = True
+    _COGNITO_INIT_DONE = True
     try:
         from .cognito_jwt_validator import CognitoJWTValidator
 

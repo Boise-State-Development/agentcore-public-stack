@@ -233,7 +233,7 @@ class AuthProviderCreate(BaseModel):
     allowed_audiences: Optional[List[str]] = None
     # Discovery
     auto_discover: bool = Field(
-        default=True,
+        default=False,
         description="When True, fetch .well-known/openid-configuration from issuer URL to auto-populate missing endpoints",
     )
     # Appearance

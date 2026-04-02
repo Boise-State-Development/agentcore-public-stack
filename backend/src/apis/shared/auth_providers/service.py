@@ -9,7 +9,6 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
 from .cognito_idp_service import (
-    DEFAULT_ATTRIBUTE_MAPPING,
     CognitoIdentityProviderService,
     get_cognito_idp_service,
 )

@@ -117,10 +117,11 @@ app.add_middleware(
 )
 logger.info("Added GZip middleware for response compression")
 
-# Add CORS middleware - allow all origins for now
+# Add CORS middleware - use configured origins or localhost for local dev
+_cors_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:4200").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _cors_origins],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

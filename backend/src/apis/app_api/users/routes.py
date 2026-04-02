@@ -88,7 +88,7 @@ async def sync_my_profile(
 
     try:
         await user_repo.upsert_user(profile)
-        logger.info(f"Synced profile for user {current_user.user_id} ({email})")
+        logger.info("Synced profile for user %s", current_user.user_id)
     except Exception as e:
         logger.error(f"Failed to sync profile for {current_user.user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to sync profile")

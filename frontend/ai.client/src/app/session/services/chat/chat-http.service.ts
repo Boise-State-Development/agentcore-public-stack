@@ -57,7 +57,10 @@ export class ChatHttpService {
           throw new FatalError('Inference API URL not configured. Please check your configuration.');
         }
 
-    return fetchEventSource(`${runtimeEndpointUrl}/invocations?qualifier=DEFAULT`, {
+    // Normalize: strip trailing /invocations if already present to avoid doubling
+    const baseUrl = runtimeEndpointUrl.replace(/\/invocations\/?$/, '');
+
+    return fetchEventSource(`${baseUrl}/invocations?qualifier=DEFAULT`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -102,7 +102,7 @@ class CognitoService:
             Permanent=True,
         )
 
-        logger.info(f"Created Cognito user: {username} (sub={user_sub})")
+        logger.info("Created Cognito user: %s (sub=%s)", username, user_sub)
         return user_sub
 
     def delete_user(self, username: str) -> None:
@@ -165,21 +165,15 @@ class CognitoService:
         """
         Disable self-signup on the User Pool by setting
         AllowAdminCreateUserOnly=true.
+
+        Only updates AdminCreateUserConfig; the existing password policy
+        (configured by CDK) is preserved.
         """
         if not self._enabled:
             raise RuntimeError("Cognito service is not enabled")
 
         self._client.update_user_pool(
             UserPoolId=self._user_pool_id,
-            Policies={
-                "PasswordPolicy": {
-                    "MinimumLength": 8,
-                    "RequireUppercase": True,
-                    "RequireLowercase": True,
-                    "RequireNumbers": True,
-                    "RequireSymbols": True,
-                }
-            },
             AdminCreateUserConfig={
                 "AllowAdminCreateUserOnly": True,
             },

@@ -1115,10 +1115,10 @@ class TestOIDCDiscoveryAutoDiscover:
         assert provider.jwks_uri is None
 
     @pytest.mark.asyncio
-    async def test_auto_discover_default_is_true(self):
-        """auto_discover should default to True."""
+    async def test_auto_discover_default_is_false(self):
+        """auto_discover should default to False (opt-in)."""
         data = _make_create()
-        assert data.auto_discover is True
+        assert data.auto_discover is False
 
     @pytest.mark.asyncio
     async def test_auto_discover_skipped_when_endpoints_provided(
