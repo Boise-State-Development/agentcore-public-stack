@@ -4,7 +4,6 @@ import {
   inject,
   signal,
   computed,
-  effect,
 } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -20,11 +19,7 @@ import {
   heroFingerPrint,
   heroCheckCircle,
   heroXCircle,
-  heroExclamationTriangle,
-  heroServerStack,
-  heroLink,
 } from '@ng-icons/heroicons/outline';
-import { heroClockSolid } from '@ng-icons/heroicons/solid';
 import { AuthProvidersService } from '../services/auth-providers.service';
 import { AuthProvider } from '../models/auth-provider.model';
 
@@ -44,10 +39,6 @@ import { AuthProvider } from '../models/auth-provider.model';
       heroFingerPrint,
       heroCheckCircle,
       heroXCircle,
-      heroExclamationTriangle,
-      heroClockSolid,
-      heroServerStack,
-      heroLink,
     }),
   ],
   host: {
@@ -78,39 +69,6 @@ import { AuthProvider } from '../models/auth-provider.model';
         Add Provider
       </a>
     </div>
-
-    <!-- Runtime Version Summary -->
-    @if (currentImageTag() && hasAnyRuntimeInfo()) {
-      <div class="mb-6 rounded-sm border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
-        <div class="flex items-start justify-between gap-4">
-          <div class="flex items-start gap-3">
-            <ng-icon name="heroServerStack" class="size-5 shrink-0 text-blue-600 dark:text-blue-400" />
-            <div>
-              <h3 class="text-sm font-medium text-blue-900 dark:text-blue-100">Runtime Version Status</h3>
-              <div class="mt-1 flex flex-wrap items-center gap-3 text-sm">
-                <div>
-                  <span class="text-blue-700 dark:text-blue-300">Current Image Tag:</span>
-                  <span class="ml-1 font-mono font-medium text-blue-900 dark:text-blue-100">{{ currentImageTag() }}</span>
-                </div>
-                <div class="h-4 w-px bg-blue-300 dark:bg-blue-700"></div>
-                <div>
-                  <span class="text-blue-700 dark:text-blue-300">Active Runtimes:</span>
-                  <span class="ml-1 font-medium text-blue-900 dark:text-blue-100">{{ getProvidersWithRuntimes().length }}</span>
-                </div>
-                @if (getOutdatedRuntimesCount() > 0) {
-                  <div class="h-4 w-px bg-blue-300 dark:bg-blue-700"></div>
-                  <div class="flex items-center gap-1">
-                    <ng-icon name="heroExclamationTriangle" class="size-4 text-yellow-600 dark:text-yellow-400" />
-                    <span class="text-yellow-700 dark:text-yellow-300">Outdated:</span>
-                    <span class="ml-1 font-medium text-yellow-900 dark:text-yellow-100">{{ getOutdatedRuntimesCount() }}</span>
-                  </div>
-                }
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    }
 
     <!-- Search and Filters -->
     <div class="mb-6 flex flex-wrap items-center gap-4">
@@ -250,115 +208,6 @@ import { AuthProvider } from '../models/auth-provider.model';
                     </div>
                   </div>
 
-                  <!-- Runtime Status Section -->
-                  @if (hasRuntimeInfo(provider)) {
-                    <div class="mt-4 rounded-sm border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/50">
-                      <div class="mb-2 flex items-center justify-between">
-                        <div class="flex items-center gap-2">
-                          <ng-icon name="heroServerStack" class="size-4 text-gray-500 dark:text-gray-400" />
-                          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">AgentCore Runtime</span>
-                          <span 
-                            [class]="'inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-xs font-medium ' + getRuntimeStatusBadgeClass(provider.agentcore_runtime_status)"
-                          >
-                            <ng-icon 
-                              [name]="getRuntimeStatusIcon(provider.agentcore_runtime_status)" 
-                              class="size-3"
-                              [class.animate-spin]="provider.agentcore_runtime_status === 'CREATING' || provider.agentcore_runtime_status === 'UPDATING'"
-                            />
-                            {{ getRuntimeStatusLabel(provider.agentcore_runtime_status) }}
-                          </span>
-                        </div>
-                        
-                        <!-- Manual Update Button -->
-                        @if (provider.agentcore_runtime_status === 'READY' && hasVersionMismatch(provider)) {
-                          <button
-                            (click)="updateRuntime(provider)"
-                            [disabled]="updatingRuntime() === provider.provider_id"
-                            class="inline-flex items-center gap-1 rounded-xs bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
-                            title="Update runtime to latest image version"
-                          >
-                            <ng-icon 
-                              name="heroArrowPath" 
-                              class="size-3"
-                              [class.animate-spin]="updatingRuntime() === provider.provider_id"
-                            />
-                            Update Runtime
-                          </button>
-                        }
-                      </div>
-
-                      <div class="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-                        <!-- Runtime ID -->
-                        @if (provider.agentcore_runtime_id) {
-                          <div>
-                            <span class="font-medium text-gray-600 dark:text-gray-400">Runtime ID:</span>
-                            <div class="mt-0.5 truncate font-mono text-gray-700 dark:text-gray-300" [title]="provider.agentcore_runtime_id">
-                              {{ provider.agentcore_runtime_id }}
-                            </div>
-                          </div>
-                        }
-
-                        <!-- Runtime ARN -->
-                        @if (provider.agentcore_runtime_arn) {
-                          <div>
-                            <span class="font-medium text-gray-600 dark:text-gray-400">Runtime ARN:</span>
-                            <div class="mt-0.5 truncate font-mono text-gray-700 dark:text-gray-300" [title]="provider.agentcore_runtime_arn">
-                              {{ provider.agentcore_runtime_arn }}
-                            </div>
-                          </div>
-                        }
-
-                        <!-- Endpoint URL -->
-                        @if (provider.agentcore_runtime_endpoint_url) {
-                          <div class="sm:col-span-2">
-                            <span class="font-medium text-gray-600 dark:text-gray-400">Endpoint URL:</span>
-                            <div class="mt-0.5 flex items-center gap-1">
-                              <ng-icon name="heroLink" class="size-3 shrink-0 text-gray-500" />
-                              <span class="truncate font-mono text-gray-700 dark:text-gray-300" [title]="provider.agentcore_runtime_endpoint_url">
-                                {{ provider.agentcore_runtime_endpoint_url }}
-                              </span>
-                            </div>
-                          </div>
-                        }
-
-                        <!-- Image Tag -->
-                        @if (provider.agentcore_runtime_image_tag) {
-                          <div>
-                            <span class="font-medium text-gray-600 dark:text-gray-400">Image Tag:</span>
-                            <div class="mt-0.5 flex items-center gap-1">
-                              <span class="font-mono text-gray-700 dark:text-gray-300">
-                                {{ provider.agentcore_runtime_image_tag }}
-                              </span>
-                              @if (hasVersionMismatch(provider)) {
-                                <span 
-                                  class="inline-flex items-center gap-0.5 rounded-xs bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300"
-                                  title="Runtime is using an older image version"
-                                >
-                                  <ng-icon name="heroExclamationTriangle" class="size-3" />
-                                  Outdated
-                                </span>
-                              }
-                            </div>
-                          </div>
-                        }
-                      </div>
-
-                      <!-- Error Message -->
-                      @if (provider.agentcore_runtime_error) {
-                        <div class="mt-2 rounded-xs border border-red-200 bg-red-50 p-2 dark:border-red-800 dark:bg-red-900/20">
-                          <div class="flex items-start gap-2">
-                            <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-red-600 dark:text-red-400" />
-                            <div class="min-w-0 flex-1">
-                              <p class="text-xs font-medium text-red-800 dark:text-red-200">Error Details:</p>
-                              <p class="mt-1 text-xs text-red-700 dark:text-red-300">
-                                {{ provider.agentcore_runtime_error }}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      }
-                    </div>
-                  }
                 </div>
 
                 <!-- Actions -->
@@ -428,28 +277,10 @@ export class AuthProviderListPage {
   searchQuery = signal('');
   enabledFilter = signal('');
   testing = signal<string | null>(null);
-  currentImageTag = signal<string | null>(null);
-  updatingRuntime = signal<string | null>(null);
 
   readonly providers = computed(() => this.authProvidersService.getProviders());
 
-  constructor() {
-    // Fetch current image tag when providers are loaded
-    effect(() => {
-      if (this.providers().length > 0 && !this.currentImageTag()) {
-        this.fetchCurrentImageTag();
-      }
-    });
-  }
-
-  async fetchCurrentImageTag(): Promise<void> {
-    try {
-      const result = await this.authProvidersService.getCurrentImageTag();
-      this.currentImageTag.set(result.image_tag);
-    } catch (error) {
-      console.error('Failed to fetch current image tag:', error);
-    }
-  }
+  constructor() {}
 
   readonly filteredProviders = computed(() => {
     let providers = this.providers();
@@ -518,85 +349,4 @@ export class AuthProviderListPage {
     }
   }
 
-  getRuntimeStatusBadgeClass(status?: string): string {
-    switch (status) {
-      case 'READY':
-        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
-      case 'CREATING':
-      case 'UPDATING':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-      case 'PENDING':
-        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
-      case 'FAILED':
-      case 'UPDATE_FAILED':
-        return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
-      default:
-        return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
-    }
-  }
-
-  getRuntimeStatusIcon(status?: string): string {
-    switch (status) {
-      case 'READY':
-        return 'heroCheckCircle';
-      case 'CREATING':
-      case 'UPDATING':
-        return 'heroArrowPath';
-      case 'PENDING':
-        return 'heroClockSolid';
-      case 'FAILED':
-      case 'UPDATE_FAILED':
-        return 'heroExclamationTriangle';
-      default:
-        return 'heroXCircle';
-    }
-  }
-
-  getRuntimeStatusLabel(status?: string): string {
-    if (!status) return 'No Runtime';
-    return status.replace(/_/g, ' ');
-  }
-
-  hasRuntimeInfo(provider: AuthProvider): boolean {
-    return !!(provider.agentcore_runtime_arn || provider.agentcore_runtime_status);
-  }
-
-  hasVersionMismatch(provider: AuthProvider): boolean {
-    if (!provider.agentcore_runtime_image_tag || !this.currentImageTag()) {
-      return false;
-    }
-    return provider.agentcore_runtime_image_tag !== this.currentImageTag();
-  }
-
-  getProvidersWithRuntimes(): AuthProvider[] {
-    return this.providers().filter(p => p.agentcore_runtime_status === 'READY');
-  }
-
-  hasAnyRuntimeInfo(): boolean {
-    return this.providers().some(p => this.hasRuntimeInfo(p));
-  }
-
-  getOutdatedRuntimesCount(): number {
-    return this.getProvidersWithRuntimes().filter(p => this.hasVersionMismatch(p)).length;
-  }
-
-  async updateRuntime(provider: AuthProvider): Promise<void> {
-    if (!confirm(`Trigger manual runtime update for "${provider.display_name}"?\n\nThis will update the runtime to use the latest container image.`)) {
-      return;
-    }
-
-    this.updatingRuntime.set(provider.provider_id);
-    try {
-      const result = await this.authProvidersService.triggerRuntimeUpdate(provider.provider_id);
-      alert(`Runtime update triggered successfully.\n\n${result.message}`);
-      // Reload providers to get updated status
-      this.authProvidersService.reload();
-    } catch (error: any) {
-      console.error('Error updating runtime:', error);
-      const message = error?.error?.detail || error?.message || 'Failed to trigger runtime update.';
-      alert(`Failed to update runtime:\n\n${message}`);
-    } finally {
-      this.updatingRuntime.set(null);
-    }
-  }
 }

@@ -220,7 +220,7 @@ The fastest path to production is the **GitHub Actions pipeline**, which automat
 ./start.sh
 ``` -->
 
-See [backend/README.md](backend/README.md) for detailed backend setup, including authentication provider bootstrapping.
+See [backend/README.md](backend/README.md) for detailed backend setup. Authentication is handled by Cognito's first-boot flow — the first user to access the application creates the admin account directly.
 
 ---
 
@@ -229,7 +229,6 @@ See [backend/README.md](backend/README.md) for detailed backend setup, including
 ```
 agentcore-public-stack/
 ├── backend/
-│   ├── lambda-functions/            # Runtime provisioner & updater
 │   └── src/
 │       ├── agents/main_agent/       # Agent core: factory, tools, memory, streaming
 │       └── apis/
