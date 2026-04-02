@@ -110,8 +110,8 @@ describe('InfrastructureStack', () => {
   // ------------------------------------------------------------------
   // 6. All DynamoDB tables are created (count)
   // ------------------------------------------------------------------
-  test('creates all 14 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 14);
+  test('creates all 16 DynamoDB tables', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 16);
   });
 
   // ------------------------------------------------------------------
@@ -216,7 +216,7 @@ describe('InfrastructureStack', () => {
 
   test('UserFiles table has PK/SK, TTL, stream, and SessionIndex GSI', () => {
     template.hasResourceProperties('AWS::DynamoDB::Table', {
-      TableName: Match.stringLikeRegexp('user-files'),
+      TableName: Match.stringLikeRegexp('user-file-uploads'),
       KeySchema: Match.arrayWith([
         { AttributeName: 'PK', KeyType: 'HASH' },
         { AttributeName: 'SK', KeyType: 'RANGE' },

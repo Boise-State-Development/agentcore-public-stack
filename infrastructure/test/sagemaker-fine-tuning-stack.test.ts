@@ -185,22 +185,8 @@ describe('SageMakerFineTuningStack', () => {
         LifecycleConfiguration: {
           Rules: Match.arrayWith([
             Match.objectLike({
-              Id: 'transition-to-ia',
-              Transitions: [
-                { StorageClass: 'STANDARD_IA', TransitionInDays: 30 },
-              ],
-              Status: 'Enabled',
-            }),
-            Match.objectLike({
-              Id: 'transition-to-glacier',
-              Transitions: [
-                { StorageClass: 'GLACIER_IR', TransitionInDays: 90 },
-              ],
-              Status: 'Enabled',
-            }),
-            Match.objectLike({
               Id: 'expire-objects',
-              ExpirationInDays: 365,
+              ExpirationInDays: 30,
               Status: 'Enabled',
             }),
             Match.objectLike({

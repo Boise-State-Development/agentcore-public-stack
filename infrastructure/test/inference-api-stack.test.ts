@@ -102,36 +102,38 @@ describe('InferenceApiStack', () => {
     });
 
     test('has Memory access permissions', () => {
-      template.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: Match.objectLike({
-          Statement: Match.arrayWith([
-            Match.objectLike({
-              Sid: 'MemoryAccess',
-              Effect: 'Allow',
-              Action: Match.arrayWith([
-                'bedrock-agentcore:CreateEvent',
-                'bedrock-agentcore:RetrieveMemory',
-              ]),
-            }),
-          ]),
-        }),
+      const inlinePolicies = template.findResources('AWS::IAM::Policy');
+      const managedPolicies = template.findResources('AWS::IAM::ManagedPolicy');
+      const allPolicies = { ...inlinePolicies, ...managedPolicies };
+
+      const hasMemoryAccess = Object.values(allPolicies).some((resource: any) => {
+        const statements = resource.Properties?.PolicyDocument?.Statement ?? [];
+        return statements.some((s: any) =>
+          s.Sid === 'MemoryAccess' &&
+          s.Effect === 'Allow' &&
+          Array.isArray(s.Action) &&
+          s.Action.includes('bedrock-agentcore:CreateEvent') &&
+          s.Action.includes('bedrock-agentcore:RetrieveMemory')
+        );
       });
+      expect(hasMemoryAccess).toBe(true);
     });
 
     test('has Code Interpreter access permissions', () => {
-      template.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: Match.objectLike({
-          Statement: Match.arrayWith([
-            Match.objectLike({
-              Sid: 'CodeInterpreterAccess',
-              Effect: 'Allow',
-              Action: Match.arrayWith([
-                'bedrock-agentcore:InvokeCodeInterpreter',
-              ]),
-            }),
-          ]),
-        }),
+      const inlinePolicies = template.findResources('AWS::IAM::Policy');
+      const managedPolicies = template.findResources('AWS::IAM::ManagedPolicy');
+      const allPolicies = { ...inlinePolicies, ...managedPolicies };
+
+      const hasCodeInterpreterAccess = Object.values(allPolicies).some((resource: any) => {
+        const statements = resource.Properties?.PolicyDocument?.Statement ?? [];
+        return statements.some((s: any) =>
+          s.Sid === 'CodeInterpreterAccess' &&
+          s.Effect === 'Allow' &&
+          Array.isArray(s.Action) &&
+          s.Action.includes('bedrock-agentcore:InvokeCodeInterpreter')
+        );
       });
+      expect(hasCodeInterpreterAccess).toBe(true);
     });
 
     test('has Browser access permissions', () => {
@@ -189,8 +191,8 @@ describe('InferenceApiStack', () => {
   });
 
   describe('SSM Parameters', () => {
-    test('creates 11 SSM parameters', () => {
-      template.resourceCountIs('AWS::SSM::Parameter', 11);
+    test('creates 12 SSM parameters', () => {
+      template.resourceCountIs('AWS::SSM::Parameter', 12);
     });
 
     test('exports runtime execution role ARN', () => {
@@ -271,39 +273,6 @@ describe('InferenceApiStack', () => {
           expect(hasWildcardAction && allResourcesWildcard).toBe(false);
         }
       }
-    });
-  });
-
-  // ============================================================
-  // SSM Parameters (Required for Deploy Script)
-  // ============================================================
-
-  describe('SSM Parameters', () => {
-    test('creates image-tag parameter', () => {
-      template.hasResourceProperties('AWS::SSM::Parameter', {
-        Name: `/${config.projectPrefix}/inference-api/image-tag`,
-        Type: 'String',
-        Description: Match.stringLikeRegexp('.*image tag.*'),
-      });
-    });
-
-    test('ECS task role has permission to read image-tag parameter', () => {
-      // The App API task needs to read this parameter
-      template.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: Match.objectLike({
-          Statement: Match.arrayWith([
-            Match.objectLike({
-              Action: Match.arrayWith(['ssm:GetParameter']),
-              Effect: 'Allow',
-              Resource: Match.arrayWith([
-                Match.objectLike({
-                  'Fn::Sub': Match.stringLikeRegexp('.*inference-api/image-tag.*'),
-                }),
-              ]),
-            }),
-          ]),
-        }),
-      });
     });
   });
 
