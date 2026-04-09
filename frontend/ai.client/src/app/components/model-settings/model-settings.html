@@ -65,7 +65,7 @@
               (keydown)="onDropdownKeydown($event)"
               class="flex w-full items-center justify-between gap-2 rounded-sm bg-white px-2.5 py-1.5 text-left outline-1 -outline-offset-1 outline-gray-300 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:bg-white/5 dark:outline-white/10 dark:focus-visible:outline-primary-400">
               <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">
-                {{ modelService.selectedModel()?.modelName }}
+                {{ modelService.selectedModel().modelName }}
               </span>
               <ng-icon
                 name="heroChevronDown"

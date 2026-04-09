@@ -22,7 +22,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
         class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
         aria-label="Select model"
       >
-        <span>{{ modelService.selectedModel()?.modelName || 'Loading...' }}</span>
+        <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
         <svg
           viewBox="0 0 20 20"
           fill="currentColor"
@@ -66,7 +66,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
                 disabled
               >
                 <div class="flex flex-col items-start">
-                  <span class="font-medium">{{ modelService.selectedModel()?.modelName || 'System Default' }}</span>
+                  <span class="font-medium">{{ modelService.selectedModel().modelName || 'System Default' }}</span>
                   <span class="text-xs text-gray-500 dark:text-gray-400">Using backend default</span>
                 </div>
                 <ng-icon name="heroCheck" class="size-5 text-primary-500 dark:text-slate-400" aria-hidden="true" />
