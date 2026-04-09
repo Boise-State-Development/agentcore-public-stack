@@ -23,7 +23,7 @@
         <div class="w-full max-w-[720px] animate-fade-in px-4 mt-0 relative">
           <!-- Greeting (hidden when assistant is selected or loading) -->
           @if (!assistant() && !isLoadingAssistant()) {
-            <div class="mb-8 flex items-center justify-center gap-4 relative">
+            <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
               <div>
                 <app-animated-text [text]="greetingMessage()" [speed]="50" />
               </div>
@@ -188,7 +188,7 @@
         class="chat-container-empty full-page"
         [class.sidenav-expanded]="!isSidenavCollapsed()">
         <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
-          <div class="mb-8 flex items-center justify-center gap-4 relative">
+          <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
             <img
               src="/img/logo-light.png"
               alt="Logo"

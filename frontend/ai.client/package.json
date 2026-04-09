@@ -7,7 +7,10 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "test:ci": "ng test --watch=false"
+    "test:ci": "ng test --watch=false",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed"
   },
   "prettier": {
     "printWidth": 100,
@@ -52,8 +55,11 @@
     "@angular/build": "21.2.6",
     "@angular/cli": "21.2.6",
     "@angular/compiler-cli": "21.2.7",
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "4.2.2",
+    "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "4.1.2",
+    "dotenv": "^17.4.1",
     "fast-check": "4.6.0",
     "jsdom": "29.0.1",
     "postcss": "8.5.8",
