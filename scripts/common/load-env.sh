@@ -206,6 +206,23 @@ build_cdk_context_params() {
         context_params="${context_params} --context fineTuning.enabled=\"${CDK_FINE_TUNING_ENABLED}\""
     fi
 
+    # Existing VPC optional parameters (only include when set)
+    if [ -n "${CDK_EXISTING_VPC_ID:-}" ]; then
+        context_params="${context_params} --context existingVpc.vpcId=\"${CDK_EXISTING_VPC_ID}\""
+    fi
+    if [ -n "${CDK_EXISTING_VPC_AZS:-}" ]; then
+        context_params="${context_params} --context existingVpc.availabilityZones=\"${CDK_EXISTING_VPC_AZS}\""
+    fi
+    if [ -n "${CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS:-}" ]; then
+        context_params="${context_params} --context existingVpc.publicSubnetIds=\"${CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS}\""
+    fi
+    if [ -n "${CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS:-}" ]; then
+        context_params="${context_params} --context existingVpc.privateSubnetIds=\"${CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS}\""
+    fi
+    if [ -n "${CDK_EXISTING_VPC_CIDR:-}" ]; then
+        context_params="${context_params} --context existingVpc.vpcCidrBlock=\"${CDK_EXISTING_VPC_CIDR}\""
+    fi
+
     echo "${context_params}"
 }
 
@@ -271,6 +288,13 @@ export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIn
 
 # SageMaker Fine-Tuning configuration
 export CDK_FINE_TUNING_ENABLED="${CDK_FINE_TUNING_ENABLED:-$(get_json_value "fineTuning.enabled" "${CONTEXT_FILE}")}"
+
+# Existing VPC configuration (optional — import a pre-existing VPC instead of creating one)
+export CDK_EXISTING_VPC_ID="${CDK_EXISTING_VPC_ID:-$(get_json_value "existingVpc.vpcId" "${CONTEXT_FILE}")}"
+export CDK_EXISTING_VPC_AZS="${CDK_EXISTING_VPC_AZS:-$(get_json_value "existingVpc.availabilityZones" "${CONTEXT_FILE}")}"
+export CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS="${CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS:-$(get_json_value "existingVpc.publicSubnetIds" "${CONTEXT_FILE}")}"
+export CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS="${CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS:-$(get_json_value "existingVpc.privateSubnetIds" "${CONTEXT_FILE}")}"
+export CDK_EXISTING_VPC_CIDR="${CDK_EXISTING_VPC_CIDR:-$(get_json_value "existingVpc.vpcCidrBlock" "${CONTEXT_FILE}")}"
 
 # Cognito configuration (optional — defaults to projectPrefix for domain prefix)
 export CDK_COGNITO_DOMAIN_PREFIX="${CDK_COGNITO_DOMAIN_PREFIX:-$(get_json_value "cognito.domainPrefix" "${CONTEXT_FILE}")}"
@@ -342,6 +366,16 @@ if [ "${LOAD_ENV_QUIET:-false}" != "true" ]; then
     if [ -n "${CDK_CERTIFICATE_ARN:-}" ]; then
         log_config "  Certificate:    ${CDK_CERTIFICATE_ARN:0:50}..." # Truncate for display
         log_config "  HTTPS Enabled:  Yes"
+    fi
+
+    if [ -n "${CDK_EXISTING_VPC_ID:-}" ]; then
+        log_config "  Existing VPC:   ${CDK_EXISTING_VPC_ID}"
+        log_config "  VPC AZs:        ${CDK_EXISTING_VPC_AZS}"
+        log_config "  Public Subnets: ${CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS}"
+        log_config "  Private Subnets:${CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS}"
+        if [ -n "${CDK_EXISTING_VPC_CIDR:-}" ]; then
+            log_config "  VPC CIDR:       ${CDK_EXISTING_VPC_CIDR}"
+        fi
     fi
 
     # Check AWS credentials

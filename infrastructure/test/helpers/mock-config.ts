@@ -81,6 +81,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,
     },
+    existingVpc: undefined,
     tags: { ManagedBy: 'CDK', Environment: 'test' },
   };
 

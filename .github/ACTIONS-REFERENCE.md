@@ -34,6 +34,11 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_CERTIFICATE_ARN | Variable | No | None | Infrastructure | ACM certificate ARN for HTTPS on ALB |
 | CDK_CORS_ORIGINS | Variable | No | None | All | Additional CORS origins appended to the auto-derived `https://{CDK_DOMAIN_NAME}`. Comma-separated. Use for localhost during local dev (e.g., `http://localhost:4200`) or extra domains. |
 | CDK_DOMAIN_NAME | Variable | No | None | All | Primary domain name (e.g., 'alpha.boisestate.ai'). Auto-applied as `https://{value}` to CORS origins for every stack. This is the primary mechanism for CORS configuration. |
+| CDK_EXISTING_VPC_ID | Variable | No | None | Infrastructure | VPC ID of a pre-existing VPC to import instead of creating a new one (e.g., `vpc-0abc123def456`). When set, the stack uses `Vpc.fromVpcAttributes()` and skips VPC creation. |
+| CDK_EXISTING_VPC_AZS | Variable | No | None | Infrastructure | Comma-separated availability zones for the existing VPC (e.g., `us-west-2a,us-west-2b`). Required when `CDK_EXISTING_VPC_ID` is set. |
+| CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS | Variable | No | None | Infrastructure | Comma-separated public subnet IDs for the existing VPC (e.g., `subnet-0a1b2c3d4e5f6,subnet-0f6e5d4c3b2a1`). Required when `CDK_EXISTING_VPC_ID` is set. |
+| CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS | Variable | No | None | Infrastructure | Comma-separated private subnet IDs for the existing VPC (e.g., `subnet-0aabbccddee11,subnet-0ffeeddccbbaa`). Required when `CDK_EXISTING_VPC_ID` is set. |
+| CDK_EXISTING_VPC_CIDR | Variable | No | None | Infrastructure | CIDR block of the existing VPC (e.g., `10.0.0.0/16`). Optional; used for the SSM vpc-cidr parameter when importing a VPC. |
 | CDK_FILE_UPLOAD_CORS_ORIGINS | Variable | No | None | Infrastructure | Additional CORS origins for the file upload S3 bucket only (appended to global CORS origins) |
 | CDK_FILE_UPLOAD_MAX_SIZE_MB | Variable | No | `10` | Infrastructure, App API | Maximum file upload size in megabytes |
 | CDK_FINE_TUNING_ENABLED | Variable | No | `false` | SageMaker Fine-Tuning, App API | Enable SageMaker fine-tuning stack and App API fine-tuning routes. Must be `true` before deploying the SageMaker Fine-Tuning workflow. |

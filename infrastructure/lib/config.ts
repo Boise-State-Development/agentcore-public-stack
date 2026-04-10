@@ -33,6 +33,7 @@ export interface AppConfig {
   fileUpload: FileUploadConfig;
   ragIngestion: RagIngestionConfig;
   fineTuning: FineTuningConfig;
+  existingVpc?: ExistingVpcConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -104,6 +105,14 @@ export interface FineTuningConfig {
   enabled: boolean;              // Enable/disable SageMaker Fine-Tuning stack
   defaultQuotaHours: number;     // Default monthly GPU-hour quota for all users (0 = whitelist-only)
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+}
+
+export interface ExistingVpcConfig {
+  vpcId: string;                // e.g. "vpc-0abc123def456"
+  availabilityZones: string[];  // e.g. ["us-west-2a", "us-west-2b"]
+  publicSubnetIds: string[];    // e.g. ["subnet-aaa", "subnet-bbb"]
+  privateSubnetIds: string[];   // e.g. ["subnet-ccc", "subnet-ddd"]
+  vpcCidrBlock?: string;        // e.g. "10.0.0.0/16" (optional)
 }
 
 /**
@@ -261,6 +270,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
       defaultQuotaHours: parseIntEnv(process.env.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS) ?? scope.node.tryGetContext('fineTuning')?.defaultQuotaHours ?? 0,
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
     },
+    existingVpc: parseExistingVpcConfig(scope),
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -316,6 +326,119 @@ export function parseBooleanEnv(value: string | undefined, defaultValue?: boolea
     `Invalid boolean value: "${value}". ` +
     `Expected "true", "false", "1", or "0".`
   );
+}
+
+/**
+ * Parse existing VPC configuration from environment variables with fallback to CDK context.
+ * Returns undefined when no vpcId is provided (neither via env var nor context).
+ * Environment variables take precedence over CDK context values.
+ */
+function parseExistingVpcConfig(scope: cdk.App): ExistingVpcConfig | undefined {
+  const existingVpcContext = scope.node.tryGetContext('existingVpc');
+
+  const vpcId = process.env.CDK_EXISTING_VPC_ID
+    || existingVpcContext?.vpcId;
+
+  // Only assemble ExistingVpcConfig when vpcId is present
+  if (!vpcId) {
+    return undefined;
+  }
+
+  const azsRaw = process.env.CDK_EXISTING_VPC_AZS
+    || existingVpcContext?.availabilityZones;
+  const publicRaw = process.env.CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS
+    || existingVpcContext?.publicSubnetIds;
+  const privateRaw = process.env.CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS
+    || existingVpcContext?.privateSubnetIds;
+  const vpcCidrBlock = process.env.CDK_EXISTING_VPC_CIDR
+    || existingVpcContext?.vpcCidrBlock
+    || undefined;
+
+  // Split comma-separated env var strings into arrays; context values are already arrays
+  const availabilityZones = typeof azsRaw === 'string'
+    ? azsRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : (azsRaw ?? []);
+  const publicSubnetIds = typeof publicRaw === 'string'
+    ? publicRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : (publicRaw ?? []);
+  const privateSubnetIds = typeof privateRaw === 'string'
+    ? privateRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : (privateRaw ?? []);
+
+  return {
+    vpcId,
+    availabilityZones,
+    publicSubnetIds,
+    privateSubnetIds,
+    ...(vpcCidrBlock ? { vpcCidrBlock } : {}),
+  };
+}
+
+/**
+ * Validate existing VPC configuration fields.
+ * Called from validateConfig() when config.existingVpc is defined.
+ * Throws descriptive errors identifying the failing field and expected format.
+ */
+function validateExistingVpcConfig(config: ExistingVpcConfig): void {
+  // Validate vpcId format
+  if (!/^vpc-[a-z0-9]+$/.test(config.vpcId)) {
+    throw new Error(
+      `Invalid existingVpc.vpcId: "${config.vpcId}". Expected format: vpc-[a-z0-9]+`
+    );
+  }
+
+  // Validate availabilityZones count (2–6)
+  if (config.availabilityZones.length < 2 || config.availabilityZones.length > 6) {
+    throw new Error(
+      `existingVpc.availabilityZones must contain between 2 and 6 entries, got ${config.availabilityZones.length}`
+    );
+  }
+
+  // Validate publicSubnetIds minimum count
+  if (config.publicSubnetIds.length < 2) {
+    throw new Error(
+      `existingVpc.publicSubnetIds must contain at least 2 entries, got ${config.publicSubnetIds.length}`
+    );
+  }
+
+  // Validate each publicSubnetId format
+  for (const id of config.publicSubnetIds) {
+    if (!/^subnet-[a-z0-9]+$/.test(id)) {
+      throw new Error(
+        `Invalid subnet ID in existingVpc.publicSubnetIds: "${id}". Expected format: subnet-[a-z0-9]+`
+      );
+    }
+  }
+
+  // Validate privateSubnetIds minimum count
+  if (config.privateSubnetIds.length < 2) {
+    throw new Error(
+      `existingVpc.privateSubnetIds must contain at least 2 entries, got ${config.privateSubnetIds.length}`
+    );
+  }
+
+  // Validate each privateSubnetId format
+  for (const id of config.privateSubnetIds) {
+    if (!/^subnet-[a-z0-9]+$/.test(id)) {
+      throw new Error(
+        `Invalid subnet ID in existingVpc.privateSubnetIds: "${id}". Expected format: subnet-[a-z0-9]+`
+      );
+    }
+  }
+
+  // Validate publicSubnetIds count matches availabilityZones count
+  if (config.publicSubnetIds.length !== config.availabilityZones.length) {
+    throw new Error(
+      `existingVpc.publicSubnetIds count (${config.publicSubnetIds.length}) must equal availabilityZones count (${config.availabilityZones.length})`
+    );
+  }
+
+  // Validate privateSubnetIds count matches availabilityZones count
+  if (config.privateSubnetIds.length !== config.availabilityZones.length) {
+    throw new Error(
+      `existingVpc.privateSubnetIds count (${config.privateSubnetIds.length}) must equal availabilityZones count (${config.availabilityZones.length})`
+    );
+  }
 }
 
 /**
@@ -391,10 +514,17 @@ function validateConfig(config: AppConfig): void {
     console.warn(`Warning: ${config.awsRegion} is not in the common regions list. Proceeding anyway.`);
   }
 
-  // Validate VPC CIDR
-  const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
-  if (!cidrPattern.test(config.vpcCidr)) {
-    throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+  // Validate VPC CIDR (only when not using an existing VPC)
+  if (!config.existingVpc) {
+    const cidrPattern = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
+    if (!cidrPattern.test(config.vpcCidr)) {
+      throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
+    }
+  }
+
+  // Validate existing VPC configuration when present
+  if (config.existingVpc) {
+    validateExistingVpcConfig(config.existingVpc);
   }
 
   // Validate RAG Ingestion configuration

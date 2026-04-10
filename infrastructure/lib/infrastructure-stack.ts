@@ -35,7 +35,7 @@ export interface InfrastructureStackProps extends cdk.StackProps {
  * This stack should be deployed FIRST, before any application stacks.
  */
 export class InfrastructureStack extends cdk.Stack {
-  public readonly vpc: ec2.Vpc;
+  public readonly vpc: ec2.IVpc;
   public readonly alb: elbv2.ApplicationLoadBalancer;
   public readonly albListener: elbv2.ApplicationListener;
   public readonly albSecurityGroup: ec2.SecurityGroup;
@@ -53,26 +53,35 @@ export class InfrastructureStack extends cdk.Stack {
     // ============================================================
     // VPC - Network Foundation
     // ============================================================
-    this.vpc = new ec2.Vpc(this, 'Vpc', {
-      vpcName: getResourceName(config, 'vpc'),
-      ipAddresses: ec2.IpAddresses.cidr(config.vpcCidr),
-      maxAzs: 2, // Use 2 AZs for high availability
-      natGateways: 1, // Single NAT Gateway for cost optimization (can be increased for HA)
-      subnetConfiguration: [
-        {
-          cidrMask: 24,
-          name: 'Public',
-          subnetType: ec2.SubnetType.PUBLIC,
-        },
-        {
-          cidrMask: 24,
-          name: 'Private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-        },
-      ],
-      enableDnsHostnames: true,
-      enableDnsSupport: true,
-    });
+    if (config.existingVpc) {
+      this.vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
+        vpcId: config.existingVpc.vpcId,
+        availabilityZones: config.existingVpc.availabilityZones,
+        publicSubnetIds: config.existingVpc.publicSubnetIds,
+        privateSubnetIds: config.existingVpc.privateSubnetIds,
+      });
+    } else {
+      this.vpc = new ec2.Vpc(this, 'Vpc', {
+        vpcName: getResourceName(config, 'vpc'),
+        ipAddresses: ec2.IpAddresses.cidr(config.vpcCidr),
+        maxAzs: 2, // Use 2 AZs for high availability
+        natGateways: 1, // Single NAT Gateway for cost optimization (can be increased for HA)
+        subnetConfiguration: [
+          {
+            cidrMask: 24,
+            name: 'Public',
+            subnetType: ec2.SubnetType.PUBLIC,
+          },
+          {
+            cidrMask: 24,
+            name: 'Private',
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          },
+        ],
+        enableDnsHostnames: true,
+        enableDnsSupport: true,
+      });
+    }
 
     // Export VPC ID to SSM for cross-stack references
     new ssm.StringParameter(this, 'VpcIdParameter', {
@@ -83,15 +92,22 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // Export VPC CIDR to SSM
+    // For imported VPCs: use config value if provided, else vpc.vpcCidrBlock (CDK token)
+    // For created VPCs: use vpc.vpcCidrBlock (same as before)
+    const vpcCidrValue = config.existingVpc?.vpcCidrBlock ?? this.vpc.vpcCidrBlock;
     new ssm.StringParameter(this, 'VpcCidrParameter', {
       parameterName: `/${config.projectPrefix}/network/vpc-cidr`,
-      stringValue: this.vpc.vpcCidrBlock,
+      stringValue: vpcCidrValue,
       description: 'Shared VPC CIDR block',
       tier: ssm.ParameterTier.STANDARD,
     });
 
     // Export Private Subnet IDs to SSM
-    const privateSubnetIds = this.vpc.privateSubnets.map(subnet => subnet.subnetId).join(',');
+    // For imported VPCs: use config values directly (fromVpcAttributes stores them)
+    // For created VPCs: extract from vpc.privateSubnets
+    const privateSubnetIds = config.existingVpc
+      ? config.existingVpc.privateSubnetIds.join(',')
+      : this.vpc.privateSubnets.map(subnet => subnet.subnetId).join(',');
     new ssm.StringParameter(this, 'PrivateSubnetIdsParameter', {
       parameterName: `/${config.projectPrefix}/network/private-subnet-ids`,
       stringValue: privateSubnetIds,
@@ -100,7 +116,9 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // Export Public Subnet IDs to SSM
-    const publicSubnetIds = this.vpc.publicSubnets.map(subnet => subnet.subnetId).join(',');
+    const publicSubnetIds = config.existingVpc
+      ? config.existingVpc.publicSubnetIds.join(',')
+      : this.vpc.publicSubnets.map(subnet => subnet.subnetId).join(',');
     new ssm.StringParameter(this, 'PublicSubnetIdsParameter', {
       parameterName: `/${config.projectPrefix}/network/public-subnet-ids`,
       stringValue: publicSubnetIds,
@@ -109,7 +127,9 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // Export Availability Zones to SSM
-    const availabilityZones = this.vpc.availabilityZones.join(',');
+    const availabilityZones = config.existingVpc
+      ? config.existingVpc.availabilityZones.join(',')
+      : this.vpc.availabilityZones.join(',');
     new ssm.StringParameter(this, 'AvailabilityZonesParameter', {
       parameterName: `/${config.projectPrefix}/network/availability-zones`,
       stringValue: availabilityZones,
