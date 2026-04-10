@@ -342,9 +342,15 @@ function handler(event) {
 
     // Create Route53 A record if domain is configured
     if (config.domainName) {
+      // Extract parent zone from domain name (e.g., "app.example.com" → "example.com")
+      const domainParts = config.domainName.split('.');
+      const zoneName = domainParts.length > 2
+        ? domainParts.slice(1).join('.')
+        : config.domainName;
+      
       // Look up the hosted zone
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-        domainName: config.domainName,
+        domainName: zoneName,
       });
 
       // Create A record aliasing to CloudFront
