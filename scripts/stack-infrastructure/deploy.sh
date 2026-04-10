@@ -42,6 +42,18 @@ cdk bootstrap aws://${CDK_DEFAULT_ACCOUNT}/${CDK_DEFAULT_REGION} \
     || log_info "CDK already bootstrapped or bootstrap failed (continuing anyway)"
 cd "${PROJECT_ROOT}/infrastructure"
 
+# Build existing VPC context parameters (only when set)
+EXISTING_VPC_CONTEXT=""
+if [ -n "${CDK_EXISTING_VPC_ID:-}" ]; then
+    EXISTING_VPC_CONTEXT="${EXISTING_VPC_CONTEXT} --context existingVpc.vpcId=\"${CDK_EXISTING_VPC_ID}\""
+    EXISTING_VPC_CONTEXT="${EXISTING_VPC_CONTEXT} --context existingVpc.availabilityZones=\"${CDK_EXISTING_VPC_AZS}\""
+    EXISTING_VPC_CONTEXT="${EXISTING_VPC_CONTEXT} --context existingVpc.publicSubnetIds=\"${CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS}\""
+    EXISTING_VPC_CONTEXT="${EXISTING_VPC_CONTEXT} --context existingVpc.privateSubnetIds=\"${CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS}\""
+    if [ -n "${CDK_EXISTING_VPC_CIDR:-}" ]; then
+        EXISTING_VPC_CONTEXT="${EXISTING_VPC_CONTEXT} --context existingVpc.vpcCidrBlock=\"${CDK_EXISTING_VPC_CIDR}\""
+    fi
+fi
+
 # Deploy the Infrastructure Stack
 # Check if pre-synthesized template exists (from CI/CD pipeline)
 if [ -d "${PROJECT_ROOT}/infrastructure/cdk.out" ] && [ -f "${PROJECT_ROOT}/infrastructure/cdk.out/InfrastructureStack.template.json" ]; then
@@ -64,6 +76,7 @@ else
         --context albSubdomain="${CDK_ALB_SUBDOMAIN}" \
         --context certificateArn="${CDK_CERTIFICATE_ARN}" \
         --context domainName="${CDK_DOMAIN_NAME}" \
+        ${EXISTING_VPC_CONTEXT} \
         --require-approval never \
         --outputs-file "${PROJECT_ROOT}/infrastructure/infrastructure-outputs.json"
 fi

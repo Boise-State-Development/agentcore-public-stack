@@ -101,6 +101,21 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 |---------------|---------|-------------|
 | `CDK_FINE_TUNING_ENABLED` | `false` | Set to `true` to enable the SageMaker Fine-Tuning stack. Must be set before running the fine-tuning deployment workflow in Step 4. |
 
+### Existing VPC (Optional)
+
+To import a pre-existing VPC instead of creating a new one, add these variables:
+
+| Variable Name | Example | Description |
+|---------------|---------|-------------|
+| `CDK_EXISTING_VPC_ID` | `vpc-0abc123def456` | VPC ID to import |
+| `CDK_EXISTING_VPC_AZS` | `us-east-1a,us-east-1b` | Comma-separated availability zones |
+| `CDK_EXISTING_VPC_PUBLIC_SUBNET_IDS` | `subnet-0a1b2c3d4e5f6,subnet-0f6e5d4c3b2a1` | Comma-separated public subnet IDs |
+| `CDK_EXISTING_VPC_PRIVATE_SUBNET_IDS` | `subnet-0aabbccddee11,subnet-0ffeeddccbbaa` | Comma-separated private subnet IDs |
+| `CDK_EXISTING_VPC_CIDR` | `192.168.0.0/16` | VPC CIDR block (optional) |
+
+> [!NOTE]
+> The number of public and private subnets must match the number of availability zones. When these variables are not set, the infrastructure stack creates a new VPC automatically.
+
 ---
 
 ## 3c. Authentication
