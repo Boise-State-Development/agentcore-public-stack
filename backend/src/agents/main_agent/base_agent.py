@@ -12,7 +12,12 @@ from typing import AsyncGenerator, List, Optional
 
 from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
 from agents.main_agent.session import SessionFactory
-from agents.main_agent.session.hooks import StopHook
+from agents.main_agent.session.hooks import (
+    StopHook,
+    EmailApprovalHook,
+    ExternalWriteApprovalHook,
+    DangerousToolApprovalHook,
+)
 from agents.main_agent.tools import (
     create_default_registry,
     ToolFilter,
@@ -180,12 +185,23 @@ class BaseAgent(ABC):
         """
         Create agent hooks.
 
+        Includes:
+        - StopHook: Always enabled, cancels tool execution on user stop
+        - Approval hooks: Gate dangerous operations for user confirmation
+
         Returns:
             list: List of initialized hooks
         """
         hooks = []
-        stop_hook = StopHook(self.session_manager)
-        hooks.append(stop_hook)
+
+        # Always-on: session cancellation
+        hooks.append(StopHook(self.session_manager))
+
+        # Approval gates for dangerous operations
+        hooks.append(EmailApprovalHook())
+        hooks.append(ExternalWriteApprovalHook())
+        hooks.append(DangerousToolApprovalHook())
+
         return hooks
 
     def _build_filtered_tools(self) -> List:
