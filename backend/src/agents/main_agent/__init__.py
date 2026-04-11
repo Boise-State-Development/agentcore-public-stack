@@ -28,6 +28,8 @@ Main entry point:
         print(event)
 """
 from .main_agent import MainAgent
+from .base_agent import BaseAgent
+from .chat_agent import ChatAgent
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
@@ -50,7 +52,9 @@ from .utils import get_current_date_pacific, get_global_stream_processor
 __version__ = "1.0.0"
 
 __all__ = [
-    # Main agent
+    # Agent types
+    "BaseAgent",
+    "ChatAgent",
     "MainAgent",
 
     # Core components
