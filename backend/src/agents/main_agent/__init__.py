@@ -30,6 +30,7 @@ Main entry point:
 from .main_agent import MainAgent
 from .base_agent import BaseAgent
 from .chat_agent import ChatAgent
+from .agent_types import create_agent, register_agent_type, get_available_types
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
@@ -56,6 +57,9 @@ __all__ = [
     "BaseAgent",
     "ChatAgent",
     "MainAgent",
+    "create_agent",
+    "register_agent_type",
+    "get_available_types",
 
     # Core components
     "ModelConfig",
