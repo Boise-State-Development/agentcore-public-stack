@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import os
 
+from agents.main_agent.config.constants import EnvVars, Defaults
+
 
 @dataclass
 class CompactionState:
@@ -62,8 +64,8 @@ class CompactionConfig:
     def from_env(cls) -> "CompactionConfig":
         """Load configuration from environment variables."""
         return cls(
-            enabled=os.environ.get("AGENTCORE_MEMORY_COMPACTION_ENABLED", "true").lower() == "true",
-            token_threshold=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_TOKEN_THRESHOLD", "100000")),
-            protected_turns=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_PROTECTED_TURNS", "3")),
-            max_tool_content_length=int(os.environ.get("AGENTCORE_MEMORY_COMPACTION_MAX_TOOL_CONTENT_LENGTH", "500")),
+            enabled=os.environ.get(EnvVars.COMPACTION_ENABLED, str(Defaults.COMPACTION_ENABLED).lower()).lower() == "true",
+            token_threshold=int(os.environ.get(EnvVars.COMPACTION_TOKEN_THRESHOLD, str(Defaults.COMPACTION_TOKEN_THRESHOLD))),
+            protected_turns=int(os.environ.get(EnvVars.COMPACTION_PROTECTED_TURNS, str(Defaults.COMPACTION_PROTECTED_TURNS))),
+            max_tool_content_length=int(os.environ.get(EnvVars.COMPACTION_MAX_TOOL_CONTENT_LENGTH, str(Defaults.COMPACTION_MAX_TOOL_CONTENT_LENGTH))),
         )

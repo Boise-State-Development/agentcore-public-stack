@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 
+from agents.main_agent.config.constants import Prefixes
+
 
 class ToolCategory(str, Enum):
     """Categories for organizing tools in the UI."""
@@ -128,7 +130,7 @@ class ToolCatalogService:
 
         Gateway tools are prefixed with 'gateway_' and loaded from MCP servers.
         """
-        if not tool_id.startswith("gateway_"):
+        if not tool_id.startswith(Prefixes.GATEWAY_TOOL):
             tool_id = f"gateway_{tool_id}"
 
         self._catalog[tool_id] = ToolMetadata(

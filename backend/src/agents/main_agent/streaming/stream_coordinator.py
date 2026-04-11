@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
+from agents.main_agent.config.constants import EnvVars
 from apis.shared.errors import ErrorCode, StreamErrorEvent, build_conversational_error_event
 
 from .stream_processor import process_agent_stream
@@ -60,8 +61,8 @@ class StreamCoordinator:
             str: SSE formatted events
         """
         # Set environment variables for browser session isolation
-        os.environ["SESSION_ID"] = session_id
-        os.environ["USER_ID"] = user_id
+        os.environ[EnvVars.SESSION_ID] = session_id
+        os.environ[EnvVars.USER_ID] = user_id
 
         # Track timing for latency metrics
         stream_start_time = time.time()

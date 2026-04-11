@@ -6,6 +6,8 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
 
+from agents.main_agent.config.constants import EnvVars, Defaults
+
 
 class ModelProvider(str, Enum):
     """Supported LLM providers"""
@@ -54,22 +56,22 @@ class RetryConfig:
             RETRY_SDK_MAX_DELAY=16.0
         """
         return cls(
-            boto_max_attempts=int(os.environ.get("RETRY_BOTO_MAX_ATTEMPTS", "3")),
-            boto_retry_mode=os.environ.get("RETRY_BOTO_MODE", "standard"),
-            connect_timeout=int(os.environ.get("RETRY_CONNECT_TIMEOUT", "5")),
-            read_timeout=int(os.environ.get("RETRY_READ_TIMEOUT", "120")),
-            sdk_max_attempts=int(os.environ.get("RETRY_SDK_MAX_ATTEMPTS", "4")),
-            sdk_initial_delay=float(os.environ.get("RETRY_SDK_INITIAL_DELAY", "2.0")),
-            sdk_max_delay=float(os.environ.get("RETRY_SDK_MAX_DELAY", "16.0")),
+            boto_max_attempts=int(os.environ.get(EnvVars.RETRY_BOTO_MAX_ATTEMPTS, str(Defaults.RETRY_BOTO_MAX_ATTEMPTS))),
+            boto_retry_mode=os.environ.get(EnvVars.RETRY_BOTO_MODE, Defaults.RETRY_BOTO_MODE),
+            connect_timeout=int(os.environ.get(EnvVars.RETRY_CONNECT_TIMEOUT, str(Defaults.RETRY_CONNECT_TIMEOUT))),
+            read_timeout=int(os.environ.get(EnvVars.RETRY_READ_TIMEOUT, str(Defaults.RETRY_READ_TIMEOUT))),
+            sdk_max_attempts=int(os.environ.get(EnvVars.RETRY_SDK_MAX_ATTEMPTS, str(Defaults.RETRY_SDK_MAX_ATTEMPTS))),
+            sdk_initial_delay=float(os.environ.get(EnvVars.RETRY_SDK_INITIAL_DELAY, str(Defaults.RETRY_SDK_INITIAL_DELAY))),
+            sdk_max_delay=float(os.environ.get(EnvVars.RETRY_SDK_MAX_DELAY, str(Defaults.RETRY_SDK_MAX_DELAY))),
         )
 
 
 @dataclass
 class ModelConfig:
     """Configuration for multi-provider LLM models"""
-    model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    temperature: float = 0.7
-    caching_enabled: bool = True
+    model_id: str = Defaults.MODEL_ID
+    temperature: float = Defaults.TEMPERATURE
+    caching_enabled: bool = Defaults.CACHING_ENABLED
     provider: ModelProvider = ModelProvider.BEDROCK
     max_tokens: Optional[int] = None
     retry_config: Optional[RetryConfig] = None

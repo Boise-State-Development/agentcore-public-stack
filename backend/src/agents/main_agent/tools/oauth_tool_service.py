@@ -35,6 +35,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from agents.main_agent.config.constants import EnvVars, Defaults
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +68,7 @@ class OAuthTokenResult:
 
         Returns a dict suitable for returning from a tool.
         """
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:4200")
+        frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
         connect_url = f"{frontend_url}/settings/connections"
 
         if self.needs_reauth:
@@ -238,7 +240,7 @@ class OAuthToolService:
         Returns:
             URL to the connections page
         """
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:4200")
+        frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
         return f"{frontend_url}/settings/connections"
 
 
@@ -311,7 +313,7 @@ def format_oauth_connection_guidance(
     if not missing_connections:
         return ""
 
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:4200")
+    frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
     connect_url = f"{frontend_url}/settings/connections"
 
     if len(missing_connections) == 1:

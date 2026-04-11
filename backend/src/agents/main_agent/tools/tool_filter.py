@@ -3,6 +3,7 @@ Tool filtering based on user preferences
 """
 import logging
 from typing import List, Optional, Any, Tuple
+from agents.main_agent.config.constants import Prefixes
 from agents.main_agent.tools.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class ToolFilter:
             if self.registry.has_tool(tool_id):
                 # Local tool from registry
                 filtered_tools.append(self.registry.get_tool(tool_id))
-            elif tool_id.startswith("gateway_"):
+            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
                 # Gateway MCP tool - collect for separate handling
                 gateway_tool_ids.append(tool_id)
             elif tool_id in self._external_mcp_tools:
@@ -117,7 +118,7 @@ class ToolFilter:
             if self.registry.has_tool(tool_id):
                 # Local tool from registry
                 filtered_tools.append(self.registry.get_tool(tool_id))
-            elif tool_id.startswith("gateway_"):
+            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
                 # Gateway MCP tool (AgentCore Gateway)
                 gateway_tool_ids.append(tool_id)
             elif tool_id in self._external_mcp_tools:
@@ -159,7 +160,7 @@ class ToolFilter:
         for tool_id in enabled_tool_ids:
             if self.registry.has_tool(tool_id):
                 local_count += 1
-            elif tool_id.startswith("gateway_"):
+            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
                 gateway_count += 1
             elif tool_id in self._external_mcp_tools:
                 external_mcp_count += 1

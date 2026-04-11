@@ -12,10 +12,12 @@ import logging
 from typing import List, Any
 from strands.types.session import SessionMessage
 
+from agents.main_agent.config.constants import Prefixes
+
 logger = logging.getLogger(__name__)
 
 # Preview session prefix - sessions with this prefix use in-memory storage only
-PREVIEW_SESSION_PREFIX = "preview-"
+PREVIEW_SESSION_PREFIX = Prefixes.PREVIEW_SESSION
 
 
 def is_preview_session(session_id: str) -> bool:
