@@ -30,6 +30,7 @@ Main entry point:
 from .main_agent import MainAgent
 from .base_agent import BaseAgent
 from .chat_agent import ChatAgent
+from .skill_agent import SkillAgent
 from .agent_types import create_agent, register_agent_type, get_available_types
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
@@ -57,6 +58,7 @@ __all__ = [
     "BaseAgent",
     "ChatAgent",
     "MainAgent",
+    "SkillAgent",
     "create_agent",
     "register_agent_type",
     "get_available_types",

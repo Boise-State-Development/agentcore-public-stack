@@ -54,7 +54,9 @@ def create_agent(agent_type: str = "chat", **kwargs) -> BaseAgent:
 # Register built-in agent types
 def _register_defaults():
     from agents.main_agent.chat_agent import ChatAgent
+    from agents.main_agent.skill_agent import SkillAgent
     register_agent_type("chat", ChatAgent)
+    register_agent_type("skill", SkillAgent)
 
 
 _register_defaults()
