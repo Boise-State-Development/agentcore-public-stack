@@ -56,6 +56,11 @@ class EnvVars:
     SESSION_ID = "SESSION_ID"
     USER_ID = "USER_ID"
 
+    # --- Voice Agent ---
+    NOVA_SONIC_MODEL_ID = "NOVA_SONIC_MODEL_ID"
+    NOVA_SONIC_VOICE = "NOVA_SONIC_VOICE"
+    NOVA_SONIC_MAX_MESSAGES = "NOVA_SONIC_MAX_MESSAGES"
+
 
 class Defaults:
     """Default values for configuration parameters.
@@ -99,6 +104,14 @@ class Defaults:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = True
+
+    # --- Voice Agent ---
+    NOVA_SONIC_MODEL_ID = "amazon.nova-2-sonic-v1:0"
+    NOVA_SONIC_VOICE = "tiffany"
+    NOVA_SONIC_INPUT_RATE = 16000
+    NOVA_SONIC_OUTPUT_RATE = 16000
+    NOVA_SONIC_MAX_MESSAGES = 20
+    VOICE_AGENT_ID = "voice"
 
 
 class Prefixes:

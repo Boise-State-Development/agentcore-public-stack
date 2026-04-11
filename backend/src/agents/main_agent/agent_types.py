@@ -58,5 +58,12 @@ def _register_defaults():
     register_agent_type("chat", ChatAgent)
     register_agent_type("skill", SkillAgent)
 
+    # Voice agent is optional (requires strands-agents[bidi])
+    try:
+        from agents.main_agent.voice_agent import VoiceAgent
+        register_agent_type("voice", VoiceAgent)
+    except Exception:
+        pass
+
 
 _register_defaults()

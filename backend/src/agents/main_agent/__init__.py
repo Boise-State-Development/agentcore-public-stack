@@ -32,6 +32,12 @@ from .base_agent import BaseAgent
 from .chat_agent import ChatAgent
 from .skill_agent import SkillAgent
 from .agent_types import create_agent, register_agent_type, get_available_types
+
+# VoiceAgent is optional (requires strands-agents[bidi])
+try:
+    from .voice_agent import VoiceAgent
+except ImportError:
+    VoiceAgent = None
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
