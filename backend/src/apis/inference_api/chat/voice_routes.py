@@ -187,16 +187,16 @@ async def voice_stream(websocket: WebSocket):
         except Exception:
             pass
     finally:
-        # Cleanup
+        # Cleanup — catch BaseException since CancelledError escapes Exception in 3.12
         _active_sessions.pop(session_id, None)
         if voice_agent:
             try:
                 await voice_agent.stop()
-            except Exception as e:
-                logger.error(f"Error stopping voice agent: {e}")
+            except BaseException as e:
+                logger.debug(f"Voice agent stop during cleanup: {type(e).__name__}: {e}")
         try:
             await websocket.close()
-        except Exception:
+        except BaseException:
             pass
         logger.info(f"Voice session cleaned up: {session_id}")
 

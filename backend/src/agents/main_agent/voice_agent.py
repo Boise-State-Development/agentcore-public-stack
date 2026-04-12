@@ -11,6 +11,7 @@ Based on the voice agent pattern from:
 https://github.com/aws-samples/sample-strands-agent-with-agentcore
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -217,6 +218,16 @@ class VoiceAgent(BaseAgent):
                 yield str(event)
 
     async def stop(self) -> None:
-        """Stop the bidirectional voice connection."""
+        """Stop the bidirectional voice connection.
+
+        Handles CancelledError from the BidiAgent's internal stream teardown
+        gracefully — the Nova Sonic SDK may cancel pending futures during
+        shutdown, which is expected and not an error.
+        """
         if self._bidi_agent and hasattr(self._bidi_agent, "stop"):
-            await self._bidi_agent.stop()
+            try:
+                await self._bidi_agent.stop()
+            except asyncio.CancelledError:
+                logger.debug("BidiAgent stop cancelled (expected during teardown)")
+            except Exception as e:
+                logger.warning(f"Error during BidiAgent stop: {e}")
