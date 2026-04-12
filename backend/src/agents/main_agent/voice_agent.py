@@ -147,8 +147,9 @@ class VoiceAgent(BaseAgent):
         """
         Load recent text chat history for voice-text continuity.
 
-        Reads messages from the text agent's session to provide context
-        for the voice conversation.
+        Reads messages from the text (default) agent's session to provide
+        context for the voice conversation. Uses agent_id="default" to
+        read from the text chat agent's history.
         """
         max_messages = int(os.environ.get(
             EnvVars.NOVA_SONIC_MAX_MESSAGES, str(Defaults.NOVA_SONIC_MAX_MESSAGES)
@@ -156,9 +157,13 @@ class VoiceAgent(BaseAgent):
 
         try:
             if hasattr(self.session_manager, "list_messages"):
-                messages = self.session_manager.list_messages()
-                if messages and len(messages) > max_messages:
-                    messages = messages[-max_messages:]
+                # AgentCoreMemorySessionManager.list_messages requires session_id and agent_id
+                # Use "default" to read the text chat agent's history
+                messages = self.session_manager.list_messages(
+                    session_id=self.session_id,
+                    agent_id="default",
+                    limit=max_messages,
+                )
                 return messages or []
         except Exception as e:
             logger.warning(f"Could not load text history: {e}")

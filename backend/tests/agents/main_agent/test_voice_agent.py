@@ -66,20 +66,25 @@ class TestVoiceAgentRegistration:
 class TestVoiceAgentTextHistory:
     """Req VA-4: Voice-text continuity."""
 
-    def test_load_text_history_respects_max(self):
+    def test_load_text_history_passes_limit(self):
         from agents.main_agent.voice_agent import VoiceAgent
 
-        # Create a mock session manager with lots of messages
         mock_session = MagicMock()
-        mock_session.list_messages.return_value = list(range(50))
+        mock_session.list_messages.return_value = list(range(10))
 
         agent = VoiceAgent.__new__(VoiceAgent)
         agent.session_manager = mock_session
+        agent.session_id = "test-session"
 
-        # Patch the env var for max messages
         with patch.dict("os.environ", {EnvVars.NOVA_SONIC_MAX_MESSAGES: "10"}):
             messages = agent._load_text_history()
 
+        # Verify limit is passed to list_messages
+        mock_session.list_messages.assert_called_once_with(
+            session_id="test-session",
+            agent_id="default",
+            limit=10,
+        )
         assert len(messages) == 10
 
     def test_load_text_history_handles_empty(self):
@@ -90,6 +95,7 @@ class TestVoiceAgentTextHistory:
 
         agent = VoiceAgent.__new__(VoiceAgent)
         agent.session_manager = mock_session
+        agent.session_id = "test-session"
 
         messages = agent._load_text_history()
         assert messages == []
@@ -102,6 +108,7 @@ class TestVoiceAgentTextHistory:
 
         agent = VoiceAgent.__new__(VoiceAgent)
         agent.session_manager = mock_session
+        agent.session_id = "test-session"
 
         messages = agent._load_text_history()
         assert messages == []
