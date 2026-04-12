@@ -36,10 +36,9 @@ export class AudioRecorderService {
 
   private checkSupport(): boolean {
     if (typeof window === 'undefined') return false;
-    return !!(
-      navigator.mediaDevices?.getUserMedia &&
-      (window.AudioContext || (window as any).webkitAudioContext)
-    );
+    const hasGetUserMedia = typeof navigator.mediaDevices?.getUserMedia === 'function';
+    const hasAudioContext = !!(window.AudioContext || (window as any).webkitAudioContext);
+    return hasGetUserMedia && hasAudioContext;
   }
 
   /**

@@ -159,12 +159,17 @@ class VoiceAgent(BaseAgent):
             if hasattr(self.session_manager, "list_messages"):
                 # AgentCoreMemorySessionManager.list_messages requires session_id and agent_id
                 # Use "default" to read the text chat agent's history
-                messages = self.session_manager.list_messages(
+                session_messages = self.session_manager.list_messages(
                     session_id=self.session_id,
                     agent_id="default",
                     limit=max_messages,
                 )
-                return messages or []
+                if not session_messages:
+                    return []
+
+                # Convert SessionMessage objects to plain dicts for BidiAgent
+                # Nova Sonic expects {"role": "user"|"assistant", "content": [...]}
+                return [msg.to_dict() for msg in session_messages]
         except Exception as e:
             logger.warning(f"Could not load text history: {e}")
 

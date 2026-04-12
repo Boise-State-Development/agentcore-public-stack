@@ -69,8 +69,15 @@ class TestVoiceAgentTextHistory:
     def test_load_text_history_passes_limit(self):
         from agents.main_agent.voice_agent import VoiceAgent
 
+        # Mock SessionMessage objects with to_dict()
+        mock_msgs = []
+        for i in range(10):
+            m = MagicMock()
+            m.to_dict.return_value = {"role": "user", "content": [{"text": f"msg {i}"}]}
+            mock_msgs.append(m)
+
         mock_session = MagicMock()
-        mock_session.list_messages.return_value = list(range(10))
+        mock_session.list_messages.return_value = mock_msgs
 
         agent = VoiceAgent.__new__(VoiceAgent)
         agent.session_manager = mock_session
@@ -85,7 +92,9 @@ class TestVoiceAgentTextHistory:
             agent_id="default",
             limit=10,
         )
+        # Messages are converted to dicts via to_dict()
         assert len(messages) == 10
+        assert messages[0]["role"] == "user"
 
     def test_load_text_history_handles_empty(self):
         from agents.main_agent.voice_agent import VoiceAgent
