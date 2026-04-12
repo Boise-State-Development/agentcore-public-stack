@@ -178,54 +178,77 @@ class VoiceAgent(BaseAgent):
 
     async def start(self) -> None:
         """Start the bidirectional voice connection."""
-        if self._bidi_agent and hasattr(self._bidi_agent, "start"):
-            await self._bidi_agent.start()
+        if not self._bidi_agent:
+            self._create_agent()
+        await self._bidi_agent.start()
 
     async def send_audio(self, audio_base64: str, sample_rate: int = 16000) -> None:
         """
-        Send audio data to the voice agent.
+        Send audio data to the voice agent via BidiAgent.send().
 
         Args:
             audio_base64: Base64-encoded PCM audio
             sample_rate: Audio sample rate (default 16kHz)
         """
-        if self._bidi_agent and hasattr(self._bidi_agent, "send_audio"):
-            await self._bidi_agent.send_audio(audio_base64, sample_rate)
+        if not self._bidi_agent:
+            raise RuntimeError("Voice agent not started")
+
+        await self._bidi_agent.send({
+            "type": "bidi_audio_input",
+            "audio": audio_base64,
+            "format": "pcm",
+            "sample_rate": sample_rate,
+            "channels": 1,
+        })
 
     async def send_text(self, text: str) -> None:
         """
-        Send text input to the voice agent (fallback from audio).
+        Send text input to the voice agent via BidiAgent.send().
 
         Args:
             text: Text message to send
         """
-        if self._bidi_agent and hasattr(self._bidi_agent, "send_text"):
-            await self._bidi_agent.send_text(text)
+        if not self._bidi_agent:
+            raise RuntimeError("Voice agent not started")
 
-    async def stream_async(
-        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
-    ) -> AsyncGenerator[dict, None]:
+        await self._bidi_agent.send({
+            "type": "bidi_text_input",
+            "text": text,
+            "role": "user",
+        })
+
+    async def receive_events(self) -> AsyncGenerator[dict, None]:
         """
-        Stream voice agent events via BidiAgent.receive().
+        Receive and transform events from BidiAgent for WebSocket transmission.
 
-        Yields typed event dicts (BidiAudioStreamEvent, BidiTranscriptStreamEvent,
-        BidiResponseCompleteEvent, etc.) from the Nova Sonic bidirectional stream.
-
-        The BidiAgent uses receive() as its event source — not stream_async().
-        Audio and text input are sent separately via send_audio()/send_text().
+        Wraps BidiAgent.receive() and converts typed event objects to plain
+        dicts via as_dict(). This is the primary event source for the voice
+        WebSocket route.
 
         Yields:
-            dict: Event dictionaries with 'type' field indicating event kind
+            dict: Event dictionaries suitable for JSON serialization
         """
         if not self._bidi_agent:
-            self._create_agent()
+            raise RuntimeError("Voice agent not started")
 
         async for event in self._bidi_agent.receive():
-            # Events have as_dict() for serialization
             if hasattr(event, "as_dict"):
                 yield event.as_dict()
             else:
                 yield {"type": "unknown", "data": str(event)}
+
+    async def stream_async(
+        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        BaseAgent interface compatibility — not used for voice mode.
+
+        Voice mode uses start() + send_audio()/send_text() + receive_events() + stop()
+        instead of the request-response stream_async() pattern.
+        """
+        logger.warning("stream_async() called on VoiceAgent — use receive_events() instead")
+        return
+        yield  # Make this a generator
 
     async def stop(self) -> None:
         """Stop the bidirectional voice connection.

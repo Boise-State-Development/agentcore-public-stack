@@ -242,12 +242,12 @@ async def _send_to_client(
 ) -> None:
     """Stream events from voice agent to client.
 
-    VoiceAgent.stream_async() yields dicts from BidiAgent.receive() — each dict
+    VoiceAgent.receive_events() yields dicts from BidiAgent.receive() — each dict
     has a 'type' field (e.g. 'bidi_audio_stream', 'bidi_transcript_stream',
     'bidi_response_complete', etc.).
     """
     try:
-        async for event in voice_agent.stream_async(""):
+        async for event in voice_agent.receive_events():
             try:
                 if isinstance(event, dict):
                     await websocket.send_json(event)
