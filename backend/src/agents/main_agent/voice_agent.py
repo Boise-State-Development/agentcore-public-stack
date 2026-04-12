@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Optional imports — BidiAgent requires the strands bidi extra
 try:
-    from strands.agent.bidi import BidiAgent
-    from strands.models.bidi_nova_sonic import BidiNovaSonicModel
+    from strands.experimental.bidi import BidiAgent
+    from strands.experimental.bidi.models.nova_sonic import BidiNovaSonicModel
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
