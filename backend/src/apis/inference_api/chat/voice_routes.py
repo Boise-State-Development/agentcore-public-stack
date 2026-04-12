@@ -240,27 +240,25 @@ async def _receive_from_client(
 async def _send_to_client(
     websocket: WebSocket, voice_agent: Any, session_id: str
 ) -> None:
-    """Stream events from voice agent to client."""
+    """Stream events from voice agent to client.
+
+    VoiceAgent.stream_async() yields dicts from BidiAgent.receive() — each dict
+    has a 'type' field (e.g. 'bidi_audio_stream', 'bidi_transcript_stream',
+    'bidi_response_complete', etc.).
+    """
     try:
         async for event in voice_agent.stream_async(""):
             try:
-                if isinstance(event, str):
-                    # Try to parse as JSON for structured events
-                    try:
-                        parsed = json.loads(event)
-                        await websocket.send_json(parsed)
-                    except json.JSONDecodeError:
-                        await websocket.send_json({
-                            "type": "bidi_text",
-                            "content": event,
-                        })
-                elif isinstance(event, dict):
+                if isinstance(event, dict):
                     await websocket.send_json(event)
                 else:
                     await websocket.send_json({
                         "type": "bidi_event",
                         "data": str(event),
                     })
+            except WebSocketDisconnect:
+                logger.info(f"Client disconnected during send: session={session_id}")
+                return
             except Exception as e:
                 logger.warning(f"Error sending event to client: {e}")
 

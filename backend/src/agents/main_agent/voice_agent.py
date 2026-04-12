@@ -198,29 +198,28 @@ class VoiceAgent(BaseAgent):
 
     async def stream_async(
         self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[dict, None]:
         """
-        Stream voice agent events.
+        Stream voice agent events via BidiAgent.receive().
 
-        For voice agents, events include audio stream data, text transcriptions,
-        and tool use events.
+        Yields typed event dicts (BidiAudioStreamEvent, BidiTranscriptStreamEvent,
+        BidiResponseCompleteEvent, etc.) from the Nova Sonic bidirectional stream.
 
-        Args:
-            message: Text message (may be empty for audio-only)
-            session_id: Session identifier
-            files: Not used for voice
-            citations: Not used for voice
-            original_message: Not used for voice
+        The BidiAgent uses receive() as its event source — not stream_async().
+        Audio and text input are sent separately via send_audio()/send_text().
 
         Yields:
-            str: SSE formatted events
+            dict: Event dictionaries with 'type' field indicating event kind
         """
         if not self._bidi_agent:
             self._create_agent()
 
-        if hasattr(self._bidi_agent, "stream_async"):
-            async for event in self._bidi_agent.stream_async(message):
-                yield str(event)
+        async for event in self._bidi_agent.receive():
+            # Events have as_dict() for serialization
+            if hasattr(event, "as_dict"):
+                yield event.as_dict()
+            else:
+                yield {"type": "unknown", "data": str(event)}
 
     async def stop(self) -> None:
         """Stop the bidirectional voice connection.
