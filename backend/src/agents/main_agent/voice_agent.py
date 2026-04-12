@@ -167,9 +167,10 @@ class VoiceAgent(BaseAgent):
                 if not session_messages:
                     return []
 
-                # Convert SessionMessage objects to plain dicts for BidiAgent
-                # Nova Sonic expects {"role": "user"|"assistant", "content": [...]}
-                return [msg.to_dict() for msg in session_messages]
+                # Convert SessionMessage objects to plain message dicts for BidiAgent
+                # to_message() returns {"role": "user"|"assistant", "content": [...]}
+                # (to_dict() wraps it in metadata — Nova Sonic needs the inner message)
+                return [msg.to_message() for msg in session_messages]
         except Exception as e:
             logger.warning(f"Could not load text history: {e}")
 
