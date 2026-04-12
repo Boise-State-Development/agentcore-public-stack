@@ -7,6 +7,14 @@ import {
 } from '@angular/core';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 
+interface CostBreakdown {
+    total: number;
+    inputCost: number;
+    outputCost: number;
+    cacheReadCost?: number;
+    cacheWriteCost?: number;
+}
+
 interface MessageMetadata {
     latency?: {
         timeToFirstToken?: number;
@@ -24,7 +32,7 @@ interface MessageMetadata {
         sessionId?: string;
         timestamp?: string;
     };
-    cost?: number;
+    cost?: CostBreakdown | number;
 }
 
 @Component({
@@ -104,13 +112,33 @@ interface MessageMetadata {
                     </div>
                 }
 
-                <!-- Cost Badge -->
-                @if (cost() !== null) {
+                <!-- Input Cost Badge -->
+                @if (inputCost() !== null) {
                     <div class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
                         <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                         </svg>
-                        <span>Cost: {{ formatCost(cost()) }}</span>
+                        <span>In: {{ formatCost(inputCost()) }}</span>
+                    </div>
+                }
+
+                <!-- Output Cost Badge -->
+                @if (outputCost() !== null) {
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-xs font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                        </svg>
+                        <span>Out: {{ formatCost(outputCost()) }}</span>
+                    </div>
+                }
+
+                <!-- Total Cost Badge -->
+                @if (totalCost() !== null) {
+                    <div class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                        </svg>
+                        <span>Total: {{ formatCost(totalCost()) }}</span>
                     </div>
                 }
         }
@@ -141,7 +169,7 @@ export class MessageMetadataBadgesComponent {
             !!meta.latency?.timeToFirstToken ||
             !!meta.latency?.endToEndLatency ||
             !!meta.tokenUsage ||
-            meta.cost !== undefined
+            meta.cost !== undefined && meta.cost !== null
         );
     });
 
@@ -217,10 +245,32 @@ export class MessageMetadataBadgesComponent {
         return { hitRate, savings: Math.max(0, savings) };
     });
 
-    cost = computed(() => {
+    private costBreakdown = computed<CostBreakdown | null>(() => {
         const meta = this.typedMetadata();
         if (meta?.cost === undefined || meta.cost === null) return null;
+        // Handle backwards compatibility with scalar cost
+        if (typeof meta.cost === 'number') {
+            return { total: meta.cost, inputCost: 0, outputCost: 0 };
+        }
         return meta.cost;
+    });
+
+    inputCost = computed(() => {
+        const breakdown = this.costBreakdown();
+        if (!breakdown || breakdown.inputCost === 0) return null;
+        return breakdown.inputCost;
+    });
+
+    outputCost = computed(() => {
+        const breakdown = this.costBreakdown();
+        if (!breakdown || breakdown.outputCost === 0) return null;
+        return breakdown.outputCost;
+    });
+
+    totalCost = computed(() => {
+        const breakdown = this.costBreakdown();
+        if (!breakdown) return null;
+        return breakdown.total;
     });
 
     /**

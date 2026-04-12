@@ -211,6 +211,23 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "supportsCaching": True,
         "isDefault": False,
     },
+    {
+        "modelId": "amazon.nova-2-sonic-v1:0",
+        "modelName": "Nova 2 Sonic",
+        "provider": "bedrock",
+        "providerName": "Amazon",
+        "inputModalities": ["TEXT", "SPEECH"],
+        "outputModalities": ["TEXT", "SPEECH"],
+        "maxInputTokens": 200000,
+        "maxOutputTokens": 4096,
+        "inputPricePerMillionTokens": Decimal("3.00"),
+        "outputPricePerMillionTokens": Decimal("12.00"),
+        "cacheWritePricePerMillionTokens": Decimal("0"),
+        "cacheReadPricePerMillionTokens": Decimal("0"),
+        "isReasoningModel": False,
+        "supportsCaching": False,
+        "isDefault": False,
+    },
 ]
 
 

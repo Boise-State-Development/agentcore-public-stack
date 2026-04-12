@@ -201,14 +201,6 @@ export class ConversationPage implements OnDestroy {
       this.assistantError.set(null);
     });
 
-    // Wire voice transcript completions to message list
-    this.voiceChatService.onResponseComplete = (transcript: string) => {
-      const sid = this.effectiveSessionId();
-      if (sid && transcript.trim()) {
-        this.messageMapService.addVoiceMessage(sid, 'assistant', transcript);
-      }
-    };
-
     // Subscribe to route parameter changes
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
@@ -295,6 +287,60 @@ export class ConversationPage implements OnDestroy {
 
   onMessageCancelled() {
     this.chatHttpService.cancelChatRequest();
+  }
+
+  /**
+   * Called when the voice overlay closes. Persists transcript entries
+   * as chat messages. Creates a new session if one doesn't exist yet.
+   *
+   * For new sessions, we await navigation so the route subscription
+   * settles before we add messages — otherwise the route change can
+   * trigger a loading state that hides the messages we just added.
+   */
+  async onVoiceClosed() {
+    const entries = this.voiceChatService.transcriptEntries();
+    if (entries.length === 0) return;
+
+    const sessionId = await this.ensureSessionExists(
+      this.voiceChatService.getSessionId() || undefined
+    );
+
+    // Wire up the messages signal for this session
+    this.messagesSignal.set(this.messageMapService.getMessagesForSession(sessionId));
+
+    // Add each transcript entry as a message
+    for (const entry of entries) {
+      this.messageMapService.addVoiceMessage(sessionId, entry.role, entry.text);
+    }
+
+    // Generate title for new voice sessions (fire and forget)
+    const firstUserEntry = entries.find(e => e.role === 'user');
+    if (firstUserEntry && this.sessionService.isNewSession(sessionId)) {
+      this.chatHttpService.generateTitle(sessionId, firstUserEntry.text)
+        .then((response) => {
+          this.sessionService.updateSessionTitleInCache(sessionId, response.title);
+        })
+        .catch((err) => {
+          console.warn('Failed to generate voice session title:', err);
+        });
+    }
+  }
+
+  /**
+   * Ensure a session exists — returns the current session ID or creates one.
+   * Awaits navigation for new sessions so the route is settled before the
+   * caller adds messages.
+   */
+  private async ensureSessionExists(preferredId?: string): Promise<string> {
+    const existing = this.effectiveSessionId();
+    if (existing) return existing;
+
+    const sessionId = preferredId || uuidv4();
+    const user = this.userService.currentUser();
+    const userId = user?.user_id || 'anonymous';
+    this.sessionService.addSessionToCache(sessionId, userId);
+    await this.router.navigate(['s', sessionId], { replaceUrl: true });
+    return sessionId;
   }
 
   toggleSettings() {

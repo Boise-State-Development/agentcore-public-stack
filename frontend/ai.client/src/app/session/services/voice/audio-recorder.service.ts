@@ -1,7 +1,6 @@
-import { Injectable, signal, computed } from '@angular/core';
-import { float32ToPcm16, pcm16ToBase64, resampleLinear, SAMPLES_PER_CHUNK } from './pcm-utils';
-
-const TARGET_SAMPLE_RATE = 16000;
+import { Injectable, signal } from '@angular/core';
+import { float32ToPcm16, pcm16ToBase64, resampleLinear } from './pcm-utils';
+import { VOICE_SAMPLE_RATE, SAMPLES_PER_CHUNK } from './voice.config';
 
 /**
  * Audio capture service using Web Audio API.
@@ -9,9 +8,8 @@ const TARGET_SAMPLE_RATE = 16000;
  * Captures microphone input, resamples to 16kHz mono PCM, and emits
  * base64-encoded chunks at ~100ms intervals for Nova Sonic streaming.
  *
- * Uses ScriptProcessorNode (widely supported) with a buffer of 4096 samples.
- * AudioWorklet would be preferred for production but requires serving a
- * separate JS file — ScriptProcessorNode works without extra build config.
+ * Uses AudioWorkletNode for off-main-thread audio processing.
+ * The worklet processor is served from /audio/pcm-capture.worklet.js.
  */
 @Injectable({ providedIn: 'root' })
 export class AudioRecorderService {
@@ -24,7 +22,7 @@ export class AudioRecorderService {
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
-  private processorNode: ScriptProcessorNode | null = null;
+  private workletNode: AudioWorkletNode | null = null;
   private sampleBuffer: Float32Array = new Float32Array(0);
 
   /** Callback invoked with each base64 PCM chunk */
@@ -54,7 +52,7 @@ export class AudioRecorderService {
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: { ideal: TARGET_SAMPLE_RATE },
+          sampleRate: { ideal: VOICE_SAMPLE_RATE },
           channelCount: { exact: 1 },
           echoCancellation: true,
           noiseSuppression: true,
@@ -63,21 +61,21 @@ export class AudioRecorderService {
       });
 
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioContextClass({ sampleRate: TARGET_SAMPLE_RATE });
+      this.audioContext = new AudioContextClass({ sampleRate: VOICE_SAMPLE_RATE });
+
+      await this.audioContext.audioWorklet.addModule('/audio/pcm-capture.worklet.js');
 
       this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-      // ScriptProcessorNode: 4096 buffer, 1 input channel, 1 output channel
-      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-capture');
       this.sampleBuffer = new Float32Array(0);
 
-      this.processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
-        const inputData = event.inputBuffer.getChannelData(0);
-        this.processAudioChunk(inputData);
+      this.workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+        this.processAudioChunk(event.data);
       };
 
-      this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.audioContext.destination);
+      this.sourceNode.connect(this.workletNode);
+      this.workletNode.connect(this.audioContext.destination);
 
       this._isRecording.set(true);
     } catch (err) {
@@ -97,8 +95,8 @@ export class AudioRecorderService {
   private processAudioChunk(inputSamples: Float32Array): void {
     // Resample if browser's actual rate differs from target
     let samples = inputSamples;
-    if (this.audioContext && this.audioContext.sampleRate !== TARGET_SAMPLE_RATE) {
-      samples = resampleLinear(inputSamples, this.audioContext.sampleRate, TARGET_SAMPLE_RATE);
+    if (this.audioContext && this.audioContext.sampleRate !== VOICE_SAMPLE_RATE) {
+      samples = resampleLinear(inputSamples, this.audioContext.sampleRate, VOICE_SAMPLE_RATE);
     }
 
     // Append to buffer
@@ -114,7 +112,7 @@ export class AudioRecorderService {
 
       const pcm = float32ToPcm16(chunk);
       const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, TARGET_SAMPLE_RATE);
+      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
     }
   }
 
@@ -123,19 +121,19 @@ export class AudioRecorderService {
     if (this.sampleBuffer.length > 0) {
       const pcm = float32ToPcm16(this.sampleBuffer);
       const base64 = pcm16ToBase64(pcm);
-      this.onAudioChunk?.(base64, TARGET_SAMPLE_RATE);
+      this.onAudioChunk?.(base64, VOICE_SAMPLE_RATE);
       this.sampleBuffer = new Float32Array(0);
     }
   }
 
   private cleanup(): void {
-    this.processorNode?.disconnect();
+    this.workletNode?.disconnect();
     this.sourceNode?.disconnect();
     this.mediaStream?.getTracks().forEach(t => t.stop());
     if (this.audioContext?.state !== 'closed') {
       this.audioContext?.close().catch(() => {});
     }
-    this.processorNode = null;
+    this.workletNode = null;
     this.sourceNode = null;
     this.mediaStream = null;
     this.audioContext = null;

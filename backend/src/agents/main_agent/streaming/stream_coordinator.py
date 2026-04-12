@@ -229,11 +229,11 @@ class StreamCoordinator:
                             usage_for_cost = accumulated_metadata.get("usage", {})
                             logger.info(f"💰 Cost calculation: model_id={model_id}, usage={usage_for_cost}")
                             try:
-                                cost = await self._calculate_streaming_cost(model_id=model_id, usage=usage_for_cost)
-                                if cost is not None:
-                                    final_metadata["cost"] = cost
+                                cost_result = await self._calculate_streaming_cost(model_id=model_id, usage=usage_for_cost)
+                                if cost_result is not None:
+                                    final_metadata["cost"] = cost_result
                                     logger.info(
-                                        f"💰 Calculated streaming cost: ${cost:.6f} for {usage_for_cost.get('inputTokens', 0)} input, {usage_for_cost.get('outputTokens', 0)} output tokens"
+                                        f"💰 Calculated streaming cost: ${cost_result['total']:.6f} (input=${cost_result['inputCost']:.6f}, output=${cost_result['outputCost']:.6f}) for {usage_for_cost.get('inputTokens', 0)} input, {usage_for_cost.get('outputTokens', 0)} output tokens"
                                     )
                             except Exception as cost_error:
                                 logger.warning(f"Failed to calculate streaming cost: {cost_error}")
@@ -625,15 +625,16 @@ class StreamCoordinator:
 
     def _get_initial_message_count(self, session_manager: Any) -> int:
         """
-        Get the initial message count from session manager BEFORE streaming starts.
+        Get the GLOBAL initial message count BEFORE streaming starts.
 
-        This is a key optimization that eliminates post-stream AgentCore Memory queries.
-        By capturing the message count at the start of streaming, we can calculate
-        the indices of new messages without querying the database after streaming.
+        Returns the total number of messages across ALL agents (default + voice)
+        in the session, because metadata retrieval in get_messages_from_cloud()
+        uses global enumerate indices across all agents' messages.
 
-        The count is obtained from:
-        1. TurnBasedSessionManager.message_count (initialized from AgentCore Memory at session start)
-        2. Fallback to 0 if no count is available
+        The agent-specific message_count (from TurnBasedSessionManager) only
+        counts messages for the "default" agent, which causes index mismatches
+        in mixed voice+text sessions.  We prefer list_messages() which returns
+        ALL messages regardless of agent_id.
 
         Args:
             session_manager: Session manager instance
@@ -641,58 +642,55 @@ class StreamCoordinator:
         Returns:
             int: Number of messages that existed before this stream started (0 if unknown)
         """
-        # For TurnBasedSessionManager (cloud mode): use the pre-initialized message_count
-        # This was queried from AgentCore Memory when the session manager was created
+        # Prefer list_messages() for global count — it returns ALL messages
+        # regardless of agent_id, matching how get_messages_from_cloud() retrieves them.
+        session_id = self._resolve_session_id(session_manager)
+        if session_id:
+            lister = self._resolve_list_messages(session_manager)
+            if lister:
+                try:
+                    messages = lister(session_id, "default")
+                    count = len(messages) if messages else 0
+                    logger.info(f"Using global list_messages count: {count}")
+                    return count
+                except Exception as e:
+                    logger.warning(f"Failed to get global message count: {e}")
+
+        # Fallback to agent-specific message_count (may undercount in mixed sessions)
         if hasattr(session_manager, "message_count"):
             count = session_manager.message_count
-            logger.debug(f"Using TurnBasedSessionManager.message_count: {count}")
+            logger.debug(f"Fallback to TurnBasedSessionManager.message_count: {count}")
             return count
 
-        # Check wrapped session managers
         if hasattr(session_manager, "base_manager"):
             base_manager = session_manager.base_manager
-
-            # Check if base manager has message_count
             if hasattr(base_manager, "message_count"):
                 count = base_manager.message_count
-                logger.debug(f"Using base_manager.message_count: {count}")
+                logger.debug(f"Fallback to base_manager.message_count: {count}")
                 return count
 
-            # Try list_messages if available
-            if hasattr(base_manager, "list_messages"):
-                try:
-                    # Get session_id from config or session_manager
-                    session_id = None
-                    if hasattr(base_manager, "config"):
-                        session_id = base_manager.config.session_id
-                    elif hasattr(base_manager, "session_id"):
-                        session_id = base_manager.session_id
-                    elif hasattr(session_manager, "session_id"):
-                        session_id = session_manager.session_id
-
-                    if session_id:
-                        messages = base_manager.list_messages(session_id, "default")
-                        count = len(messages) if messages else 0
-                        logger.debug(f"Using base_manager.list_messages count: {count}")
-                        return count
-                except Exception as e:
-                    logger.warning(f"Failed to get message count from base_manager: {e}")
-
-        # Direct session manager with list_messages
-        if hasattr(session_manager, "list_messages"):
-            try:
-                session_id = getattr(session_manager, "session_id", None)
-                if session_id:
-                    messages = session_manager.list_messages(session_id, "default")
-                    count = len(messages) if messages else 0
-                    logger.debug(f"Using session_manager.list_messages count: {count}")
-                    return count
-            except Exception as e:
-                logger.warning(f"Failed to get message count from session_manager: {e}")
-
-        # Fallback: no count available (assume new session)
         logger.warning("Could not determine initial message count, defaulting to 0")
         return 0
+
+    @staticmethod
+    def _resolve_session_id(session_manager: Any) -> Optional[str]:
+        """Extract session_id from a session manager."""
+        for mgr in (session_manager, getattr(session_manager, "base_manager", None)):
+            if mgr is None:
+                continue
+            if hasattr(mgr, "config") and hasattr(mgr.config, "session_id"):
+                return mgr.config.session_id
+            if hasattr(mgr, "session_id"):
+                return mgr.session_id
+        return None
+
+    @staticmethod
+    def _resolve_list_messages(session_manager: Any) -> Optional[callable]:
+        """Find list_messages callable on a session manager."""
+        for mgr in (session_manager, getattr(session_manager, "base_manager", None)):
+            if mgr and hasattr(mgr, "list_messages"):
+                return mgr.list_messages
+        return None
 
     def _get_latest_message_id(self, session_manager: Any) -> Optional[int]:
         """
@@ -908,7 +906,9 @@ class StreamCoordinator:
 
                 # Calculate cost if we have both usage and pricing
                 if token_usage and pricing_snapshot:
-                    cost = self._calculate_message_cost(usage=accumulated_metadata.get("usage", {}), pricing=pricing_snapshot)
+                    cost_result = self._calculate_message_cost(usage=accumulated_metadata.get("usage", {}), pricing=pricing_snapshot)
+                    if cost_result is not None:
+                        cost = cost_result
 
             # Create Attribution for cost tracking foundation
             attribution = Attribution(
@@ -1012,7 +1012,7 @@ class StreamCoordinator:
             logger.error(f"Failed to get pricing snapshot for {model_id}: {e}")
             return None
 
-    def _calculate_message_cost(self, usage: Dict[str, Any], pricing: Optional[Dict[str, Any]]) -> Optional[float]:
+    def _calculate_message_cost(self, usage: Dict[str, Any], pricing: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Calculate message cost from usage and pricing
 
@@ -1021,7 +1021,7 @@ class StreamCoordinator:
             pricing: Pricing snapshot (PricingSnapshot model)
 
         Returns:
-            Total cost in USD or None if pricing unavailable
+            Dict with total cost and breakdown, or None if pricing unavailable
         """
         if not pricing:
             return None
@@ -1035,14 +1035,20 @@ class StreamCoordinator:
             else:
                 pricing_dict = pricing
 
-            total_cost, _ = CostCalculator.calculate_message_cost(usage, pricing_dict)
-            return total_cost
+            total_cost, breakdown = CostCalculator.calculate_message_cost(usage, pricing_dict)
+            return {
+                "total": total_cost,
+                "inputCost": breakdown.input_cost,
+                "outputCost": breakdown.output_cost,
+                "cacheReadCost": breakdown.cache_read_cost,
+                "cacheWriteCost": breakdown.cache_write_cost,
+            }
 
         except Exception as e:
             logger.error(f"Failed to calculate message cost: {e}")
             return None
 
-    async def _calculate_streaming_cost(self, model_id: str, usage: Dict[str, Any]) -> Optional[float]:
+    async def _calculate_streaming_cost(self, model_id: str, usage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Calculate cost for streaming response to send to client in real-time.
 
@@ -1055,7 +1061,7 @@ class StreamCoordinator:
             usage: Token usage dict from streaming
 
         Returns:
-            Total cost in USD or None if pricing unavailable
+            Dict with total cost and breakdown, or None if pricing unavailable
         """
         if not usage:
             return None

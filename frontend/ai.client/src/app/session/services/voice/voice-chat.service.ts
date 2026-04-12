@@ -1,13 +1,26 @@
 import { Injectable, signal, computed, inject, OnDestroy } from '@angular/core';
+import { v4 as uuidv4 } from 'uuid';
 import { AuthService } from '../../../auth/auth.service';
 import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
+import {
+  IDLE_TIMEOUT_MS,
+  WS_CONNECT_TIMEOUT_MS,
+  MAX_TRANSCRIPT_ENTRIES,
+  WS_CLOSE_REASONS,
+  REVEAL_CHARS_PER_TICK,
+  REVEAL_TICK_MS,
+  REVEAL_FLUSH_CHARS_PER_TICK,
+} from './voice.config';
 
 export type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'speaking';
 
-/** Idle timeout — auto-disconnect after 60s of silence */
-const IDLE_TIMEOUT_MS = 60_000;
+export interface VoiceTranscriptEntry {
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: number;
+}
 
 /**
  * Voice chat orchestration service.
@@ -31,18 +44,42 @@ export class VoiceChatService implements OnDestroy {
 
   // --- State signals ---
   private readonly _status = signal<VoiceStatus>('idle');
-  private readonly _currentTranscript = signal('');
   private readonly _isConnected = signal(false);
-  private readonly _lastTranscriptRole = signal<'user' | 'assistant'>('assistant');
+  private readonly _transcriptEntries = signal<VoiceTranscriptEntry[]>([]);
+
+  /**
+   * Buffered reveal transcript system.
+   *
+   * _bufferedTranscript: raw text from WebSocket — grows instantly as deltas arrive.
+   * _revealedIndex: how many characters the UI is allowed to see.
+   * agentTranscript: computed slice — what the template actually renders.
+   *
+   * A reveal timer advances _revealedIndex at speaking pace, creating a
+   * typewriter effect that stays roughly in sync with the audio.
+   */
+  private readonly _bufferedTranscript = signal('');
+  private readonly _revealedIndex = signal(0);
+  private _revealCharsPerTick = REVEAL_CHARS_PER_TICK;
+  private _revealTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Per-turn tracking for transcript entries.
+   *
+   * _currentTurnStart: index into _bufferedTranscript where the current
+   *   assistant turn began, so we can extract just this turn's text.
+   * _userTranscript: accumulates user speech text between assistant turns,
+   *   saved to transcriptEntries when the assistant starts responding.
+   */
+  private _currentTurnStart = 0;
+  private _userTranscript = '';
 
   readonly status = this._status.asReadonly();
-  readonly currentTranscript = this._currentTranscript.asReadonly();
-  readonly lastTranscriptRole = this._lastTranscriptRole.asReadonly();
+  readonly agentTranscript = computed(() =>
+    this._bufferedTranscript().slice(0, this._revealedIndex())
+  );
   readonly isConnected = this._isConnected.asReadonly();
   readonly isVoiceActive = computed(() => this._status() !== 'idle');
-
-  /** Emitted when a complete assistant response is finalized */
-  onResponseComplete: ((transcript: string) => void) | null = null;
+  readonly transcriptEntries = this._transcriptEntries.asReadonly();
 
   // --- Internals ---
   private ws: WebSocket | null = null;
@@ -51,13 +88,19 @@ export class VoiceChatService implements OnDestroy {
 
   /**
    * Connect to the voice endpoint and start recording.
+   * If no sessionId is provided, one is auto-generated.
    */
-  async connect(sessionId: string): Promise<void> {
+  async connect(sessionId?: string): Promise<void> {
     if (this._isConnected()) return;
 
-    this.sessionId = sessionId;
+    this.sessionId = sessionId || uuidv4();
     this._status.set('connecting');
-    this._currentTranscript.set('');
+    this._bufferedTranscript.set('');
+    this._revealedIndex.set(0);
+    this._currentTurnStart = 0;
+    this._userTranscript = '';
+    this.stopRevealTimer();
+    this._transcriptEntries.set([]);
 
     try {
       const token = this.authService.getAccessToken();
@@ -68,7 +111,7 @@ export class VoiceChatService implements OnDestroy {
       // Build WebSocket URL from inference API URL
       const httpUrl = this.configService.inferenceApiUrl();
       const wsUrl = httpUrl.replace(/^http/, 'ws');
-      const url = `${wsUrl}/voice/stream?session_id=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`;
+      const url = `${wsUrl}/voice/stream?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
 
       await this.openWebSocket(url, token);
       await this.recorder.start();
@@ -101,6 +144,11 @@ export class VoiceChatService implements OnDestroy {
     this._isConnected.set(false);
   }
 
+  /** Get the current voice session ID (auto-generated or passed to connect). */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
   /** Send a text message (fallback when mic not available). */
   sendText(text: string): void {
     if (!this._isConnected()) return;
@@ -121,7 +169,7 @@ export class VoiceChatService implements OnDestroy {
       const timeout = setTimeout(() => {
         reject(new Error('WebSocket connection timeout'));
         this.ws?.close();
-      }, 10_000);
+      }, WS_CONNECT_TIMEOUT_MS);
 
       this.ws.onopen = () => {
         clearTimeout(timeout);
@@ -143,9 +191,11 @@ export class VoiceChatService implements OnDestroy {
         reject(new Error('WebSocket connection failed'));
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event: CloseEvent) => {
         if (this._isConnected()) {
-          // Unexpected close — clean up
+          // Unexpected close — log reason and clean up
+          const reason = WS_CLOSE_REASONS[event.code] || `Disconnected (code ${event.code})`;
+          console.warn(`Voice WebSocket closed: ${reason}`);
           this.cleanupAll();
           this._status.set('idle');
           this._isConnected.set(false);
@@ -187,33 +237,71 @@ export class VoiceChatService implements OnDestroy {
         this.resetIdleTimer();
         break;
 
-      case 'bidi_transcript_stream':
-        // Accumulate transcript text
-        if (data['role']) {
-          this._lastTranscriptRole.set(data['role'] as 'user' | 'assistant');
-        }
+      case 'bidi_transcript_stream': {
+        const role = data['role'] as string | undefined;
+
+        let deltaText = '';
         if (data['delta']) {
-          this._currentTranscript.update(t => t + (data['delta'] as string));
+          const delta = data['delta'];
+          deltaText = typeof delta === 'object' && delta !== null
+            ? (delta as Record<string, unknown>)['text'] as string
+            : delta as string;
         } else if (data['current_transcript']) {
-          this._currentTranscript.set(data['current_transcript'] as string);
+          deltaText = data['current_transcript'] as string;
         }
+
+        if (deltaText) {
+          if (role === 'assistant') {
+            // Buffer for reveal-based display
+            this._bufferedTranscript.update(t => t + deltaText);
+          } else {
+            // Accumulate user speech for transcript entries
+            this._userTranscript += deltaText;
+          }
+        }
+
         this.resetIdleTimer();
         break;
+      }
 
       case 'bidi_response_start':
+        // Save accumulated user speech as a transcript entry
+        if (this._userTranscript.trim()) {
+          this.appendTranscriptEntry({
+            role: 'user',
+            text: this._userTranscript.trim(),
+            timestamp: Date.now(),
+          });
+          this._userTranscript = '';
+        }
+
+        // New assistant turn — add separator if there's prior text, start reveal
+        if (this._bufferedTranscript()) {
+          this._bufferedTranscript.update(t => t + '\n\n');
+          this._revealedIndex.set(this._bufferedTranscript().length);
+        }
+        this._currentTurnStart = this._bufferedTranscript().length;
+        this._revealCharsPerTick = REVEAL_CHARS_PER_TICK;
+        this.startRevealTimer();
         this._status.set('speaking');
-        this._currentTranscript.set('');
         break;
 
-      case 'bidi_response_complete':
-        // Agent finished speaking
-        this._status.set('listening');
-        const transcript = this._currentTranscript();
-        if (transcript) {
-          this.onResponseComplete?.(transcript);
+      case 'bidi_response_complete': {
+        // Extract only this turn's assistant text for the transcript entry
+        const turnText = this._bufferedTranscript().slice(this._currentTurnStart).trim();
+        if (turnText) {
+          this.appendTranscriptEntry({
+            role: 'assistant',
+            text: turnText,
+            timestamp: Date.now(),
+          });
         }
-        this._currentTranscript.set('');
+
+        // Speed up reveal to flush remaining buffered text
+        this._revealCharsPerTick = REVEAL_FLUSH_CHARS_PER_TICK;
+        this._status.set('listening');
         break;
+      }
 
       case 'bidi_interruption':
         // User interrupted — stop playback
@@ -241,6 +329,56 @@ export class VoiceChatService implements OnDestroy {
     }
   }
 
+  // --- Transcript reveal ---
+
+  private startRevealTimer(): void {
+    if (this._revealTimer) return; // already running
+    this._revealTimer = setInterval(() => {
+      const bufferedLen = this._bufferedTranscript().length;
+      const current = this._revealedIndex();
+      if (current >= bufferedLen) {
+        // Caught up — if not speaking anymore, stop the timer
+        if (this._status() !== 'speaking') {
+          this.stopRevealTimer();
+        }
+        return;
+      }
+      // Advance by configured chars per tick, snapping to word boundaries
+      const target = Math.min(current + this._revealCharsPerTick, bufferedLen);
+      // Find the next space or end-of-buffer to avoid splitting mid-word
+      const buf = this._bufferedTranscript();
+      let end = target;
+      if (end < bufferedLen && buf[end] !== ' ' && buf[end] !== '\n') {
+        const nextSpace = buf.indexOf(' ', end);
+        const nextNewline = buf.indexOf('\n', end);
+        const nearest = nextSpace === -1 ? nextNewline
+          : nextNewline === -1 ? nextSpace
+          : Math.min(nextSpace, nextNewline);
+        end = nearest === -1 ? bufferedLen : nearest + 1;
+      }
+      this._revealedIndex.set(end);
+    }, REVEAL_TICK_MS);
+  }
+
+  private stopRevealTimer(): void {
+    if (this._revealTimer) {
+      clearInterval(this._revealTimer);
+      this._revealTimer = null;
+    }
+  }
+
+  // --- Transcript management ---
+
+  /** Append an entry, evicting the oldest if at capacity. */
+  private appendTranscriptEntry(entry: VoiceTranscriptEntry): void {
+    this._transcriptEntries.update(entries => {
+      const updated = [...entries, entry];
+      return updated.length > MAX_TRANSCRIPT_ENTRIES
+        ? updated.slice(updated.length - MAX_TRANSCRIPT_ENTRIES)
+        : updated;
+    });
+  }
+
   // --- Idle timeout ---
 
   private resetIdleTimer(): void {
@@ -258,6 +396,8 @@ export class VoiceChatService implements OnDestroy {
   // --- Cleanup ---
 
   private cleanupAll(): void {
+    this.stopRevealTimer();
+
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;

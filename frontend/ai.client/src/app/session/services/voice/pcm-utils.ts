@@ -5,10 +5,7 @@
  * Transport format: 16-bit PCM encoded as base64 over JSON WebSocket.
  */
 
-const TARGET_SAMPLE_RATE = 16000;
-const CHUNK_DURATION_MS = 100;
-/** Number of samples per chunk at 16kHz * 100ms */
-export const SAMPLES_PER_CHUNK = (TARGET_SAMPLE_RATE * CHUNK_DURATION_MS) / 1000; // 1600
+export { SAMPLES_PER_CHUNK, VOICE_SAMPLE_RATE } from './voice.config';
 
 /**
  * Convert Float32 audio samples (-1.0 to 1.0) to 16-bit PCM Int16Array.

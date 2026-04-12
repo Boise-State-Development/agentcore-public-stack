@@ -1,6 +1,6 @@
 """Messages API models"""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -115,7 +115,7 @@ class MessageMetadata(BaseModel):
     token_usage: Optional[TokenUsage] = Field(None, alias="tokenUsage", description="Token usage statistics")
     model_info: Optional[ModelInfo] = Field(None, alias="modelInfo", description="Model information for cost tracking")
     attribution: Optional[Attribution] = Field(None, description="Attribution for cost tracking and billing")
-    cost: Optional[float] = Field(None, description="Total cost in USD for this message (computed from token usage and pricing)")
+    cost: Optional[Union[float, Dict[str, float]]] = Field(None, description="Cost for this message — either a total float (legacy) or a breakdown dict with total, inputCost, outputCost, cacheReadCost, cacheWriteCost")
     citations: Optional[List[Dict[str, str]]] = Field(None, description="RAG citations for this message (stored as dicts for flexible JSON storage)")
     display_text: Optional[str] = Field(None, alias="displayText", description="Original user message text before RAG augmentation (for clean UI display)")
     # Note: Feedback will be added in future implementation

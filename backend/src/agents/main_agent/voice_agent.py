@@ -71,6 +71,13 @@ class VoiceAgent(BaseAgent):
             EnvVars.NOVA_SONIC_VOICE, Defaults.NOVA_SONIC_VOICE
         )
         self._bidi_agent: Any = None
+        # Nova Sonic bidi_usage events report CUMULATIVE token counts (not deltas).
+        # _accumulated_usage stores the latest cumulative snapshot from the stream.
+        self._accumulated_usage: dict = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        self._current_turn_usage: dict = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        self._per_turn_usage: List[dict] = []  # Snapshot of usage per completed turn
+        self._turn_count: int = 0  # Completed turns (bidi_response_complete)
+        self._response_start_count: int = 0  # Started turns (bidi_response_start)
         super().__init__(**kwargs)
 
     def _create_agent(self) -> None:
@@ -217,6 +224,31 @@ class VoiceAgent(BaseAgent):
             "role": "user",
         })
 
+    @property
+    def accumulated_usage(self) -> dict:
+        """Token usage accumulated across all voice turns."""
+        return self._accumulated_usage
+
+    @property
+    def turn_count(self) -> int:
+        """Number of completed assistant response turns."""
+        return self._turn_count
+
+    @property
+    def response_start_count(self) -> int:
+        """Number of started assistant responses (may exceed turn_count if interrupted)."""
+        return self._response_start_count
+
+    @property
+    def per_turn_usage(self) -> List[dict]:
+        """Token usage snapshots for each completed turn."""
+        return self._per_turn_usage
+
+    @property
+    def voice_model_id(self) -> str:
+        """Nova Sonic model ID used by this agent."""
+        return os.environ.get(EnvVars.NOVA_SONIC_MODEL_ID, Defaults.NOVA_SONIC_MODEL_ID)
+
     async def receive_events(self) -> AsyncGenerator[dict, None]:
         """
         Receive and transform events from BidiAgent for WebSocket transmission.
@@ -224,6 +256,9 @@ class VoiceAgent(BaseAgent):
         Wraps BidiAgent.receive() and converts typed event objects to plain
         dicts via as_dict(). This is the primary event source for the voice
         WebSocket route.
+
+        Intercepts bidi_usage events to accumulate token counts and
+        bidi_response_complete events to track turn count.
 
         Yields:
             dict: Event dictionaries suitable for JSON serialization
@@ -233,9 +268,42 @@ class VoiceAgent(BaseAgent):
 
         async for event in self._bidi_agent.receive():
             if hasattr(event, "as_dict"):
-                yield event.as_dict()
+                event_dict = event.as_dict()
             else:
-                yield {"type": "unknown", "data": str(event)}
+                event_dict = {"type": "unknown", "data": str(event)}
+
+            event_type = event_dict.get("type", "")
+
+            # Log non-audio event types for debugging (skip audio to avoid noise)
+            if event_type not in ("bidi_audio_stream",):
+                # Log extra detail for events that might carry usage data
+                if any(k in event_dict for k in ("usage", "inputTokens", "outputTokens", "totalTokens")):
+                    logger.info(f"Voice event: type={event_type}, keys={list(event_dict.keys())}")
+                else:
+                    logger.info(f"Voice event: type={event_type}")
+
+            # Track started turns (bidi_response_start)
+            if event_type == "bidi_response_start":
+                self._response_start_count += 1
+                logger.info(f"Voice response started (count={self._response_start_count})")
+
+            # Update cumulative token usage from bidi_usage events.
+            # Nova Sonic reports CUMULATIVE totals in each event (not deltas),
+            # so we replace rather than sum.
+            if event_type == "bidi_usage":
+                usage = event_dict.get("usage", event_dict)
+                for key in ("inputTokens", "outputTokens", "totalTokens"):
+                    self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
+                logger.info(f"Voice bidi_usage snapshot: {usage}")
+                logger.info(f"Voice usage current: {self._accumulated_usage}")
+
+            # Track completed assistant turns and snapshot cumulative usage at turn boundary
+            if event_type == "bidi_response_complete":
+                self._per_turn_usage.append(self._accumulated_usage.copy())
+                self._turn_count += 1
+                logger.info(f"Voice turn {self._turn_count} complete, cumulative usage: {self._accumulated_usage}")
+
+            yield event_dict
 
     async def stream_async(
         self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
@@ -249,6 +317,39 @@ class VoiceAgent(BaseAgent):
         logger.warning("stream_async() called on VoiceAgent — use receive_events() instead")
         return
         yield  # Make this a generator
+
+    async def drain_remaining_events(self, timeout: float = 3.0) -> None:
+        """Drain remaining events from BidiAgent to capture final usage data.
+
+        After stop() is called, the BidiAgent may still have queued events
+        (especially bidi_usage) that were not consumed because the
+        _send_to_client task was cancelled on client disconnect. This method
+        consumes those remaining events with a timeout to ensure accumulated
+        usage totals are complete before finalization.
+        """
+        if not self._bidi_agent:
+            return
+        try:
+            async with asyncio.timeout(timeout):
+                async for event in self._bidi_agent.receive():
+                    if hasattr(event, "as_dict"):
+                        event_dict = event.as_dict()
+                    else:
+                        continue
+                    event_type = event_dict.get("type", "")
+                    if event_type == "bidi_usage":
+                        usage = event_dict.get("usage", event_dict)
+                        for key in ("inputTokens", "outputTokens", "totalTokens"):
+                            self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
+                        logger.info(f"Drained bidi_usage: {usage}, current: {self._accumulated_usage}")
+                    elif event_type == "bidi_response_complete":
+                        self._per_turn_usage.append(self._accumulated_usage.copy())
+                        self._turn_count += 1
+                        logger.info(f"Drained turn {self._turn_count} complete")
+        except (TimeoutError, asyncio.CancelledError, StopAsyncIteration):
+            pass
+        except Exception as e:
+            logger.debug(f"Event drain ended: {e}")
 
     async def stop(self) -> None:
         """Stop the bidirectional voice connection.
@@ -264,3 +365,4 @@ class VoiceAgent(BaseAgent):
                 logger.debug("BidiAgent stop cancelled (expected during teardown)")
             except Exception as e:
                 logger.warning(f"Error during BidiAgent stop: {e}")
+        logger.info(f"Voice agent stopped. Final accumulated_usage: {self._accumulated_usage}")

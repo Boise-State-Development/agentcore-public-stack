@@ -1,0 +1,116 @@
+<!-- Fullscreen voice conversation overlay -->
+<div
+  class="voice-overlay-backdrop"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Voice conversation"
+  cdkTrapFocus
+  [cdkTrapFocusAutoCapture]="true"
+>
+  <!-- Header -->
+  <header class="flex items-center justify-between px-6 py-4 shrink-0">
+    <div class="flex items-center gap-3">
+      <h2 class="text-gray-900 dark:text-white/90 text-base font-semibold tracking-wide">Voice Mode</h2>
+      @if (statusClass()) {
+        <span class="status-badge" [class]="statusClass()">
+          <span class="status-dot" aria-hidden="true"></span>
+          {{ statusLabel() }}
+        </span>
+      }
+    </div>
+    <button
+      type="button"
+      (click)="endSession()"
+      class="flex items-center justify-center size-10 rounded-full text-gray-400 dark:text-white/50 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-white/10 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:focus-visible:outline-white"
+      aria-label="End voice session"
+    >
+      <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+      </svg>
+    </button>
+  </header>
+
+  <!-- Center: Visualizer + Live Transcript -->
+  <div class="flex-1 flex flex-col items-center justify-center px-6 min-h-0">
+    <!-- Animated Orb -->
+    <div class="voice-orb">
+      <!-- Ripple rings (listening only) -->
+      @if (voiceStatus() === 'listening') {
+        <div class="voice-ripple"></div>
+        <div class="voice-ripple"></div>
+        <div class="voice-ripple"></div>
+      }
+
+      <!-- Core orb -->
+      <div class="voice-orb-core" [class]="statusClass()">
+        <!-- Wave bars inside orb (speaking only) -->
+        @if (voiceStatus() === 'speaking') {
+          <div class="flex items-center justify-center gap-1">
+            <span class="voice-wave-bar h-8" style="animation-delay: 0ms;" aria-hidden="true"></span>
+            <span class="voice-wave-bar h-10" style="animation-delay: 100ms;" aria-hidden="true"></span>
+            <span class="voice-wave-bar h-12" style="animation-delay: 200ms;" aria-hidden="true"></span>
+            <span class="voice-wave-bar h-10" style="animation-delay: 300ms;" aria-hidden="true"></span>
+            <span class="voice-wave-bar h-8" style="animation-delay: 400ms;" aria-hidden="true"></span>
+          </div>
+        }
+
+        <!-- Connecting spinner -->
+        @if (voiceStatus() === 'connecting') {
+          <svg class="size-8 text-gray-600 dark:text-white/80 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        }
+
+        <!-- Listening mic icon -->
+        @if (voiceStatus() === 'listening') {
+          <svg class="size-8 text-white" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+          </svg>
+        }
+      </div>
+    </div>
+
+    <!-- Status label below the orb -->
+    @if (voiceStatus() === 'connecting') {
+      <p class="text-gray-400 dark:text-white/30 text-sm">Establishing connection...</p>
+    } @else if (voiceStatus() === 'listening') {
+      <p class="text-gray-400 dark:text-white/30 text-sm">Listening...</p>
+    }
+
+    <!--
+      TODO: Revisit live transcript display.
+
+      The service already buffers agent transcript text via a reveal timer
+      (see VoiceChatService._bufferedTranscript / _revealedIndex / agentTranscript).
+      The challenge is syncing revealed text to audio playback — transcript deltas
+      arrive from the WebSocket independently of audio chunks, so a simple timer
+      can't match the cadence of speech.
+
+      Possible approaches to explore:
+      1. Server-side: include a timestamp or word-offset in each bidi_transcript_stream
+         delta so the client can align text reveal to audio position.
+      2. Client-side: track AudioPlayerService queue depth / playback position and
+         use it to pace the reveal timer dynamically instead of a fixed chars/tick.
+      3. Hybrid: reveal text in sentence-level chunks (split on punctuation) timed
+         to audio chunk boundaries rather than character-by-character.
+    -->
+  </div>
+
+  <!-- Bottom: End Button -->
+  <div class="shrink-0 px-6 pb-8 pt-4">
+    <!-- End session button -->
+    <div class="flex justify-center">
+      <button
+        type="button"
+        (click)="endSession()"
+        class="inline-flex items-center gap-2 rounded-full bg-red-600/90 px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-red-900/30 transition-all hover:bg-red-500 hover:shadow-red-900/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-400 active:scale-95"
+      >
+        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5.636 5.636a9 9 0 1 0 12.728 0M12 3v9" />
+        </svg>
+        End Voice Session
+      </button>
+    </div>
+  </div>
+</div>

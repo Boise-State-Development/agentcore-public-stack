@@ -236,12 +236,20 @@ export interface Metrics {
   timeToFirstByteMs?: number;
 }
 
+export interface CostBreakdown {
+  total: number;
+  inputCost: number;
+  outputCost: number;
+  cacheReadCost?: number;
+  cacheWriteCost?: number;
+}
+
 export interface MetadataEvent {
   metrics?: Metrics;
   trace?: any;
   usage?: Usage;
-  /** Total cost in USD for this message (calculated from token usage and model pricing) */
-  cost?: number;
+  /** Cost for this message — either a total number (legacy) or a breakdown object */
+  cost?: number | CostBreakdown;
 }
 
 export interface ExceptionEvent {

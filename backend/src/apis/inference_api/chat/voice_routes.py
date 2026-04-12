@@ -24,9 +24,13 @@ import json
 import jwt
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
+from apis.shared.sessions.models import SessionMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +77,192 @@ def _extract_user_from_token(token: str) -> Optional[Dict[str, str]]:
         return None
 
 
+async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
+    """Create session metadata entry if one doesn't already exist.
+
+    This makes the voice session visible in the conversations side nav.
+    If the session started as a text chat, existing metadata is preserved.
+    """
+    try:
+        existing = await get_session_metadata(session_id, user_id)
+        if existing:
+            logger.debug(f"Session metadata already exists for {session_id}")
+            return
+
+        now = datetime.now(timezone.utc).isoformat()
+        metadata = SessionMetadata(
+            session_id=session_id,
+            user_id=user_id,
+            title="Voice Conversation",
+            status="active",
+            created_at=now,
+            last_message_at=now,
+            message_count=0,
+            starred=False,
+            tags=[],
+            preferences=None,
+        )
+        await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
+        logger.info(f"Created session metadata for voice session {session_id}")
+    except Exception as e:
+        logger.error(f"Failed to create session metadata for {session_id}: {e}", exc_info=True)
+
+
+async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: Any) -> None:
+    """Update session metadata and store cost/token data after voice session ends.
+
+    Called in the finally block of voice_stream to persist usage metrics.
+    """
+    # Use response_start_count as fallback when turns are interrupted before completion
+    completed_turns = getattr(voice_agent, "turn_count", 0)
+    started_turns = getattr(voice_agent, "response_start_count", 0)
+    effective_turns = max(completed_turns, started_turns)
+
+    logger.info(
+        f"Finalizing voice session {session_id}: "
+        f"completed_turns={completed_turns}, started_turns={started_turns}, "
+        f"effective_turns={effective_turns}, "
+        f"accumulated_usage={getattr(voice_agent, 'accumulated_usage', 'N/A')}, "
+        f"per_turn_usage_count={len(getattr(voice_agent, 'per_turn_usage', []))}"
+    )
+    try:
+        # Update session metadata with final turn count
+        existing = await get_session_metadata(session_id, user_id)
+        if existing:
+            now = datetime.now(timezone.utc).isoformat()
+            updated = SessionMetadata(
+                session_id=session_id,
+                user_id=user_id,
+                title=existing.title,
+                status=existing.status,
+                created_at=existing.created_at,
+                last_message_at=now,
+                message_count=existing.message_count + effective_turns,
+                starred=existing.starred,
+                tags=existing.tags,
+                preferences=existing.preferences,
+            )
+            await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=updated)
+            logger.info(f"Updated voice session metadata: turns={effective_turns}, session={session_id}")
+    except Exception as e:
+        logger.error(f"Failed to update session metadata for {session_id}: {e}", exc_info=True)
+
+    # Store metadata for each assistant message in the voice session.
+    # BidiAgent may split responses into multiple messages, so we can't assume
+    # a strict user/assistant alternating pattern. Instead, read the actual messages
+    # from AgentCore Memory and find which indices are assistant messages.
+    try:
+        import asyncio
+        from agents.main_agent.config.constants import Defaults
+
+        accumulated_usage = getattr(voice_agent, "accumulated_usage", {})
+        has_usage = (accumulated_usage.get("inputTokens", 0) + accumulated_usage.get("outputTokens", 0)) > 0
+
+        if not has_usage:
+            logger.info(f"No voice usage to record metadata for session {session_id}")
+            return
+
+        from apis.app_api.messages.models import Attribution, MessageMetadata, ModelInfo, TokenUsage
+        from apis.app_api.sessions.services.metadata import store_message_metadata
+
+        model_id = getattr(voice_agent, "voice_model_id", "amazon.nova-2-sonic-v1:0")
+        model_info = ModelInfo(
+            model_id=model_id,
+            model_name="Nova Sonic 2",
+            provider="bedrock",
+        )
+
+        # Read actual messages from AgentCore Memory to find assistant indices
+        assistant_indices = []
+        try:
+            session_manager = voice_agent.session_manager
+            if hasattr(session_manager, "list_messages"):
+                messages = await asyncio.to_thread(
+                    session_manager.list_messages,
+                    session_id,
+                    Defaults.VOICE_AGENT_ID,
+                )
+                for idx, msg in enumerate(messages or []):
+                    inner = getattr(msg, "message", msg)
+                    role = inner.get("role") if isinstance(inner, dict) else getattr(inner, "role", None)
+                    if role == "assistant":
+                        assistant_indices.append(idx)
+                logger.info(f"Voice session messages: {len(messages or [])} total, assistant at indices {assistant_indices}")
+        except Exception as msg_err:
+            logger.warning(f"Could not read voice messages for metadata: {msg_err}")
+
+        if not assistant_indices:
+            # Fallback: store a single record at index 1 (most common position)
+            assistant_indices = [1]
+            logger.info("No assistant messages found, using fallback index [1]")
+
+        # Get pricing
+        pricing = None
+        try:
+            from apis.app_api.costs.calculator import CostCalculator
+            from apis.app_api.costs.pricing_config import get_model_pricing
+
+            pricing = await get_model_pricing(model_id)
+        except Exception as cost_err:
+            logger.debug(f"Cost calculation unavailable for voice: {cost_err}")
+
+        # Store cumulative session usage on the LAST assistant message only.
+        # Nova Sonic reports cumulative totals for the whole connection, so
+        # splitting across messages would be misleading. The last message
+        # carries the full session cost; earlier messages get no badge.
+        last_idx = assistant_indices[-1]
+        input_tokens = accumulated_usage.get("inputTokens", 0)
+        output_tokens = accumulated_usage.get("outputTokens", 0)
+        total_tokens = input_tokens + output_tokens
+
+        token_usage = TokenUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
+        attribution = Attribution(
+            user_id=user_id,
+            session_id=session_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+        cost = None
+        if pricing and total_tokens > 0:
+            try:
+                total_cost, breakdown = CostCalculator.calculate_message_cost(accumulated_usage, pricing)
+                cost = {
+                    "total": total_cost,
+                    "inputCost": breakdown.input_cost,
+                    "outputCost": breakdown.output_cost,
+                    "cacheReadCost": breakdown.cache_read_cost,
+                    "cacheWriteCost": breakdown.cache_write_cost,
+                }
+            except Exception:
+                pass
+
+        message_metadata = MessageMetadata(
+            token_usage=token_usage,
+            model_info=model_info,
+            attribution=attribution,
+            cost=cost,
+        )
+
+        await store_message_metadata(
+            session_id=session_id,
+            user_id=user_id,
+            message_id=f"voice:{last_idx}",
+            message_metadata=message_metadata,
+        )
+
+        logger.info(
+            f"Stored voice metadata on last assistant message (index {last_idx}), "
+            f"usage={accumulated_usage}, session={session_id}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to store voice cost metadata for {session_id}: {e}", exc_info=True)
+
+
 @router.websocket("/voice/stream")
 async def voice_stream(websocket: WebSocket):
     """
@@ -87,6 +277,7 @@ async def voice_stream(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
     enabled_tools_raw = websocket.query_params.get("enabled_tools", "")
     voice_agent = None
+    user_id = None
 
     try:
         # Parse enabled tools
@@ -149,6 +340,9 @@ async def voice_stream(websocket: WebSocket):
         # Start the voice agent
         await voice_agent.start()
 
+        # Create session metadata so voice sessions appear in the side nav
+        await _ensure_session_metadata(session_id, user_id)
+
         # Run bidirectional communication
         receive_task = asyncio.create_task(
             _receive_from_client(websocket, voice_agent, session_id)
@@ -189,11 +383,23 @@ async def voice_stream(websocket: WebSocket):
     finally:
         # Cleanup — catch BaseException since CancelledError escapes Exception in 3.12
         _active_sessions.pop(session_id, None)
-        if voice_agent:
+        if voice_agent and user_id:
+            # 1. Stop BidiAgent first — flushes stream, emits final events including usage
             try:
                 await voice_agent.stop()
             except BaseException as e:
-                logger.debug(f"Voice agent stop during cleanup: {type(e).__name__}: {e}")
+                logger.debug(f"Voice agent stop: {type(e).__name__}: {e}")
+            # 2. Drain any remaining queued events (captures final bidi_usage
+            #    that weren't consumed because _send_to_client was cancelled)
+            try:
+                await voice_agent.drain_remaining_events(timeout=3.0)
+            except BaseException as e:
+                logger.debug(f"Voice event drain: {type(e).__name__}: {e}")
+            # 3. NOW finalize with complete accumulated usage data
+            try:
+                await _finalize_voice_session(session_id, user_id, voice_agent)
+            except BaseException as e:
+                logger.debug(f"Voice session finalization error: {type(e).__name__}: {e}")
         try:
             await websocket.close()
         except BaseException:

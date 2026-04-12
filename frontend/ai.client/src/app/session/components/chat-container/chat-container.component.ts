@@ -19,6 +19,8 @@ import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
 import { AssistantIndicatorComponent } from '../assistant-indicator/assistant-indicator.component';
+import { VoiceOverlayComponent } from '../voice-overlay';
+import { VoiceChatService } from '../../services/voice';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -58,6 +60,7 @@ export interface ChatContainerConfig {
     NgIcon,
     AssistantCardComponent,
     AssistantIndicatorComponent,
+    VoiceOverlayComponent,
   ],
   providers: [provideIcons({ heroXMark })],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -67,6 +70,8 @@ export interface ChatContainerConfig {
 export class ChatContainerComponent {
   // Inject sidenav service for full-page mode positioning
   protected sidenavService = inject(SidenavService);
+  private voiceChatService = inject(VoiceChatService);
+  protected readonly isVoiceActive = this.voiceChatService.isVoiceActive;
 
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
@@ -107,6 +112,7 @@ export class ChatContainerComponent {
   assistantNewSession = output<void>();
   assistantEdit = output<void>();
   assistantShare = output<void>();
+  voiceClosed = output<void>();
 
   // Computed signals
   protected readonly hasMessages = computed(() => this.messages().length > 0);
@@ -172,5 +178,9 @@ export class ChatContainerComponent {
 
   onAssistantShare() {
     this.assistantShare.emit();
+  }
+
+  onVoiceClosed() {
+    this.voiceClosed.emit();
   }
 }

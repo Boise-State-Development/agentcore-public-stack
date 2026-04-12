@@ -101,7 +101,7 @@ export class ChatInputComponent {
   // Voice state (from VoiceChatService)
   readonly voiceStatus = this.voiceChatService.status;
   readonly isVoiceActive = this.voiceChatService.isVoiceActive;
-  readonly voiceTranscript = this.voiceChatService.currentTranscript;
+  readonly voiceTranscript = this.voiceChatService.agentTranscript;
 
   readonly voiceButtonClass = computed(() => {
     const status = this.voiceStatus();
@@ -183,18 +183,15 @@ export class ChatInputComponent {
   }
 
   async toggleVoice() {
-    const sessionId = this.sessionId();
     if (this.isVoiceActive()) {
       await this.voiceChatService.disconnect();
-    } else if (sessionId) {
+    } else {
       try {
-        await this.voiceChatService.connect(sessionId);
+        await this.voiceChatService.connect(this.sessionId() || undefined);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to start voice';
         this.toastService.error('Voice Error', msg);
       }
-    } else {
-      this.toastService.warning('No Session', 'Start a conversation first to use voice mode.');
     }
   }
 
