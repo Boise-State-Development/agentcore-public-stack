@@ -22,6 +22,7 @@ import {
   ShareAssistantDialogComponent,
   ShareAssistantDialogData,
 } from '../assistants/components/share-assistant-dialog.component';
+import { VoiceChatService } from './services/voice';
 
 @Component({
   selector: 'app-session-page',
@@ -44,6 +45,7 @@ export class ConversationPage implements OnDestroy {
   private assistantService = inject(AssistantService);
   private router = inject(Router);
   private dialog = inject(Dialog);
+  private voiceChatService = inject(VoiceChatService);
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
@@ -198,6 +200,14 @@ export class ConversationPage implements OnDestroy {
       this.assistant.set(null);
       this.assistantError.set(null);
     });
+
+    // Wire voice transcript completions to message list
+    this.voiceChatService.onResponseComplete = (transcript: string) => {
+      const sid = this.effectiveSessionId();
+      if (sid && transcript.trim()) {
+        this.messageMapService.addVoiceMessage(sid, 'assistant', transcript);
+      }
+    };
 
     // Subscribe to route parameter changes
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
