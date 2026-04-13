@@ -343,8 +343,6 @@ async def voice_stream(websocket: WebSocket):
                 websocket.receive_json(), timeout=10.0
             )
             if first_msg.get("type") == "config":
-                # Config can override session params
-                session_id = first_msg.get("session_id", session_id)
                 if first_msg.get("auth_token"):
                     auth_token = first_msg["auth_token"]
                 if first_msg.get("enabled_tools"):
@@ -354,6 +352,10 @@ async def voice_stream(websocket: WebSocket):
             logger.warning("No config message received within 10s, using query params")
         except Exception as e:
             logger.warning(f"Error reading config message: {e}")
+            if not user_id:
+                await websocket.send_json({"type": "bidi_error", "message": "Config message required"})
+                await websocket.close(code=4001, reason="Authentication required")
+                return
 
         # AgentCore path: extract user from config message token if not yet identified
         if not user_id and auth_token:
