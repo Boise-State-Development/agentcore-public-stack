@@ -312,8 +312,13 @@ async def voice_stream(websocket: WebSocket):
             except json.JSONDecodeError:
                 logger.warning(f"Invalid enabled_tools JSON: {_sanitize_log(enabled_tools_raw)}")
 
-        # Determine subprotocol for accept — AgentCore sends the bearer token
-        # via Sec-WebSocket-Protocol as "base64UrlBearerAuthorization.<b64>"
+        # Detect AgentCore path via custom headers (AgentCore strips
+        # Sec-WebSocket-Protocol, so we can't rely on subprotocol detection)
+        is_agentcore = bool(
+            websocket.headers.get("x-amzn-bedrock-agentcore-runtime-custom-sessionid")
+        )
+
+        # Check if browser sent subprotocol (may reach container in local-proxy setups)
         requested_protocols = websocket.headers.get("sec-websocket-protocol", "")
         accept_subprotocol = None
         if "base64UrlBearerAuthorization" in requested_protocols:
@@ -321,7 +326,7 @@ async def voice_stream(websocket: WebSocket):
 
         # Local dev: authenticate before accepting using query-param token
         user_info = _extract_user_from_token(token) if token else None
-        if not accept_subprotocol and not user_info:
+        if not is_agentcore and not accept_subprotocol and not user_info:
             # Not an AgentCore connection AND no valid local token → reject
             await websocket.close(code=4001, reason="Authentication required")
             return
@@ -333,7 +338,7 @@ async def voice_stream(websocket: WebSocket):
             # AgentCore path: auth_token will come from config message
             auth_token = ""
 
-        # Accept the WebSocket connection (with subprotocol if AgentCore)
+        # Accept the WebSocket connection (with subprotocol if applicable)
         await websocket.accept(subprotocol=accept_subprotocol)
         logger.info(f"Voice WebSocket connected: session={_sanitize_log(session_id)}, user={_sanitize_log(user_id or 'pending')}")
 
