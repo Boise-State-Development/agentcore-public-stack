@@ -316,7 +316,8 @@ export class ConversationPage implements OnDestroy {
     // Filter out any messages with no text (e.g. interrupted before first delta).
     this.messagesSignal.set(this.messageMapService.getMessagesForSession(sessionId));
     for (const msg of voiceMsgs) {
-      const text = msg.content[0]?.text || '';
+      const textBlock = msg.content.find(b => b.type === 'text');
+      const text = textBlock?.text || '';
       if (!text) continue;
       this.messageMapService.addVoiceMessage(
         sessionId,

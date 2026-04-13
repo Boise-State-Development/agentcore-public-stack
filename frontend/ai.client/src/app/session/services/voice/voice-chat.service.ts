@@ -491,7 +491,8 @@ export class VoiceChatService implements OnDestroy {
           }
           this._voiceMessages.update(msgs => {
             const last = msgs[msgs.length - 1];
-            if (!last || last.role !== 'assistant') return msgs;
+            // Skip if not assistant or already has metadata (e.g. set by attachPendingUsage on disconnect)
+            if (!last || last.role !== 'assistant' || last.metadata) return msgs;
             const updated = [...msgs];
             updated[updated.length - 1] = { ...last, metadata };
             return updated;

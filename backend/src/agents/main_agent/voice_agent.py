@@ -74,7 +74,6 @@ class VoiceAgent(BaseAgent):
         # Nova Sonic bidi_usage events report CUMULATIVE token counts (not deltas).
         # _accumulated_usage stores the latest cumulative snapshot from the stream.
         self._accumulated_usage: dict = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
-        self._current_turn_usage: dict = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
         self._per_turn_usage: List[dict] = []  # Snapshot of usage per completed turn
         self._turn_count: int = 0  # Completed turns (bidi_response_complete)
         self._response_start_count: int = 0  # Started turns (bidi_response_start)
