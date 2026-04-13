@@ -169,8 +169,13 @@ export class MessageMapService {
   /**
    * Add a voice transcript message (from VoiceChatService) to the session.
    * Used when the voice agent completes a response and the transcript is finalized.
+   *
+   * @param sessionId - The session ID to add the message to
+   * @param role - Message role (user or assistant)
+   * @param text - Message text content
+   * @param metadata - Optional metadata (token usage, cost) for badge display
    */
-  addVoiceMessage(sessionId: string, role: 'user' | 'assistant', text: string): Message {
+  addVoiceMessage(sessionId: string, role: 'user' | 'assistant', text: string, metadata?: Record<string, unknown>): Message {
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
     const messageIndex = currentMessages.length;
     const messageId = `msg-${sessionId}-${messageIndex}`;
@@ -179,6 +184,7 @@ export class MessageMapService {
       id: messageId,
       role,
       content: [{ type: 'text', text }],
+      ...(metadata ? { metadata } : {}),
     };
 
     this.messageMap.update(map => {

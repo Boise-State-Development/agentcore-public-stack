@@ -257,14 +257,19 @@ class VoiceAgent(BaseAgent):
         dicts via as_dict(). This is the primary event source for the voice
         WebSocket route.
 
-        Intercepts bidi_usage events to accumulate token counts and
-        bidi_response_complete events to track turn count.
+        Intercepts bidi_usage events to accumulate token counts, calculate
+        real-time cost, and enrich the event with a cost breakdown before
+        forwarding to the client.
 
         Yields:
             dict: Event dictionaries suitable for JSON serialization
         """
         if not self._bidi_agent:
             raise RuntimeError("Voice agent not started")
+
+        # Lazy-loaded pricing for real-time cost calculation
+        pricing_dict: Optional[dict] = None
+        pricing_loaded = False
 
         async for event in self._bidi_agent.receive():
             if hasattr(event, "as_dict"):
@@ -276,7 +281,6 @@ class VoiceAgent(BaseAgent):
 
             # Log non-audio event types for debugging (skip audio to avoid noise)
             if event_type not in ("bidi_audio_stream",):
-                # Log extra detail for events that might carry usage data
                 if any(k in event_dict for k in ("usage", "inputTokens", "outputTokens", "totalTokens")):
                     logger.info(f"Voice event: type={event_type}, keys={list(event_dict.keys())}")
                 else:
@@ -296,6 +300,32 @@ class VoiceAgent(BaseAgent):
                     self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
                 logger.info(f"Voice bidi_usage snapshot: {usage}")
                 logger.info(f"Voice usage current: {self._accumulated_usage}")
+
+                # Calculate real-time cost and enrich the event for the client.
+                # Pricing is fetched once and cached for the session lifetime.
+                if not pricing_loaded:
+                    pricing_loaded = True
+                    try:
+                        from apis.app_api.costs.pricing_config import get_model_pricing
+                        pricing_dict = await get_model_pricing(self.voice_model_id)
+                    except Exception as e:
+                        logger.debug(f"Voice pricing unavailable: {e}")
+
+                if pricing_dict and self._accumulated_usage.get("totalTokens", 0) > 0:
+                    try:
+                        from apis.app_api.costs.calculator import CostCalculator
+                        total_cost, breakdown = CostCalculator.calculate_message_cost(
+                            self._accumulated_usage, pricing_dict
+                        )
+                        event_dict["cost"] = {
+                            "total": total_cost,
+                            "inputCost": breakdown.input_cost,
+                            "outputCost": breakdown.output_cost,
+                            "cacheReadCost": breakdown.cache_read_cost,
+                            "cacheWriteCost": breakdown.cache_write_cost,
+                        }
+                    except Exception as e:
+                        logger.debug(f"Voice cost calculation error: {e}")
 
             # Track completed assistant turns and snapshot cumulative usage at turn boundary
             if event_type == "bidi_response_complete":

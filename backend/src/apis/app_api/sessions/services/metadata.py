@@ -224,8 +224,12 @@ async def _update_cost_summary_async(
         import asyncio
         from datetime import datetime
 
-        # Extract cost and usage from metadata
-        cost = message_metadata.cost or 0.0
+        # Extract cost from metadata — may be a float (legacy) or a breakdown dict
+        raw_cost = message_metadata.cost
+        if isinstance(raw_cost, dict):
+            cost = raw_cost.get("total", 0.0)
+        else:
+            cost = raw_cost or 0.0
         token_usage = message_metadata.token_usage
 
         usage_delta = {}

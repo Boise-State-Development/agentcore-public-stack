@@ -4,6 +4,7 @@ import { AuthService } from '../../../auth/auth.service';
 import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
+import { Message } from '../models/message.model';
 import {
   IDLE_TIMEOUT_MS,
   WS_CONNECT_TIMEOUT_MS,
@@ -16,10 +17,20 @@ import {
 
 export type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'speaking';
 
+export interface VoiceTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface VoiceTranscriptEntry {
   role: 'user' | 'assistant';
   text: string;
   timestamp: number;
+  /** Per-turn token usage (assistant messages only, computed from cumulative bidi_usage deltas) */
+  metadata?: {
+    tokenUsage?: VoiceTokenUsage;
+  };
 }
 
 /**
@@ -72,6 +83,8 @@ export class VoiceChatService implements OnDestroy {
    */
   private _currentTurnStart = 0;
   private _userTranscript = '';
+  /** Whether the current turn's final assistant Message has been created in voiceMessages. */
+  private _assistantFinalStarted = false;
 
   readonly status = this._status.asReadonly();
   readonly agentTranscript = computed(() =>
@@ -80,6 +93,36 @@ export class VoiceChatService implements OnDestroy {
   readonly isConnected = this._isConnected.asReadonly();
   readonly isVoiceActive = computed(() => this._status() !== 'idle');
   readonly transcriptEntries = this._transcriptEntries.asReadonly();
+
+  /**
+   * Real-time voice conversation messages.
+   *
+   * Maintained as Message[] objects that the session page can read directly.
+   * Updated as WebSocket events stream in:
+   *   - bidi_response_start → user Message pushed
+   *   - bidi_transcript_stream (assistant) → last Message text updated
+   *   - bidi_response_complete → metadata attached to last Message
+   */
+  private readonly _voiceMessages = signal<Message[]>([]);
+  readonly voiceMessages = this._voiceMessages.asReadonly();
+  private _voiceMessageIndex = 0;
+
+  /** Clear voice messages after they've been persisted to the message map. */
+  clearVoiceMessages(): void {
+    this._voiceMessages.set([]);
+  }
+
+  // --- Token usage & cost tracking ---
+  /**
+   * Nova Sonic reports CUMULATIVE token counts in bidi_usage events.
+   * To compute per-turn deltas, we snapshot the cumulative total at each
+   * turn boundary and subtract the previous snapshot.
+   */
+  private _cumulativeUsage: VoiceTokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  private _prevTurnCumulativeUsage: VoiceTokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  /** Latest cumulative cost breakdown from the backend (sent with bidi_usage events). */
+  private _cumulativeCost: Record<string, number> | null = null;
+  private _prevTurnCumulativeCost: Record<string, number> | null = null;
 
   // --- Internals ---
   private ws: WebSocket | null = null;
@@ -101,6 +144,13 @@ export class VoiceChatService implements OnDestroy {
     this._userTranscript = '';
     this.stopRevealTimer();
     this._transcriptEntries.set([]);
+    this._voiceMessages.set([]);
+    this._voiceMessageIndex = 0;
+    this._assistantFinalStarted = false;
+    this._cumulativeUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    this._prevTurnCumulativeUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    this._cumulativeCost = null;
+    this._prevTurnCumulativeCost = null;
 
     try {
       const token = this.authService.getAccessToken();
@@ -138,10 +188,79 @@ export class VoiceChatService implements OnDestroy {
   /** Disconnect from voice session and release all resources. */
   async disconnect(): Promise<void> {
     if (!this._isConnected()) return;
+
+    // Flush any assistant text that hasn't been committed to voiceMessages
+    // yet (bidi_response_complete may not arrive before WebSocket closes).
+    this.flushPendingAssistantMessage();
+
+    // Attach token usage to any assistant messages missing metadata
+    // (bidi_response_complete / bidi_usage may not arrive before close).
+    this.attachPendingUsage();
+
     this.sendMessage({ type: 'stop' });
     this.cleanupAll();
     this._status.set('idle');
     this._isConnected.set(false);
+  }
+
+  /**
+   * Attach cumulative token usage to the LAST assistant message if it
+   * doesn't already have metadata. Called on disconnect since
+   * bidi_response_complete (which normally attaches per-turn metadata)
+   * may not arrive before close.
+   *
+   * Only the last assistant message gets the badge — matches the backend
+   * pattern in _finalize_voice_session() which stores cumulative usage
+   * on the last assistant message only.
+   *
+   * Note: cost data requires server-side pricing config and will appear
+   * after page refresh once _finalize_voice_session() has run.
+   */
+  private attachPendingUsage(): void {
+    const total = this._cumulativeUsage;
+    if (total.totalTokens === 0 && !this._cumulativeCost) return;
+
+    this._voiceMessages.update(msgs => {
+      // Find the last assistant message without metadata
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant' && !msgs[i].metadata) {
+          const metadata: Record<string, unknown> = {};
+          if (total.totalTokens > 0) {
+            metadata['tokenUsage'] = { ...total };
+          }
+          if (this._cumulativeCost) {
+            metadata['cost'] = { ...this._cumulativeCost };
+          }
+          const updated = [...msgs];
+          updated[i] = { ...msgs[i], metadata };
+          return updated;
+        }
+      }
+      return msgs;
+    });
+  }
+
+  /**
+   * If there's buffered assistant text that hasn't been committed to
+   * voiceMessages (no is_final events arrived), flush it from the buffer
+   * so it isn't lost when the WebSocket closes.
+   */
+  private flushPendingAssistantMessage(): void {
+    // If is_final events already created an assistant message, nothing to flush.
+    const msgs = this._voiceMessages();
+    const last = msgs[msgs.length - 1];
+    if (last?.role === 'assistant') return;
+
+    // Fall back to the buffered transcript (may be speculative text, but
+    // better than losing the response entirely).
+    const turnText = this._bufferedTranscript().slice(this._currentTurnStart).trim();
+    if (!turnText) return;
+
+    this._voiceMessages.update(m => [...m, {
+      id: `msg-${this.sessionId}-${this._voiceMessageIndex++}`,
+      role: 'assistant' as const,
+      content: [{ type: 'text', text: turnText }],
+    }]);
   }
 
   /** Get the current voice session ID (auto-generated or passed to connect). */
@@ -239,6 +358,7 @@ export class VoiceChatService implements OnDestroy {
 
       case 'bidi_transcript_stream': {
         const role = data['role'] as string | undefined;
+        const isFinal = !!(data['is_final']);
 
         let deltaText = '';
         if (data['delta']) {
@@ -252,8 +372,32 @@ export class VoiceChatService implements OnDestroy {
 
         if (deltaText) {
           if (role === 'assistant') {
-            // Buffer for reveal-based display
+            // Buffer for reveal-based display (voice overlay)
             this._bufferedTranscript.update(t => t + deltaText);
+
+            // Only commit to voiceMessages from FINAL pass (is_final=true),
+            // skipping speculative text to avoid duplication.
+            if (isFinal) {
+              if (!this._assistantFinalStarted) {
+                this._assistantFinalStarted = true;
+                this._voiceMessages.update(msgs => [...msgs, {
+                  id: `msg-${this.sessionId}-${this._voiceMessageIndex++}`,
+                  role: 'assistant' as const,
+                  content: [{ type: 'text', text: deltaText }],
+                }]);
+              } else {
+                this._voiceMessages.update(msgs => {
+                  const last = msgs[msgs.length - 1];
+                  if (!last || last.role !== 'assistant') return msgs;
+                  const updated = [...msgs];
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: [{ type: 'text', text: (last.content[0]?.text || '') + deltaText }],
+                  };
+                  return updated;
+                });
+              }
+            }
           } else {
             // Accumulate user speech for transcript entries
             this._userTranscript += deltaText;
@@ -265,15 +409,26 @@ export class VoiceChatService implements OnDestroy {
       }
 
       case 'bidi_response_start':
-        // Save accumulated user speech as a transcript entry
+        // Flush accumulated user speech as a user Message.
+        // _userTranscript is cleared after push, so the second
+        // bidi_response_start (FINAL pass) is a no-op here.
         if (this._userTranscript.trim()) {
+          const userText = this._userTranscript.trim();
           this.appendTranscriptEntry({
             role: 'user',
-            text: this._userTranscript.trim(),
+            text: userText,
             timestamp: Date.now(),
           });
+          this._voiceMessages.update(msgs => [...msgs, {
+            id: `msg-${this.sessionId}-${this._voiceMessageIndex++}`,
+            role: 'user' as const,
+            content: [{ type: 'text', text: userText }],
+          }]);
           this._userTranscript = '';
         }
+
+        // Reset for this turn's final assistant text
+        this._assistantFinalStarted = false;
 
         // New assistant turn — add separator if there's prior text, start reveal
         if (this._bufferedTranscript()) {
@@ -287,13 +442,59 @@ export class VoiceChatService implements OnDestroy {
         break;
 
       case 'bidi_response_complete': {
-        // Extract only this turn's assistant text for the transcript entry
+        // Extract only this turn's assistant text for the transcript entry (overlay)
         const turnText = this._bufferedTranscript().slice(this._currentTurnStart).trim();
+
+        // Compute per-turn token delta from cumulative snapshots
+        const turnUsage: VoiceTokenUsage = {
+          inputTokens: this._cumulativeUsage.inputTokens - this._prevTurnCumulativeUsage.inputTokens,
+          outputTokens: this._cumulativeUsage.outputTokens - this._prevTurnCumulativeUsage.outputTokens,
+          totalTokens: this._cumulativeUsage.totalTokens - this._prevTurnCumulativeUsage.totalTokens,
+        };
+        this._prevTurnCumulativeUsage = { ...this._cumulativeUsage };
+
         if (turnText) {
-          this.appendTranscriptEntry({
+          const entry: VoiceTranscriptEntry = {
             role: 'assistant',
             text: turnText,
             timestamp: Date.now(),
+          };
+          if (turnUsage.totalTokens > 0) {
+            entry.metadata = { tokenUsage: turnUsage };
+          }
+          this.appendTranscriptEntry(entry);
+        }
+
+        // Compute per-turn cost delta from cumulative cost snapshots
+        let turnCost: Record<string, number> | undefined;
+        if (this._cumulativeCost) {
+          if (this._prevTurnCumulativeCost) {
+            turnCost = {};
+            for (const key of Object.keys(this._cumulativeCost)) {
+              turnCost[key] = (this._cumulativeCost[key] || 0) - (this._prevTurnCumulativeCost[key] || 0);
+            }
+          } else {
+            turnCost = { ...this._cumulativeCost };
+          }
+          this._prevTurnCumulativeCost = { ...this._cumulativeCost };
+        }
+
+        // Attach per-turn metadata (usage + cost) to the last assistant Message
+        // (already created by is_final transcript events in bidi_transcript_stream).
+        if (turnUsage.totalTokens > 0 || turnCost) {
+          const metadata: Record<string, unknown> = {};
+          if (turnUsage.totalTokens > 0) {
+            metadata['tokenUsage'] = turnUsage;
+          }
+          if (turnCost) {
+            metadata['cost'] = turnCost;
+          }
+          this._voiceMessages.update(msgs => {
+            const last = msgs[msgs.length - 1];
+            if (!last || last.role !== 'assistant') return msgs;
+            const updated = [...msgs];
+            updated[updated.length - 1] = { ...last, metadata };
+            return updated;
           });
         }
 
@@ -309,9 +510,20 @@ export class VoiceChatService implements OnDestroy {
         this._status.set('listening');
         break;
 
-      case 'bidi_usage':
-        // Token usage stats — could emit for metadata display
+      case 'bidi_usage': {
+        // Nova Sonic reports CUMULATIVE token counts — replace, don't sum
+        const usage = (data['usage'] as Record<string, number>) ?? data;
+        this._cumulativeUsage = {
+          inputTokens: (usage['inputTokens'] as number) ?? this._cumulativeUsage.inputTokens,
+          outputTokens: (usage['outputTokens'] as number) ?? this._cumulativeUsage.outputTokens,
+          totalTokens: (usage['totalTokens'] as number) ?? this._cumulativeUsage.totalTokens,
+        };
+        // Capture cumulative cost breakdown (calculated server-side, sent with bidi_usage)
+        if (data['cost']) {
+          this._cumulativeCost = data['cost'] as Record<string, number>;
+        }
         break;
+      }
 
       case 'bidi_error':
         console.error('Voice error:', data['message']);
