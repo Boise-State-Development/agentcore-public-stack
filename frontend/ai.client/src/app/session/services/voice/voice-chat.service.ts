@@ -161,9 +161,28 @@ export class VoiceChatService implements OnDestroy {
       // Build WebSocket URL from inference API URL
       const httpUrl = this.configService.inferenceApiUrl();
       const wsUrl = httpUrl.replace(/^http/, 'ws');
-      const url = `${wsUrl}/voice/stream?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
+      const isAgentCore = httpUrl.includes('/runtimes/');
 
-      await this.openWebSocket(url, token);
+      let url: string;
+      let protocols: string[] | undefined;
+
+      if (isAgentCore) {
+        // AgentCore: /ws path, session via custom header param, auth via Sec-WebSocket-Protocol
+        const params = new URLSearchParams();
+        params.set('X-Amzn-Bedrock-AgentCore-Runtime-Custom-SessionId', this.sessionId!);
+        url = `${wsUrl}/ws?${params.toString()}`;
+
+        const base64url = btoa(token)
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=/g, '');
+        protocols = [`base64UrlBearerAuthorization.${base64url}`, 'base64UrlBearerAuthorization'];
+      } else {
+        // Local dev: direct connection with query params
+        url = `${wsUrl}/ws?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
+      }
+
+      await this.openWebSocket(url, token, protocols);
       await this.recorder.start();
 
       // Wire audio chunks to WebSocket
@@ -281,9 +300,9 @@ export class VoiceChatService implements OnDestroy {
 
   // --- WebSocket ---
 
-  private openWebSocket(url: string, token: string): Promise<void> {
+  private openWebSocket(url: string, token: string, protocols?: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(url);
+      this.ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
 
       const timeout = setTimeout(() => {
         reject(new Error('WebSocket connection timeout'));

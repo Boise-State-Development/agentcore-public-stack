@@ -268,19 +268,38 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
         logger.error(f"Failed to store voice cost metadata for {_sanitize_log(session_id)}: {e}", exc_info=True)
 
 
-@router.websocket("/voice/stream")
+@router.websocket("/ws")
 async def voice_stream(websocket: WebSocket):
     """
     Bidirectional voice streaming endpoint.
 
-    Query params:
-        session_id: Session identifier (optional, auto-generated if missing)
-        token: JWT bearer token for authentication
-        enabled_tools: JSON array of tool IDs (optional)
+    Supports two connection modes:
+
+    **AgentCore (deployed):** Browser connects via
+    ``wss://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>/ws``.
+    Auth is handled by AgentCore's JWT Authorizer; the bearer token is sent
+    in ``Sec-WebSocket-Protocol`` (base64url-encoded).  Session ID and
+    enabled_tools arrive as ``X-Amzn-Bedrock-AgentCore-Runtime-Custom-*``
+    headers (set via query params on the original URL).  The token for
+    user-claim extraction comes in the first ``config`` message.
+
+    **Local dev:** Browser connects directly to ``ws://localhost:8001/ws``.
+    Session ID and token are plain query params; auth is checked pre-accept.
     """
-    session_id = websocket.query_params.get("session_id") or str(uuid.uuid4())
+    # Read session_id: AgentCore custom header → query param → auto-generate
+    session_id = (
+        websocket.headers.get("x-amzn-bedrock-agentcore-runtime-custom-sessionid")
+        or websocket.query_params.get("session_id")
+        or str(uuid.uuid4())
+    )
+    # Read enabled_tools: AgentCore custom header → query param
+    enabled_tools_raw = (
+        websocket.headers.get("x-amzn-bedrock-agentcore-runtime-custom-enabledtools")
+        or websocket.query_params.get("enabled_tools")
+        or ""
+    )
+    # Local dev sends token as query param; AgentCore flow uses config message
     token = websocket.query_params.get("token", "")
-    enabled_tools_raw = websocket.query_params.get("enabled_tools", "")
     voice_agent = None
     user_id = None
 
@@ -293,18 +312,30 @@ async def voice_stream(websocket: WebSocket):
             except json.JSONDecodeError:
                 logger.warning(f"Invalid enabled_tools JSON: {_sanitize_log(enabled_tools_raw)}")
 
-        # Authenticate
-        user_info = _extract_user_from_token(token)
-        if not user_info:
+        # Determine subprotocol for accept — AgentCore sends the bearer token
+        # via Sec-WebSocket-Protocol as "base64UrlBearerAuthorization.<b64>"
+        requested_protocols = websocket.headers.get("sec-websocket-protocol", "")
+        accept_subprotocol = None
+        if "base64UrlBearerAuthorization" in requested_protocols:
+            accept_subprotocol = "base64UrlBearerAuthorization"
+
+        # Local dev: authenticate before accepting using query-param token
+        user_info = _extract_user_from_token(token) if token else None
+        if not accept_subprotocol and not user_info:
+            # Not an AgentCore connection AND no valid local token → reject
             await websocket.close(code=4001, reason="Authentication required")
             return
 
-        user_id = user_info["user_id"]
-        auth_token = user_info["raw_token"]
+        if user_info:
+            user_id = user_info["user_id"]
+            auth_token = user_info["raw_token"]
+        else:
+            # AgentCore path: auth_token will come from config message
+            auth_token = ""
 
-        # Accept the WebSocket connection
-        await websocket.accept()
-        logger.info(f"Voice WebSocket connected: session={_sanitize_log(session_id)}, user={_sanitize_log(user_id)}")
+        # Accept the WebSocket connection (with subprotocol if AgentCore)
+        await websocket.accept(subprotocol=accept_subprotocol)
+        logger.info(f"Voice WebSocket connected: session={_sanitize_log(session_id)}, user={_sanitize_log(user_id or 'pending')}")
 
         # Wait for initial config message (supplements query params)
         try:
@@ -323,6 +354,16 @@ async def voice_stream(websocket: WebSocket):
             logger.warning("No config message received within 10s, using query params")
         except Exception as e:
             logger.warning(f"Error reading config message: {e}")
+
+        # AgentCore path: extract user from config message token if not yet identified
+        if not user_id and auth_token:
+            user_info = _extract_user_from_token(auth_token)
+            if user_info:
+                user_id = user_info["user_id"]
+            else:
+                await websocket.send_json({"type": "bidi_error", "message": "Authentication required"})
+                await websocket.close(code=4001, reason="Authentication required")
+                return
 
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
