@@ -364,6 +364,7 @@ async def voice_stream(
 
     voice_agent = None
 
+    try:
         # Create VoiceAgent
         VoiceAgent = _get_voice_agent_class()
         voice_agent = VoiceAgent(
