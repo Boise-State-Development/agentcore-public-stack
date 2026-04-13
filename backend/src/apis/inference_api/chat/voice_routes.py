@@ -34,6 +34,11 @@ from apis.shared.sessions.models import SessionMetadata
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize_log(value: str) -> str:
+    """Strip newlines and carriage returns to prevent log injection."""
+    return str(value).replace("\n", "").replace("\r", "")
+
 router = APIRouter(tags=["voice"])
 
 # Track active voice sessions for debugging
@@ -86,7 +91,7 @@ async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
     try:
         existing = await get_session_metadata(session_id, user_id)
         if existing:
-            logger.debug(f"Session metadata already exists for {session_id}")
+            logger.debug(f"Session metadata already exists for {_sanitize_log(session_id)}")
             return
 
         now = datetime.now(timezone.utc).isoformat()
@@ -103,9 +108,9 @@ async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
             preferences=None,
         )
         await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
-        logger.info(f"Created session metadata for voice session {session_id}")
+        logger.info(f"Created session metadata for voice session {_sanitize_log(session_id)}")
     except Exception as e:
-        logger.error(f"Failed to create session metadata for {session_id}: {e}", exc_info=True)
+        logger.error(f"Failed to create session metadata for {_sanitize_log(session_id)}: {e}", exc_info=True)
 
 
 async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: Any) -> None:
@@ -119,7 +124,7 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
     effective_turns = max(completed_turns, started_turns)
 
     logger.info(
-        f"Finalizing voice session {session_id}: "
+        f"Finalizing voice session {_sanitize_log(session_id)}: "
         f"completed_turns={completed_turns}, started_turns={started_turns}, "
         f"effective_turns={effective_turns}, "
         f"accumulated_usage={getattr(voice_agent, 'accumulated_usage', 'N/A')}, "
@@ -143,9 +148,9 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
                 preferences=existing.preferences,
             )
             await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=updated)
-            logger.info(f"Updated voice session metadata: turns={effective_turns}, session={session_id}")
+            logger.info(f"Updated voice session metadata: turns={effective_turns}, session={_sanitize_log(session_id)}")
     except Exception as e:
-        logger.error(f"Failed to update session metadata for {session_id}: {e}", exc_info=True)
+        logger.error(f"Failed to update session metadata for {_sanitize_log(session_id)}: {e}", exc_info=True)
 
     # Store metadata for each assistant message in the voice session.
     # BidiAgent may split responses into multiple messages, so we can't assume
@@ -159,7 +164,7 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
         has_usage = (accumulated_usage.get("inputTokens", 0) + accumulated_usage.get("outputTokens", 0)) > 0
 
         if not has_usage:
-            logger.info(f"No voice usage to record metadata for session {session_id}")
+            logger.info(f"No voice usage to record metadata for session {_sanitize_log(session_id)}")
             return
 
         from apis.app_api.messages.models import Attribution, MessageMetadata, ModelInfo, TokenUsage
@@ -257,10 +262,10 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
 
         logger.info(
             f"Stored voice metadata on last assistant message (index {last_idx}), "
-            f"usage={accumulated_usage}, session={session_id}"
+            f"usage={accumulated_usage}, session={_sanitize_log(session_id)}"
         )
     except Exception as e:
-        logger.error(f"Failed to store voice cost metadata for {session_id}: {e}", exc_info=True)
+        logger.error(f"Failed to store voice cost metadata for {_sanitize_log(session_id)}: {e}", exc_info=True)
 
 
 @router.websocket("/voice/stream")
@@ -286,7 +291,7 @@ async def voice_stream(websocket: WebSocket):
             try:
                 enabled_tools = json.loads(enabled_tools_raw)
             except json.JSONDecodeError:
-                logger.warning(f"Invalid enabled_tools JSON: {enabled_tools_raw}")
+                logger.warning(f"Invalid enabled_tools JSON: {_sanitize_log(enabled_tools_raw)}")
 
         # Authenticate
         user_info = _extract_user_from_token(token)
@@ -299,7 +304,7 @@ async def voice_stream(websocket: WebSocket):
 
         # Accept the WebSocket connection
         await websocket.accept()
-        logger.info(f"Voice WebSocket connected: session={session_id}, user={user_id}")
+        logger.info(f"Voice WebSocket connected: session={_sanitize_log(session_id)}, user={_sanitize_log(user_id)}")
 
         # Wait for initial config message (supplements query params)
         try:
@@ -313,7 +318,7 @@ async def voice_stream(websocket: WebSocket):
                     auth_token = first_msg["auth_token"]
                 if first_msg.get("enabled_tools"):
                     enabled_tools = first_msg["enabled_tools"]
-                logger.info(f"Voice config received: session={session_id}")
+                logger.info(f"Voice config received: session={_sanitize_log(session_id)}")
         except asyncio.TimeoutError:
             logger.warning("No config message received within 10s, using query params")
         except Exception as e:
@@ -370,7 +375,7 @@ async def voice_stream(websocket: WebSocket):
                 logger.error(f"Voice task error: {task.exception()}")
 
     except WebSocketDisconnect:
-        logger.info(f"Voice WebSocket disconnected: session={session_id}")
+        logger.info(f"Voice WebSocket disconnected: session={_sanitize_log(session_id)}")
     except Exception as e:
         logger.error(f"Voice stream error: {e}", exc_info=True)
         try:
@@ -404,7 +409,7 @@ async def voice_stream(websocket: WebSocket):
             await websocket.close()
         except BaseException:
             pass
-        logger.info(f"Voice session cleaned up: {session_id}")
+        logger.info(f"Voice session cleaned up: {_sanitize_log(session_id)}")
 
 
 async def _receive_from_client(
@@ -430,16 +435,16 @@ async def _receive_from_client(
                 await websocket.send_json({"type": "pong"})
 
             elif msg_type == "stop":
-                logger.info(f"Client requested stop: session={session_id}")
+                logger.info(f"Client requested stop: session={_sanitize_log(session_id)}")
                 break
 
             else:
-                logger.debug(f"Unknown message type: {msg_type}")
+                logger.debug(f"Unknown message type: {_sanitize_log(msg_type)}")
 
     except WebSocketDisconnect:
-        logger.info(f"Client disconnected (receive): session={session_id}")
+        logger.info(f"Client disconnected (receive): session={_sanitize_log(session_id)}")
     except asyncio.CancelledError:
-        logger.debug(f"Receive task cancelled: session={session_id}")
+        logger.debug(f"Receive task cancelled: session={_sanitize_log(session_id)}")
         raise
 
 
@@ -463,13 +468,13 @@ async def _send_to_client(
                         "data": str(event),
                     })
             except WebSocketDisconnect:
-                logger.info(f"Client disconnected during send: session={session_id}")
+                logger.info(f"Client disconnected during send: session={_sanitize_log(session_id)}")
                 return
             except Exception as e:
                 logger.warning(f"Error sending event to client: {e}")
 
     except asyncio.CancelledError:
-        logger.debug(f"Send task cancelled: session={session_id}")
+        logger.debug(f"Send task cancelled: session={_sanitize_log(session_id)}")
         raise
     except Exception as e:
         logger.error(f"Error in send_to_client: {e}")
@@ -496,7 +501,7 @@ async def stop_voice_session(session_id: str):
     try:
         await agent.stop()
     except Exception as e:
-        logger.error(f"Error force-stopping session {session_id}: {e}")
+        logger.error(f"Error force-stopping session {_sanitize_log(session_id)}: {e}")
 
     _active_sessions.pop(session_id, None)
     return {"status": "stopped", "session_id": session_id}
