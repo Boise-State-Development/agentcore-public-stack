@@ -167,10 +167,8 @@ export class VoiceChatService implements OnDestroy {
       let protocols: string[] | undefined;
 
       if (isAgentCore) {
-        // AgentCore: /ws path, session via custom header param, auth via Sec-WebSocket-Protocol
-        const params = new URLSearchParams();
-        params.set('X-Amzn-Bedrock-AgentCore-Runtime-Custom-SessionId', this.sessionId!);
-        url = `${wsUrl}/ws?${params.toString()}`;
+        // AgentCore: /ws path, auth via Sec-WebSocket-Protocol
+        url = `${wsUrl}/ws`;
 
         const base64url = btoa(token)
           .replace(/\+/g, '-')
@@ -178,8 +176,8 @@ export class VoiceChatService implements OnDestroy {
           .replace(/=/g, '');
         protocols = [`base64UrlBearerAuthorization.${base64url}`, 'base64UrlBearerAuthorization'];
       } else {
-        // Local dev: direct connection with query params
-        url = `${wsUrl}/ws?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
+        // Local dev: /voice/stream path with query params
+        url = `${wsUrl}/voice/stream?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
       }
 
       await this.openWebSocket(url, token, protocols);
