@@ -106,6 +106,10 @@ Enable programmatic access to the platform's AI models via REST API. Users gener
 
 **Built-in code examples:** The API Keys settings page includes a code generator with cURL, Python, and JavaScript examples, a model selector, and configurable parameters (temperature, max tokens, system prompt) so users can start integrating immediately.
 
+### 🎙️ Voice Mode
+
+Have natural, real-time spoken conversations with the assistant. Voice Mode streams audio bidirectionally over WebSockets to an AgentCore-hosted voice agent, using **Amazon Nova Sonic** for low-latency speech-to-speech interaction. Users can speak their questions and hear responses aloud — no typing required — while the same RBAC, quotas, and model access rules as the chat interface apply.
+
 ### 🧠 Memory and Context
 
 A two-tier memory system combines **short-term session history** with **long-term user preferences**. The agent remembers coding style preferences, language choices, and learned facts across sessions — personalization without compromising privacy.
