@@ -344,7 +344,7 @@ function handler(event) {
     if (config.domainName) {
       // Use the explicitly configured hosted zone domain, falling back to domainName
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-        domainName: config.infrastructureHostedZoneDomain || config.domainName,
+        domainName: config.infrastructureHostedZoneDomain!,
       });
 
       // Create A record aliasing to CloudFront
