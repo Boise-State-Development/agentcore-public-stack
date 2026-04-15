@@ -342,7 +342,7 @@ function handler(event) {
 
     // Create Route53 A record if domain is configured
     if (config.domainName) {
-      // Use the explicitly configured hosted zone domain, falling back to domainName
+      // Use the explicitly configured hosted zone domain
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
         domainName: config.infrastructureHostedZoneDomain!,
       });
