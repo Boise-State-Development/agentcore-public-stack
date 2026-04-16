@@ -24,8 +24,8 @@ export const environment = {
     production: false,
     appApiUrl: 'http://localhost:8000',
     version: 'dev',
-    cognitoDomainUrl: '',
-    cognitoAppClientId: '',
+    cognitoDomainUrl: 'https://dev-boisestateai-v2.auth.us-west-2.amazoncognito.com',
+    cognitoAppClientId: '49bgkj3r1q23kkabqcg7m8c4si',
     cognitoRegion: 'us-east-1',
     inferenceApiUrl: 'http://localhost:8001',
 };

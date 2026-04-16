@@ -5,6 +5,7 @@ import {
   heroPlus,
   heroAdjustmentsHorizontal,
   heroClock,
+  heroMicrophone,
 } from '@ng-icons/heroicons/outline';
 import { heroPaperAirplaneSolid, heroStopSolid } from '@ng-icons/heroicons/solid';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
@@ -21,6 +22,7 @@ import {
   formatBytes
 } from '../../../services/file-upload';
 import { ToastService } from '../../../services/toast/toast.service';
+import { VoiceChatService, type VoiceStatus } from '../../services/voice';
 
 interface Message {
   content: string;
@@ -36,6 +38,7 @@ interface Message {
       heroPlus,
       heroAdjustmentsHorizontal,
       heroClock,
+      heroMicrophone,
       heroStopSolid,
       heroPaperAirplaneSolid
     })
@@ -47,6 +50,7 @@ export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
+  private readonly voiceChatService = inject(VoiceChatService);
 
   // Input: session ID for file uploads
   readonly sessionId = input<string | null>(null);
@@ -94,6 +98,46 @@ export class ChatInputComponent {
   // Allowed file types for input accept attribute
   readonly acceptedFileTypes = ALLOWED_EXTENSIONS.join(',');
 
+  // Voice state (from VoiceChatService)
+  readonly voiceStatus = this.voiceChatService.status;
+  readonly isVoiceActive = this.voiceChatService.isVoiceActive;
+  readonly voiceTranscript = this.voiceChatService.agentTranscript;
+
+  readonly voiceButtonClass = computed(() => {
+    const status = this.voiceStatus();
+    const base = 'flex size-10 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]';
+    switch (status) {
+      case 'listening':
+        return `${base} bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 animate-pulse`;
+      case 'speaking':
+        return `${base} bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400`;
+      case 'connecting':
+        return `${base} bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400`;
+      default:
+        return `${base} text-gray-500 dark:text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300`;
+    }
+  });
+
+  readonly voiceAriaLabel = computed(() => {
+    const status = this.voiceStatus();
+    switch (status) {
+      case 'listening': return 'Listening... Click to stop voice';
+      case 'speaking': return 'Agent is speaking... Click to stop voice';
+      case 'connecting': return 'Connecting voice...';
+      default: return 'Start voice conversation';
+    }
+  });
+
+  readonly voiceTooltip = computed(() => {
+    const status = this.voiceStatus();
+    switch (status) {
+      case 'listening': return 'Listening...';
+      case 'speaking': return 'Speaking...';
+      case 'connecting': return 'Connecting...';
+      default: return 'Voice mode';
+    }
+  });
+
   onSubmit() {
     if (this.isLoading()) {
       this.cancelChatRequest();
@@ -136,6 +180,19 @@ export class ChatInputComponent {
 
   toggleSettings() {
     this.settingsToggled.emit();
+  }
+
+  async toggleVoice() {
+    if (this.isVoiceActive()) {
+      await this.voiceChatService.disconnect();
+    } else {
+      try {
+        await this.voiceChatService.connect(this.sessionId() || undefined);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to start voice';
+        this.toastService.error('Voice Error', msg);
+      }
+    }
   }
 
   async onFileSelect(event: Event) {

@@ -62,9 +62,9 @@ class TestCompactionConfig:
 
     def test_default_config(self):
         config = CompactionConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.token_threshold == 100_000
-        assert config.protected_turns == 2
+        assert config.protected_turns == 3
         assert config.max_tool_content_length == 500
 
     def test_from_env(self, monkeypatch):

@@ -28,6 +28,16 @@ Main entry point:
         print(event)
 """
 from .main_agent import MainAgent
+from .base_agent import BaseAgent
+from .chat_agent import ChatAgent
+from .skill_agent import SkillAgent
+from .agent_types import create_agent, register_agent_type, get_available_types
+
+# VoiceAgent is optional (requires strands-agents[bidi])
+try:
+    from .voice_agent import VoiceAgent
+except ImportError:
+    VoiceAgent = None
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
@@ -50,8 +60,14 @@ from .utils import get_current_date_pacific, get_global_stream_processor
 __version__ = "1.0.0"
 
 __all__ = [
-    # Main agent
+    # Agent types
+    "BaseAgent",
+    "ChatAgent",
     "MainAgent",
+    "SkillAgent",
+    "create_agent",
+    "register_agent_type",
+    "get_available_types",
 
     # Core components
     "ModelConfig",

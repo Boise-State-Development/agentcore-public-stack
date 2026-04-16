@@ -73,7 +73,7 @@ class TestCacheSavingsCalculation:
     async def test_cache_savings_calculation(self, mock_storage, sample_message_metadata):
         """Test that cache savings are calculated correctly"""
         with patch(
-            'apis.app_api.storage.metadata_storage.get_metadata_storage',
+            'apis.app_api.storage.get_metadata_storage',
             return_value=mock_storage
         ):
             from apis.app_api.sessions.services.metadata import _update_cost_summary_async
@@ -138,7 +138,7 @@ class TestCacheSavingsCalculation:
         )
 
         with patch(
-            'apis.app_api.storage.metadata_storage.get_metadata_storage',
+            'apis.app_api.storage.get_metadata_storage',
             return_value=mock_storage
         ):
             from apis.app_api.sessions.services.metadata import _update_cost_summary_async
@@ -180,7 +180,7 @@ class TestCacheSavingsCalculation:
         )
 
         with patch(
-            'apis.app_api.storage.metadata_storage.get_metadata_storage',
+            'apis.app_api.storage.get_metadata_storage',
             return_value=mock_storage
         ):
             from apis.app_api.sessions.services.metadata import _update_cost_summary_async
@@ -230,7 +230,7 @@ class TestCacheSavingsCalculation:
         )
 
         with patch(
-            'apis.app_api.storage.metadata_storage.get_metadata_storage',
+            'apis.app_api.storage.get_metadata_storage',
             return_value=mock_storage
         ):
             from apis.app_api.sessions.services.metadata import _update_cost_summary_async
@@ -287,7 +287,7 @@ class TestCacheSavingsCalculation:
         )
 
         with patch(
-            'apis.app_api.storage.metadata_storage.get_metadata_storage',
+            'apis.app_api.storage.get_metadata_storage',
             return_value=mock_storage
         ):
             from apis.app_api.sessions.services.metadata import _update_cost_summary_async

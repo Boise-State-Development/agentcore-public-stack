@@ -20,6 +20,8 @@ import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
+from agents.main_agent.config.constants import EnvVars
+
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 
@@ -243,7 +245,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     def _get_dynamodb_table(self):
         """Lazy initialization of DynamoDB table for compaction state."""
         if TurnBasedSessionManager._dynamodb_table is None:
-            table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+            table_name = os.environ.get(EnvVars.DYNAMODB_SESSIONS_METADATA_TABLE)
             if not table_name:
                 logger.warning(
                     "DYNAMODB_SESSIONS_METADATA_TABLE_NAME not configured, "

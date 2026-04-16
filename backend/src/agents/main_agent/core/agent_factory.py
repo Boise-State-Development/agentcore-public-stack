@@ -10,6 +10,7 @@ from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
+from agents.main_agent.config.constants import EnvVars
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,10 @@ class AgentFactory:
         Raises:
             ValueError: If OPENAI_API_KEY environment variable is not set
         """
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv(EnvVars.OPENAI_API_KEY)
         if not api_key:
             raise ValueError(
-                "OPENAI_API_KEY environment variable is required for OpenAI models. "
+                f"{EnvVars.OPENAI_API_KEY} environment variable is required for OpenAI models. "
                 "Please set it in your .env file."
             )
 
@@ -72,10 +73,10 @@ class AgentFactory:
         Raises:
             ValueError: If GOOGLE_GEMINI_API_KEY environment variable is not set
         """
-        api_key = os.getenv("GOOGLE_GEMINI_API_KEY")
+        api_key = os.getenv(EnvVars.GOOGLE_GEMINI_API_KEY)
         if not api_key:
             raise ValueError(
-                "GOOGLE_GEMINI_API_KEY environment variable is required for Gemini models. "
+                f"{EnvVars.GOOGLE_GEMINI_API_KEY} environment variable is required for Gemini models. "
                 "Please set it in your .env file."
             )
 

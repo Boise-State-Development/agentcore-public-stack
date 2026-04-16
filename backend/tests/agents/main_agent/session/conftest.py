@@ -223,11 +223,16 @@ def _mock_parent_init(config):
 def make_session_manager(mock_agentcore_config):
     """
     Factory fixture — returns a callable that creates a TurnBasedSessionManager
-    with AgentCoreMemorySessionManager.__init__ mocked out so no AWS calls are made.
+    with AgentCoreMemorySessionManager.__init__ and .initialize() mocked out
+    so no AWS calls are made.
 
-    The resulting manager inherits all TurnBasedSessionManager methods and has
-    the parent's required attributes set via the mock __init__.
+    The parent's initialize() is replaced with a shim that simulates the SDK
+    behavior: read the agent, load messages from list_messages(), and populate
+    agent.messages. This allows tests to control the loaded messages by setting
+    mgr.read_agent and mgr.list_messages before calling mgr.initialize(agent).
     """
+    active_patches = []
+
     def _factory(compaction_config=None, user_id=TEST_USER_ID, **kwargs):
         from bedrock_agentcore.memory.integrations.strands.session_manager import (
             AgentCoreMemorySessionManager,
@@ -237,6 +242,29 @@ def make_session_manager(mock_agentcore_config):
         # Reset class-level state between tests
         TurnBasedSessionManager._dynamodb_table = None
         TurnBasedSessionManager._dynamodb_table_name = None
+
+        _initialized_agent_ids = set()
+
+        def _mock_sdk_initialize(self_inner, agent, **kw):
+            """Simulate what the SDK's initialize() does: load messages into agent."""
+            from strands.types.exceptions import SessionException
+
+            # SDK tracks agent_ids and raises on duplicate
+            if agent.agent_id in _initialized_agent_ids:
+                raise SessionException(f"Agent ID must be unique: {agent.agent_id}")
+            _initialized_agent_ids.add(agent.agent_id)
+
+            session_agent = self_inner.read_agent(agent.agent_id)
+            if session_agent is None:
+                self_inner.create_agent(agent.agent_id)
+            else:
+                session_messages = self_inner.list_messages(agent.agent_id)
+                loaded = [sm.to_message() for sm in session_messages]
+                agent.messages = loaded
+
+            # SDK always sets these after initialization
+            self_inner.has_existing_agent = True
+            self_inner._is_new_session = False
 
         with patch.object(
             AgentCoreMemorySessionManager,
@@ -251,6 +279,16 @@ def make_session_manager(mock_agentcore_config):
                 **kwargs,
             )
 
+        # Patch the parent's initialize so super().initialize() uses our shim.
+        # Keep the patch active for the lifetime of the test.
+        p = patch.object(
+            AgentCoreMemorySessionManager,
+            "initialize",
+            _mock_sdk_initialize,
+        )
+        p.start()
+        active_patches.append(p)
+
         # Set up mock methods for session repository operations
         # (These are inherited from AgentCoreMemorySessionManager and called via self)
         mgr.read_agent = MagicMock(return_value=None)
@@ -260,4 +298,9 @@ def make_session_manager(mock_agentcore_config):
 
         return mgr
 
-    return _factory
+    yield _factory
+
+    # Cleanup: stop all patches started during this fixture's lifetime
+    for p in active_patches:
+        p.stop()
+    active_patches.clear()

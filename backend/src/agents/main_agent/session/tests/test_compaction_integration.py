@@ -18,6 +18,13 @@ Or run directly:
 """
 
 import os
+import pytest
+
+# Skip all tests in this module unless AWS integration env vars are set
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("AGENTCORE_MEMORY_ID"),
+    reason="Integration test requires AGENTCORE_MEMORY_ID environment variable"
+)
 import sys
 import uuid
 import asyncio

@@ -11,7 +11,7 @@ import logging
 import json
 import os
 import base64
-from typing import Optional, Tuple, Any, Dict
+from typing import Optional, Tuple, Any, Dict, Union
 from decimal import Decimal
 
 from apis.shared.sessions.models import MessageMetadata, SessionMetadata
@@ -54,7 +54,7 @@ def _convert_decimal_to_float(obj: Any) -> Any:
 async def store_message_metadata(
     session_id: str,
     user_id: str,
-    message_id: int,
+    message_id: Union[int, str],
     message_metadata: MessageMetadata
 ) -> None:
     """
@@ -65,7 +65,7 @@ async def store_message_metadata(
     Args:
         session_id: Session identifier
         user_id: User identifier
-        message_id: Message number (1, 2, 3, ...)
+        message_id: Message index or namespaced key (e.g. 1 for default, "voice:1" for voice)
         message_metadata: MessageMetadata object to store
 
     Note:
@@ -88,7 +88,7 @@ async def store_message_metadata(
 async def _store_message_metadata_cloud(
     session_id: str,
     user_id: str,
-    message_id: int,
+    message_id: Union[int, str],
     message_metadata: MessageMetadata,
     table_name: str
 ) -> None:
@@ -224,8 +224,12 @@ async def _update_cost_summary_async(
         import asyncio
         from datetime import datetime
 
-        # Extract cost and usage from metadata
-        cost = message_metadata.cost or 0.0
+        # Extract cost from metadata — may be a float (legacy) or a breakdown dict
+        raw_cost = message_metadata.cost
+        if isinstance(raw_cost, dict):
+            cost = raw_cost.get("total", 0.0)
+        else:
+            cost = raw_cost or 0.0
         token_usage = message_metadata.token_usage
 
         usage_delta = {}

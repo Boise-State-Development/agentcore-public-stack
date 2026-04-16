@@ -22,6 +22,7 @@ import {
   ShareAssistantDialogComponent,
   ShareAssistantDialogData,
 } from '../assistants/components/share-assistant-dialog.component';
+import { VoiceChatService } from './services/voice';
 
 @Component({
   selector: 'app-session-page',
@@ -44,9 +45,11 @@ export class ConversationPage implements OnDestroy {
   private assistantService = inject(AssistantService);
   private router = inject(Router);
   private dialog = inject(Dialog);
+  private voiceChatService = inject(VoiceChatService);
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
+
   assistant = signal<Assistant | null>(null);
   assistantError = signal<string | null>(null);
   isLoadingAssistant = signal(false);
@@ -72,8 +75,14 @@ export class ConversationPage implements OnDestroy {
   // Writable signal that holds the current messages signal reference
   private messagesSignal = signal<Signal<Message[]>>(signal([]));
 
-  // Computed that unwraps the current messages signal
-  readonly messages = computed(() => this.messagesSignal()());
+  // Computed that unwraps the current messages signal, merging in
+  // real-time voice messages. Voice messages are cleared on voice close
+  // after being persisted to the map, so there's no double-counting.
+  readonly messages = computed(() => {
+    const base = this.messagesSignal()();
+    const voice = this.voiceChatService.voiceMessages();
+    return voice.length > 0 ? [...base, ...voice] : base;
+  });
 
   // Get user's first name from the user service
   private firstName = computed(() => {
@@ -285,6 +294,66 @@ export class ConversationPage implements OnDestroy {
 
   onMessageCancelled() {
     this.chatHttpService.cancelChatRequest();
+  }
+
+  /**
+   * Called when the voice overlay closes.
+   *
+   * By this point, disconnect() has already set isVoiceActive = false,
+   * so the messages computed stops merging voiceMessages. We persist
+   * those messages into the message map (so they survive navigation)
+   * and update the URL.
+   */
+  onVoiceClosed() {
+    const voiceMsgs = this.voiceChatService.voiceMessages();
+    if (voiceMsgs.length === 0) return;
+
+    const sessionId = this.voiceChatService.getSessionId();
+    if (!sessionId) return;
+
+    // Persist voice messages into the message map so they survive
+    // page navigation and show up when the overlay is gone.
+    // Filter out any messages with no text (e.g. interrupted before first delta).
+    this.messagesSignal.set(this.messageMapService.getMessagesForSession(sessionId));
+    for (const msg of voiceMsgs) {
+      const textBlock = msg.content.find(b => b.type === 'text');
+      const text = textBlock?.text || '';
+      if (!text) continue;
+      this.messageMapService.addVoiceMessage(
+        sessionId,
+        msg.role as 'user' | 'assistant',
+        text,
+        msg.metadata ?? undefined,
+      );
+    }
+
+    // Clear voice messages now that they're in the map — prevents any
+    // change detection cycle from seeing both sources simultaneously.
+    this.voiceChatService.clearVoiceMessages();
+
+    // If there's no route session yet, navigate (fire-and-forget).
+    // addSessionToCache MUST happen before navigation so the route
+    // subscription recognises this as new and skips the API fetch
+    // (same sequencing as ChatRequestService.navigateToSession).
+    if (!this.effectiveSessionId()) {
+      const user = this.userService.currentUser();
+      const userId = user?.user_id || 'anonymous';
+      this.sessionService.addSessionToCache(sessionId, userId);
+      this.router.navigate(['s', sessionId], { replaceUrl: true });
+    }
+
+    // Generate title for new voice sessions (fire and forget)
+    const firstUserMsg = voiceMsgs.find(m => m.role === 'user');
+    const firstUserText = firstUserMsg?.content[0]?.text;
+    if (firstUserText && this.sessionService.isNewSession(sessionId)) {
+      this.chatHttpService.generateTitle(sessionId, firstUserText)
+        .then((response) => {
+          this.sessionService.updateSessionTitleInCache(sessionId, response.title);
+        })
+        .catch((err) => {
+          console.warn('Failed to generate voice session title:', err);
+        });
+    }
   }
 
   toggleSettings() {

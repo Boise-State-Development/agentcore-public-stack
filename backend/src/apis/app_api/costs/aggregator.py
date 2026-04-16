@@ -167,8 +167,12 @@ class CostAggregator:
         model_stats = {}
 
         for message in messages:
-            # Extract cost and tokens
-            cost = float(message.get("cost", 0.0))
+            # Extract cost and tokens (cost may be a float or a breakdown dict)
+            raw_cost = message.get("cost", 0.0)
+            if isinstance(raw_cost, dict):
+                cost = float(raw_cost.get("total", 0.0))
+            else:
+                cost = float(raw_cost or 0.0)
             total_cost += cost
 
             input_tokens = message.get("inputTokens", 0)

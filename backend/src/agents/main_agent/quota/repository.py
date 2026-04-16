@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 import logging
 import os
 from .models import QuotaTier, QuotaAssignment, QuotaEvent, QuotaAssignmentType, QuotaOverride
+from agents.main_agent.config.constants import EnvVars, Defaults
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,9 @@ class QuotaRepository:
     ):
         # Use environment variables if table names not provided
         if table_name is None:
-            table_name = os.getenv("DYNAMODB_QUOTA_TABLE", "UserQuotas")
+            table_name = os.getenv(EnvVars.DYNAMODB_QUOTA_TABLE, Defaults.DYNAMODB_QUOTA_TABLE)
         if events_table_name is None:
-            events_table_name = os.getenv("DYNAMODB_QUOTA_EVENTS_TABLE", "QuotaEvents")
+            events_table_name = os.getenv(EnvVars.DYNAMODB_QUOTA_EVENTS_TABLE, Defaults.DYNAMODB_QUOTA_EVENTS_TABLE)
 
         self.dynamodb = boto3.resource('dynamodb')
         self.table = self.dynamodb.Table(table_name)

@@ -1,0 +1,202 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* === Overlay entrance === */
+:host {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  animation: overlay-enter 400ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.voice-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background-color: rgba(249, 250, 251, 0.97);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  color: var(--color-gray-900);
+}
+
+:host-context(.dark) .voice-overlay-backdrop {
+  background-color: rgba(3, 7, 18, 0.97);
+  color: var(--color-gray-100);
+}
+
+@keyframes overlay-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* === Visualizer Orb === */
+.voice-orb {
+  position: relative;
+  width: 10rem;
+  height: 10rem;
+  margin-bottom: 2.5rem;
+}
+
+.voice-orb-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  transition: background 600ms ease, box-shadow 600ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* -- Connecting state -- */
+.voice-orb-core.connecting {
+  background: radial-gradient(circle at 40% 40%, #fbbf24, #d97706);
+  box-shadow: 0 0 40px rgba(251, 191, 36, 0.3), 0 0 80px rgba(217, 119, 6, 0.15);
+  animation: orb-spin 2s linear infinite;
+}
+
+@keyframes orb-spin {
+  0% { transform: rotate(0deg) scale(0.92); }
+  50% { transform: rotate(180deg) scale(1.04); }
+  100% { transform: rotate(360deg) scale(0.92); }
+}
+
+/* -- Listening state -- */
+.voice-orb-core.listening {
+  background: radial-gradient(circle at 45% 40%, #f87171, #dc2626);
+  box-shadow: 0 0 40px rgba(248, 113, 113, 0.35), 0 0 80px rgba(220, 38, 38, 0.15);
+  animation: orb-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.voice-ripple {
+  position: absolute;
+  inset: -0.5rem;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(248, 113, 113, 0.4);
+  animation: ripple-expand 2.4s ease-out infinite;
+}
+
+.voice-ripple:nth-child(2) {
+  animation-delay: 0.8s;
+}
+
+.voice-ripple:nth-child(3) {
+  animation-delay: 1.6s;
+}
+
+@keyframes ripple-expand {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* -- Speaking state -- */
+.voice-orb-core.speaking {
+  background: radial-gradient(circle at 45% 40%, #4ade80, #16a34a);
+  box-shadow: 0 0 40px rgba(74, 222, 128, 0.35), 0 0 80px rgba(22, 163, 74, 0.15);
+  animation: orb-pulse-speak 2.5s ease-in-out infinite;
+}
+
+@keyframes orb-pulse-speak {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.04); opacity: 0.9; }
+}
+
+/* Wave bars inside orb during speaking */
+.voice-wave-bar {
+  width: 3px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.85);
+  animation: wave-bar 0.8s ease-in-out infinite;
+}
+
+@keyframes wave-bar {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+/*
+ * TODO: Transcript box styles (removed — revisit when transcript display is re-added).
+ *
+ * When re-implementing, the fixed-height box with gradient fade worked well visually:
+ *   .transcript-box        — position:relative; height:7rem; overflow:hidden
+ *   .transcript-box-inner  — overflow-y:auto; scrollbar-width:none
+ *   .transcript-box-gradient — absolute bottom gradient matching backdrop color
+ *
+ * The hard part is pacing text reveal to match audio. See the TODO comment in
+ * voice-overlay.component.html for approaches.
+ */
+
+/* === Status badge === */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.status-badge.connecting {
+  background: rgba(251, 191, 36, 0.15);
+  color: #b45309;
+}
+
+.status-badge.listening {
+  background: rgba(248, 113, 113, 0.15);
+  color: #dc2626;
+}
+
+.status-badge.speaking {
+  background: rgba(74, 222, 128, 0.15);
+  color: #16a34a;
+}
+
+:host-context(.dark) .status-badge.connecting {
+  color: #fbbf24;
+}
+
+:host-context(.dark) .status-badge.listening {
+  color: #f87171;
+}
+
+:host-context(.dark) .status-badge.speaking {
+  color: #4ade80;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* === Reduced motion === */
+@media (prefers-reduced-motion: reduce) {
+  :host { animation: none; opacity: 1; }
+  .voice-orb-core { animation: none !important; }
+  .voice-ripple { animation: none !important; opacity: 0; }
+  .voice-wave-bar { animation: none !important; transform: scaleY(0.6); }
+  .status-dot { animation: none !important; }
+}

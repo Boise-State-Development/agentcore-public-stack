@@ -46,7 +46,7 @@ export class ModelFormPage implements OnInit {
 
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
-  readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'EMBEDDING'];
+  readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'SPEECH', 'EMBEDDING'];
 
   // AppRoles from the API (reactive resource)
   readonly rolesResource = this.appRolesService.rolesResource;

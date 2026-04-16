@@ -167,6 +167,40 @@ export class MessageMapService {
   }
 
   /**
+   * Add a voice transcript message (from VoiceChatService) to the session.
+   * Used when the voice agent completes a response and the transcript is finalized.
+   *
+   * @param sessionId - The session ID to add the message to
+   * @param role - Message role (user or assistant)
+   * @param text - Message text content
+   * @param metadata - Optional metadata (token usage, cost) for badge display
+   */
+  addVoiceMessage(sessionId: string, role: 'user' | 'assistant', text: string, metadata?: Record<string, unknown>): Message {
+    const currentMessages = this.messageMap()[sessionId]?.() ?? [];
+    const messageIndex = currentMessages.length;
+    const messageId = `msg-${sessionId}-${messageIndex}`;
+
+    const message: Message = {
+      id: messageId,
+      role,
+      content: [{ type: 'text', text }],
+      ...(metadata ? { metadata } : {}),
+    };
+
+    this.messageMap.update(map => {
+      const updated = { ...map };
+      if (!updated[sessionId]) {
+        updated[sessionId] = signal([message]);
+      } else {
+        updated[sessionId].update(msgs => [...msgs, message]);
+      }
+      return updated;
+    });
+
+    return message;
+  }
+
+  /**
    * Sync streaming messages to the message map.
    * Handles the case where we're appending to existing messages.
    * Preserves all previous complete messages and only replaces the currently streaming assistant response.
