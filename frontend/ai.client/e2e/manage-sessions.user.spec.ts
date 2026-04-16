@@ -47,7 +47,6 @@ test.describe('Manage Sessions Page (user)', () => {
     // Deselect
     await checkbox.uncheck();
     await expect(page.getByText(/0 of \d+ selected/)).toBeVisible();
-    await page.pause()
   });
 
   test('should navigate back to home', async ({ page }) => {
