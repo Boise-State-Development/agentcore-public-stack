@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { AuthService } from '../../../auth/auth.service';
+import { UserSettingsService } from '../../../services/user-settings.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
 
 interface ManagedModelsListResponse {
@@ -17,6 +18,7 @@ export class ModelService {
   private http = inject(HttpClient);
   private authService = inject(AuthService);
   private config = inject(ConfigService);
+  private userSettingsService = inject(UserSettingsService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/models`);
 
   // Session storage key for persisting model selection
@@ -128,10 +130,16 @@ export class ModelService {
           this._selectedModel.set(savedModel);
           this.usingDefaultModel.set(false);
         } else {
-          // Find admin-configured default model, or fall back to first available
-          const defaultModel = enabledModels.find(m => m.isDefault);
-          this._selectedModel.set(defaultModel || enabledModels[0]);
+          // Set provisional selection synchronously so the UI has a value immediately.
+          // Priority: admin-configured default (isDefault: true), else first available.
+          const adminDefault = enabledModels.find(m => m.isDefault);
+          this._selectedModel.set(adminDefault || enabledModels[0]);
           this.usingDefaultModel.set(false);
+
+          // Then asynchronously upgrade to the user's persisted default if one is set.
+          // We don't await inside the synchronous selection path so callers (and tests)
+          // see a valid selection without waiting on the settings HTTP call.
+          this.applyUserDefaultModel(enabledModels);
         }
       } else {
         // No models available, use system default
@@ -218,6 +226,34 @@ export class ModelService {
     } catch (e) {
       // SessionStorage may be unavailable in some contexts (e.g., private browsing)
       console.warn('Could not save model selection to sessionStorage:', e);
+    }
+  }
+
+  /**
+   * Asynchronously applies the user's persisted default model (from the settings API)
+   * on top of an already-set provisional selection. Runs as a fire-and-forget task.
+   * Only upgrades the selection if:
+   *   - The user has a defaultModelId set
+   *   - That model exists in the supplied enabled list
+   *   - The user hasn't already made a different explicit selection while loading
+   */
+  private async applyUserDefaultModel(enabledModels: ManagedModel[]): Promise<void> {
+    const selectionBeforeFetch = this._selectedModel();
+    try {
+      const settings = await this.userSettingsService.fetchSettings();
+      const userDefaultId = settings?.defaultModelId;
+      if (!userDefaultId) return;
+
+      // Skip if the user changed the selection while we were fetching.
+      if (this._selectedModel() !== selectionBeforeFetch) return;
+
+      const userDefault = enabledModels.find(m => m.modelId === userDefaultId);
+      if (userDefault) {
+        this._selectedModel.set(userDefault);
+        this.usingDefaultModel.set(false);
+      }
+    } catch (e) {
+      console.warn('Could not load user default model from settings:', e);
     }
   }
 
