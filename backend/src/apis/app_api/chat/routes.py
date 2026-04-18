@@ -360,6 +360,36 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
             logger.warning(f"Failed to resolve file upload IDs: {e}")
             # Continue without files rather than failing the request
 
+    # Resolve model selection: if the request omitted a model_id, fall back to the
+    # user's persisted default from settings before letting get_agent use the
+    # hardcoded system default. Provider is resolved from the managed models table
+    # when possible so the correct client/formatter is used.
+    model_id = request.model_id
+    provider = request.provider
+
+    if model_id is None:
+        try:
+            from apis.shared.user_settings.repository import UserSettingsRepository
+
+            user_settings_repo = UserSettingsRepository()
+            user_settings = await user_settings_repo.get_settings(user_id)
+            saved_default = user_settings.get("defaultModelId")
+            if saved_default:
+                model_id = saved_default
+                if provider is None:
+                    try:
+                        from apis.shared.models.managed_models import get_managed_model
+
+                        managed = await get_managed_model(saved_default)
+                        if managed is not None:
+                            provider = getattr(managed, "provider", None) or provider
+                    except Exception as provider_err:
+                        logger.debug(f"Could not resolve provider for {saved_default}: {provider_err}")
+                logger.info(f"Applied user's persisted default model {saved_default} for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error loading user default model for user {user_id}: {e}", exc_info=True)
+            # Continue without saved default - agent will use system default
+
     try:
         # Get agent instance (with or without tool filtering)
         # Use assistant's system prompt if provided
@@ -368,6 +398,8 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
             user_id=user_id,
             enabled_tools=authorized_tools,  # Filtered by RBAC (may be None for all allowed)
             system_prompt=system_prompt,  # Assistant instructions if assistant is attached
+            model_id=model_id,
+            provider=provider,
         )
 
         # Wrap stream to ensure flush on disconnect and prevent further processing

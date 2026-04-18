@@ -185,7 +185,9 @@ export class ChatPreferencesSettingsPage {
 
   readonly currentDefaultModelId = computed(() => {
     const settings = this.userSettingsService.settingsResource.value();
-    return settings?.defaultModelId ?? '';
+    const models = this.modelService.availableModels();
+    if (!settings || models.length === 0) return '';
+    return settings.defaultModelId ?? '';
   });
 
   async onModelChange(event: Event): Promise<void> {
