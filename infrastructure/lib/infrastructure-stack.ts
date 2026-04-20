@@ -593,6 +593,14 @@ export class InfrastructureStack extends cdk.Stack {
       removalPolicy: getRemovalPolicy(config),
     });
 
+    // Secrets Manager for OpenAI API key.
+    // The value is user-supplied and populated out-of-band after deployment.
+    const openAiApiKeySecret = new secretsmanager.CfnSecret(this, "OpenAiApiKeySecret", {
+      name: getResourceName(config, "openai-api-key"),
+      description: "OpenAI API key for OpenAI provider models",
+    });
+    openAiApiKeySecret.applyRemovalPolicy(getRemovalPolicy(config));
+
     // Store OAuth resource names in SSM
     new ssm.StringParameter(this, "OAuthProvidersTableNameParameter", {
       parameterName: `/${config.projectPrefix}/oauth/providers-table-name`,
@@ -633,6 +641,13 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/oauth/client-secrets-arn`,
       stringValue: oauthClientSecretsSecret.secretArn,
       description: "Secrets Manager ARN for OAuth client secrets",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "OpenAiApiKeySecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/llm/openai-api-key-secret-arn`,
+      stringValue: openAiApiKeySecret.ref,
+      description: "Secrets Manager ARN for OpenAI API key",
       tier: ssm.ParameterTier.STANDARD,
     });
 

@@ -50,6 +50,18 @@ Now for the fun part. You'll trigger up to 8 GitHub Actions workflows in order. 
 > [!TIP]
 > Steps that share the same number can be deployed in parallel — just wait for the previous step to finish first.
 
+## Optional: Enable OpenAI Models
+
+The infrastructure workflow creates a Secrets Manager secret for the OpenAI API key, but it does not store a key value for you. If you want OpenAI-provider models to work in deployed environments, populate the secret after **Deploy Infrastructure** succeeds and before redeploying the App API or Inference API containers:
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id <project-prefix>-openai-api-key \
+  --secret-string <your-openai-key>
+```
+
+Until this secret is populated, OpenAI model listing and OpenAI chat requests will remain unavailable, but the rest of the system continues to run normally.
+
 ### Status Badges
 
 You can monitor the current state of each workflow:
