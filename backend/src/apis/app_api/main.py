@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
+from apis.shared.secrets.openai_key import hydrate_openai_api_key
 
 # Set up logging
 logging.basicConfig(
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== AgentCore Public Stack API Starting ===")
+    hydrate_openai_api_key()
     logger.info("Agent execution engine initialized")
 
     # Create output directories if they don't exist

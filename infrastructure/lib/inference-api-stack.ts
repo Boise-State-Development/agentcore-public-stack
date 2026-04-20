@@ -204,6 +204,11 @@ export class InferenceApiStack extends cdk.Stack {
       this,
       `/${config.projectPrefix}/oauth/client-secrets-arn`
     );
+
+    const openAiApiKeySecretArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/llm/openai-api-key-secret-arn`
+    );
     
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'OAuthClientSecretsAccess',
@@ -215,6 +220,19 @@ export class InferenceApiStack extends cdk.Stack {
       resources: [
         oauthClientSecretsArn,
         `${oauthClientSecretsArn}*`, // Include wildcard for random suffix
+      ],
+    }));
+
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'OpenAiApiKeySecretAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'secretsmanager:GetSecretValue',
+        'secretsmanager:DescribeSecret',
+      ],
+      resources: [
+        openAiApiKeySecretArn,
+        `${openAiApiKeySecretArn}*`, // Include wildcard for random suffix
       ],
     }));
 
@@ -931,6 +949,7 @@ export class InferenceApiStack extends cdk.Stack {
         // OAuth configuration
         OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
+        OPENAI_API_KEY_SECRET_ARN: openAiApiKeySecretArn,
 
         // AgentCore resources
         AGENTCORE_MEMORY_ID: this.memory.attrMemoryId,

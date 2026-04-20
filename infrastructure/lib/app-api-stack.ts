@@ -245,6 +245,11 @@ export class AppApiStack extends cdk.Stack {
       `/${config.projectPrefix}/oauth/client-secrets-arn`
     );
 
+    const openAiApiKeySecretArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/llm/openai-api-key-secret-arn`
+    );
+
     // Import shared tables from Infrastructure Stack
     // These tables were moved from AppApiStack to InfrastructureStack to eliminate circular dependencies
     const userQuotasTableName = ssm.StringParameter.valueForStringParameter(
@@ -445,6 +450,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_API_KEYS_TABLE_NAME: apiKeysTableName,
         OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
+        OPENAI_API_KEY_SECRET_ARN: openAiApiKeySecretArn,
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
@@ -915,6 +921,15 @@ export class AppApiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
         resources: [`${oauthClientSecretsArn}*`], // Wildcard for random suffix
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'OpenAiApiKeySecretAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [`${openAiApiKeySecretArn}*`], // Wildcard for random suffix
       })
     );
     // Grant permissions for API Keys table (imported from Infrastructure Stack)
