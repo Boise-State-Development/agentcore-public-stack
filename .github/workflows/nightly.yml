@@ -5,10 +5,11 @@
 #   test-backend-<branch>              Run backend tests against <branch>
 #   test-frontend-<branch>             Run frontend tests against <branch>
 #   deploy-<branch>                    Deploy full stack from <branch>
+#   e2e-<branch>                       Deploy full stack, run Playwright E2E tests, teardown
 #   merge-validation:<base>:<overlay>  Deploy <base>, then overlay <overlay>
 #   scan-images-<branch>               Scan Docker images from <branch> for vulnerabilities
 #   all                                Run all tracks with default branches
-#                                      (tests + deploy on develop, MV main→develop)
+#                                      (tests + deploy + e2e on develop, MV main→develop)
 #
 # Examples:
 #   test-backend-develop
@@ -79,6 +80,8 @@ jobs:
       mv_overlay_ref: ${{ steps.resolve.outputs.mv_overlay_ref }}
       run_scan_images: ${{ steps.resolve.outputs.run_scan_images }}
       scan_images_ref: ${{ steps.resolve.outputs.scan_images_ref }}
+      run_e2e: ${{ steps.resolve.outputs.run_e2e }}
+      e2e_ref: ${{ steps.resolve.outputs.e2e_ref }}
       any_track: ${{ steps.resolve.outputs.any_track }}
     steps:
       - name: Parse tracks
@@ -103,6 +106,8 @@ jobs:
           mv_overlay_ref=""
           run_scan_images=false
           scan_images_ref=""
+          run_e2e=false
+          e2e_ref=""
 
           # Empty tracks = nothing runs (fork-safe default)
           if [ -z "$TRACKS" ]; then
@@ -125,6 +130,8 @@ jobs:
                   mv_overlay_ref="develop"
                   run_scan_images=true
                   scan_images_ref="develop"
+                  run_e2e=true
+                  e2e_ref="develop"
                   ;;
                 test-backend-*)
                   run_test_backend=true
@@ -147,6 +154,10 @@ jobs:
                   run_scan_images=true
                   scan_images_ref="${token#scan-images-}"
                   ;;
+                e2e-*)
+                  run_e2e=true
+                  e2e_ref="${token#e2e-}"
+                  ;;
                 *)
                   echo "::warning::Unknown track token: $token"
                   ;;
@@ -158,7 +169,7 @@ jobs:
           any_track=false
           if [ "$run_test_backend" = "true" ] || [ "$run_test_frontend" = "true" ] || \
              [ "$run_deploy" = "true" ] || [ "$run_mv" = "true" ] || \
-             [ "$run_scan_images" = "true" ]; then
+             [ "$run_scan_images" = "true" ] || [ "$run_e2e" = "true" ]; then
             any_track=true
           fi
 
@@ -175,6 +186,8 @@ jobs:
             echo "mv_overlay_ref=$mv_overlay_ref"
             echo "run_scan_images=$run_scan_images"
             echo "scan_images_ref=$scan_images_ref"
+            echo "run_e2e=$run_e2e"
+            echo "e2e_ref=$e2e_ref"
             echo "any_track=$any_track"
           } >> "$GITHUB_OUTPUT"
 
@@ -185,6 +198,7 @@ jobs:
           echo "  deploy:        $run_deploy (ref: $deploy_ref)"
           echo "  mv:            $run_mv (base: $mv_base_ref, overlay: $mv_overlay_ref)"
           echo "  scan-images:   $run_scan_images (ref: $scan_images_ref)"
+          echo "  e2e:           $run_e2e (ref: $e2e_ref)"
           echo "  any_track:     $any_track"
 
   # ── Test Tracks ───────────────────────────────────────────────────────────
@@ -471,6 +485,27 @@ jobs:
       label: deploy-${{ needs.resolve-tracks.outputs.deploy_ref }}
     secrets: inherit
 
+  # ── E2E Test Track ────────────────────────────────────────────────────────
+  # Deploys the full stack and runs Playwright E2E tests against it.
+  # Uses the deploy pipeline with run-e2e enabled. Separate from the deploy
+  # track so you can deploy without E2E or run E2E independently.
+
+  e2e:
+    needs: resolve-tracks
+    if: needs.resolve-tracks.outputs.run_e2e == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/nightly-deploy-pipeline.yml
+    with:
+      ref: ${{ needs.resolve-tracks.outputs.e2e_ref }}
+      project-prefix: nightly-e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}
+      alb-subdomain: nightly-e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}-api
+      skip-teardown: ${{ github.event.inputs.skip_teardown || 'false' }}
+      label: e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}
+      run-e2e: 'true'
+    secrets: inherit
+
   # ── Merge Validation Track ────────────────────────────────────────────────
   # Deploys base branch first, then overlays the overlay branch on top —
   # simulating a real merge to catch CDK/infra incompatibilities.
@@ -593,7 +628,7 @@ jobs:
   summary:
     name: Nightly Summary
     runs-on: ubuntu-24.04
-    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, mv-base, mv-overlay, scan-images]
+    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, e2e, mv-base, mv-overlay, scan-images]
     if: always() && needs.resolve-tracks.outputs.any_track == 'true'
     steps:
       - name: Checkout code
@@ -606,9 +641,11 @@ jobs:
           RUN_TEST_BACKEND: ${{ needs.resolve-tracks.outputs.run_test_backend }}
           RUN_TEST_FRONTEND: ${{ needs.resolve-tracks.outputs.run_test_frontend }}
           RUN_DEPLOY: ${{ needs.resolve-tracks.outputs.run_deploy }}
+          RUN_E2E: ${{ needs.resolve-tracks.outputs.run_e2e }}
           RUN_MV: ${{ needs.resolve-tracks.outputs.run_mv }}
           RUN_SCAN_IMAGES: ${{ needs.resolve-tracks.outputs.run_scan_images }}
           DEPLOY_REF: ${{ needs.resolve-tracks.outputs.deploy_ref }}
+          E2E_REF: ${{ needs.resolve-tracks.outputs.e2e_ref }}
           MV_BASE_REF: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
           MV_OVERLAY_REF: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
         run: |
@@ -655,6 +692,13 @@ jobs:
             status="$(map_status "${{ needs.deploy.result }}")"
             ROWS+=("Deploy Pipeline (${DEPLOY_REF})|${status}|0")
             [ "$status" = "failure" ] && AGGREGATE="failure"
+          fi
+
+          # E2E track (reusable workflow — informational, does not fail aggregate)
+          if [ "$RUN_E2E" = "true" ]; then
+            status="$(map_status "${{ needs.e2e.result }}")"
+            ROWS+=("E2E Tests (${E2E_REF})|${status}|0")
+            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 
           # MV tracks

@@ -34,6 +34,11 @@ on:
         required: false
         default: ''
         type: string
+      run-e2e:
+        description: 'Run Playwright E2E tests after smoke test (requires Cognito test user secrets)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
@@ -584,10 +589,80 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
 
+  e2e-tests:
+    name: "[${{ inputs.label }}] E2E Tests"
+    runs-on: ubuntu-24.04
+    needs: smoke-test
+    if: ${{ inputs.run-e2e == 'true' && needs.smoke-test.result == 'success' }}
+    environment: development
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+      duration: ${{ steps.summary.outputs.duration }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      CDK_ALB_SUBDOMAIN: ${{ inputs.alb-subdomain }}
+      CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
+      ADMIN_USERNAME: ${{ secrets.E2E_ADMIN_USERNAME }}
+      ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      USER_USERNAME: ${{ secrets.E2E_USER_USERNAME }}
+      USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Restore frontend node_modules cache
+        id: cache-frontend
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: frontend/ai.client/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
+
+      - name: Install frontend dependencies
+        if: steps.cache-frontend.outputs.cache-hit != 'true'
+        run: bash scripts/stack-frontend/install.sh
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-${{ inputs.label }}-E2E
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Run E2E tests
+        id: run-tests
+        run: bash scripts/nightly/e2e-test.sh
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: playwright-report-${{ inputs.label }}
+          path: frontend/ai.client/playwright-report/
+          retention-days: 30
+
+      - name: Generate summary
+        id: summary
+        if: always()
+        run: |
+          if [ "${{ steps.run-tests.outcome }}" = "success" ]; then STATUS="success"; else STATUS="failure"; fi
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
+
   teardown:
     name: "[${{ inputs.label }}] Teardown"
     runs-on: ubuntu-24.04
-    needs: smoke-test
+    needs: [smoke-test, e2e-tests]
     if: ${{ always() && inputs.skip-teardown != 'true' }}
     environment: development
     outputs:

@@ -17,8 +17,9 @@ Tracks are specified as a comma-separated string in the `NIGHTLY_TRACKS` repo va
 | `test-backend-<branch>` | Run backend tests against `<branch>` |
 | `test-frontend-<branch>` | Run frontend tests against `<branch>` |
 | `deploy-<branch>` | Deploy full stack from `<branch>` with automatic teardown |
+| `e2e-<branch>` | Deploy full stack from `<branch>`, run Playwright E2E tests, then teardown |
 | `merge-validation:<base>:<overlay>` | Deploy `<base>`, then overlay `<overlay>` on top (colons delimit to avoid branch name ambiguity) |
-| `all` | Run all tracks with defaults: tests + deploy on `develop`, MV `main`→`develop` |
+| `all` | Run all tracks with defaults: tests + deploy + e2e on `develop`, MV `main`→`develop` |
 
 ### Examples
 
@@ -27,9 +28,10 @@ test-backend-develop
 test-frontend-main,test-backend-main
 deploy-develop
 deploy-main,deploy-develop
+e2e-develop
 merge-validation:main:develop
 merge-validation:main:feature/my-branch
-test-backend-develop,deploy-develop,merge-validation:main:develop
+test-backend-develop,deploy-develop,e2e-develop,merge-validation:main:develop
 all
 ```
 
@@ -44,7 +46,7 @@ The `resolve-tracks` job parses the tracks string into boolean flags and branch 
 ## Workflow Jobs
 
 ### resolve-tracks
-Parses the tracks string and outputs boolean flags (`run_test_backend`, `run_test_frontend`, `run_deploy`, `run_mv`) and branch refs for each enabled track.
+Parses the tracks string and outputs boolean flags (`run_test_backend`, `run_test_frontend`, `run_deploy`, `run_e2e`, `run_mv`) and branch refs for each enabled track.
 
 ### Test Tracks
 
@@ -62,7 +64,23 @@ When `deploy-<branch>` is specified, calls the reusable `nightly-deploy-pipeline
 - `alb-subdomain`: `nightly-<branch>-api`
 - Automatic teardown (unless `skip_teardown` is set)
 
-The deploy pipeline runs: install-infra → check-stack-deps → deploy-infra → deploy-rag → deploy-inference → deploy-app → deploy-frontend + deploy-gateway → smoke-test → teardown.
+The deploy pipeline runs: install-infra → check-stack-deps → deploy-infra → deploy-rag → deploy-inference → deploy-app → deploy-frontend + deploy-gateway → smoke-test → e2e-tests (if enabled) → teardown.
+
+### E2E Test Track
+
+When `e2e-<branch>` is specified, calls the reusable `nightly-deploy-pipeline.yml` with:
+- `project-prefix`: `nightly-e2e-<branch>`
+- `alb-subdomain`: `nightly-e2e-<branch>-api`
+- `run-e2e`: `true`
+- Automatic teardown (unless `skip_teardown` is set)
+
+This deploys a full stack and runs Playwright E2E tests against it. The E2E job runs after the smoke test confirms the stack is healthy. It uses a separate CI Playwright config (`playwright.ci.config.ts`) that points at the deployed stack URL instead of starting local servers.
+
+E2E test failures are **informational** — they mark the nightly summary as "partial" rather than "failed". This allows the track to stabilize without blocking other tracks.
+
+**Required secrets** (in the `development` environment):
+- `E2E_ADMIN_USERNAME` / `E2E_ADMIN_PASSWORD` — Cognito admin test account
+- `E2E_USER_USERNAME` / `E2E_USER_PASSWORD` — Cognito regular user test account
 
 ### Merge Validation Track
 
@@ -91,6 +109,7 @@ Reusable workflow (`workflow_call`) containing the full deploy pipeline.
 | `skip-teardown` | no | Skip teardown (default: `false`) |
 | `label` | no | Label for job names |
 | `source-project-prefix` | no | If set, Docker jobs try ECR image promotion before building |
+| `run-e2e` | no | Run Playwright E2E tests after smoke test (default: `false`) |
 
 ### Promote-or-Build Pattern
 
@@ -126,6 +145,8 @@ Deploy and MV tracks use the `development` GitHub environment with overrides:
 ### Required Secrets
 - `AWS_ROLE_ARN` or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
 - `GITHUB_TOKEN` (automatically provided)
+- `E2E_ADMIN_USERNAME` / `E2E_ADMIN_PASSWORD` — Cognito admin test account (required for e2e track)
+- `E2E_USER_USERNAME` / `E2E_USER_PASSWORD` — Cognito regular user test account (required for e2e track)
 
 ### Required Variables
 - `AWS_REGION`, `CDK_AWS_ACCOUNT`
@@ -138,6 +159,7 @@ Deploy and MV tracks use the `development` GitHub environment with overrides:
 | `backend-coverage` | 30 days | Backend test track enabled |
 | `frontend-coverage` | 30 days | Frontend test track enabled |
 | `coverage-comparison` | 30 days | Any test track succeeded |
+| `playwright-report-<label>` | 30 days | E2E track enabled (includes HTML report, screenshots, traces) |
 
 ## Troubleshooting
 
@@ -159,3 +181,10 @@ Check that `NIGHTLY_TRACKS` is set as a repository variable (not a secret). Empt
 
 ### Merge validation fails on overlay
 This is the intended signal — it means the overlay branch has CDK/infra incompatibilities with the base branch that need to be resolved before merging.
+
+### E2E tests fail
+- Download the `playwright-report-<label>` artifact for screenshots and traces
+- Check that `E2E_ADMIN_USERNAME`, `E2E_ADMIN_PASSWORD`, `E2E_USER_USERNAME`, `E2E_USER_PASSWORD` secrets are set in the `development` environment
+- Verify the Cognito test users exist and have the correct roles
+- If auth setup fails, the Cognito managed login UI may have changed — check the `auth-admin.setup.ts` / `auth-user.setup.ts` selectors
+- E2E failures are informational and do not block other tracks
