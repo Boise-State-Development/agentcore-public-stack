@@ -1,12 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-const TEST_FILE_NAME = 'e2e-profile-test.txt';
-const TEST_FILE_CONTENT = 'Hello from Playwright e2e profile test.';
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -20,27 +14,27 @@ async function goToProfilePage(page: Page) {
 }
 
 /** Navigate to the My Files page and wait for it to load. */
-async function goToFilesPage(page: Page) {
-  await page.goto('/files');
-  await expect(
-    page.getByRole('heading', { name: 'My Files' }),
-  ).toBeVisible({ timeout: 15_000 });
-  // Wait for loading to finish
-  await expect(page.getByText('Loading files...')).toBeHidden({ timeout: 15_000 });
-}
+// async function goToFilesPage(page: Page) {
+//   await page.goto('/files');
+//   await expect(
+//     page.getByRole('heading', { name: 'My Files' }),
+//   ).toBeVisible({ timeout: 15_000 });
+//   // Wait for loading to finish
+//   await expect(page.getByText('Loading files...')).toBeHidden({ timeout: 15_000 });
+// }
 
 /** Send a chat message and wait for the assistant to finish responding. */
-async function sendMessageAndWaitForResponse(page: Page, message: string) {
-  const textarea = page.locator('textarea#user-message');
-  await expect(textarea).toBeVisible({ timeout: 15_000 });
-  await textarea.fill(message);
+// async function sendMessageAndWaitForResponse(page: Page, message: string) {
+//   const textarea = page.locator('textarea#user-message');
+//   await expect(textarea).toBeVisible({ timeout: 15_000 });
+//   await textarea.fill(message);
 
-  await page.getByRole('button', { name: 'Submit message' }).click();
+//   await page.getByRole('button', { name: 'Submit message' }).click();
 
-  const assistantMessage = page.locator('app-assistant-message').last();
-  await expect(assistantMessage).toBeVisible({ timeout: 60_000 });
-  await expect(page.locator('app-pulsating-loader')).toBeHidden({ timeout: 200_000 });
-}
+//   const assistantMessage = page.locator('app-assistant-message').last();
+//   await expect(assistantMessage).toBeVisible({ timeout: 60_000 });
+//   await expect(page.locator('app-pulsating-loader')).toBeHidden({ timeout: 200_000 });
+// }
 
 // ---------------------------------------------------------------------------
 // Independent profile page tests
@@ -106,6 +100,9 @@ test.describe('Settings / Profile (user)', () => {
 //   // -------------------------------------------------------------------------
 //   // Serial: File upload → My Files → Delete conversation → File gone
 //   // -------------------------------------------------------------------------
+
+// const TEST_FILE_NAME = 'e2e-profile-test.txt';
+// const TEST_FILE_CONTENT = 'Hello from Playwright e2e profile test.';
 
 //   test.describe.serial('File lifecycle via chat and My Files', () => {
 //     let page: Page;
