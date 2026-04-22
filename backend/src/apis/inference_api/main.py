@@ -33,6 +33,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
+from apis.inference_api.middleware.agentcore_context import AgentCoreContextMiddleware
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -116,6 +118,12 @@ app.add_middleware(
     compresslevel=6  # Balance between speed and compression ratio (1-9)
 )
 logger.info("Added GZip middleware for response compression")
+
+# Bridge AgentCore Runtime headers (WorkloadAccessToken, OAuth2CallbackUrl,
+# session ID) into BedrockAgentCoreContext so downstream code can look up
+# per-user OAuth tokens via AgentCore Identity.
+app.add_middleware(AgentCoreContextMiddleware)
+logger.info("Added AgentCore Runtime context middleware")
 
 # Add CORS middleware - origins from CDK-provided CORS_ORIGINS env var
 _cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")

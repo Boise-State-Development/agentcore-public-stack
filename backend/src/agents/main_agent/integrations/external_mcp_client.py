@@ -23,6 +23,11 @@ from apis.app_api.tools.models import (
     MCPTransport,
     ToolDefinition,
 )
+from agents.main_agent.integrations.agentcore_identity import (
+    TokenResult,
+    WorkloadTokenUnavailableError,
+    get_agentcore_identity_client,
+)
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
@@ -213,6 +218,11 @@ class ExternalMCPIntegration:
         """Initialize external MCP integration."""
         # Cache key: tool_id for non-OAuth tools, "user_id:tool_id" for OAuth tools
         self.clients: dict[str, MCPClient] = {}
+        # Consent URLs collected during load_external_tools, keyed by user_id.
+        # Consumed (and cleared) by the inference route on the next response so
+        # they surface as an oauth_required SSE event. Shape:
+        #   { user_id: [ { "provider_id": str, "authorization_url": str }, ... ] }
+        self.pending_consent: dict[str, list[dict[str, str]]] = {}
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         """Get the cache key for a tool client."""
@@ -222,28 +232,59 @@ class ExternalMCPIntegration:
 
     async def _get_oauth_token(
         self,
-        user_id: str,
         provider_id: str,
-    ) -> Optional[str]:
-        """
-        Get decrypted OAuth token for a user and provider.
+    ) -> TokenResult:
+        """Fetch an OAuth token for `provider_id` via AgentCore Identity.
 
-        Args:
-            user_id: The user's ID
-            provider_id: The OAuth provider ID
+        The user is identified implicitly by the WorkloadAccessToken on
+        `BedrockAgentCoreContext` (populated from request headers by
+        `AgentCoreContextMiddleware`). Scopes are read from the platform's
+        OAuth provider record so organizations can change them without code
+        changes.
+
+        Convention: `provider_id` is used verbatim as the AgentCore Identity
+        credential-provider name. Admins register providers with matching
+        names via `CreateOauth2CredentialProvider`.
 
         Returns:
-            Decrypted access token or None if not connected
-        """
-        try:
-            from apis.shared.oauth.service import get_oauth_service
+            `TokenResult` — either `.access_token` on cache hit or
+            `.authorization_url` when user consent is required.
 
-            oauth_service = get_oauth_service()
-            token = await oauth_service.get_decrypted_token(user_id, provider_id)
-            return token
-        except Exception as e:
-            logger.error("Error getting OAuth token")
-            return None
+        Raises:
+            WorkloadTokenUnavailableError: Not running inside an AgentCore
+                Runtime invocation (e.g. misconfigured middleware).
+        """
+        from apis.shared.oauth.provider_repository import get_provider_repository
+
+        provider = await get_provider_repository().get_provider(provider_id)
+        scopes = provider.scopes if provider else []
+
+        identity_client = get_agentcore_identity_client()
+        return identity_client.get_token_for_user(
+            provider_name=provider_id, scopes=scopes
+        )
+
+    def _record_pending_consent(
+        self, user_id: str, provider_id: str, authorization_url: str
+    ) -> None:
+        """Stash a consent URL to be surfaced to the user via SSE."""
+        bucket = self.pending_consent.setdefault(user_id, [])
+        # Dedupe on provider_id — if the user has two tools needing the same
+        # provider, one consent covers both.
+        if any(entry["provider_id"] == provider_id for entry in bucket):
+            return
+        bucket.append(
+            {"provider_id": provider_id, "authorization_url": authorization_url}
+        )
+
+    def drain_pending_consent(self, user_id: str) -> list[dict[str, str]]:
+        """Consume and return pending consent prompts for a user.
+
+        Called by the inference route on each response so the frontend can
+        render "Connect to X" affordances. Idempotent across repeated calls
+        because consent entries are removed once read.
+        """
+        return self.pending_consent.pop(user_id, [])
 
     async def load_external_tools(
         self,
@@ -313,7 +354,7 @@ class ExternalMCPIntegration:
                         logger.info(f"Using OIDC token forwarding for tool {tool_id}")
 
                 elif requires_oauth:
-                    # Use stored OAuth token from provider
+                    # Fetch user-federated token via AgentCore Identity.
                     if not user_id:
                         logger.warning(
                             f"Tool {tool_id} requires OAuth provider '{tool.requires_oauth_provider}' "
@@ -321,17 +362,44 @@ class ExternalMCPIntegration:
                         )
                         continue
 
-                    token_to_use = await self._get_oauth_token(
-                        user_id=user_id,
-                        provider_id=tool.requires_oauth_provider,
-                    )
-
-                    if not token_to_use:
-                        logger.warning(
-                            "User not connected to required OAuth provider for tool"
+                    try:
+                        token_result = await self._get_oauth_token(
+                            provider_id=tool.requires_oauth_provider,
                         )
-                        # Still create the client - it will fail gracefully when used
-                        # The MCP server should return an appropriate error
+                    except WorkloadTokenUnavailableError:
+                        logger.error(
+                            "No workload token on context for tool %s — "
+                            "AgentCoreContextMiddleware may be misconfigured",
+                            tool_id,
+                        )
+                        continue
+                    except Exception as e:
+                        logger.error(
+                            "Failed to fetch OAuth token for tool %s: %s",
+                            tool_id,
+                            e,
+                        )
+                        continue
+
+                    if token_result.requires_consent:
+                        # Record the auth URL; the inference route will emit
+                        # an oauth_required SSE event on the next response.
+                        self._record_pending_consent(
+                            user_id=user_id,
+                            provider_id=tool.requires_oauth_provider,
+                            authorization_url=token_result.authorization_url,
+                        )
+                        logger.info(
+                            "User consent required for tool %s (provider=%s); "
+                            "skipping client creation until consent completes",
+                            tool_id,
+                            tool.requires_oauth_provider,
+                        )
+                        # Skip loading this tool — the frontend will prompt
+                        # the user to consent before the next invocation.
+                        continue
+
+                    token_to_use = token_result.access_token
 
                 # Create MCP client with optional token (works for both OAuth and OIDC)
                 client = create_external_mcp_client(
