@@ -917,6 +917,28 @@ export class AppApiStack extends cdk.Stack {
         resources: [`${oauthClientSecretsArn}*`], // Wildcard for random suffix
       })
     );
+
+    // Admin CRUD for OAuth2 credential providers stored in AgentCore Identity.
+    // Provider-scoped actions are scoped to the default token vault; List
+    // requires a broader resource since it enumerates the vault itself.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreCredentialProviderAdmin',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:CreateOauth2CredentialProvider',
+          'bedrock-agentcore:UpdateOauth2CredentialProvider',
+          'bedrock-agentcore:DeleteOauth2CredentialProvider',
+          'bedrock-agentcore:GetOauth2CredentialProvider',
+          'bedrock-agentcore:ListOauth2CredentialProviders',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/oauth2credentialprovider/*`,
+        ],
+      })
+    );
+
     // Grant permissions for API Keys table (imported from Infrastructure Stack)
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
