@@ -262,3 +262,77 @@ class TestDeleteCredentialProvider:
         )
         with pytest.raises(ClientError):
             registrar.delete_credential_provider("p")
+
+
+class TestResponseParsing:
+    """`_info_from_response` must fail loudly on contract violations and
+    tolerate documented variations (missing secret, missing clientId)."""
+
+    def test_tolerates_missing_client_secret_arn(self, registrar, boto_client):
+        response = _create_response()
+        response.pop("clientSecretArn")
+        boto_client.create_oauth2_credential_provider.return_value = response
+
+        info = registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.GOOGLE,
+            client_id="cid",
+            client_secret="csec",
+        )
+        assert info.client_secret_arn == ""
+
+    def test_rejects_client_secret_arn_as_string(self, registrar, boto_client):
+        """AgentCore contract is `{secretArn: str}`; a raw string signals
+        an API contract change we should fail on loudly."""
+        response = _create_response()
+        response["clientSecretArn"] = "arn:aws:secretsmanager:...:secret:s"
+        boto_client.create_oauth2_credential_provider.return_value = response
+
+        with pytest.raises(TypeError, match="clientSecretArn of unexpected type"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.GOOGLE,
+                client_id="cid",
+                client_secret="csec",
+            )
+
+    def test_rejects_non_string_nested_secret_arn(self, registrar, boto_client):
+        response = _create_response()
+        response["clientSecretArn"] = {"secretArn": 12345}
+        boto_client.create_oauth2_credential_provider.return_value = response
+
+        with pytest.raises(TypeError, match="secretArn of unexpected type"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.GOOGLE,
+                client_id="cid",
+                client_secret="csec",
+            )
+
+    def test_rejects_missing_credential_provider_arn(self, registrar, boto_client):
+        response = _create_response()
+        response.pop("credentialProviderArn")
+        boto_client.create_oauth2_credential_provider.return_value = response
+
+        with pytest.raises(TypeError, match="credentialProviderArn"):
+            registrar.create_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.GOOGLE,
+                client_id="cid",
+                client_secret="csec",
+            )
+
+    def test_tolerates_missing_callback_url(self, registrar, boto_client):
+        """Callback URL absence falls back to empty string — non-fatal for
+        vendors that don't declare one yet."""
+        response = _create_response()
+        response["callbackUrl"] = None
+        boto_client.create_oauth2_credential_provider.return_value = response
+
+        info = registrar.create_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.GOOGLE,
+            client_id="cid",
+            client_secret="csec",
+        )
+        assert info.callback_url == ""

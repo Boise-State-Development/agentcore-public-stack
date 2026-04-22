@@ -288,7 +288,28 @@ class AgentCoreRegistrar:
     def _info_from_response(
         *, provider_id: str, vendor: str, response: Dict[str, Any]
     ) -> CredentialProviderInfo:
-        client_secret = response.get("clientSecretArn") or {}
+        # AgentCore's documented shape is `clientSecretArn: {secretArn: str}`.
+        # If the field is missing (possible for vendors that don't persist a
+        # secret) we tolerate that. If it's present but shaped differently,
+        # that's a contract change we want to fail loudly on rather than
+        # silently storing an empty string.
+        raw_secret = response.get("clientSecretArn")
+        if raw_secret is None:
+            client_secret_arn = ""
+        elif isinstance(raw_secret, dict):
+            secret_arn = raw_secret.get("secretArn", "")
+            if not isinstance(secret_arn, str):
+                raise TypeError(
+                    f"AgentCore returned clientSecretArn.secretArn of unexpected "
+                    f"type {type(secret_arn).__name__}; expected str"
+                )
+            client_secret_arn = secret_arn
+        else:
+            raise TypeError(
+                f"AgentCore returned clientSecretArn of unexpected type "
+                f"{type(raw_secret).__name__}; expected dict or None"
+            )
+
         output_config = response.get("oauth2ProviderConfigOutput") or {}
         # Each vendor variant nests its own output object; the clientId lives
         # one level deeper when present. We tolerate its absence.
@@ -298,12 +319,18 @@ class AgentCoreRegistrar:
                 client_id = nested["clientId"]
                 break
 
+        credential_provider_arn = response.get("credentialProviderArn")
+        if not isinstance(credential_provider_arn, str) or not credential_provider_arn:
+            raise TypeError(
+                "AgentCore response missing credentialProviderArn or wrong type"
+            )
+
         return CredentialProviderInfo(
             provider_id=provider_id,
             vendor=vendor,
-            credential_provider_arn=response["credentialProviderArn"],
-            client_secret_arn=client_secret.get("secretArn", ""),
-            callback_url=response.get("callbackUrl", ""),
+            credential_provider_arn=credential_provider_arn,
+            client_secret_arn=client_secret_arn,
+            callback_url=response.get("callbackUrl", "") or "",
             client_id=client_id,
         )
 

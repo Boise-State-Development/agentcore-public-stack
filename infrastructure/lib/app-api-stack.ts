@@ -939,6 +939,24 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
+    // Custom metrics for OAuth admin flows (e.g. ProviderOrphaned emitted
+    // by `_emit_orphan_metric` when a failed DB write + failed rollback
+    // leaves an AgentCore credential provider stranded). PutMetricData
+    // cannot be resource-scoped; we scope via the namespace condition.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'OAuthAdminMetrics',
+        effect: iam.Effect.ALLOW,
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+        conditions: {
+          StringEquals: {
+            'cloudwatch:namespace': 'Agentcore/OAuth',
+          },
+        },
+      })
+    );
+
     // Grant permissions for API Keys table (imported from Infrastructure Stack)
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({

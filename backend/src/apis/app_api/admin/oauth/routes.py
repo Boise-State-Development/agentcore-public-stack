@@ -6,9 +6,13 @@ credential provider owns `clientId`, `clientSecret`, endpoint config, and
 the callback URL that the admin must register with the vendor.
 """
 
+import asyncio
 import logging
+import os
 from datetime import datetime, timezone
+from functools import lru_cache
 
+import boto3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.shared.auth import User, require_admin
@@ -35,6 +39,92 @@ from apis.shared.oauth.provider_repository import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/oauth-providers", tags=["admin-oauth"])
+
+# Rollback backoff schedule. Two retries after the initial attempt, ~2.5s
+# total worst case — short enough to keep the create request responsive,
+# long enough to absorb the common class of transient AWS errors.
+_ROLLBACK_RETRY_DELAYS_SECONDS = (0.5, 2.0)
+
+# CloudWatch namespace for orphan telemetry. Kept distinct so ops can
+# scope alarms without catching unrelated Bedrock metrics.
+_ORPHAN_METRIC_NAMESPACE = "Agentcore/OAuth"
+_ORPHAN_METRIC_NAME = "ProviderOrphaned"
+
+
+@lru_cache(maxsize=1)
+def _cloudwatch_client():
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    return boto3.client("cloudwatch", region_name=region)
+
+
+async def _rollback_orphaned_provider(
+    registrar: AgentCoreRegistrar, provider_id: str
+) -> None:
+    """Best-effort delete of an AgentCore provider after a DB write failed.
+
+    Retries on transient AWS errors. If every attempt fails we emit a
+    CloudWatch `ProviderOrphaned` metric and log at ERROR — the AgentCore
+    record is now orphaned (no DynamoDB row) and needs manual cleanup,
+    but the admin's original 5xx still propagates so they know the
+    create didn't land.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1 + len(_ROLLBACK_RETRY_DELAYS_SECONDS)):
+        try:
+            # Registrar is sync; off-thread it so we don't block the event loop.
+            await asyncio.to_thread(registrar.delete_credential_provider, provider_id)
+            logger.info(
+                "Rolled back orphaned AgentCore provider %s (attempt %d)",
+                provider_id,
+                attempt + 1,
+            )
+            return
+        except Exception as err:
+            last_err = err
+            if attempt < len(_ROLLBACK_RETRY_DELAYS_SECONDS):
+                delay = _ROLLBACK_RETRY_DELAYS_SECONDS[attempt]
+                logger.warning(
+                    "Rollback attempt %d for %s failed (%s); retrying in %.1fs",
+                    attempt + 1,
+                    provider_id,
+                    err,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    logger.error(
+        "Rollback delete exhausted for %s after %d attempts; emitting "
+        "orphan metric. Last error: %s",
+        provider_id,
+        1 + len(_ROLLBACK_RETRY_DELAYS_SECONDS),
+        last_err,
+        exc_info=last_err,
+    )
+    _emit_orphan_metric(provider_id)
+
+
+def _emit_orphan_metric(provider_id: str) -> None:
+    """Fire-and-forget CloudWatch metric for an orphaned credential provider.
+
+    Failures here are swallowed — we're already inside a rollback path
+    and a secondary error would just shadow the admin-facing one.
+    """
+    try:
+        _cloudwatch_client().put_metric_data(
+            Namespace=_ORPHAN_METRIC_NAMESPACE,
+            MetricData=[
+                {
+                    "MetricName": _ORPHAN_METRIC_NAME,
+                    "Dimensions": [{"Name": "ProviderId", "Value": provider_id}],
+                    "Value": 1,
+                    "Unit": "Count",
+                }
+            ],
+        )
+    except Exception:
+        logger.exception(
+            "Failed to emit CloudWatch orphan metric for %s", provider_id
+        )
 
 
 # =============================================================================
@@ -107,8 +197,27 @@ async def create_provider(
             discovery_url=provider_data.oauth_discovery_url,
             authorization_server_metadata=provider_data.authorization_server_metadata,
         )
-    except CredentialProviderConflictError as err:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err))
+    except CredentialProviderConflictError:
+        # We already verified the DB has no record for this provider_id
+        # above, so a conflict from AgentCore means its vault carries an
+        # orphaned record — almost always from a prior failed rollback.
+        # Give the admin a cleanup pointer instead of a bare 409.
+        logger.error(
+            "Orphan detected for %s: DB empty but AgentCore has a credential "
+            "provider. Previous rollback likely failed.",
+            provider_data.provider_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"An AgentCore credential provider named "
+                f"'{provider_data.provider_id}' already exists but has no "
+                "matching database record (likely from a previous failed "
+                "rollback). Delete it via the AWS CLI and retry: "
+                "`aws bedrock-agentcore-control delete-oauth2-credential-provider "
+                f"--name {provider_data.provider_id}`."
+            ),
+        )
     except InvalidCustomProviderConfigError as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
 
@@ -120,13 +229,7 @@ async def create_provider(
             "DB write failed for %s; rolling back AgentCore credential provider",
             provider_data.provider_id,
         )
-        try:
-            registrar.delete_credential_provider(provider_data.provider_id)
-        except Exception:
-            logger.exception(
-                "Rollback delete failed for %s; orphaned AgentCore provider may exist",
-                provider_data.provider_id,
-            )
+        await _rollback_orphaned_provider(registrar, provider_data.provider_id)
         raise
 
     return OAuthProviderResponse.from_provider(provider)
