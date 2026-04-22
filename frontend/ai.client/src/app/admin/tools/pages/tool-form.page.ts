@@ -340,7 +340,7 @@ import {
             <div class="border border-emerald-200 dark:border-emerald-800 rounded-lg p-4 bg-emerald-50/50 dark:bg-emerald-900/20">
               <div class="flex items-center gap-2 mb-4">
                 <ng-icon name="heroLink" class="size-5 text-emerald-600 dark:text-emerald-400" />
-                <h3 class="text-lg font-semibold text-emerald-900 dark:text-emerald-100">User OAuth Connection</h3>
+                <h3 class="text-lg font-semibold text-emerald-900 dark:text-emerald-100">User OAuth Connector</h3>
               </div>
               <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
                 If this tool requires access to a user's external account (e.g., Google Workspace, Microsoft 365),

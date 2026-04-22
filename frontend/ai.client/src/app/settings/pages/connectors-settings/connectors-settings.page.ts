@@ -18,12 +18,12 @@ import {
   heroArrowPath,
   heroKey,
 } from '@ng-icons/heroicons/outline';
-import { ConnectionsService } from '../../connections/services';
-import { OAuthConnection, OAuthProviderType } from '../../connections/models';
+import { ConnectorsService } from '../../connectors/services';
+import { OAuthConnector, OAuthProviderType } from '../../connectors/models';
 import { ToastService } from '../../../services/toast/toast.service';
 
 @Component({
-  selector: 'app-connections-settings',
+  selector: 'app-connectors-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
   providers: [
@@ -43,29 +43,29 @@ import { ToastService } from '../../../services/toast/toast.service';
     <div class="flex flex-col gap-8">
       <!-- Section header -->
       <div>
-        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Connections</h2>
+        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Connectors</h2>
         <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
           Connect your accounts to enable tools that require third-party authentication.
         </p>
       </div>
 
       <!-- Loading State -->
-      @if (connectionsResource.isLoading() && connections().length === 0) {
+      @if (connectorsResource.isLoading() && connectors().length === 0) {
         <div class="flex h-48 items-center justify-center">
           <div class="flex flex-col items-center gap-4">
             <div class="size-10 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600"></div>
-            <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading connections...</p>
+            <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading connectors...</p>
           </div>
         </div>
       }
 
       <!-- Error State -->
-      @if (connectionsResource.error()) {
+      @if (connectorsResource.error()) {
         <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
-          <p class="font-medium">Failed to load connections</p>
+          <p class="font-medium">Failed to load connectors</p>
           <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
           <button
-            (click)="connectionsService.reload()"
+            (click)="connectorsService.reload()"
             class="mt-3 text-sm/6 font-medium underline hover:no-underline"
           >
             Retry
@@ -73,47 +73,47 @@ import { ToastService } from '../../../services/toast/toast.service';
         </div>
       }
 
-      <!-- Connections Grid -->
-      @if (!connectionsResource.isLoading() || connections().length > 0) {
-        @if (connections().length === 0 && !connectionsResource.error()) {
+      <!-- Connectors Grid -->
+      @if (!connectorsResource.isLoading() || connectors().length > 0) {
+        @if (connectors().length === 0 && !connectorsResource.error()) {
           <!-- Empty State -->
           <div class="py-12 text-center">
             <div class="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
               <ng-icon name="heroLink" class="size-7 text-gray-400" />
             </div>
-            <h3 class="text-base/7 font-medium text-gray-900 dark:text-white">No connections available</h3>
+            <h3 class="text-base/7 font-medium text-gray-900 dark:text-white">No connectors available</h3>
             <p class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">
               There are no OAuth providers configured for your account. Contact an administrator if you need access to external tools.
             </p>
           </div>
         } @else {
           <div class="grid gap-4 sm:grid-cols-2">
-            @for (connection of connections(); track connection.providerId) {
+            @for (connector of connectors(); track connector.providerId) {
               <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-gray-800">
                 <!-- Provider Info -->
                 <div class="flex items-start gap-4">
-                  <div [class]="getProviderIconClasses(connection.providerType)">
-                    <ng-icon [name]="getProviderIcon(connection)" class="size-6" />
+                  <div [class]="getProviderIconClasses(connector.providerType)">
+                    <ng-icon [name]="getProviderIcon(connector)" class="size-6" />
                   </div>
                   <div class="min-w-0 flex-1">
                     <h3 class="font-semibold text-gray-900 dark:text-white">
-                      {{ connection.displayName }}
+                      {{ connector.displayName }}
                     </h3>
 
                     <!-- Status Badge -->
-                    @if (isConnected(connection)) {
+                    @if (isConnected(connector)) {
                       <div class="mt-1 flex items-center gap-1.5">
                         <span class="inline-flex items-center gap-1 rounded-xs bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
                           <ng-icon name="heroCheck" class="size-3" />
                           Connected
                         </span>
-                        @if (connection.connectedAt) {
+                        @if (connector.connectedAt) {
                           <span class="text-xs text-gray-500 dark:text-gray-400">
-                            since {{ formatDate(connection.connectedAt) }}
+                            since {{ formatDate(connector.connectedAt) }}
                           </span>
                         }
                       </div>
-                    } @else if (connection.needsReauth || connection.status === 'needs_reauth' || connection.status === 'expired') {
+                    } @else if (connector.needsReauth || connector.status === 'needs_reauth' || connector.status === 'expired') {
                       <div class="mt-1">
                         <span class="inline-flex items-center gap-1 rounded-xs bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                           <ng-icon name="heroExclamationTriangle" class="size-3" />
@@ -130,13 +130,13 @@ import { ToastService } from '../../../services/toast/toast.service';
 
                 <!-- Action Button -->
                 <div class="mt-4 flex justify-end">
-                  @if (isConnected(connection) && !connection.needsReauth && connection.status !== 'needs_reauth' && connection.status !== 'expired') {
+                  @if (isConnected(connector) && !connector.needsReauth && connector.status !== 'needs_reauth' && connector.status !== 'expired') {
                     <button
-                      (click)="disconnect(connection)"
-                      [disabled]="disconnecting() === connection.providerId"
+                      (click)="disconnect(connector)"
+                      [disabled]="disconnecting() === connector.providerId"
                       class="inline-flex items-center gap-2 rounded-xs border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                     >
-                      @if (disconnecting() === connection.providerId) {
+                      @if (disconnecting() === connector.providerId) {
                         <ng-icon name="heroArrowPath" class="size-4 animate-spin" />
                         Disconnecting...
                       } @else {
@@ -145,15 +145,15 @@ import { ToastService } from '../../../services/toast/toast.service';
                     </button>
                   } @else {
                     <button
-                      (click)="connect(connection)"
-                      [disabled]="connecting() === connection.providerId"
+                      (click)="connect(connector)"
+                      [disabled]="connecting() === connector.providerId"
                       class="inline-flex items-center gap-2 rounded-xs bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
                     >
-                      @if (connecting() === connection.providerId) {
+                      @if (connecting() === connector.providerId) {
                         <ng-icon name="heroArrowPath" class="size-4 animate-spin" />
                         Connecting...
                       } @else {
-                        @if (connection.needsReauth || connection.status === 'needs_reauth' || connection.status === 'expired') {
+                        @if (connector.needsReauth || connector.status === 'needs_reauth' || connector.status === 'expired') {
                           Reconnect
                         } @else {
                           Connect
@@ -170,18 +170,18 @@ import { ToastService } from '../../../services/toast/toast.service';
     </div>
   `,
 })
-export class ConnectionsSettingsPage implements OnInit {
-  readonly connectionsService = inject(ConnectionsService);
+export class ConnectorsSettingsPage implements OnInit {
+  readonly connectorsService = inject(ConnectorsService);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private toast = inject(ToastService);
 
-  readonly connectionsResource = this.connectionsService.connectionsResource;
+  readonly connectorsResource = this.connectorsService.connectorsResource;
 
   connecting = signal<string | null>(null);
   disconnecting = signal<string | null>(null);
 
-  readonly connections = computed(() => this.connectionsService.getConnections());
+  readonly connectors = computed(() => this.connectorsService.getConnectors());
 
   ngOnInit(): void {
     this.handleCallbackParams();
@@ -193,7 +193,7 @@ export class ConnectionsSettingsPage implements OnInit {
     if (params['success'] === 'true') {
       const provider = params['provider'] || 'the service';
       this.toast.success('Connected!', `Successfully connected to ${provider}.`);
-      this.connectionsService.reload();
+      this.connectorsService.reload();
       this.router.navigate([], {
         relativeTo: this.route,
         queryParams: {},
@@ -222,16 +222,16 @@ export class ConnectionsSettingsPage implements OnInit {
     }
   }
 
-  isConnected(connection: OAuthConnection): boolean {
-    return connection.status === 'connected';
+  isConnected(connector: OAuthConnector): boolean {
+    return connector.status === 'connected';
   }
 
-  async connect(connection: OAuthConnection): Promise<void> {
-    this.connecting.set(connection.providerId);
+  async connect(connector: OAuthConnector): Promise<void> {
+    this.connecting.set(connector.providerId);
 
     try {
       const redirectUrl = window.location.origin + '/settings/oauth/callback';
-      const authUrl = await this.connectionsService.connect(connection.providerId, redirectUrl);
+      const authUrl = await this.connectorsService.connect(connector.providerId, redirectUrl);
       window.location.href = authUrl;
     } catch (error: unknown) {
       const err = error as { error?: { detail?: string }; message?: string };
@@ -241,16 +241,16 @@ export class ConnectionsSettingsPage implements OnInit {
     }
   }
 
-  async disconnect(connection: OAuthConnection): Promise<void> {
-    if (!confirm(`Are you sure you want to disconnect from ${connection.displayName}?`)) {
+  async disconnect(connector: OAuthConnector): Promise<void> {
+    if (!confirm(`Are you sure you want to disconnect from ${connector.displayName}?`)) {
       return;
     }
 
-    this.disconnecting.set(connection.providerId);
+    this.disconnecting.set(connector.providerId);
 
     try {
-      await this.connectionsService.disconnect(connection.providerId);
-      this.toast.success('Disconnected', `Successfully disconnected from ${connection.displayName}.`);
+      await this.connectorsService.disconnect(connector.providerId);
+      this.toast.success('Disconnected', `Successfully disconnected from ${connector.displayName}.`);
     } catch (error: unknown) {
       const err = error as { error?: { detail?: string }; message?: string };
       const message = err?.error?.detail || err?.message || 'Failed to disconnect.';
@@ -260,11 +260,11 @@ export class ConnectionsSettingsPage implements OnInit {
     }
   }
 
-  getProviderIcon(connection: OAuthConnection): string {
-    if (connection.iconName && connection.iconName !== 'heroLink') {
-      return connection.iconName;
+  getProviderIcon(connector: OAuthConnector): string {
+    if (connector.iconName && connector.iconName !== 'heroLink') {
+      return connector.iconName;
     }
-    switch (connection.providerType) {
+    switch (connector.providerType) {
       case 'google':
       case 'microsoft':
         return 'heroCloud';

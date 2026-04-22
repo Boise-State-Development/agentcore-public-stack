@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
-import { ConnectionsService } from './connections.service';
+import { ConnectorsService } from './connectors.service';
 import { ConfigService } from '../../../services/config.service';
 import { AuthService } from '../../../auth/auth.service';
 
-describe('ConnectionsService', () => {
-  let service: ConnectionsService;
+describe('ConnectorsService', () => {
+  let service: ConnectorsService;
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
@@ -15,38 +15,38 @@ describe('ConnectionsService', () => {
     TestBed.configureTestingModule({
       imports: [HttpClientTestingModule],
       providers: [
-        ConnectionsService,
+        ConnectorsService,
         { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });
-    service = TestBed.inject(ConnectionsService);
+    service = TestBed.inject(ConnectorsService);
     httpMock = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
-    httpMock.match(() => true); // discard pending requests
+    httpMock.match(() => true);
     TestBed.resetTestingModule();
   });
 
-  it('should fetch connections', async () => {
+  it('should fetch connectors', async () => {
     const mockResponse = { connections: [{ provider_id: 'google', status: 'connected' }] };
 
-    const connectionsPromise = service.fetchConnections();
-    
+    const connectorsPromise = service.fetchConnectors();
+
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/oauth/connections').flush(mockResponse);
     });
 
-    const connections = await connectionsPromise;
-    expect(connections.connections[0].providerId).toBe('google');
+    const connectors = await connectorsPromise;
+    expect(connectors.connectors[0].providerId).toBe('google');
   });
 
   it('should fetch providers', async () => {
     const mockResponse = { providers: [{ provider_id: 'google', name: 'Google' }], total: 1 };
 
     const providersPromise = service.fetchProviders();
-    
+
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/oauth/providers').flush(mockResponse);
     });
@@ -60,7 +60,7 @@ describe('ConnectionsService', () => {
     const mockResponse = { authorization_url: 'https://oauth.example.com/auth' };
 
     const connectPromise = service.connect('google');
-    
+
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/oauth/connect/google').flush(mockResponse);
     });
@@ -71,7 +71,7 @@ describe('ConnectionsService', () => {
 
   it('should disconnect from provider', async () => {
     const disconnectPromise = service.disconnect('google');
-    
+
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/oauth/connections/google').flush({});
     });

@@ -85,7 +85,7 @@ type CallbackState = 'processing' | 'success' | 'error';
               }
             </p>
             <p class="redirect-notice">
-              Redirecting to your connections<span class="dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
+              Redirecting to your connectors<span class="dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
             </p>
           </div>
         }
@@ -587,8 +587,8 @@ export class OAuthCallbackPage implements OnInit, OnDestroy {
       } else if (params['error']) {
         this.handleError(params);
       } else {
-        // No valid params, redirect to connections
-        this.redirectToConnections();
+        // No valid params, redirect to connectors
+        this.redirectToConnectors();
       }
     }, 800);
   }
@@ -602,7 +602,7 @@ export class OAuthCallbackPage implements OnInit, OnDestroy {
 
     // Redirect after showing success
     setTimeout(() => {
-      this.redirectToConnections({ success: 'true', provider });
+      this.redirectToConnectors({ success: 'true', provider });
     }, 1500);
   }
 
@@ -632,12 +632,12 @@ export class OAuthCallbackPage implements OnInit, OnDestroy {
 
     // Redirect after showing error
     setTimeout(() => {
-      this.redirectToConnections({ error, provider });
+      this.redirectToConnectors({ error, provider });
     }, 2500);
   }
 
-  private redirectToConnections(queryParams?: Record<string, string>): void {
-    this.router.navigate(['/settings/connections'], {
+  private redirectToConnectors(queryParams?: Record<string, string>): void {
+    this.router.navigate(['/settings/connectors'], {
       queryParams,
       replaceUrl: true,
     });

@@ -4,15 +4,12 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { AuthService } from '../../../auth/auth.service';
 import {
-  OAuthConnection,
-  OAuthConnectionListResponse,
+  OAuthConnector,
+  OAuthConnectorListResponse,
   OAuthProvider,
   OAuthProviderListResponse,
 } from '../models';
 
-/**
- * Convert snake_case to camelCase for frontend models.
- */
 function toCamelCase(obj: Record<string, any>): Record<string, any> {
   const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(obj)) {
@@ -23,34 +20,28 @@ function toCamelCase(obj: Record<string, any>): Record<string, any> {
 }
 
 /**
- * Service for managing user OAuth connections.
+ * Service for managing user OAuth connectors.
  *
- * Provides access to available providers and user's connections,
+ * Provides access to available providers and user's connectors,
  * as well as connect/disconnect operations.
  */
 @Injectable({
   providedIn: 'root'
 })
-export class ConnectionsService {
+export class ConnectorsService {
   private http = inject(HttpClient);
   private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/oauth`);
 
-  /**
-   * Reactive resource for fetching user's OAuth connections.
-   */
-  readonly connectionsResource = resource({
+  readonly connectorsResource = resource({
     loader: async () => {
       await this.authService.ensureAuthenticated();
-      return this.fetchConnections();
+      return this.fetchConnectors();
     }
   });
 
-  /**
-   * Reactive resource for fetching available OAuth providers.
-   */
   readonly providersResource = resource({
     loader: async () => {
       await this.authService.ensureAuthenticated();
@@ -58,42 +49,28 @@ export class ConnectionsService {
     }
   });
 
-  /**
-   * Get all user connections (from resource).
-   */
-  getConnections(): OAuthConnection[] {
-    return this.connectionsResource.value()?.connections ?? [];
+  getConnectors(): OAuthConnector[] {
+    return this.connectorsResource.value()?.connectors ?? [];
   }
 
-  /**
-   * Get all available providers (from resource).
-   */
   getProviders(): OAuthProvider[] {
     return this.providersResource.value()?.providers ?? [];
   }
 
-  /**
-   * Get a connection by provider ID.
-   */
-  getConnectionByProviderId(providerId: string): OAuthConnection | undefined {
-    return this.getConnections().find(c => c.providerId === providerId);
+  getConnectorByProviderId(providerId: string): OAuthConnector | undefined {
+    return this.getConnectors().find(c => c.providerId === providerId);
   }
 
-  /**
-   * Fetch user's OAuth connections from the API.
-   */
-  async fetchConnections(): Promise<OAuthConnectionListResponse> {
+  async fetchConnectors(): Promise<OAuthConnectorListResponse> {
+    // Backend endpoint still returns a `connections` array — translate at the service layer.
     const response = await firstValueFrom(
       this.http.get<any>(`${this.baseUrl()}/connections`)
     );
     return {
-      connections: response.connections.map((c: any) => toCamelCase(c) as OAuthConnection),
+      connectors: response.connections.map((c: any) => toCamelCase(c) as OAuthConnector),
     };
   }
 
-  /**
-   * Fetch available OAuth providers from the API.
-   */
   async fetchProviders(): Promise<OAuthProviderListResponse> {
     const response = await firstValueFrom(
       this.http.get<any>(`${this.baseUrl()}/providers`)
@@ -104,10 +81,6 @@ export class ConnectionsService {
     };
   }
 
-  /**
-   * Initiate OAuth connection flow.
-   * Returns the authorization URL to redirect to.
-   */
   async connect(providerId: string, redirectUrl?: string): Promise<string> {
     const params = redirectUrl ? `?redirect=${encodeURIComponent(redirectUrl)}` : '';
     const response = await firstValueFrom(
@@ -116,21 +89,15 @@ export class ConnectionsService {
     return response.authorization_url;
   }
 
-  /**
-   * Disconnect from an OAuth provider.
-   */
   async disconnect(providerId: string): Promise<void> {
     await firstValueFrom(
       this.http.delete<void>(`${this.baseUrl()}/connections/${providerId}`)
     );
-    this.connectionsResource.reload();
+    this.connectorsResource.reload();
   }
 
-  /**
-   * Reload both resources.
-   */
   reload(): void {
-    this.connectionsResource.reload();
+    this.connectorsResource.reload();
     this.providersResource.reload();
   }
 }

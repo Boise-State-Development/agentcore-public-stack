@@ -33,8 +33,13 @@ export const routes: Routes = [
         loadComponent: () => import('./auth/callback/callback.page').then(m => m.CallbackPage),
     },
     {
+        path: 'connectors',
+        redirectTo: 'settings/connectors',
+        pathMatch: 'full',
+    },
+    {
         path: 'connections',
-        redirectTo: 'settings/connections',
+        redirectTo: 'settings/connectors',
         pathMatch: 'full',
     },
     {

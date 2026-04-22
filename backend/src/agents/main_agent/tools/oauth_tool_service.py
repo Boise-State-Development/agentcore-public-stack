@@ -69,7 +69,7 @@ class OAuthTokenResult:
         Returns a dict suitable for returning from a tool.
         """
         frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
-        connect_url = f"{frontend_url}/settings/connections"
+        connect_url = f"{frontend_url}/settings/connectors"
 
         if self.needs_reauth:
             message = f"""⚠️ **Re-authorization Required**
@@ -241,7 +241,7 @@ class OAuthToolService:
             URL to the connections page
         """
         frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
-        return f"{frontend_url}/settings/connections"
+        return f"{frontend_url}/settings/connectors"
 
 
 # Singleton instance
@@ -314,7 +314,7 @@ def format_oauth_connection_guidance(
         return ""
 
     frontend_url = os.getenv(EnvVars.FRONTEND_URL, Defaults.FRONTEND_URL)
-    connect_url = f"{frontend_url}/settings/connections"
+    connect_url = f"{frontend_url}/settings/connectors"
 
     if len(missing_connections) == 1:
         conn = missing_connections[0]
