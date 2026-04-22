@@ -110,10 +110,10 @@ export class AdminPage {
       route: '/admin/auth-providers',
     },
     {
-      title: 'OAuth Providers',
-      description: 'Configure third-party OAuth integrations for MCP tool authentication. Manage Google, Microsoft, GitHub, and custom providers.',
+      title: 'Connectors',
+      description: 'Configure third-party OAuth integrations that users can connect for MCP tool authentication. Manage Google, Microsoft, GitHub, and custom connectors.',
       icon: 'heroLink',
-      route: '/admin/oauth-providers',
+      route: '/admin/connectors',
     },
     {
       title: 'Fine-Tuning Access',

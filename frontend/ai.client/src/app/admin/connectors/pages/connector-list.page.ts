@@ -23,12 +23,12 @@ import {
   heroXCircle,
   heroShieldCheck,
 } from '@ng-icons/heroicons/outline';
-import { OAuthProvidersService } from '../services/oauth-providers.service';
-import { OAuthProvider, OAuthProviderType } from '../models/oauth-provider.model';
+import { ConnectorsService } from '../services/connectors.service';
+import { Connector, ConnectorType } from '../models/connector.model';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
 
 @Component({
-  selector: 'app-provider-list',
+  selector: 'app-connector-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, FormsModule, NgIcon, TooltipDirective],
   providers: [
@@ -66,17 +66,17 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
         <!-- Page Header -->
         <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">OAuth Providers</h1>
+            <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">Connectors</h1>
             <p class="mt-2 text-base/7 text-gray-600 dark:text-gray-400">
-              Configure third-party OAuth integrations for MCP tool authentication.
+              Configure third-party OAuth integrations that users can connect for MCP tool authentication.
             </p>
           </div>
           <a
-            routerLink="/admin/oauth-providers/new"
+            routerLink="/admin/connectors/new"
             class="inline-flex items-center justify-center gap-2 rounded-sm bg-blue-600 px-4 py-2.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
           >
             <ng-icon name="heroPlus" class="size-5" />
-            Add Provider
+            Add Connector
           </a>
         </div>
 
@@ -90,7 +90,7 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
             <input
               type="text"
               [(ngModel)]="searchQuery"
-              placeholder="Search providers..."
+              placeholder="Search connectors..."
               class="w-full rounded-sm border border-gray-300 bg-white py-2.5 pl-10 pr-10 text-sm/6 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
             />
             @if (searchQuery()) {
@@ -110,7 +110,7 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
             (ngModelChange)="enabledFilter.set($event)"
             class="rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           >
-            <option value="">All Providers</option>
+            <option value="">All Connectors</option>
             <option value="enabled">Enabled Only</option>
             <option value="disabled">Disabled Only</option>
           </select>
@@ -139,26 +139,26 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
         </div>
 
         <!-- Loading State -->
-        @if (providersResource.isLoading() && providers().length === 0) {
+        @if (connectorsResource.isLoading() && connectors().length === 0) {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
               <div
                 class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600"
               ></div>
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                Loading providers...
+                Loading connectors...
               </p>
             </div>
           </div>
         }
 
         <!-- Error State -->
-        @if (providersResource.error()) {
+        @if (connectorsResource.error()) {
           <div class="mb-6 rounded-sm border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
-            <p class="font-medium">Failed to load providers</p>
+            <p class="font-medium">Failed to load connectors</p>
             <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
             <button
-              (click)="oauthProvidersService.reload()"
+              (click)="connectorsService.reload()"
               class="mt-3 text-sm/6 font-medium underline hover:no-underline"
             >
               Retry
@@ -166,14 +166,14 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
           </div>
         }
 
-        <!-- Providers Table -->
-        @if (!providersResource.isLoading() || providers().length > 0) {
+        <!-- Connectors Table -->
+        @if (!connectorsResource.isLoading() || connectors().length > 0) {
           <div class="overflow-hidden rounded-sm border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
             <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead class="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
                   <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 sm:pl-6">
-                    Provider
+                    Connector
                   </th>
                   <th scope="col" class="hidden px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 md:table-cell">
                     Type
@@ -193,23 +193,23 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                @for (provider of filteredProviders(); track provider.providerId) {
+                @for (connector of filteredConnectors(); track connector.providerId) {
                   <tr
                     class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                    [class.opacity-60]="!provider.enabled"
+                    [class.opacity-60]="!connector.enabled"
                   >
-                    <!-- Provider Info -->
+                    <!-- Connector Info -->
                     <td class="whitespace-nowrap py-4 pl-4 pr-3 sm:pl-6">
                       <div class="flex items-center gap-3">
-                        <div [class]="getProviderIconClasses(provider.providerType)">
-                          <ng-icon [name]="getProviderIcon(provider)" class="size-5" />
+                        <div [class]="getConnectorIconClasses(connector.providerType)">
+                          <ng-icon [name]="getConnectorIcon(connector)" class="size-5" />
                         </div>
                         <div class="min-w-0">
                           <p class="font-medium text-gray-900 dark:text-white">
-                            {{ provider.displayName }}
+                            {{ connector.displayName }}
                           </p>
                           <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-                            {{ provider.providerId }}
+                            {{ connector.providerId }}
                           </p>
                         </div>
                       </div>
@@ -217,23 +217,23 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
 
                     <!-- Type -->
                     <td class="hidden whitespace-nowrap px-3 py-4 md:table-cell">
-                      <span [class]="getProviderTypeBadgeClasses(provider.providerType)">
-                        {{ getProviderTypeLabel(provider.providerType) }}
+                      <span [class]="getConnectorTypeBadgeClasses(connector.providerType)">
+                        {{ getConnectorTypeLabel(connector.providerType) }}
                       </span>
                     </td>
 
                     <!-- Scopes -->
                     <td class="hidden px-3 py-4 lg:table-cell">
                       <div class="flex flex-wrap gap-1">
-                        @if (provider.scopes.length === 0) {
+                        @if (connector.scopes.length === 0) {
                           <span class="text-sm/6 text-gray-400 dark:text-gray-500">None</span>
                         } @else {
                           <span
                             class="cursor-help text-sm/6 text-gray-600 dark:text-gray-300"
-                            [appTooltip]="provider.scopes.join(', ')"
+                            [appTooltip]="connector.scopes.join(', ')"
                             appTooltipPosition="top"
                           >
-                            {{ provider.scopes.length }} scope{{ provider.scopes.length === 1 ? '' : 's' }}
+                            {{ connector.scopes.length }} scope{{ connector.scopes.length === 1 ? '' : 's' }}
                           </span>
                         }
                       </div>
@@ -241,7 +241,7 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
 
                     <!-- Access -->
                     <td class="hidden whitespace-nowrap px-3 py-4 sm:table-cell">
-                      @if (provider.allowedRoles.length === 0 || provider.allowedRoles.includes('*')) {
+                      @if (connector.allowedRoles.length === 0 || connector.allowedRoles.includes('*')) {
                         <span class="inline-flex items-center gap-1 text-sm/6 text-purple-600 dark:text-purple-400">
                           <ng-icon name="heroShieldCheck" class="size-4" />
                           All Roles
@@ -249,17 +249,17 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
                       } @else {
                         <span
                           class="cursor-help text-sm/6 text-gray-600 dark:text-gray-300"
-                          [appTooltip]="provider.allowedRoles.join(', ')"
+                          [appTooltip]="connector.allowedRoles.join(', ')"
                           appTooltipPosition="top"
                         >
-                          {{ provider.allowedRoles.length }} role{{ provider.allowedRoles.length === 1 ? '' : 's' }}
+                          {{ connector.allowedRoles.length }} role{{ connector.allowedRoles.length === 1 ? '' : 's' }}
                         </span>
                       }
                     </td>
 
                     <!-- Status -->
                     <td class="whitespace-nowrap px-3 py-4">
-                      @if (provider.enabled) {
+                      @if (connector.enabled) {
                         <span class="inline-flex items-center gap-1 rounded-xs bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
                           <ng-icon name="heroCheck" class="size-3" />
                           Active
@@ -276,17 +276,17 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
                     <td class="whitespace-nowrap py-4 pl-3 pr-4 text-right sm:pr-6">
                       <div class="flex items-center justify-end gap-2">
                         <a
-                          [routerLink]="['/admin/oauth-providers/edit', provider.providerId]"
+                          [routerLink]="['/admin/connectors/edit', connector.providerId]"
                           class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-                          [appTooltip]="'Edit provider'"
+                          [appTooltip]="'Edit connector'"
                           appTooltipPosition="top"
                         >
                           <ng-icon name="heroPencilSquare" class="size-5" />
                         </a>
                         <button
-                          (click)="deleteProvider(provider)"
+                          (click)="deleteConnector(connector)"
                           class="inline-flex items-center justify-center rounded-xs p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 focus:outline-hidden focus:ring-3 focus:ring-red-500/50 dark:text-gray-400 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                          [appTooltip]="'Delete provider'"
+                          [appTooltip]="'Delete connector'"
                           appTooltipPosition="top"
                         >
                           <ng-icon name="heroTrash" class="size-5" />
@@ -300,13 +300,13 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
           </div>
 
           <!-- Empty State -->
-          @if (filteredProviders().length === 0 && !providersResource.isLoading()) {
+          @if (filteredConnectors().length === 0 && !connectorsResource.isLoading()) {
             <div class="py-16 text-center">
               <div class="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
                 <ng-icon name="heroLink" class="size-8 text-gray-400" />
               </div>
               @if (hasActiveFilters()) {
-                <h3 class="text-lg/7 font-medium text-gray-900 dark:text-white">No providers match your filters</h3>
+                <h3 class="text-lg/7 font-medium text-gray-900 dark:text-white">No connectors match your filters</h3>
                 <p class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">Try adjusting your search or filter criteria.</p>
                 <button
                   (click)="resetFilters()"
@@ -315,16 +315,16 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
                   Clear all filters
                 </button>
               } @else {
-                <h3 class="text-lg/7 font-medium text-gray-900 dark:text-white">No OAuth providers configured</h3>
+                <h3 class="text-lg/7 font-medium text-gray-900 dark:text-white">No connectors configured</h3>
                 <p class="mt-2 text-sm/6 text-gray-500 dark:text-gray-400">
-                  Get started by adding your first OAuth provider integration.
+                  Get started by adding your first connector.
                 </p>
                 <a
-                  routerLink="/admin/oauth-providers/new"
+                  routerLink="/admin/connectors/new"
                   class="mt-6 inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2.5 text-sm/6 font-semibold text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50"
                 >
                   <ng-icon name="heroPlus" class="size-5" />
-                  Add Provider
+                  Add Connector
                 </a>
               }
             </div>
@@ -332,15 +332,15 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
         }
 
         <!-- Info Section -->
-        @if (providers().length > 0) {
+        @if (connectors().length > 0) {
           <div class="mt-8 rounded-sm border border-blue-200 bg-blue-50 p-6 dark:border-blue-800 dark:bg-blue-900/20">
-            <h2 class="text-lg/7 font-semibold text-blue-900 dark:text-blue-200">About OAuth Providers</h2>
+            <h2 class="text-lg/7 font-semibold text-blue-900 dark:text-blue-200">About Connectors</h2>
             <div class="mt-3 space-y-2 text-sm/6 text-blue-800 dark:text-blue-300">
               <p>
-                <strong>Provider Types:</strong> Choose from common presets (Google, Microsoft, GitHub, Canvas) or configure a custom OAuth 2.0 provider.
+                <strong>Connector Types:</strong> Choose from common presets (Google, Microsoft, GitHub, Canvas) or configure a custom OAuth 2.0 connector.
               </p>
               <p>
-                <strong>Role Restrictions:</strong> Control which application roles can connect to each provider. Leave empty for unrestricted access.
+                <strong>Role Restrictions:</strong> Control which application roles can use each connector. Leave empty for unrestricted access.
               </p>
               <p>
                 <strong>Security:</strong> Client secrets are encrypted and stored securely. They are never exposed to the frontend after creation.
@@ -352,47 +352,44 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
     </div>
   `,
 })
-export class ProviderListPage {
-  oauthProvidersService = inject(OAuthProvidersService);
+export class ConnectorListPage {
+  connectorsService = inject(ConnectorsService);
   private router = inject(Router);
 
-  readonly providersResource = this.oauthProvidersService.providersResource;
+  readonly connectorsResource = this.connectorsService.connectorsResource;
 
-  // Local state
   searchQuery = signal('');
   enabledFilter = signal('');
   typeFilter = signal('');
 
-  // Computed
-  readonly providers = computed(() => this.oauthProvidersService.getProviders());
+  readonly connectors = computed(() => this.connectorsService.getConnectors());
 
-  readonly filteredProviders = computed(() => {
-    let providers = this.providers();
+  readonly filteredConnectors = computed(() => {
+    let connectors = this.connectors();
     const query = this.searchQuery().toLowerCase();
     const enabled = this.enabledFilter();
     const type = this.typeFilter();
 
     if (query) {
-      providers = providers.filter(
-        p =>
-          p.displayName.toLowerCase().includes(query) ||
-          p.providerId.toLowerCase().includes(query) ||
-          p.providerType.toLowerCase().includes(query)
+      connectors = connectors.filter(
+        c =>
+          c.displayName.toLowerCase().includes(query) ||
+          c.providerId.toLowerCase().includes(query) ||
+          c.providerType.toLowerCase().includes(query)
       );
     }
 
     if (enabled === 'enabled') {
-      providers = providers.filter(p => p.enabled);
+      connectors = connectors.filter(c => c.enabled);
     } else if (enabled === 'disabled') {
-      providers = providers.filter(p => !p.enabled);
+      connectors = connectors.filter(c => !c.enabled);
     }
 
     if (type) {
-      providers = providers.filter(p => p.providerType === type);
+      connectors = connectors.filter(c => c.providerType === type);
     }
 
-    // Sort: enabled first, then alphabetically by display name
-    return providers.sort((a, b) => {
+    return connectors.sort((a, b) => {
       if (a.enabled !== b.enabled) {
         return a.enabled ? -1 : 1;
       }
@@ -410,12 +407,11 @@ export class ProviderListPage {
     this.typeFilter.set('');
   }
 
-  getProviderIcon(provider: OAuthProvider): string {
-    if (provider.iconName) {
-      return provider.iconName;
+  getConnectorIcon(connector: Connector): string {
+    if (connector.iconName) {
+      return connector.iconName;
     }
-    // Default icons by type
-    switch (provider.providerType) {
+    switch (connector.providerType) {
       case 'google':
       case 'microsoft':
         return 'heroCloud';
@@ -428,7 +424,7 @@ export class ProviderListPage {
     }
   }
 
-  getProviderIconClasses(type: OAuthProviderType): string {
+  getConnectorIconClasses(type: ConnectorType): string {
     const baseClasses = 'flex size-10 shrink-0 items-center justify-center rounded-sm';
     switch (type) {
       case 'google':
@@ -444,7 +440,7 @@ export class ProviderListPage {
     }
   }
 
-  getProviderTypeBadgeClasses(type: OAuthProviderType): string {
+  getConnectorTypeBadgeClasses(type: ConnectorType): string {
     const baseClasses = 'inline-flex items-center rounded-xs px-2 py-0.5 text-xs font-medium';
     switch (type) {
       case 'google':
@@ -460,7 +456,7 @@ export class ProviderListPage {
     }
   }
 
-  getProviderTypeLabel(type: OAuthProviderType): string {
+  getConnectorTypeLabel(type: ConnectorType): string {
     switch (type) {
       case 'google':
         return 'Google';
@@ -475,16 +471,16 @@ export class ProviderListPage {
     }
   }
 
-  async deleteProvider(provider: OAuthProvider): Promise<void> {
-    if (!confirm(`Are you sure you want to delete the provider "${provider.displayName}"?\n\nThis will disconnect all users currently using this provider. This action cannot be undone.`)) {
+  async deleteConnector(connector: Connector): Promise<void> {
+    if (!confirm(`Are you sure you want to delete the connector "${connector.displayName}"?\n\nThis will disconnect all users currently using this connector. This action cannot be undone.`)) {
       return;
     }
 
     try {
-      await this.oauthProvidersService.deleteProvider(provider.providerId);
+      await this.connectorsService.deleteConnector(connector.providerId);
     } catch (error: any) {
-      console.error('Error deleting provider:', error);
-      const message = error?.error?.detail || error?.message || 'Failed to delete provider.';
+      console.error('Error deleting connector:', error);
+      const message = error?.error?.detail || error?.message || 'Failed to delete connector.';
       alert(message);
     }
   }
