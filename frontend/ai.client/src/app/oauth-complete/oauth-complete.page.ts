@@ -13,6 +13,8 @@ import {
   heroCheckCircle,
   heroExclamationCircle,
 } from '@ng-icons/heroicons/outline';
+import { AuthService } from '../auth/auth.service';
+import { ConfigService } from '../services/config.service';
 
 /**
  * Landing page for AgentCore Identity's 3-legged OAuth flow.
@@ -161,13 +163,17 @@ export interface OAuthCompleteMessage {
 export class OAuthCompletePage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly authService = inject(AuthService);
+  private readonly config = inject(ConfigService);
 
   private redirectTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly state = signal<CompleteState>('success');
   readonly providerId = signal<string | null>(null);
+  readonly sessionUri = signal<string | null>(null);
   readonly errorMessage = signal<string>('Authorization was denied or did not complete.');
   private readonly isPopup = signal<boolean>(false);
+  private readonly finalizing = signal<boolean>(false);
 
   readonly providerLabel = computed(() => {
     const id = this.providerId();
@@ -192,10 +198,23 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
     const params = this.route.snapshot.queryParamMap;
     const error = params.get('error');
     const errorDescription = params.get('error_description');
-    const providerId = params.get('provider_id') ?? params.get('providerId');
+    // AgentCore echoes our custom_state back as `state`; we set it server-side
+    // to the providerId when initiating consent from the settings page.
+    const providerId =
+      params.get('provider_id') ??
+      params.get('providerId') ??
+      params.get('state');
+
+    // AgentCore's redirect also carries `session_id`, which is the
+    // `request_uri` from the initial authorize call. We must hand it back
+    // to CompleteResourceTokenAuth or the token vault stays empty.
+    const sessionUri = params.get('session_id') ?? params.get('sessionUri');
 
     if (providerId) {
       this.providerId.set(providerId);
+    }
+    if (sessionUri) {
+      this.sessionUri.set(sessionUri);
     }
 
     if (error) {
@@ -208,10 +227,65 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
     const inPopup = this.detectPopup();
     this.isPopup.set(inPopup);
 
+    // Finalize AgentCore's OAuth session (exchanges the `request_uri` for a
+    // persisted token). Must happen BEFORE we tell the opener we're done —
+    // otherwise the opener's next tool call will still see "consent required".
+    if (this.state() === 'success' && sessionUri) {
+      this.finalizing.set(true);
+      this.finalizeConsent(sessionUri, providerId)
+        .catch((err) => {
+          this.state.set('error');
+          this.errorMessage.set(
+            err instanceof Error
+              ? `Couldn't finalize authorization: ${err.message}`
+              : "Couldn't finalize authorization.",
+          );
+        })
+        .finally(() => {
+          this.finalizing.set(false);
+          if (inPopup) {
+            this.notifyOpenerAndClose();
+          } else {
+            this.redirectTimer = setTimeout(() => this.router.navigate(['/']), 2000);
+          }
+        });
+      return;
+    }
+
     if (inPopup) {
       this.notifyOpenerAndClose();
     } else {
       this.redirectTimer = setTimeout(() => this.router.navigate(['/']), 2000);
+    }
+  }
+
+  private async finalizeConsent(
+    sessionUri: string,
+    providerId: string | null,
+  ): Promise<void> {
+    const baseUrl = this.config.inferenceApiUrl().replace(/\/invocations\/?$/, '');
+    if (!baseUrl) {
+      throw new Error('inferenceApiUrl not configured');
+    }
+    const token = this.authService.getAccessToken();
+    if (!token) {
+      throw new Error('No access token available');
+    }
+    const url = `${baseUrl}/connectors/complete-consent`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        session_uri: sessionUri,
+        provider_id: providerId,
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
     }
   }
 
@@ -241,15 +315,28 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
       providerId: this.providerId(),
       error: this.state() === 'error' ? this.errorMessage() : null,
     };
+
+    // Primary channel: BroadcastChannel. Survives the Cross-Origin-Opener-Policy
+    // split that severs window.opener once a popup navigates through external
+    // origins (AgentCore, Google) and back. Same-origin tabs sharing a channel
+    // name always see each other, regardless of opener relationship.
+    try {
+      const channel = new BroadcastChannel('agentcore-oauth-complete');
+      channel.postMessage(message);
+      // Give the message a tick to propagate before closing the channel.
+      setTimeout(() => channel.close(), 200);
+    } catch {
+      // BroadcastChannel unavailable — fall back to postMessage below.
+    }
+
+    // Fallback: postMessage to opener. Works when COOP isn't in play.
     try {
       window.opener?.postMessage(message, window.location.origin);
     } catch {
-      // Cross-origin opener — nothing we can do; leave the page open so the
-      // user can read the message and close manually.
-      return;
+      // Cross-origin or COOP-isolated opener — BroadcastChannel above
+      // handles the handoff in that case.
     }
-    // Small delay so the opener has time to receive before the window closes
-    // (Chrome closes immediately otherwise on some platforms).
+
     this.redirectTimer = setTimeout(() => {
       try {
         window.close();

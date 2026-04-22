@@ -1,6 +1,6 @@
 """Tests for AgentCoreIdentityClient."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,14 +52,15 @@ def mock_context():
 
 
 class TestGetTokenForUserCacheHit:
-    def test_returns_access_token_when_vault_has_token(
+    @pytest.mark.asyncio
+    async def test_returns_access_token_when_vault_has_token(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         sdk_instance = mock_identity_sdk.return_value
-        sdk_instance.get_token.return_value = "ya29.access-token"
+        sdk_instance.get_token = AsyncMock(return_value="ya29.access-token")
 
         client = AgentCoreIdentityClient(region="us-east-1")
-        result = client.get_token_for_user(
+        result = await client.get_token_for_user(
             provider_name="google-workspace", scopes=["openid"]
         )
 
@@ -72,28 +73,36 @@ class TestGetTokenForUserCacheHit:
         assert kwargs["scopes"] == ["openid"]
         assert kwargs["auth_flow"] == "USER_FEDERATION"
         assert kwargs["agent_identity_token"] == "workload-token-xyz"
-        assert kwargs["callback_url"] == "https://cb.example.com/oauth"
+        # Wrapper appends provider_id to the callback so the /oauth-complete
+        # page knows which provider to dismiss in the consent banner.
+        assert kwargs["callback_url"] == (
+            "https://cb.example.com/oauth?provider_id=google-workspace"
+        )
         assert kwargs["force_authentication"] is False
 
-    def test_explicit_callback_url_overrides_context(
+    @pytest.mark.asyncio
+    async def test_explicit_callback_url_overrides_context(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         sdk_instance = mock_identity_sdk.return_value
-        sdk_instance.get_token.return_value = "t"
+        sdk_instance.get_token = AsyncMock(return_value="t")
 
         client = AgentCoreIdentityClient()
-        client.get_token_for_user(
+        await client.get_token_for_user(
             provider_name="p",
             scopes=["s"],
             callback_url="https://override.example.com/cb",
         )
 
         kwargs = sdk_instance.get_token.call_args.kwargs
-        assert kwargs["callback_url"] == "https://override.example.com/cb"
+        assert kwargs["callback_url"] == (
+            "https://override.example.com/cb?provider_id=p"
+        )
 
 
 class TestGetTokenForUserConsentRequired:
-    def test_returns_authorization_url_when_sdk_invokes_callback(
+    @pytest.mark.asyncio
+    async def test_returns_authorization_url_when_sdk_invokes_callback(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         """When the user needs to consent, the SDK calls on_auth_url with the
@@ -101,67 +110,71 @@ class TestGetTokenForUserConsentRequired:
         authorization_url set rather than raising."""
         sdk_instance = mock_identity_sdk.return_value
 
-        def fake_get_token(**kwargs):
+        async def fake_get_token(**kwargs):
             kwargs["on_auth_url"]("https://accounts.example.com/consent?x=1")
             return None
 
-        sdk_instance.get_token.side_effect = fake_get_token
+        sdk_instance.get_token = AsyncMock(side_effect=fake_get_token)
 
         client = AgentCoreIdentityClient()
-        result = client.get_token_for_user(provider_name="p", scopes=["s"])
+        result = await client.get_token_for_user(provider_name="p", scopes=["s"])
 
         assert result.requires_consent is True
         assert result.authorization_url == "https://accounts.example.com/consent?x=1"
         assert result.access_token is None
 
-    def test_auth_url_takes_precedence_over_stale_token(
+    @pytest.mark.asyncio
+    async def test_auth_url_takes_precedence_over_stale_token(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         """Defensive: if the SDK both returns a token AND invokes on_auth_url,
         we treat consent-required as the authoritative signal."""
         sdk_instance = mock_identity_sdk.return_value
 
-        def fake_get_token(**kwargs):
+        async def fake_get_token(**kwargs):
             kwargs["on_auth_url"]("https://consent.example.com")
             return "stale-token"
 
-        sdk_instance.get_token.side_effect = fake_get_token
+        sdk_instance.get_token = AsyncMock(side_effect=fake_get_token)
 
         client = AgentCoreIdentityClient()
-        result = client.get_token_for_user(provider_name="p", scopes=["s"])
+        result = await client.get_token_for_user(provider_name="p", scopes=["s"])
 
         assert result.requires_consent is True
         assert result.authorization_url == "https://consent.example.com"
 
 
 class TestGetTokenForUserErrors:
-    def test_raises_when_no_workload_token_on_context(
+    @pytest.mark.asyncio
+    async def test_raises_when_no_workload_token_on_context(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         mock_context.get_workload_access_token.return_value = None
 
         client = AgentCoreIdentityClient()
         with pytest.raises(WorkloadTokenUnavailableError):
-            client.get_token_for_user(provider_name="p", scopes=["s"])
+            await client.get_token_for_user(provider_name="p", scopes=["s"])
 
-    def test_raises_when_sdk_returns_nothing_and_no_auth_url(
+    @pytest.mark.asyncio
+    async def test_raises_when_sdk_returns_nothing_and_no_auth_url(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         sdk_instance = mock_identity_sdk.return_value
-        sdk_instance.get_token.return_value = None
+        sdk_instance.get_token = AsyncMock(return_value=None)
 
         client = AgentCoreIdentityClient()
         with pytest.raises(RuntimeError, match="neither a token nor"):
-            client.get_token_for_user(provider_name="p", scopes=["s"])
+            await client.get_token_for_user(provider_name="p", scopes=["s"])
 
-    def test_force_authentication_flag_is_forwarded(
+    @pytest.mark.asyncio
+    async def test_force_authentication_flag_is_forwarded(
         self, mock_identity_sdk: MagicMock, mock_context: MagicMock
     ) -> None:
         sdk_instance = mock_identity_sdk.return_value
-        sdk_instance.get_token.return_value = "t"
+        sdk_instance.get_token = AsyncMock(return_value="t")
 
         client = AgentCoreIdentityClient()
-        client.get_token_for_user(
+        await client.get_token_for_user(
             provider_name="p", scopes=["s"], force_authentication=True
         )
 

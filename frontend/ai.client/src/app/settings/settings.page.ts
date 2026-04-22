@@ -114,6 +114,7 @@ export class SettingsPage {
     { label: 'Profile', icon: 'heroUser', route: '/settings/profile', description: 'Your personal information' },
     { label: 'Appearance', icon: 'heroPaintBrush', route: '/settings/appearance', description: 'Theme and display' },
     { label: 'Chat', icon: 'heroChatBubbleLeftRight', route: '/settings/chat', description: 'Chat preferences' },
+    { label: 'Connectors', icon: 'heroLink', route: '/settings/connectors', description: 'Connected accounts' },
     { label: 'API Keys', icon: 'heroKey', route: '/settings/api-keys', description: 'API key management' },
     { label: 'Usage', icon: 'heroChartBar', route: '/settings/usage', description: 'Usage and billing' },
   ];
