@@ -323,19 +323,12 @@ def auth_provider_repository(auth_providers_table, secrets_manager):
 
 
 @pytest.fixture()
-def oauth_provider_repository(oauth_providers_table, secrets_manager):
+def oauth_provider_repository(oauth_providers_table):
     from apis.shared.oauth.provider_repository import OAuthProviderRepository
     return OAuthProviderRepository(
         table_name="test-oauth-providers",
-        secrets_arn="oauth-client-secrets",
         region=AWS_REGION,
     )
-
-
-@pytest.fixture()
-def oauth_token_repository(oauth_tokens_table):
-    from apis.shared.oauth.token_repository import OAuthTokenRepository
-    return OAuthTokenRepository(table_name="test-oauth-user-tokens", region=AWS_REGION)
 
 
 @pytest.fixture()
