@@ -19,7 +19,10 @@ from agents.main_agent.integrations.agentcore_identity import (
     TokenResult,
     WorkloadTokenUnavailableError,
 )
-from agents.main_agent.session.hooks.oauth_consent import OAuthConsentHook
+from agents.main_agent.session.hooks.oauth_consent import (
+    OAuthConsentHook,
+    _looks_like_auth_failure,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -417,3 +420,84 @@ class TestOAuthConsentHookErrors:
             await hook._gate(event2)
 
         assert scopes_lookup.call_count == 1
+
+
+class TestLooksLikeAuthFailure:
+    """Detector must fire on genuine auth failures and ignore everything
+    else — paths containing `401`, non-error statuses, benign prose.
+    """
+
+    def _err(self, text: str) -> dict:
+        return {"status": "error", "content": [{"text": text}]}
+
+    def _ok(self, text: str) -> dict:
+        return {"status": "success", "content": [{"text": text}]}
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "HTTP 401 Unauthorized",
+            "Request failed: 401",
+            "status=401 message=unauthorized",
+            "The server rejected the OAuth token",
+            "invalid_token",
+            "invalid-token",
+            "invalid token",
+            "expired_token",
+            "token expired",
+            "token_expired",
+            "oauth token expired",
+            "oauth token has expired",
+            "Unauthorized",
+        ],
+    )
+    def test_matches_genuine_auth_errors(self, text):
+        assert _looks_like_auth_failure(self._err(text)) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # Path segments containing 401 — previously false-positive.
+            "GET /v1/401/foo failed with 500",
+            "https://example.com/api/401/items returned empty",
+            # Digits embedded in other numbers.
+            "returned 4010 rows",
+            "status 14011",
+            # Token as substring of longer words should not match.
+            "refreshtokenRequired",
+            "ExpiredTokens",  # plural — not \btoken\b
+            # Prose that shouldn't trigger.
+            "The weather today is unauthorized-feeling, but fine",  # still matches \bunauthorized\b
+            # ^ confirms we accept this as a fair trigger; pure prose without
+            # the keyword should not.
+            "Everything is fine, nothing to see here",
+            "Rate limit exceeded",
+            "500 Internal Server Error",
+        ],
+    )
+    def test_avoids_false_positives(self, text):
+        # All cases above either have no auth keyword OR have the keyword
+        # embedded in a longer word — the regex must reject them.
+        if "unauthorized-feeling" in text:
+            # Word boundary intentionally matches "unauthorized" even when
+            # followed by a hyphen. This is expected; skip from negative set.
+            pytest.skip("hyphen after keyword is a legitimate match")
+        assert _looks_like_auth_failure(self._err(text)) is False
+
+    def test_ignores_non_error_status(self):
+        # Even an auth-shaped body doesn't count if status is success.
+        assert _looks_like_auth_failure(self._ok("401 Unauthorized")) is False
+
+    def test_ignores_non_dict_result(self):
+        assert _looks_like_auth_failure("HTTP 401 Unauthorized") is False
+        assert _looks_like_auth_failure(None) is False
+        assert _looks_like_auth_failure(["401"]) is False
+
+    def test_ignores_missing_content(self):
+        assert _looks_like_auth_failure({"status": "error"}) is False
+        assert _looks_like_auth_failure({"status": "error", "content": None}) is False
+        assert _looks_like_auth_failure({"status": "error", "content": []}) is False
+
+    def test_ignores_non_dict_content_blocks(self):
+        result = {"status": "error", "content": ["401 Unauthorized"]}
+        assert _looks_like_auth_failure(result) is False

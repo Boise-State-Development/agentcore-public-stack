@@ -45,12 +45,21 @@ logger = logging.getLogger(__name__)
 # String markers that indicate an OAuth-style auth failure in a tool
 # result. MCP servers vary in how they format errors, so we match a small
 # set of unambiguous signals: the literal HTTP code, "Unauthorized", and
-# explicit OAuth/token-rejected language. Tools that legitimately return
-# the digit "401" in successful output are not at risk because we also
-# require an error status (or a context word) — see `_looks_like_auth_failure`.
+# explicit OAuth/token-rejected language.
+#
+# Every alternative is word-bounded. `401` additionally excludes adjacent
+# `/` so path segments like `/v1/401/...` in an error message do not
+# trigger a false-positive reauth. We only run the pattern on results
+# whose `status == "error"` (see `_looks_like_auth_failure`), so this
+# plus `\b` on every other clause is tight enough in practice.
 _AUTH_FAILURE_PATTERN = re.compile(
-    r"\b401\b|\bunauthorized\b|invalid[_\s-]token|expired[_\s-]token"
-    r"|token[\s_-]expired|rejected the oauth token|oauth token (?:has )?expired",
+    r"(?<![\w/])401(?![\w/])"
+    r"|\bunauthorized\b"
+    r"|\binvalid[_\s-]token\b"
+    r"|\bexpired[_\s-]token\b"
+    r"|\btoken[_\s-]expired\b"
+    r"|\brejected the oauth token\b"
+    r"|\boauth token (?:has )?expired\b",
     re.IGNORECASE,
 )
 

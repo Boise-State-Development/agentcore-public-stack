@@ -16,7 +16,10 @@ forward it for the frontend popup.
 from __future__ import annotations
 
 import logging
+import os
+from functools import lru_cache
 
+import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -26,6 +29,7 @@ from agents.main_agent.integrations.agentcore_identity import (
 )
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
+from apis.shared.oauth import session_cache
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
@@ -33,6 +37,17 @@ from apis.shared.oauth.provider_repository import (
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _agentcore_control_client():
+    """Process-wide bedrock-agentcore control-plane client.
+
+    Cached so `complete_consent` doesn't reconstruct the boto3 client
+    (and re-resolve credentials) on every request.
+    """
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    return boto3.client("bedrock-agentcore", region_name=region)
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
@@ -115,6 +130,21 @@ async def initiate_consent(
         )
 
     if result.requires_consent:
+        # Record the session_uri AgentCore embedded in the authorize URL so
+        # `complete_consent` can prove this user is the one who started the
+        # flow. We soft-fail when the URL doesn't carry an identifier we
+        # recognise — AgentCore's own binding still applies in that case,
+        # and logs capture the shape change for investigation.
+        session_uri = session_cache.extract_session_uri(result.authorization_url or "")
+        if session_uri:
+            session_cache.remember(current_user.user_id, session_uri)
+        else:
+            logger.warning(
+                "Could not extract session_uri from AgentCore authorization URL "
+                "for user=%s provider=%s; skipping server-side session tracking",
+                current_user.user_id,
+                provider_id,
+            )
         return InitiateConsentResponse(authorization_url=result.authorization_url)
     return InitiateConsentResponse(connected=True)
 
@@ -137,15 +167,28 @@ async def complete_consent(
     fresh authorization URL.
 
     Returns `ok: true` on success; errors from AgentCore bubble up as 502.
-    """
-    import boto3
-    from agents.main_agent.integrations.agentcore_identity import (
-        _RUNTIME_WORKLOAD_ENV,
-    )
-    import os
 
-    region = os.environ.get("AWS_REGION", "us-west-2")
-    control = boto3.client("bedrock-agentcore", region_name=region)
+    Authorization: the submitted `session_uri` must have been remembered
+    for `current_user` at `initiate_consent`. This is defence-in-depth on
+    top of AgentCore's own `userIdentifier`-bound check, so that a
+    leaked `session_uri` cannot be driven to completion under a
+    different user's identity here.
+    """
+    if not session_cache.consume(current_user.user_id, body.session_uri):
+        logger.warning(
+            "Rejecting complete_consent: session_uri not issued to user=%s provider=%s",
+            current_user.user_id,
+            body.provider_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This consent session was not initiated by you, or it has "
+                "expired. Start the connection again from Settings."
+            ),
+        )
+
+    control = _agentcore_control_client()
 
     try:
         control.complete_resource_token_auth(
