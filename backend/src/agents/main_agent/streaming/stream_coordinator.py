@@ -195,6 +195,16 @@ class StreamCoordinator:
                     # Don't yield this event to the client (will send final metadata before done)
                     continue
 
+                # If the agent paused on an OAuth interrupt, surface one
+                # `oauth_required` SSE event per pending interrupt before the
+                # stream closes. The frontend uses these to drive the consent
+                # popup and then POSTs interrupt responses to resume the turn.
+                # Done before the metadata branch so the events land between
+                # message_stop and the final metadata/done block.
+                if event.get("type") == "done":
+                    for sse in self._extract_oauth_required_events(agent):
+                        yield sse
+
                 # Check if this is the "done" event - send final metadata before it
                 if event.get("type") == "done":
                     # Calculate end-to-end latency
@@ -529,6 +539,45 @@ class StreamCoordinator:
                     logger.info(f"💾 Saved stream error messages to session {session_id}")
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
+
+    def _extract_oauth_required_events(self, agent: Any) -> List[str]:
+        """Yield one SSE-formatted `oauth_required` event per pending OAuth
+        interrupt on the agent.
+
+        The Strands `_interrupt_state` is populated when `OAuthConsentHook`
+        calls `event.interrupt(...)`. We look for interrupts whose `reason`
+        carries `type: "oauth_required"` and translate them into the SSE
+        shape the frontend already understands. Non-OAuth interrupts (other
+        approval gates added later) are ignored here so they can be handled
+        by their own SSE event types.
+        """
+        from apis.shared.oauth.models import OAuthRequiredEvent
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != "oauth_required":
+                continue
+            provider_id = reason.get("providerId")
+            authorization_url = reason.get("authorizationUrl")
+            if not provider_id or not authorization_url:
+                logger.warning(
+                    "OAuth interrupt missing providerId or authorizationUrl: id=%s",
+                    interrupt.id,
+                )
+                continue
+            events.append(
+                OAuthRequiredEvent(
+                    provider_id=provider_id,
+                    authorization_url=authorization_url,
+                    interrupt_id=interrupt.id,
+                ).to_sse_format()
+            )
+        return events
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """

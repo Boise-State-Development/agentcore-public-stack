@@ -17,11 +17,23 @@ class FileContent(BaseModel):
     bytes: str  # Base64 encoded
 
 
+class InterruptResponseEntry(BaseModel):
+    """One user response to a Strands interrupt, in the SDK's prompt shape.
+
+    Posted by the frontend after the user completes (or declines) an OAuth
+    consent popup. The backend forwards the list verbatim to
+    `agent.stream_async(...)` to resume the paused turn.
+    """
+
+    interruptId: str
+    response: Any = None
+
+
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
     session_id: str
-    message: str
+    message: str = ""
     model_id: Optional[str] = None
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None
@@ -36,6 +48,10 @@ class InvocationRequest(BaseModel):
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
     # likely trying to resolve it as an AWS Bedrock Agent ID.
     rag_assistant_id: Optional[str] = None
+    # When set, the route resumes a paused agent turn instead of starting a
+    # new one. `message` is ignored in that case — the original prompt is
+    # already in the agent's interrupt context.
+    interrupt_responses: Optional[List[InterruptResponseEntry]] = None
 
 
 class InvocationResponse(BaseModel):

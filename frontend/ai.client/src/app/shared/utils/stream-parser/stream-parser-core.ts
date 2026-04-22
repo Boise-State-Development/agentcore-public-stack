@@ -337,7 +337,9 @@ export function validateOAuthRequiredEvent(data: unknown): data is OAuthRequired
     typeof event.providerId === 'string' &&
     event.providerId.length > 0 &&
     typeof event.authorizationUrl === 'string' &&
-    event.authorizationUrl.length > 0
+    event.authorizationUrl.length > 0 &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0
   );
 }
 

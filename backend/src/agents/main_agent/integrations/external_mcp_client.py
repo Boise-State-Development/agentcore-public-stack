@@ -5,14 +5,17 @@ Creates MCP clients based on tool catalog configuration,
 supporting various authentication methods (AWS IAM, API Key, OAuth, etc.)
 
 OAuth Support:
-    When a tool has `requires_oauth_provider` set, the MCP client will
-    automatically inject the user's OAuth token into requests. This requires
-    per-user client instances since tokens are user-specific.
+    Tools with `requires_oauth_provider` set get an `OAuthBearerAuth` whose
+    token is resolved lazily on every MCP request via `oauth_token_cache`.
+    The cache is warmed by `OAuthConsentHook` (which also pauses the agent
+    via Strands interrupts when consent is needed). This module never
+    pre-flights OAuth — the agent loads tools optimistically; the hook
+    gates execution.
 """
 
 import logging
 import re
-from typing import Optional, List, Any
+from typing import Any, Callable, Optional, List
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -23,11 +26,7 @@ from apis.app_api.tools.models import (
     MCPTransport,
     ToolDefinition,
 )
-from agents.main_agent.integrations.agentcore_identity import (
-    TokenResult,
-    WorkloadTokenUnavailableError,
-    get_agentcore_identity_client,
-)
+from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
@@ -96,28 +95,22 @@ def create_external_mcp_client(
     config: MCPServerConfig,
     tool_definition: Optional[ToolDefinition] = None,
     oauth_token: Optional[str] = None,
+    token_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[MCPClient]:
     """
     Create an MCP client for an externally deployed MCP server.
 
+    Pass either `oauth_token` (static, for OIDC forwarding) or `token_provider`
+    (callable, for OAuth tokens that the consent hook resolves lazily).
+
     Args:
         config: MCP server configuration from tool catalog
         tool_definition: Optional tool definition for logging
-        oauth_token: Optional OAuth token to include in requests (for user-specific auth)
+        oauth_token: Optional static token (used for OIDC forwarding)
+        token_provider: Optional callable returning the current token
 
     Returns:
         MCPClient instance or None if configuration is invalid
-
-    Example:
-        >>> config = MCPServerConfig(
-        ...     server_url="https://xxx.lambda-url.us-west-2.on.aws/",
-        ...     transport=MCPTransport.STREAMABLE_HTTP,
-        ...     auth_type=MCPAuthType.AWS_IAM,
-        ... )
-        >>> client = create_external_mcp_client(config)
-
-        # With OAuth token for user-specific access:
-        >>> client = create_external_mcp_client(config, oauth_token="user_access_token")
     """
     if not config.server_url:
         logger.warning("MCP server URL is required")
@@ -125,26 +118,29 @@ def create_external_mcp_client(
 
     tool_id = tool_definition.tool_id if tool_definition else "unknown"
     requires_oauth = tool_definition.requires_oauth_provider if tool_definition else None
-    has_token = bool(oauth_token)
+    has_static_token = bool(oauth_token)
+    has_provider = bool(token_provider)
     logger.info(f"Creating external MCP client for tool: {tool_id}")
     logger.debug(f"  Transport: {config.transport}")
     logger.debug(f"  Auth Type: {config.auth_type}")
     if requires_oauth:
         logger.debug("  Requires OAuth Provider: yes")
-        logger.debug(f"  OAuth Token Provided: {has_token}")
+        logger.debug(f"  Token mode: {'provider' if has_provider else 'static' if has_static_token else 'none'}")
 
     try:
         # Build list of auth handlers (may combine multiple)
         auth_handlers = []
 
-        # When an OAuth token is provided, use it exclusively as the auth method.
-        # SigV4 and OAuth both use the Authorization header and cannot coexist —
-        # SigV4 sets "AWS4-HMAC-SHA256 ..." while OAuth sets "Bearer ...".
-        # The Lambda Function URL auth type should be NONE for OAuth-authenticated tools.
-        if oauth_token:
-            oauth_auth = create_oauth_bearer_auth(token=oauth_token)
-            auth_handlers.append(oauth_auth)
-            logger.debug("  Using OAuth Bearer token auth (skipping SigV4)")
+        # OAuth/OIDC bearer auth takes precedence over SigV4. SigV4 and OAuth both
+        # use the Authorization header and cannot coexist (SigV4 sets
+        # "AWS4-HMAC-SHA256 ...", OAuth sets "Bearer ..."). Lambda Function URLs
+        # backing OAuth-authenticated MCP servers must use auth_type=NONE.
+        if token_provider:
+            auth_handlers.append(create_oauth_bearer_auth(token_provider=token_provider))
+            logger.debug("  Using OAuth Bearer token provider (lazy)")
+        elif oauth_token:
+            auth_handlers.append(create_oauth_bearer_auth(token=oauth_token))
+            logger.debug("  Using OAuth Bearer token (static)")
 
         # AWS IAM SigV4 authentication (for Lambda/API Gateway without OAuth)
         elif config.auth_type == MCPAuthType.AWS_IAM or config.auth_type == "aws-iam":
@@ -209,82 +205,31 @@ class ExternalMCPIntegration:
     with protocol='mcp_external' in the tool catalog.
 
     OAuth Support:
-        Tools with `requires_oauth_provider` set will have their MCP clients
-        created with the user's OAuth token injected. Since tokens are user-specific,
-        OAuth-enabled tools use a per-user cache key.
+        For OAuth-gated tools, clients are created with a lazy token provider
+        that reads from the per-process token cache at request time. The
+        cache is populated by `OAuthConsentHook`, which gates execution by
+        raising a Strands interrupt when no token is available yet.
+
+        This integration also maintains an MCPClient -> provider_id map so
+        the hook can look up which provider a tool's MCP server requires
+        without coupling on tool names.
     """
 
     def __init__(self):
-        """Initialize external MCP integration."""
         # Cache key: tool_id for non-OAuth tools, "user_id:tool_id" for OAuth tools
         self.clients: dict[str, MCPClient] = {}
-        # Consent URLs collected during load_external_tools, keyed by user_id.
-        # Consumed (and cleared) by the inference route on the next response so
-        # they surface as an oauth_required SSE event. Shape:
-        #   { user_id: [ { "provider_id": str, "authorization_url": str }, ... ] }
-        self.pending_consent: dict[str, list[dict[str, str]]] = {}
+        # MCPClient object identity -> provider_id, populated alongside `clients`.
+        # Consumed by OAuthConsentHook via `provider_for_client`.
+        self._provider_for_client_id: dict[int, str] = {}
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
-        """Get the cache key for a tool client."""
         if requires_oauth and user_id:
             return f"{user_id}:{tool_id}"
         return tool_id
 
-    async def _get_oauth_token(
-        self,
-        provider_id: str,
-    ) -> TokenResult:
-        """Fetch an OAuth token for `provider_id` via AgentCore Identity.
-
-        The user is identified implicitly by the WorkloadAccessToken on
-        `BedrockAgentCoreContext` (populated from request headers by
-        `AgentCoreContextMiddleware`). Scopes are read from the platform's
-        OAuth provider record so organizations can change them without code
-        changes.
-
-        Convention: `provider_id` is used verbatim as the AgentCore Identity
-        credential-provider name. Admins register providers with matching
-        names via `CreateOauth2CredentialProvider`.
-
-        Returns:
-            `TokenResult` — either `.access_token` on cache hit or
-            `.authorization_url` when user consent is required.
-
-        Raises:
-            WorkloadTokenUnavailableError: Not running inside an AgentCore
-                Runtime invocation (e.g. misconfigured middleware).
-        """
-        from apis.shared.oauth.provider_repository import get_provider_repository
-
-        provider = await get_provider_repository().get_provider(provider_id)
-        scopes = provider.scopes if provider else []
-
-        identity_client = get_agentcore_identity_client()
-        return identity_client.get_token_for_user(
-            provider_name=provider_id, scopes=scopes
-        )
-
-    def _record_pending_consent(
-        self, user_id: str, provider_id: str, authorization_url: str
-    ) -> None:
-        """Stash a consent URL to be surfaced to the user via SSE."""
-        bucket = self.pending_consent.setdefault(user_id, [])
-        # Dedupe on provider_id — if the user has two tools needing the same
-        # provider, one consent covers both.
-        if any(entry["provider_id"] == provider_id for entry in bucket):
-            return
-        bucket.append(
-            {"provider_id": provider_id, "authorization_url": authorization_url}
-        )
-
-    def drain_pending_consent(self, user_id: str) -> list[dict[str, str]]:
-        """Consume and return pending consent prompts for a user.
-
-        Called by the inference route on each response so the frontend can
-        render "Connect to X" affordances. Idempotent across repeated calls
-        because consent entries are removed once read.
-        """
-        return self.pending_consent.pop(user_id, [])
+    def provider_for_client(self, client: Any) -> Optional[str]:
+        """Return the OAuth provider_id backing `client`, or None."""
+        return self._provider_for_client_id.get(id(client))
 
     async def load_external_tools(
         self,
@@ -295,15 +240,16 @@ class ExternalMCPIntegration:
         """
         Load external MCP clients for enabled tools.
 
-        This method queries the tool catalog for tools with protocol='mcp_external'
-        and creates MCP clients for them. For tools requiring OAuth, the user's
-        OAuth token is retrieved and injected. For tools with forward_auth_token,
-        the user's OIDC authentication token is forwarded instead.
+        For OAuth-gated tools, the client is created with a token provider
+        that reads from `oauth_token_cache` lazily at request time. Token
+        acquisition + consent prompting happen in `OAuthConsentHook` at
+        tool-call time, not here. For tools with `forward_auth_token`, the
+        user's OIDC token is injected statically.
 
         Args:
             enabled_tool_ids: List of enabled tool IDs
-            user_id: User ID for OAuth token retrieval (required for OAuth-enabled tools)
-            auth_token: Raw OIDC token for forwarding (required for forward_auth_token tools)
+            user_id: User ID (required for OAuth-gated and OIDC-forwarded tools)
+            auth_token: Raw OIDC token for forwarding
 
         Returns:
             List of MCPClient instances to add to the agent's tools
@@ -319,7 +265,6 @@ class ExternalMCPIntegration:
                 if not tool:
                     continue
 
-                # Check if this is an external MCP tool
                 if tool.protocol != "mcp_external":
                     continue
 
@@ -327,34 +272,30 @@ class ExternalMCPIntegration:
                     logger.warning(f"Tool {tool_id} has protocol=mcp_external but no mcp_config")
                     continue
 
-                # Determine auth mode: OIDC forwarding, OAuth, or none
                 forward_auth = bool(getattr(tool, "forward_auth_token", False))
                 requires_oauth = bool(tool.requires_oauth_provider)
                 requires_user_auth = forward_auth or requires_oauth
 
                 cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
 
-                # Check cache
                 if cache_key in self.clients:
                     clients.append(self.clients[cache_key])
                     continue
 
-                # Resolve token to use (OIDC forwarding takes precedence)
-                token_to_use = None
+                static_token: Optional[str] = None
+                token_provider: Optional[Callable[[], Optional[str]]] = None
+                provider_id: Optional[str] = None
 
                 if forward_auth:
-                    # Forward the user's OIDC authentication token
                     if not auth_token:
                         logger.warning(
                             f"Tool {tool_id} has forward_auth_token=true but no auth_token provided"
                         )
-                        # Still create the client - server will reject unauthorized requests
                     else:
-                        token_to_use = auth_token
+                        static_token = auth_token
                         logger.info(f"Using OIDC token forwarding for tool {tool_id}")
 
                 elif requires_oauth:
-                    # Fetch user-federated token via AgentCore Identity.
                     if not user_id:
                         logger.warning(
                             f"Tool {tool_id} requires OAuth provider '{tool.requires_oauth_provider}' "
@@ -362,58 +303,28 @@ class ExternalMCPIntegration:
                         )
                         continue
 
-                    try:
-                        token_result = await self._get_oauth_token(
-                            provider_id=tool.requires_oauth_provider,
-                        )
-                    except WorkloadTokenUnavailableError:
-                        logger.error(
-                            "No workload token on context for tool %s — "
-                            "AgentCoreContextMiddleware may be misconfigured",
-                            tool_id,
-                        )
-                        continue
-                    except Exception as e:
-                        logger.error(
-                            "Failed to fetch OAuth token for tool %s: %s",
-                            tool_id,
-                            e,
-                        )
-                        continue
+                    provider_id = tool.requires_oauth_provider
+                    # Bind user_id and provider_id at closure time so the
+                    # provider stays valid for the client's lifetime.
+                    token_provider = (
+                        lambda u=user_id, p=provider_id: oauth_token_cache.get(u, p)
+                    )
 
-                    if token_result.requires_consent:
-                        # Record the auth URL; the inference route will emit
-                        # an oauth_required SSE event on the next response.
-                        self._record_pending_consent(
-                            user_id=user_id,
-                            provider_id=tool.requires_oauth_provider,
-                            authorization_url=token_result.authorization_url,
-                        )
-                        logger.info(
-                            "User consent required for tool %s (provider=%s); "
-                            "skipping client creation until consent completes",
-                            tool_id,
-                            tool.requires_oauth_provider,
-                        )
-                        # Skip loading this tool — the frontend will prompt
-                        # the user to consent before the next invocation.
-                        continue
-
-                    token_to_use = token_result.access_token
-
-                # Create MCP client with optional token (works for both OAuth and OIDC)
                 client = create_external_mcp_client(
                     config=tool.mcp_config,
                     tool_definition=tool,
-                    oauth_token=token_to_use,
+                    oauth_token=static_token,
+                    token_provider=token_provider,
                 )
 
                 if client:
                     self.clients[cache_key] = client
+                    if provider_id:
+                        self._provider_for_client_id[id(client)] = provider_id
                     clients.append(client)
                     auth_label = (
-                        " (with OIDC forwarding)" if forward_auth and token_to_use
-                        else " (with OAuth)" if requires_oauth and token_to_use
+                        " (with OIDC forwarding)" if forward_auth and static_token
+                        else f" (OAuth: {provider_id})" if provider_id
                         else ""
                     )
                     logger.info(f"✅ Loaded external MCP tool: {tool_id}{auth_label}")
@@ -425,17 +336,6 @@ class ExternalMCPIntegration:
         return clients
 
     def get_client(self, tool_id: str, user_id: Optional[str] = None) -> Optional[MCPClient]:
-        """
-        Get a specific MCP client by tool ID.
-
-        Args:
-            tool_id: The tool ID
-            user_id: User ID for OAuth-enabled tools
-
-        Returns:
-            MCPClient or None if not found
-        """
-        # Try user-specific key first, then generic
         if user_id:
             user_key = f"{user_id}:{tool_id}"
             if user_key in self.clients:
@@ -443,15 +343,6 @@ class ExternalMCPIntegration:
         return self.clients.get(tool_id)
 
     def add_to_tool_list(self, tools: List[Any]) -> List[Any]:
-        """
-        Add all loaded external MCP clients to the tool list.
-
-        Args:
-            tools: Existing list of tools
-
-        Returns:
-            Updated tool list with MCP clients added
-        """
         for client in self.clients.values():
             if client not in tools:
                 tools.append(client)
@@ -461,24 +352,22 @@ class ExternalMCPIntegration:
         """
         Clear cached MCP clients for a specific user.
 
-        Call this when a user disconnects from an OAuth provider
-        to ensure fresh clients are created on next use.
-
-        Args:
-            user_id: User ID to clear clients for
+        Call this when a user disconnects from an OAuth provider so the next
+        agent build creates fresh clients (and the token cache miss forces a
+        new consent flow).
         """
         keys_to_remove = [
             key for key in self.clients.keys()
             if key.startswith(f"{user_id}:")
         ]
         for key in keys_to_remove:
-            del self.clients[key]
+            client = self.clients.pop(key)
+            self._provider_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
 
 
-# Global instance
 _external_mcp_integration: Optional[ExternalMCPIntegration] = None
 
 

@@ -246,9 +246,12 @@ class OAuthProviderListResponse(BaseModel):
 class OAuthRequiredEvent(BaseModel):
     """SSE event signalling that a tool needs user consent before it can run.
 
-    Emitted by the inference route after an agent response finishes, one per
-    provider with a pending consent URL. The frontend uses it to render a
-    "Connect to X" affordance that opens `authorizationUrl` in a popup.
+    Emitted mid-turn when `OAuthConsentHook` raises a Strands interrupt: the
+    agent's tool call is paused (its in-flight state is held in
+    `_interrupt_state`), the frontend receives this event, opens the
+    consent popup at `authorizationUrl`, and on completion POSTs an
+    interrupt response carrying `interruptId` back to `/invocations`. The
+    backend resumes the same turn — no retype, no replay.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -256,6 +259,7 @@ class OAuthRequiredEvent(BaseModel):
     type: str = "oauth_required"
     provider_id: str = Field(..., alias="providerId")
     authorization_url: str = Field(..., alias="authorizationUrl")
+    interrupt_id: str = Field(..., alias="interruptId")
 
     def to_sse_format(self) -> str:
         import json

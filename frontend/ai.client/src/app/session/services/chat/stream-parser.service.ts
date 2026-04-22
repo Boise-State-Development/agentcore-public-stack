@@ -197,8 +197,11 @@ export class StreamParserService {
     }
 
     // Check if we should process this event
-    const isStartOrErrorEvent = event === 'message_start' || event === 'error';
-    if (!isStartOrErrorEvent && !this.shouldProcessEvent()) {
+    // oauth_required arrives after message_stop/done by design (see CLAUDE.md SSE
+    // table) — allow it through even when the stream state is Completed.
+    const isAlwaysAllowedEvent =
+      event === 'message_start' || event === 'error' || event === 'oauth_required';
+    if (!isAlwaysAllowedEvent && !this.shouldProcessEvent()) {
       return;
     }
 
@@ -293,7 +296,11 @@ export class StreamParserService {
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
 
       onOAuthRequired: (data: OAuthRequiredEvent) =>
-        this.oauthConsentService.requestConsent(data.providerId, data.authorizationUrl),
+        this.oauthConsentService.requestConsent(
+          data.providerId,
+          data.authorizationUrl,
+          data.interruptId,
+        ),
 
       onError: (data) => this.handleError(data),
       onStreamError: (data) =>

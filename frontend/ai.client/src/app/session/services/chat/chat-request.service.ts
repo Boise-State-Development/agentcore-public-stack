@@ -1,4 +1,4 @@
-import { inject, Injectable } from '@angular/core';
+import { inject, Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
@@ -10,6 +10,8 @@ import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { StreamParserService } from './stream-parser.service';
 
 export interface ContentFile {
   fileName: string;
@@ -21,7 +23,7 @@ export interface ContentFile {
 @Injectable({
   providedIn: 'root',
 })
-export class ChatRequestService {
+export class ChatRequestService implements OnDestroy {
   // private conversationService = inject(ConversationService);
   private chatHttpService = inject(ChatHttpService);
   private chatStateService = inject(ChatStateService);
@@ -31,8 +33,25 @@ export class ChatRequestService {
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
   private fileUploadService = inject(FileUploadService);
+  private oauthConsentService = inject(OAuthConsentService);
+  private streamParserService = inject(StreamParserService);
   private router = inject(Router);
   // TODO: Inject proper logging service
+
+  /** Last request payload — replayed (with `interrupt_responses` added) when
+   *  the user completes an OAuth consent so the paused agent turn resumes
+   *  without retyping. Cleared on a true new turn. */
+  private lastRequestObject: Record<string, unknown> | null = null;
+
+  constructor() {
+    this.oauthConsentService.setResumeHandler((interruptIds) =>
+      this.resumeFromOAuthConsent(interruptIds),
+    );
+  }
+
+  ngOnDestroy(): void {
+    this.oauthConsentService.setResumeHandler(null);
+  }
 
   async submitChatRequest(
     userInput: string,
@@ -77,6 +96,12 @@ export class ChatRequestService {
       fileUploadIds,
       assistantId,
     );
+
+    // Remember this turn's params so the OAuth resume handler can replay
+    // them with `interrupt_responses` attached. Snapshotting the *exact*
+    // payload keeps the agent cache key stable, so the resume hits the
+    // same paused agent instance.
+    this.lastRequestObject = { ...requestObject };
 
     try {
       await this.chatHttpService.sendChatRequest(requestObject);
@@ -147,6 +172,54 @@ export class ChatRequestService {
     }
 
     return requestObject;
+  }
+
+  /**
+   * Replay the last turn's request with `interrupt_responses` attached so
+   * the backend resumes the paused agent turn instead of starting a new
+   * one. Triggered by OAuthConsentService after the user completes a
+   * consent popup.
+   */
+  private async resumeFromOAuthConsent(interruptIds: string[]): Promise<void> {
+    if (!this.lastRequestObject || interruptIds.length === 0) {
+      return;
+    }
+
+    const sessionId = this.lastRequestObject['session_id'] as string | undefined;
+    if (!sessionId) {
+      return;
+    }
+
+    // Reset the parser so the resumed stream is treated as a fresh batch
+    // of events. Without this, the parser stays in Completed state from
+    // the prior `done` and ignores everything.
+    this.streamParserService.reset(sessionId);
+    this.messageMapService.startStreaming(sessionId);
+    this.chatStateService.createNewAbortController();
+    this.chatStateService.setChatLoading(true);
+
+    const resumeRequest: Record<string, unknown> = {
+      ...this.lastRequestObject,
+      // The original prompt is already in the agent's interrupt context;
+      // sending an empty string keeps the request valid without
+      // re-augmenting or re-charging quota.
+      message: '',
+      interrupt_responses: interruptIds.map((interruptId) => ({
+        interruptId,
+        // The token is already in AgentCore Identity's vault by the time
+        // we resume; the response payload itself doesn't carry a secret —
+        // it's just the signal that consent completed.
+        response: 'consented',
+      })),
+    };
+
+    try {
+      await this.chatHttpService.sendChatRequest(resumeRequest);
+    } catch (error) {
+      this.chatStateService.setChatLoading(false);
+      this.messageMapService.endStreaming();
+      throw error;
+    }
   }
 
   /**

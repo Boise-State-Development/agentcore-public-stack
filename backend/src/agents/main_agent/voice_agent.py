@@ -335,7 +335,13 @@ class VoiceAgent(BaseAgent):
             yield event_dict
 
     async def stream_async(
-        self, message: str, session_id: Optional[str] = None, files: Optional[List] = None, citations: Optional[List] = None, original_message: Optional[str] = None
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        files: Optional[List] = None,
+        citations: Optional[List] = None,
+        original_message: Optional[str] = None,
+        interrupt_responses: Optional[List] = None,
     ) -> AsyncGenerator[str, None]:
         """
         BaseAgent interface compatibility — not used for voice mode.

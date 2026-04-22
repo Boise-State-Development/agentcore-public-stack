@@ -1,16 +1,15 @@
 """
-Tests for extract_region_from_url and detect_aws_service_from_url.
+Tests for the external MCP client helpers.
+
+OAuth provisioning moved to `OAuthConsentHook` (see
+`tests/agents/main_agent/session/hooks/test_oauth_consent.py`); this
+module covers the URL-parsing helpers and the integration's
+MCPClient -> provider_id map that the hook reads from.
 
 Requirements: 25.1–25.3
 """
 import pytest
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from agents.main_agent.integrations.agentcore_identity import (
-    TokenResult,
-    WorkloadTokenUnavailableError,
-)
 from agents.main_agent.integrations.external_mcp_client import (
     ExternalMCPIntegration,
     detect_aws_service_from_url,
@@ -71,158 +70,42 @@ class TestDetectAwsServiceFromUrl:
         assert detect_aws_service_from_url(url) == "lambda"
 
 
-class TestGetOAuthTokenViaAgentCoreIdentity:
-    """Tests for ExternalMCPIntegration._get_oauth_token delegating to AgentCore Identity."""
+class TestProviderForClient:
+    """The integration's MCPClient -> provider_id map is what
+    `OAuthConsentHook.provider_lookup` consults."""
 
-    @pytest.mark.asyncio
-    async def test_fetches_scopes_from_provider_repo_and_calls_identity(self):
-        """Provider scopes from the platform's provider record are forwarded to AgentCore."""
+    def test_unknown_client_returns_none(self):
         integration = ExternalMCPIntegration()
 
-        mock_provider = MagicMock()
-        mock_provider.scopes = ["openid", "profile", "email"]
-        mock_repo = MagicMock()
-        mock_repo.get_provider = AsyncMock(return_value=mock_provider)
+        class FakeClient:
+            pass
 
-        mock_identity = MagicMock()
-        mock_identity.get_token_for_user.return_value = TokenResult(access_token="tok")
+        assert integration.provider_for_client(FakeClient()) is None
 
-        with patch(
-            "apis.shared.oauth.provider_repository.get_provider_repository",
-            return_value=mock_repo,
-        ), patch(
-            "agents.main_agent.integrations.external_mcp_client.get_agentcore_identity_client",
-            return_value=mock_identity,
-        ):
-            result = await integration._get_oauth_token(provider_id="google")
-
-        assert result.access_token == "tok"
-        mock_identity.get_token_for_user.assert_called_once_with(
-            provider_name="google", scopes=["openid", "profile", "email"]
-        )
-
-    @pytest.mark.asyncio
-    async def test_returns_authorization_url_when_consent_required(self):
+    def test_records_and_resolves_provider_for_client(self):
         integration = ExternalMCPIntegration()
 
-        mock_repo = MagicMock()
-        mock_repo.get_provider = AsyncMock(
-            return_value=MagicMock(scopes=["openid"])
-        )
+        class FakeClient:
+            pass
 
-        mock_identity = MagicMock()
-        mock_identity.get_token_for_user.return_value = TokenResult(
-            authorization_url="https://accounts.example.com/consent"
-        )
+        client = FakeClient()
+        # Simulate what `load_external_tools` does after creating an
+        # OAuth-gated MCP client.
+        integration._provider_for_client_id[id(client)] = "google-workspace"
 
-        with patch(
-            "apis.shared.oauth.provider_repository.get_provider_repository",
-            return_value=mock_repo,
-        ), patch(
-            "agents.main_agent.integrations.external_mcp_client.get_agentcore_identity_client",
-            return_value=mock_identity,
-        ):
-            result = await integration._get_oauth_token(provider_id="google")
+        assert integration.provider_for_client(client) == "google-workspace"
 
-        assert result.requires_consent is True
-        assert result.authorization_url == "https://accounts.example.com/consent"
-
-    @pytest.mark.asyncio
-    async def test_empty_scopes_when_provider_record_missing(self):
-        """Missing provider record falls back to empty scopes so the call still succeeds
-        and AgentCore can apply its own provider defaults."""
+    def test_clear_user_clients_drops_provider_mapping(self):
         integration = ExternalMCPIntegration()
 
-        mock_repo = MagicMock()
-        mock_repo.get_provider = AsyncMock(return_value=None)
+        class FakeClient:
+            pass
 
-        mock_identity = MagicMock()
-        mock_identity.get_token_for_user.return_value = TokenResult(access_token="t")
+        client = FakeClient()
+        integration.clients["alice:gmail"] = client
+        integration._provider_for_client_id[id(client)] = "google-workspace"
 
-        with patch(
-            "apis.shared.oauth.provider_repository.get_provider_repository",
-            return_value=mock_repo,
-        ), patch(
-            "agents.main_agent.integrations.external_mcp_client.get_agentcore_identity_client",
-            return_value=mock_identity,
-        ):
-            await integration._get_oauth_token(provider_id="unknown")
+        integration.clear_user_clients("alice")
 
-        mock_identity.get_token_for_user.assert_called_once_with(
-            provider_name="unknown", scopes=[]
-        )
-
-    @pytest.mark.asyncio
-    async def test_propagates_workload_token_unavailable(self):
-        """Misconfigured middleware should surface as a typed error, not be swallowed."""
-        integration = ExternalMCPIntegration()
-
-        mock_repo = MagicMock()
-        mock_repo.get_provider = AsyncMock(return_value=MagicMock(scopes=[]))
-
-        mock_identity = MagicMock()
-        mock_identity.get_token_for_user.side_effect = WorkloadTokenUnavailableError(
-            "no ctx"
-        )
-
-        with patch(
-            "apis.shared.oauth.provider_repository.get_provider_repository",
-            return_value=mock_repo,
-        ), patch(
-            "agents.main_agent.integrations.external_mcp_client.get_agentcore_identity_client",
-            return_value=mock_identity,
-        ):
-            with pytest.raises(WorkloadTokenUnavailableError):
-                await integration._get_oauth_token(provider_id="google")
-
-
-class TestPendingConsent:
-    """Tests for the per-user consent URL stash consumed by the SSE emitter."""
-
-    def test_record_and_drain_roundtrip(self):
-        integration = ExternalMCPIntegration()
-        integration._record_pending_consent(
-            user_id="u1", provider_id="google", authorization_url="https://a/1"
-        )
-
-        drained = integration.drain_pending_consent("u1")
-
-        assert drained == [
-            {"provider_id": "google", "authorization_url": "https://a/1"}
-        ]
-
-    def test_drain_is_idempotent(self):
-        """Second drain returns empty — consent prompts are single-delivery."""
-        integration = ExternalMCPIntegration()
-        integration._record_pending_consent("u1", "google", "https://a/1")
-
-        integration.drain_pending_consent("u1")
-        second = integration.drain_pending_consent("u1")
-
-        assert second == []
-
-    def test_dedupe_by_provider(self):
-        """Two tools needing the same provider produce one consent prompt."""
-        integration = ExternalMCPIntegration()
-        integration._record_pending_consent("u1", "google", "https://a/1")
-        integration._record_pending_consent("u1", "google", "https://a/1")
-
-        drained = integration.drain_pending_consent("u1")
-
-        assert len(drained) == 1
-
-    def test_per_user_isolation(self):
-        integration = ExternalMCPIntegration()
-        integration._record_pending_consent("u1", "google", "https://a/1")
-        integration._record_pending_consent("u2", "slack", "https://a/2")
-
-        assert integration.drain_pending_consent("u1") == [
-            {"provider_id": "google", "authorization_url": "https://a/1"}
-        ]
-        assert integration.drain_pending_consent("u2") == [
-            {"provider_id": "slack", "authorization_url": "https://a/2"}
-        ]
-
-    def test_drain_empty_when_no_prompts(self):
-        integration = ExternalMCPIntegration()
-        assert integration.drain_pending_consent("u-nobody") == []
+        assert "alice:gmail" not in integration.clients
+        assert integration.provider_for_client(client) is None

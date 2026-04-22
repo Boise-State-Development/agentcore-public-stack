@@ -88,13 +88,15 @@ export interface ReasoningEvent {
 
 /**
  * OAuth required event — emitted when an external MCP tool needs the user
- * to grant consent via AgentCore Identity. The payload carries the provider
- * slug and the consent URL to open.
+ * to grant consent via AgentCore Identity. The agent's tool call is paused
+ * (Strands interrupt) and the frontend resumes the same turn after the
+ * user completes consent by POSTing back the carried `interruptId`.
  */
 export interface OAuthRequiredEvent {
   type: 'oauth_required';
   providerId: string;
   authorizationUrl: string;
+  interruptId: string;
 }
 
 /**

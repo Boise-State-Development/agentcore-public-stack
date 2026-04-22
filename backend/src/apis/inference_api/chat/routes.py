@@ -24,7 +24,6 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.shared.files.file_resolver import get_file_resolver
-from apis.shared.oauth.models import OAuthRequiredEvent
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.quota import (
     QuotaExceededEvent,
@@ -210,7 +209,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
-    logger.info("Invocation request received")
+    # Resume requests reuse the cached agent and its paused interrupt state;
+    # they bypass quota, file resolution, and RAG augmentation because those
+    # already ran on the original turn that got paused.
+    is_resume = bool(input_data.interrupt_responses)
+    logger.info(
+        "Invocation request received (resume=%s)" % is_resume
+    )
     logger.info("Message received")
 
     if input_data.enabled_tools:
@@ -246,7 +251,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_exceeded_event = None
-    if is_quota_enforcement_enabled():
+    if is_quota_enforcement_enabled() and not is_resume:
         try:
             quota_checker = get_quota_checker()
             quota_result = await quota_checker.check_quota(user=current_user, session_id=input_data.session_id)
@@ -305,7 +310,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request - processing with assistant context"
     )
 
-    if input_data.rag_assistant_id:
+    if input_data.rag_assistant_id and not is_resume:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
@@ -574,28 +579,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 augmented_message != input_data.message  # RAG augmentation
                 or bool(files_to_send)                   # File attachments
             )
+            # Strands' resume protocol wants each entry wrapped as
+            # {"interruptResponse": {...}}. The InvocationRequest schema
+            # accepts the inner shape so callers don't have to think about
+            # the SDK's content-block convention.
+            interrupt_responses_payload = (
+                [{"interruptResponse": entry.model_dump()} for entry in input_data.interrupt_responses]
+                if input_data.interrupt_responses
+                else None
+            )
+
             async for event in agent.stream_async(
                 augmented_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
                 citations=citations_for_storage if citations_for_storage else None,
                 original_message=input_data.message if message_will_be_modified else None,
+                interrupt_responses=interrupt_responses_payload,
             ):
                 yield event
-
-            # Surface any OAuth consent URLs collected while loading external
-            # MCP tools for this user. Draining is idempotent — entries are
-            # removed on read, so a later invocation won't re-prompt unless
-            # AgentCore Identity still reports consent is required.
-            from agents.main_agent.integrations.external_mcp_client import (
-                get_external_mcp_integration,
-            )
-
-            for entry in get_external_mcp_integration().drain_pending_consent(user_id):
-                yield OAuthRequiredEvent(
-                    provider_id=entry["provider_id"],
-                    authorization_url=entry["authorization_url"],
-                ).to_sse_format()
 
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py

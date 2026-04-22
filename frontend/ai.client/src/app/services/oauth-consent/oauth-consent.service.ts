@@ -1,15 +1,20 @@
 import { Injectable, signal, computed, inject, DestroyRef } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { fromEvent } from 'rxjs';
-import { filter } from 'rxjs/operators';
 
 /**
  * Pending OAuth consent request surfaced by the backend when an external
  * MCP tool needs the user to authorize AgentCore Identity.
+ *
+ * `interruptId` is set when the request comes from a paused agent turn
+ * (SSE `oauth_required` event) so the chat layer can resume the same turn
+ * after consent. It's omitted when the user proactively connects from the
+ * settings page — in that case there's no agent turn to resume.
  */
 export interface OAuthConsentRequest {
   providerId: string;
   authorizationUrl: string;
+  interruptId?: string;
   receivedAt: number;
 }
 
@@ -25,6 +30,14 @@ export interface OAuthCompleteMessage {
   error: string | null;
 }
 
+/**
+ * Handler the chat layer registers to resume a paused agent turn after
+ * one or more OAuth consents complete. Receives the interrupt ids whose
+ * tokens are now available; the handler is expected to POST a resume
+ * request to `/invocations` with `interrupt_responses` populated.
+ */
+export type OAuthResumeHandler = (interruptIds: string[]) => void | Promise<void>;
+
 function isOAuthCompleteMessage(data: unknown): data is OAuthCompleteMessage {
   if (!data || typeof data !== 'object') {
     return false;
@@ -35,14 +48,16 @@ function isOAuthCompleteMessage(data: unknown): data is OAuthCompleteMessage {
 
 /**
  * Tracks OAuth consent requests surfaced by the SSE stream and coordinates
- * the popup flow.
+ * the popup + auto-resume flow.
  *
  * The stream parser calls {@link requestConsent} when an `oauth_required`
  * event arrives; components render a "Connect" affordance bound to
  * {@link pending}. When the user clicks, {@link openConsentPopup} opens the
  * AgentCore Identity URL, and this service listens for the
  * `agentcore-oauth-complete` postMessage from the `/oauth-complete` landing
- * page to resolve the provider.
+ * page. On success it dismisses the request and asks the registered
+ * {@link OAuthResumeHandler} to fire a resume request — the user does NOT
+ * have to retype the original prompt.
  */
 @Injectable({ providedIn: 'root' })
 export class OAuthConsentService {
@@ -58,6 +73,10 @@ export class OAuthConsentService {
   /** Most recent completion notice surfaced to the chat layer. */
   private readonly lastCompletion = signal<OAuthCompleteMessage | null>(null);
 
+  /** Resume handler registered by the chat layer. Replayed when a
+   *  consent completes successfully. */
+  private resumeHandler: OAuthResumeHandler | null = null;
+
   readonly pending = computed<OAuthConsentRequest[]>(() =>
     Array.from(this.requests().values()).sort((a, b) => a.receivedAt - b.receivedAt),
   );
@@ -67,30 +86,52 @@ export class OAuthConsentService {
   readonly completion = this.lastCompletion.asReadonly();
 
   constructor() {
-    // Listen for postMessages from the /oauth-complete landing page. The
-    // origin guard makes sure cross-origin pages can't spoof a completion.
+    // Primary channel: BroadcastChannel. AgentCore's OAuth popup navigates
+    // through external origins (Google, AgentCore), which triggers Chrome's
+    // Cross-Origin-Opener-Policy and severs window.opener. window.postMessage
+    // from the /oauth-complete page is silently blocked in that case, so we
+    // rely on a same-origin BroadcastChannel to bridge popup → opener.
+    try {
+      const channel = new BroadcastChannel('agentcore-oauth-complete');
+      channel.addEventListener('message', (event) => {
+        if (!isOAuthCompleteMessage(event.data)) {
+          return;
+        }
+        this.handleCompletion(event.data);
+      });
+      this.destroyRef.onDestroy(() => channel.close());
+    } catch {
+      // BroadcastChannel unavailable — fall back to postMessage below.
+    }
+
+    // Fallback channel: window postMessage (pre-COOP browsers, or flows
+    // where the popup manages to retain window.opener). The origin guard
+    // makes sure cross-origin pages can't spoof a completion.
     fromEvent<MessageEvent>(window, 'message')
-      .pipe(
-        filter((event) => event.origin === window.location.origin),
-        filter((event) => isOAuthCompleteMessage(event.data)),
-        takeUntilDestroyed(this.destroyRef),
-      )
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((event) => {
-        const message = event.data as OAuthCompleteMessage;
-        this.handleCompletion(message);
+        if (event.origin !== window.location.origin) {
+          return;
+        }
+        if (!isOAuthCompleteMessage(event.data)) {
+          return;
+        }
+        this.handleCompletion(event.data);
       });
   }
 
   /**
    * Register a consent request coming off the SSE stream.
-   * Duplicate providerIds refresh the existing entry (URLs can rotate).
+   * Duplicate providerIds refresh the existing entry — the backend may
+   * reissue an interrupt with a new id if the user retried.
    */
-  requestConsent(providerId: string, authorizationUrl: string): void {
+  requestConsent(providerId: string, authorizationUrl: string, interruptId?: string): void {
     this.requests.update((map) => {
       const next = new Map(map);
       next.set(providerId, {
         providerId,
         authorizationUrl,
+        interruptId,
         receivedAt: Date.now(),
       });
       return next;
@@ -147,6 +188,16 @@ export class OAuthConsentService {
   }
 
   /**
+   * Register the chat-layer handler that resumes the paused agent turn
+   * after one or more OAuth consents complete. The handler receives the
+   * interrupt ids whose tokens are ready; replacing it (set to null)
+   * disables auto-resume.
+   */
+  setResumeHandler(handler: OAuthResumeHandler | null): void {
+    this.resumeHandler = handler;
+  }
+
+  /**
    * Clear a single consent request — called from the UI after the user
    * completes or dismisses a provider, or when the chat is reset.
    */
@@ -183,8 +234,24 @@ export class OAuthConsentService {
 
   private handleCompletion(message: OAuthCompleteMessage): void {
     this.lastCompletion.set(message);
-    if (message.status === 'success' && message.providerId) {
-      this.dismiss(message.providerId);
+    if (message.status !== 'success' || !message.providerId) {
+      return;
     }
+
+    // Capture the paused interrupt id BEFORE dismissing the request, since
+    // dismiss removes the entry the handler needs. A user-initiated
+    // settings-page consent has no interruptId — nothing to resume.
+    const request = this.requests().get(message.providerId);
+    this.dismiss(message.providerId);
+
+    if (!request?.interruptId || !this.resumeHandler) {
+      return;
+    }
+
+    void Promise.resolve(this.resumeHandler([request.interruptId])).catch((err) => {
+      // Resume failures are surfaced through the resume request's own error
+      // handling — log here for diagnostics but don't crash the consent flow.
+      console.error('OAuth resume handler failed', err);
+    });
   }
 }
