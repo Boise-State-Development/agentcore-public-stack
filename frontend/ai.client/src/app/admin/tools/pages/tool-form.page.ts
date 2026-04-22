@@ -19,7 +19,7 @@ import {
   heroShieldCheck,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
-import { OAuthProvidersService } from '../../oauth-providers/services/oauth-providers.service';
+import { ConnectorsService } from '../../connectors/services/connectors.service';
 import {
   TOOL_CATEGORIES,
   TOOL_PROTOCOLS,
@@ -361,8 +361,8 @@ import {
                   }
                 </select>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Users must connect this provider before using the tool. Manage providers in
-                  <a routerLink="/admin/oauth-providers" class="text-emerald-600 hover:underline">OAuth Settings</a>.
+                  Users must connect this connector before using the tool. Manage connectors in
+                  <a routerLink="/admin/connectors" class="text-emerald-600 hover:underline">Connectors</a>.
                 </p>
               </div>
             </div>
@@ -568,7 +568,7 @@ export class ToolFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private adminToolService = inject(AdminToolService);
-  private oauthProvidersService = inject(OAuthProvidersService);
+  private connectorsService = inject(ConnectorsService);
 
   readonly categories = TOOL_CATEGORIES;
   readonly protocols = TOOL_PROTOCOLS;
@@ -585,8 +585,8 @@ export class ToolFormPage implements OnInit {
   readonly isEditMode = computed(() => !!this.toolId());
   readonly selectedProtocol = signal<ToolProtocol>('local');
 
-  /** Available OAuth providers for dropdown */
-  readonly oauthProviders = computed(() => this.oauthProvidersService.getEnabledProviders());
+  /** Available connectors for dropdown */
+  readonly oauthProviders = computed(() => this.connectorsService.getEnabledConnectors());
 
   form: FormGroup = this.fb.group({
     toolId: ['', [Validators.required, Validators.pattern(/^[a-z][a-z0-9_]{2,49}$/)]],

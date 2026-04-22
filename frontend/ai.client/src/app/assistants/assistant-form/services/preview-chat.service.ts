@@ -214,6 +214,7 @@ export class PreviewChatService {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
           Accept: 'text/event-stream',
+          OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
         },
         body: JSON.stringify(requestBody),
         signal: this.abortController.signal,

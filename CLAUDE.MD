@@ -48,6 +48,7 @@ npx cdk deploy --all
 | `message_stop` | End of message |
 | `tool_use` / `tool_result` | Tool invocation and result |
 | `stream_error` | Conversational error |
+| `oauth_required` | External MCP tool needs user consent — payload `{providerId, authorizationUrl}`, one event per provider emitted after `message_stop` |
 | `done` | Stream complete |
 
 ## Multi-Protocol Tool Architecture

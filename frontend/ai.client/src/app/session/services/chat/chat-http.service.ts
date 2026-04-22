@@ -65,7 +65,8 @@ export class ChatHttpService {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
-        Accept: 'text/event-stream',        
+        Accept: 'text/event-stream',
+        OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
       },
       body: JSON.stringify(requestObject),
       signal: abortController.signal,

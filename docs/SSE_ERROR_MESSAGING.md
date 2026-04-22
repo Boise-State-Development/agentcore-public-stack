@@ -138,6 +138,19 @@ if hasattr(session_manager, 'base_manager') and hasattr(session_manager.base_man
 - `StreamError` interface
 - Error state signals for UI
 
+### OAuth Required
+
+**Backend**: `apis/shared/oauth/models.py`
+- `OAuthRequiredEvent` - Pydantic model with `to_sse_format()` method
+- Event name: `oauth_required`, payload: `{providerId, authorizationUrl}`
+
+**Routes**: `apis/inference_api/chat/routes.py`
+- After the agent stream drains, pull consent URLs from
+  `ExternalMCPIntegration.drain_pending_consent(user_id)` and emit one
+  `oauth_required` event per provider before `done`.
+- Consent URLs are populated during external MCP tool loading whenever
+  AgentCore Identity reports the user hasn't granted the required scopes.
+
 ## Adding New Error Types
 
 1. **Create event model** in `apis/shared/errors.py`:

@@ -482,6 +482,25 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // AgentCore Identity OAuth2 token vault access — lets the Runtime fetch
+    // user-federated OAuth tokens for external MCP tools (e.g. Google, Slack)
+    // via IdentityClient.get_token. When the user has not consented, this
+    // call returns an authorization URL instead of a token, which the
+    // inference route surfaces as an `oauth_required` SSE event.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'GetResourceOauth2Token',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:GetResourceOauth2Token',
+      ],
+      resources: [
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/*`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/hosted_agent_*`,
+      ],
+    }));
+
     // DynamoDB Quota Tables permissions (imported from App API Stack)
     const userQuotasTableArn = ssm.StringParameter.valueForStringParameter(
       this,

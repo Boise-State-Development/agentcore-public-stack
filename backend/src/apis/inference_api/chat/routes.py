@@ -24,6 +24,7 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 from apis.shared.files.file_resolver import get_file_resolver
+from apis.shared.oauth.models import OAuthRequiredEvent
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.quota import (
     QuotaExceededEvent,
@@ -581,6 +582,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 original_message=input_data.message if message_will_be_modified else None,
             ):
                 yield event
+
+            # Surface any OAuth consent URLs collected while loading external
+            # MCP tools for this user. Draining is idempotent — entries are
+            # removed on read, so a later invocation won't re-prompt unless
+            # AgentCore Identity still reports consent is required.
+            from agents.main_agent.integrations.external_mcp_client import (
+                get_external_mcp_integration,
+            )
+
+            for entry in get_external_mcp_integration().drain_pending_consent(user_id):
+                yield OAuthRequiredEvent(
+                    provider_id=entry["provider_id"],
+                    authorization_url=entry["authorization_url"],
+                ).to_sse_format()
 
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py

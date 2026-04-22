@@ -14,6 +14,8 @@ import {
   QuotaWarning,
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import type { OAuthRequiredEvent } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
   createStreamLineParser,
@@ -48,6 +50,7 @@ export class StreamParserService {
   private chatStateService = inject(ChatStateService);
   private errorService = inject(ErrorService);
   private quotaWarningService = inject(QuotaWarningService);
+  private oauthConsentService = inject(OAuthConsentService);
 
   // =========================================================================
   // State Signals
@@ -288,6 +291,9 @@ export class StreamParserService {
 
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
+
+      onOAuthRequired: (data: OAuthRequiredEvent) =>
+        this.oauthConsentService.requestConsent(data.providerId, data.authorizationUrl),
 
       onError: (data) => this.handleError(data),
       onStreamError: (data) =>

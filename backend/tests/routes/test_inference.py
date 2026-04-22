@@ -147,6 +147,93 @@ class TestInvocationsValid:
 # ---------------------------------------------------------------------------
 
 
+class TestInvocationsOAuthRequired:
+    """After a stream, pending OAuth consent URLs are emitted as oauth_required events."""
+
+    def test_emits_oauth_required_event_per_provider(self, authed_app, authed_client, trusted_user):
+        """Drain pending_consent for the user after stream_async and emit one event per provider."""
+        mock_agent = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            yield 'event: message_start\ndata: {"role": "assistant"}\n\n'
+            yield 'event: message_stop\ndata: {"stopReason": "end_turn"}\n\n'
+
+        mock_agent.stream_async = fake_stream
+
+        mock_integration = MagicMock()
+        mock_integration.drain_pending_consent.return_value = [
+            {"provider_id": "google", "authorization_url": "https://accounts.google.com/consent?x=1"},
+            {"provider_id": "slack", "authorization_url": "https://slack.com/oauth?y=2"},
+        ]
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=mock_agent,
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=mock_integration,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-oauth",
+                    "message": "Do the thing",
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.text
+
+        assert body.count("event: oauth_required\n") == 2
+        assert '"providerId": "google"' in body
+        assert '"authorizationUrl": "https://accounts.google.com/consent?x=1"' in body
+        assert '"providerId": "slack"' in body
+        assert '"authorizationUrl": "https://slack.com/oauth?y=2"' in body
+
+        mock_integration.drain_pending_consent.assert_called_once_with(trusted_user.user_id)
+
+        # oauth_required events must come AFTER message_stop so the UI
+        # renders consent prompts after the assistant message settles.
+        assert body.index("event: message_stop") < body.index("event: oauth_required")
+
+    def test_no_event_when_no_pending_consent(self, authed_app, authed_client):
+        """When drain_pending_consent returns an empty list, no oauth_required event is emitted."""
+        mock_agent = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            yield 'event: message_start\ndata: {"role": "assistant"}\n\n'
+            yield 'event: message_stop\ndata: {"stopReason": "end_turn"}\n\n'
+
+        mock_agent.stream_async = fake_stream
+
+        mock_integration = MagicMock()
+        mock_integration.drain_pending_consent.return_value = []
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=mock_agent,
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=mock_integration,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-no-oauth",
+                    "message": "Hi",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert "event: oauth_required" not in resp.text
+
+
 class TestInvocationsInvalid:
     """POST /invocations with invalid payload returns 422."""
 

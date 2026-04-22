@@ -36,6 +36,7 @@ import type {
   QuotaExceededEvent,
   StreamErrorEvent,
   ConversationalStreamErrorEvent,
+  OAuthRequiredEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -74,6 +75,9 @@ export interface StreamParserCallbacks {
   // Quota events
   onQuotaWarning?: (data: QuotaWarningEvent) => void;
   onQuotaExceeded?: (data: QuotaExceededEvent) => void;
+
+  // OAuth consent required (external MCP tool needs user authorization)
+  onOAuthRequired?: (data: OAuthRequiredEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -319,6 +323,25 @@ export function validateConversationalStreamError(
 }
 
 /**
+ * Validate OAuthRequiredEvent structure
+ */
+export function validateOAuthRequiredEvent(data: unknown): data is OAuthRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<OAuthRequiredEvent>;
+
+  return (
+    event.type === 'oauth_required' &&
+    typeof event.providerId === 'string' &&
+    event.providerId.length > 0 &&
+    typeof event.authorizationUrl === 'string' &&
+    event.authorizationUrl.length > 0
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -480,6 +503,14 @@ export function processStreamEvent(
       case 'citation':
         if (validateCitation(data)) {
           callbacks.onCitation?.(data);
+        }
+        break;
+
+      case 'oauth_required':
+        if (validateOAuthRequiredEvent(data)) {
+          callbacks.onOAuthRequired?.(data);
+        } else {
+          callbacks.onParseError?.('oauth_required: invalid data structure');
         }
         break;
 
