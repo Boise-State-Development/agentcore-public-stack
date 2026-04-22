@@ -1,52 +1,48 @@
-"""OAuth provider management module.
+"""OAuth provider administration.
 
-This module provides OAuth connection management for third-party integrations.
-Admins can configure OAuth providers (Google, Microsoft, Canvas, etc.) and
-users can connect their accounts for MCP tool requests.
+Providers are registered and authenticated against AWS Bedrock AgentCore
+Identity. This module exposes the provider metadata model, the DynamoDB
+repository, and the AgentCore registrar used by admin CRUD routes.
 """
 
-from .models import (
-    OAuthProviderType,
-    OAuthConnectionStatus,
-    OAuthProvider,
-    OAuthUserToken,
-    OAuthProviderCreate,
-    OAuthProviderUpdate,
-    OAuthProviderResponse,
-    OAuthProviderListResponse,
-    OAuthConnectionResponse,
-    OAuthConnectionListResponse,
-    OAuthConnectResponse,
+from .agentcore_registrar import (
+    AgentCoreRegistrar,
+    CredentialProviderConflictError,
+    CredentialProviderInfo,
+    CredentialProviderNotFoundError,
+    InvalidCustomProviderConfigError,
+    get_agentcore_registrar,
 )
-from .encryption import TokenEncryptionService, get_token_encryption_service
-from .token_cache import TokenCache, get_token_cache
-from .provider_repository import OAuthProviderRepository, get_provider_repository
-from .token_repository import OAuthTokenRepository, get_token_repository
-from .service import OAuthService, get_oauth_service
+from .models import (
+    OAuthProvider,
+    OAuthProviderCreate,
+    OAuthProviderListResponse,
+    OAuthProviderResponse,
+    OAuthProviderType,
+    OAuthProviderUpdate,
+    OAuthRequiredEvent,
+    compute_scopes_hash,
+)
+from .provider_repository import (
+    OAuthProviderRepository,
+    get_provider_repository,
+)
 
 __all__ = [
-    # Enums
     "OAuthProviderType",
-    "OAuthConnectionStatus",
-    # Models
     "OAuthProvider",
-    "OAuthUserToken",
     "OAuthProviderCreate",
     "OAuthProviderUpdate",
     "OAuthProviderResponse",
     "OAuthProviderListResponse",
-    "OAuthConnectionResponse",
-    "OAuthConnectionListResponse",
-    "OAuthConnectResponse",
-    # Services
-    "TokenEncryptionService",
-    "get_token_encryption_service",
-    "TokenCache",
-    "get_token_cache",
+    "OAuthRequiredEvent",
+    "compute_scopes_hash",
     "OAuthProviderRepository",
     "get_provider_repository",
-    "OAuthTokenRepository",
-    "get_token_repository",
-    "OAuthService",
-    "get_oauth_service",
+    "AgentCoreRegistrar",
+    "CredentialProviderInfo",
+    "CredentialProviderConflictError",
+    "CredentialProviderNotFoundError",
+    "InvalidCustomProviderConfigError",
+    "get_agentcore_registrar",
 ]

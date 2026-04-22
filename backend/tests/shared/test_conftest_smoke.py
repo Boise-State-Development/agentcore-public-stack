@@ -71,9 +71,6 @@ class TestRepositoryFactories:
     def test_oauth_provider_repository(self, oauth_provider_repository):
         assert oauth_provider_repository.enabled
 
-    def test_oauth_token_repository(self, oauth_token_repository):
-        assert oauth_token_repository.enabled
-
     def test_file_repository(self, file_repository):
         assert file_repository is not None
 
