@@ -324,7 +324,7 @@ class ExternalMCPIntegration:
                     clients.append(client)
                     auth_label = (
                         " (with OIDC forwarding)" if forward_auth and static_token
-                        else f" (OAuth: {provider_id})" if provider_id
+                        else " (OAuth)" if provider_id
                         else ""
                     )
                     logger.info(f"✅ Loaded external MCP tool: {tool_id}{auth_label}")
