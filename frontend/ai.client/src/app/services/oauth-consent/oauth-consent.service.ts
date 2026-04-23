@@ -47,6 +47,20 @@ function isOAuthCompleteMessage(data: unknown): data is OAuthCompleteMessage {
 }
 
 /**
+ * Only https URLs are accepted for consent navigation. Guards against a
+ * compromised backend or a misconfigured AgentCore response smuggling a
+ * `javascript:` or `data:` URL through the `oauth_required` event and
+ * executing in our origin when the user clicks Connect.
+ */
+function isSafeConsentUrl(raw: string): boolean {
+  try {
+    return new URL(raw).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Tracks OAuth consent requests surfaced by the SSE stream and coordinates
  * the popup + auto-resume flow.
  *
@@ -69,6 +83,9 @@ export class OAuthConsentService {
 
   /** ProviderIds whose popup is currently open. */
   private readonly inFlight = signal<Set<string>>(new Set());
+
+  /** ProviderIds whose popup was blocked on the last open attempt. */
+  private readonly blocked = signal<Set<string>>(new Set());
 
   /** Most recent completion notice surfaced to the chat layer. */
   private readonly lastCompletion = signal<OAuthCompleteMessage | null>(null);
@@ -124,8 +141,17 @@ export class OAuthConsentService {
    * Register a consent request coming off the SSE stream.
    * Duplicate providerIds refresh the existing entry — the backend may
    * reissue an interrupt with a new id if the user retried.
+   *
+   * Rejects non-https URLs — see {@link isSafeConsentUrl}.
    */
   requestConsent(providerId: string, authorizationUrl: string, interruptId?: string): void {
+    if (!isSafeConsentUrl(authorizationUrl)) {
+      console.error(
+        'OAuth consent rejected: authorizationUrl is not https',
+        { providerId },
+      );
+      return;
+    }
     this.requests.update((map) => {
       const next = new Map(map);
       next.set(providerId, {
@@ -136,16 +162,42 @@ export class OAuthConsentService {
       });
       return next;
     });
+    // A fresh request clears any prior blocked state for this provider.
+    this.blocked.update((set) => {
+      if (!set.has(providerId)) {
+        return set;
+      }
+      const next = new Set(set);
+      next.delete(providerId);
+      return next;
+    });
   }
 
   /**
    * Open the AgentCore Identity consent URL in a popup window.
-   * Falls back to a same-tab redirect if the popup is blocked.
+   *
+   * If the browser blocks the popup, we mark the provider as blocked and
+   * surface that to the UI rather than navigating the parent tab away —
+   * a redirect would tear down the chat mid-conversation and leave the
+   * paused agent turn hanging.
+   *
+   * Returns true if the popup opened, false if it was blocked or the URL
+   * failed validation. Callers can use this to trigger a fallback UI.
    */
-  openConsentPopup(providerId: string): void {
+  openConsentPopup(providerId: string): boolean {
     const request = this.requests().get(providerId);
     if (!request) {
-      return;
+      return false;
+    }
+
+    // Re-validate on the hot path even though requestConsent already
+    // checked — defensive against anyone mutating the stored entry.
+    if (!isSafeConsentUrl(request.authorizationUrl)) {
+      console.error(
+        'OAuth consent rejected at open: authorizationUrl is not https',
+        { providerId },
+      );
+      return false;
     }
 
     const width = 520;
@@ -169,22 +221,52 @@ export class OAuthConsentService {
     const popup = window.open(request.authorizationUrl, `oauth-${providerId}`, features);
 
     if (!popup) {
-      // Popup blocked — fall back to opening in the current tab. The
-      // `/oauth-complete` page will route back to `/` once consent resolves.
-      window.location.href = request.authorizationUrl;
-      return;
+      this.blocked.update((set) => {
+        if (set.has(providerId)) {
+          return set;
+        }
+        const next = new Set(set);
+        next.add(providerId);
+        return next;
+      });
+      return false;
     }
+
+    this.blocked.update((set) => {
+      if (!set.has(providerId)) {
+        return set;
+      }
+      const next = new Set(set);
+      next.delete(providerId);
+      return next;
+    });
 
     this.inFlight.update((set) => {
       const next = new Set(set);
       next.add(providerId);
       return next;
     });
+    return true;
   }
 
   /** Check whether a popup is still open for this provider. */
   isInFlight(providerId: string): boolean {
     return this.inFlight().has(providerId);
+  }
+
+  /** Check whether the last popup-open attempt was blocked. */
+  isBlocked(providerId: string): boolean {
+    return this.blocked().has(providerId);
+  }
+
+  /**
+   * Return the https authorization URL for a provider, or null if no
+   * pending request. Used by the banner to render an anchor-based fallback
+   * when the popup is blocked.
+   */
+  getAuthorizationUrl(providerId: string): string | null {
+    const request = this.requests().get(providerId);
+    return request ? request.authorizationUrl : null;
   }
 
   /**
@@ -218,12 +300,21 @@ export class OAuthConsentService {
       next.delete(providerId);
       return next;
     });
+    this.blocked.update((set) => {
+      if (!set.has(providerId)) {
+        return set;
+      }
+      const next = new Set(set);
+      next.delete(providerId);
+      return next;
+    });
   }
 
   /** Reset all state (new session, logout). */
   clear(): void {
     this.requests.set(new Map());
     this.inFlight.set(new Set());
+    this.blocked.set(new Set());
     this.lastCompletion.set(null);
   }
 

@@ -539,6 +539,29 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             max_tokens=input_data.max_tokens,
         )
 
+        # Resume requests must target interrupts that the cached agent
+        # actually has paused. Cache eviction, a process restart, or a
+        # forged request will otherwise be silently accepted by Strands
+        # and drop the client's response. Reject up front so the client
+        # sees a 400 and can restart the turn cleanly.
+        if is_resume:
+            strands_agent = getattr(agent, "agent", None)
+            interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
+            known_ids: set[str] = set()
+            if interrupt_state and getattr(interrupt_state, "activated", False):
+                interrupts = getattr(interrupt_state, "interrupts", None) or {}
+                known_ids = set(interrupts.keys())
+            submitted_ids = [entry.interruptId for entry in (input_data.interrupt_responses or [])]
+            unknown_ids = [iid for iid in submitted_ids if iid not in known_ids]
+            if unknown_ids:
+                logger.warning(
+                    "Resume rejected: submitted interrupt ids not in paused state"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unknown or expired interrupt ids; restart the turn.",
+                )
+
         # Build citations list for persistence (convert context chunks to citation format)
         citations_for_storage = []
         if context_chunks:
