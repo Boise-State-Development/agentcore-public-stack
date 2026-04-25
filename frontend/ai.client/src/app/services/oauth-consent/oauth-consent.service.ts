@@ -84,6 +84,15 @@ export class OAuthConsentService {
   /** ProviderIds whose popup is currently open. */
   private readonly inFlight = signal<Set<string>>(new Set());
 
+  /** Public read of inFlight so settings/chat UIs can react when a popup
+   *  closes without completing (state needs to flip from "Awaiting" back
+   *  to "Connect" so the user can retry). */
+  readonly inFlightProviders = this.inFlight.asReadonly();
+
+  /** Active close-watcher intervals keyed by providerId so we can cancel
+   *  cleanly on completion / dismissal. */
+  private readonly closeWatchers = new Map<string, ReturnType<typeof setInterval>>();
+
   /** ProviderIds whose popup was blocked on the last open attempt. */
   private readonly blocked = signal<Set<string>>(new Set());
 
@@ -246,7 +255,56 @@ export class OAuthConsentService {
       next.add(providerId);
       return next;
     });
+
+    // Watch for the user closing the popup without completing consent.
+    // Without this the provider stays "in-flight" forever and the Connect
+    // button remains disabled. We poll because there's no reliable
+    // cross-browser event for popup close, especially under COOP.
+    this.watchPopupClose(providerId, popup);
     return true;
+  }
+
+  /** Poll a popup window until it closes; on close, drop the provider out
+   *  of `inFlight` so the UI re-enables the Connect button. The pending
+   *  request stays so the chat banner can offer a retry. */
+  private watchPopupClose(providerId: string, popup: Window): void {
+    // Cancel any prior watcher for this provider — only one popup at a time.
+    this.cancelCloseWatcher(providerId);
+
+    const interval = setInterval(() => {
+      let closed = false;
+      try {
+        closed = popup.closed;
+      } catch {
+        // Cross-Origin-Opener-Policy can block reads of `closed` after the
+        // popup navigates externally. Give up — the user can dismiss the
+        // banner manually if needed.
+        this.cancelCloseWatcher(providerId);
+        return;
+      }
+      if (!closed) return;
+
+      this.cancelCloseWatcher(providerId);
+      // Only act if still flagged in-flight: a successful completion already
+      // ran handleCompletion → dismiss() before the popup's own close.
+      if (!this.inFlight().has(providerId)) return;
+      this.inFlight.update((set) => {
+        if (!set.has(providerId)) return set;
+        const next = new Set(set);
+        next.delete(providerId);
+        return next;
+      });
+    }, 500);
+    this.closeWatchers.set(providerId, interval);
+    this.destroyRef.onDestroy(() => this.cancelCloseWatcher(providerId));
+  }
+
+  private cancelCloseWatcher(providerId: string): void {
+    const interval = this.closeWatchers.get(providerId);
+    if (interval !== undefined) {
+      clearInterval(interval);
+      this.closeWatchers.delete(providerId);
+    }
   }
 
   /** Check whether a popup is still open for this provider. */
@@ -325,6 +383,12 @@ export class OAuthConsentService {
 
   private handleCompletion(message: OAuthCompleteMessage): void {
     this.lastCompletion.set(message);
+    if (message.providerId) {
+      // Completion arrived — the close watcher is no longer needed and
+      // would otherwise fire spuriously when the popup auto-closes after
+      // postMessage.
+      this.cancelCloseWatcher(message.providerId);
+    }
     if (message.status !== 'success' || !message.providerId) {
       return;
     }

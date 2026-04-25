@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import boto3
 from bedrock_agentcore.runtime import BedrockAgentCoreContext
@@ -79,6 +79,43 @@ _RUNTIME_WORKLOAD_ENV = "AGENTCORE_RUNTIME_WORKLOAD_NAME"
 # (e.g. `http://localhost:4200/oauth-complete`) to make chat-triggered
 # consent work outside the runtime.
 _LOCAL_CALLBACK_URL_ENV = "AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"
+
+
+def _vendor_baseline_params(provider_type: Optional[str]) -> Dict[str, str]:
+    """Hardcoded params AgentCore Identity *requires* for a given vendor.
+
+    Per the AgentCore Identity authentication docs
+    (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-authentication.html),
+    Google must receive `access_type=offline` to issue a refresh token —
+    without it the vault entry expires after ~1 hour with no refresh
+    path. This is non-negotiable: it always wins over admin-supplied
+    extras to prevent an admin from accidentally turning it off.
+    """
+    if not provider_type:
+        return {}
+    if provider_type.lower() == "google":
+        return {"access_type": "offline"}
+    return {}
+
+
+def custom_parameters_for(
+    provider_type: Optional[str],
+    admin_extras: Optional[Dict[str, str]] = None,
+) -> Optional[Dict[str, str]]:
+    """Build the `customParameters` payload AgentCore Identity wants forwarded.
+
+    Merges admin-supplied extras (e.g. Google `hd=mycorp.com` for domain
+    restriction, `prompt=consent` for stricter UX) with the hardcoded
+    vendor baseline. Baseline keys win on conflict — admins cannot turn
+    off a documented requirement.
+
+    Returns None when the merged result would be empty, so callers can
+    pass the value through to the SDK unconditionally without sending
+    an empty `customParameters` map.
+    """
+    baseline = _vendor_baseline_params(provider_type)
+    merged = {**(admin_extras or {}), **baseline}
+    return merged or None
 
 
 @dataclass(frozen=True)
@@ -142,6 +179,7 @@ class AgentCoreIdentityClient:
         force_authentication: bool = False,
         user_id: Optional[str] = None,
         custom_state: Optional[str] = None,
+        custom_parameters: Optional[Dict[str, str]] = None,
     ) -> TokenResult:
         """Fetch a user-federated OAuth2 access token for `provider_name`.
 
@@ -200,6 +238,8 @@ class AgentCoreIdentityClient:
             )
             if custom_state is not None:
                 sdk_kwargs["custom_state"] = custom_state
+            if custom_parameters:
+                sdk_kwargs["custom_parameters"] = custom_parameters
             token = await self._client.get_token(**sdk_kwargs)
         except _ConsentRequired:
             # Expected path when consent is required: the SDK invoked

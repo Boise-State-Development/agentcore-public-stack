@@ -368,6 +368,10 @@ def _build_provider_from_create(
         callback_url=credential_info.callback_url,
         oauth_discovery_url=data.oauth_discovery_url,
         authorization_server_metadata=data.authorization_server_metadata,
+        # `{}` from the form means "explicitly no extras" — store as None
+        # so absent/empty are indistinguishable in DynamoDB and `from_*`
+        # lookups round-trip identically.
+        custom_parameters=data.custom_parameters or None,
         created_at=now,
         updated_at=now,
     )

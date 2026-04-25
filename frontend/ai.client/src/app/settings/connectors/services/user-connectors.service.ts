@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { AuthService } from '../../../auth/auth.service';
 import {
+  ConnectorStatusResponse,
   InitiateConsentResponse,
   UserConnector,
 } from '../models/user-connector.model';
@@ -46,6 +47,34 @@ export class UserConnectorsService {
     },
   });
 
+  /**
+   * Side-effect-free check of whether AgentCore's vault has a usable token
+   * for this user + provider. Use it to render a "Connected" badge without
+   * committing the user to a consent flow — `initiateConsent` records a
+   * server-side pending session every time it returns an auth URL, which is
+   * wasteful when we only want a badge.
+   *
+   * Sends `OAuth2CallbackUrl` for the same reason `initiateConsent` does:
+   * the runtime injects it in prod, but the settings page bypasses the
+   * runtime, so without it the backend's identity client has no callback
+   * URL to give AgentCore Identity and rejects the request 503.
+   */
+  async getStatus(providerId: string): Promise<ConnectorStatusResponse> {
+    await this.auth.ensureAuthenticated();
+    const callback = new URL('/oauth-complete', window.location.origin);
+    callback.searchParams.set('provider_id', providerId);
+    return await firstValueFrom(
+      this.http.get<ConnectorStatusResponse>(
+        `${this.inferenceUrl()}/${providerId}/status`,
+        {
+          headers: {
+            OAuth2CallbackUrl: callback.toString(),
+          },
+        },
+      ),
+    );
+  }
+
   async initiateConsent(providerId: string): Promise<InitiateConsentResponse> {
     await this.auth.ensureAuthenticated();
     // AgentCore's GetResourceOauth2Token requires a callback URL. The runtime
@@ -67,6 +96,20 @@ export class UserConnectorsService {
       ),
     );
     return toCamelCase<InitiateConsentResponse>(raw);
+  }
+
+  /**
+   * Best-effort disconnect: clears the inference-api's local token cache
+   * for this user/provider and flags it for forced re-consent on next
+   * use. AgentCore Identity exposes no per-user vault-delete, so the
+   * upstream token at the provider keeps existing until it expires or
+   * the user revokes our app from their provider account.
+   */
+  async disconnect(providerId: string): Promise<void> {
+    await this.auth.ensureAuthenticated();
+    await firstValueFrom(
+      this.http.delete(`${this.inferenceUrl()}/${providerId}/connection`),
+    );
   }
 
   reload(): void {

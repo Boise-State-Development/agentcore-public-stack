@@ -145,6 +145,10 @@ class OAuthProviderRepository:
             existing.oauth_discovery_url = updates.oauth_discovery_url
         if updates.authorization_server_metadata is not None:
             existing.authorization_server_metadata = updates.authorization_server_metadata
+        if updates.custom_parameters is not None:
+            # Empty dict (`{}`) explicitly clears the field; pass None on the
+            # update model to leave the existing value alone.
+            existing.custom_parameters = updates.custom_parameters or None
 
         existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
         self._table.put_item(Item=existing.to_dynamo_item())

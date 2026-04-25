@@ -8,7 +8,64 @@ from agents.main_agent.integrations.agentcore_identity import (
     AgentCoreIdentityClient,
     TokenResult,
     WorkloadTokenUnavailableError,
+    custom_parameters_for,
 )
+
+
+class TestCustomParametersFor:
+    """Merge of vendor baseline + admin extras. Baseline is non-negotiable
+    because admins can't safely turn off documented requirements (e.g.
+    Google's `access_type=offline` for refresh tokens)."""
+
+    def test_google_baseline_alone(self) -> None:
+        assert custom_parameters_for("google") == {"access_type": "offline"}
+
+    def test_google_match_is_case_insensitive(self) -> None:
+        # OAuthProviderType.GOOGLE.value is "google", but defensive against
+        # callers that pass the upper-case enum name.
+        assert custom_parameters_for("Google") == {"access_type": "offline"}
+
+    @pytest.mark.parametrize(
+        "vendor", ["microsoft", "github", "canvas", "custom", "unknown"]
+    )
+    def test_other_vendors_with_no_extras_return_none(self, vendor: str) -> None:
+        # Per the AgentCore Identity docs, only Google requires baseline
+        # extras today. Returning None lets callers pass through.
+        assert custom_parameters_for(vendor) is None
+
+    def test_none_returns_none(self) -> None:
+        assert custom_parameters_for(None) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert custom_parameters_for("") is None
+
+    def test_admin_extras_merged_with_google_baseline(self) -> None:
+        # Admin can add domain restriction / prompt without losing
+        # the access_type=offline requirement.
+        result = custom_parameters_for(
+            "google", {"hd": "mycompany.com", "prompt": "consent"}
+        )
+        assert result == {
+            "access_type": "offline",
+            "hd": "mycompany.com",
+            "prompt": "consent",
+        }
+
+    def test_admin_cannot_override_baseline_keys(self) -> None:
+        # Admin-supplied access_type=online is silently superseded by the
+        # baseline. This is intentional — overriding it would silently
+        # break refresh tokens, the exact bug we hardcoded against.
+        result = custom_parameters_for("google", {"access_type": "online"})
+        assert result == {"access_type": "offline"}
+
+    def test_admin_extras_only_for_non_baseline_vendor(self) -> None:
+        # Vendors with no baseline still pass through admin extras.
+        result = custom_parameters_for("github", {"prompt": "consent"})
+        assert result == {"prompt": "consent"}
+
+    def test_empty_admin_extras_treated_as_none(self) -> None:
+        assert custom_parameters_for("microsoft", {}) is None
+        assert custom_parameters_for("microsoft", None) is None
 
 
 class TestTokenResult:
@@ -180,3 +237,42 @@ class TestGetTokenForUserErrors:
 
         kwargs = sdk_instance.get_token.call_args.kwargs
         assert kwargs["force_authentication"] is True
+
+    @pytest.mark.asyncio
+    async def test_custom_parameters_are_forwarded_to_sdk(
+        self, mock_identity_sdk: MagicMock, mock_context: MagicMock
+    ) -> None:
+        # AgentCore Identity needs Google's `access_type=offline` forwarded
+        # via the SDK's `custom_parameters` kwarg — without it Google
+        # issues no refresh token and the vault entry expires after 1hr.
+        sdk_instance = mock_identity_sdk.return_value
+        sdk_instance.get_token = AsyncMock(return_value="t")
+
+        client = AgentCoreIdentityClient()
+        await client.get_token_for_user(
+            provider_name="p",
+            scopes=["s"],
+            custom_parameters={"access_type": "offline"},
+        )
+
+        kwargs = sdk_instance.get_token.call_args.kwargs
+        assert kwargs["custom_parameters"] == {"access_type": "offline"}
+
+    @pytest.mark.asyncio
+    async def test_custom_parameters_omitted_when_none_or_empty(
+        self, mock_identity_sdk: MagicMock, mock_context: MagicMock
+    ) -> None:
+        # The SDK only ships the kwarg when we actually have something to
+        # send; absent custom_parameters should not appear in the call.
+        sdk_instance = mock_identity_sdk.return_value
+        sdk_instance.get_token = AsyncMock(return_value="t")
+
+        client = AgentCoreIdentityClient()
+        await client.get_token_for_user(provider_name="p", scopes=["s"])
+        assert "custom_parameters" not in sdk_instance.get_token.call_args.kwargs
+
+        sdk_instance.get_token.reset_mock()
+        await client.get_token_for_user(
+            provider_name="p", scopes=["s"], custom_parameters={}
+        )
+        assert "custom_parameters" not in sdk_instance.get_token.call_args.kwargs

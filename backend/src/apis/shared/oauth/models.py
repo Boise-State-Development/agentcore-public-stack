@@ -63,6 +63,13 @@ class OAuthProvider:
     # CANVAS; both are None for Google/Microsoft/GitHub.
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    # Vendor-specific OAuth parameters merged into AgentCore Identity's
+    # `customParameters` at request time. Examples: Google `hd=mycorp.com`
+    # to restrict to a Workspace domain, `prompt=consent` to force the
+    # consent screen. Hardcoded baselines (e.g. Google's
+    # `access_type=offline`) win on conflict — admins cannot accidentally
+    # turn off a documented requirement.
+    custom_parameters: Optional[Dict[str, str]] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
 
@@ -88,6 +95,7 @@ class OAuthProvider:
             "callbackUrl": self.callback_url,
             "oauthDiscoveryUrl": self.oauth_discovery_url,
             "authorizationServerMetadata": self.authorization_server_metadata,
+            "customParameters": self.custom_parameters,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -106,6 +114,7 @@ class OAuthProvider:
             callback_url=item.get("callbackUrl"),
             oauth_discovery_url=item.get("oauthDiscoveryUrl"),
             authorization_server_metadata=item.get("authorizationServerMetadata"),
+            custom_parameters=item.get("customParameters"),
             created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
             updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
         )
@@ -139,6 +148,7 @@ class OAuthProviderCreate(BaseModel):
     icon_name: str = "heroLink"
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    custom_parameters: Optional[Dict[str, str]] = None
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -188,6 +198,7 @@ class OAuthProviderUpdate(BaseModel):
     icon_name: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    custom_parameters: Optional[Dict[str, str]] = None
 
     @model_validator(mode="after")
     def _validate_credential_pair(self) -> "OAuthProviderUpdate":
@@ -216,6 +227,7 @@ class OAuthProviderResponse(BaseModel):
     callback_url: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
+    custom_parameters: Optional[Dict[str, str]] = None
     created_at: str
     updated_at: str
 
@@ -233,6 +245,7 @@ class OAuthProviderResponse(BaseModel):
             callback_url=provider.callback_url,
             oauth_discovery_url=provider.oauth_discovery_url,
             authorization_server_metadata=provider.authorization_server_metadata,
+            custom_parameters=provider.custom_parameters,
             created_at=provider.created_at,
             updated_at=provider.updated_at,
         )

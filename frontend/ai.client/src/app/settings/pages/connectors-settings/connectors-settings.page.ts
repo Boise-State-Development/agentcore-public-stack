@@ -6,6 +6,8 @@ import {
   computed,
   effect,
 } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroLink,
@@ -20,8 +22,18 @@ import { UserConnectorsService } from '../../connectors/services/user-connectors
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { UserConnector } from '../../connectors/models/user-connector.model';
 import { ToastService } from '../../../services/toast/toast.service';
+import {
+  ConfirmationDialogComponent,
+  ConfirmationDialogData,
+} from '../../../components/confirmation-dialog';
 
-type ConnectState = 'idle' | 'initiating' | 'awaiting' | 'connected' | 'error';
+type ConnectState =
+  | 'probing'
+  | 'idle'
+  | 'initiating'
+  | 'awaiting'
+  | 'connected'
+  | 'error';
 
 @Component({
   selector: 'app-connectors-settings',
@@ -94,47 +106,62 @@ type ConnectState = 'idle' | 'initiating' | 'awaiting' | 'connected' | 'error';
                   <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
                     {{ connector.displayName }}
                   </h3>
-                  @if (connector.scopes.length > 0) {
-                    <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                      Requests: {{ connector.scopes.join(', ') }}
-                    </p>
-                  }
                 </div>
               </div>
 
               @let state = getState(connector.providerId);
-              <div class="flex shrink-0 items-center gap-2">
-                @if (state === 'connected') {
-                  <span class="inline-flex items-center gap-1.5 rounded-sm bg-emerald-50 px-2.5 py-1.5 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                    <ng-icon name="heroCheckCircle" class="size-4" />
-                    Connected
-                  </span>
-                } @else if (state === 'error') {
-                  <span class="inline-flex items-center gap-1.5 rounded-sm bg-red-50 px-2.5 py-1.5 text-xs/5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
-                    <ng-icon name="heroExclamationTriangle" class="size-4" />
-                    Failed
-                  </span>
-                }
-
-                <button
-                  type="button"
-                  (click)="connect(connector.providerId)"
-                  [disabled]="state === 'initiating' || state === 'awaiting'"
-                  class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
-                >
-                  @if (state === 'initiating') {
-                    <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
-                    Starting...
-                  } @else if (state === 'awaiting') {
-                    <ng-icon name="heroArrowPath" class="size-4" />
-                    Awaiting consent
-                  } @else if (state === 'connected') {
-                    Reconnect
-                  } @else {
-                    Connect
+              @if (state === 'probing') {
+                <!-- Skeleton placeholder while the side-effect-free /status
+                     probe resolves. Sized to roughly match the badge + button
+                     footprint so the row doesn't reflow when the real UI
+                     swaps in. Decorative — list-level loading is announced
+                     by the resource state above. -->
+                <div class="flex shrink-0 items-center gap-2" aria-hidden="true">
+                  <div class="h-7 w-24 animate-pulse rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+                  <div class="h-7 w-20 animate-pulse rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+                </div>
+              } @else {
+                <div class="flex shrink-0 items-center gap-2">
+                  @if (state === 'connected') {
+                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-emerald-50 px-2.5 py-1.5 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                      <ng-icon name="heroCheckCircle" class="size-4" />
+                      Connected
+                    </span>
+                  } @else if (state === 'error') {
+                    <span class="inline-flex items-center gap-1.5 rounded-sm bg-red-50 px-2.5 py-1.5 text-xs/5 font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                      <ng-icon name="heroExclamationTriangle" class="size-4" />
+                      Failed
+                    </span>
                   }
-                </button>
-              </div>
+
+                  @if (state === 'connected') {
+                    <button
+                      type="button"
+                      (click)="disconnect(connector)"
+                      class="inline-flex items-center gap-1.5 rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-semibold text-gray-700 shadow-xs hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-300/50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      Disconnect
+                    </button>
+                  } @else {
+                    <button
+                      type="button"
+                      (click)="connect(connector.providerId)"
+                      [disabled]="state === 'initiating' || state === 'awaiting'"
+                      class="inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                    >
+                      @if (state === 'initiating') {
+                        <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                        Starting...
+                      } @else if (state === 'awaiting') {
+                        <ng-icon name="heroArrowPath" class="size-4" />
+                        Awaiting consent
+                      } @else {
+                        Connect
+                      }
+                    </button>
+                  }
+                </div>
+              }
             </li>
           }
         </ul>
@@ -146,6 +173,7 @@ export class ConnectorsSettingsPage {
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
+  private readonly dialog = inject(Dialog);
 
   protected readonly resource = this.connectorsService.connectorsResource;
 
@@ -172,26 +200,58 @@ export class ConnectorsSettingsPage {
 
     // Probe AgentCore on load (and whenever the connector list changes)
     // to restore the "Connected" badge without the user having to click.
-    // We call initiateConsent just for its `connected` flag — if it returns
-    // false we discard the URL, the user can still click Connect manually.
+    // Uses the side-effect-free `/status` endpoint — `initiateConsent`
+    // would record a pending session on the server every time the vault is
+    // empty, which is wasteful when we only want a badge.
     effect(() => {
       const connectors = this.connectors();
       if (connectors.length === 0) return;
       void this.probeConnectedStatus(connectors);
     });
+
+    // If a user closes the OAuth popup without completing consent, the
+    // service drops the providerId from inFlight. Reset our local state
+    // back to `idle` so the Connect button becomes interactive again.
+    effect(() => {
+      const inFlight = this.consentService.inFlightProviders();
+      this.states.update((states) => {
+        let changed = false;
+        const next = new Map(states);
+        for (const [providerId, state] of next.entries()) {
+          if (state === 'awaiting' && !inFlight.has(providerId)) {
+            next.set(providerId, 'idle');
+            changed = true;
+          }
+        }
+        return changed ? next : states;
+      });
+    });
   }
 
   private async probeConnectedStatus(connectors: UserConnector[]): Promise<void> {
     const unknown = connectors.filter((c) => !this.states().has(c.providerId));
+    if (unknown.length === 0) return;
+
+    // Flip to `probing` synchronously so the skeleton renders before the
+    // first network round-trip resolves, instead of flashing the Connect
+    // button and replacing it half a second later.
+    unknown.forEach((c) => this.setState(c.providerId, 'probing'));
+
     await Promise.all(
       unknown.map(async (c) => {
         try {
-          const result = await this.connectorsService.initiateConsent(c.providerId);
-          if (result.connected && this.getState(c.providerId) === 'idle') {
-            this.setState(c.providerId, 'connected');
+          const status = await this.connectorsService.getStatus(c.providerId);
+          // Only resolve from `probing` — if the user clicked Connect
+          // mid-probe we don't want to clobber their in-flight state.
+          if (this.getState(c.providerId) === 'probing') {
+            this.setState(c.providerId, status.connected ? 'connected' : 'idle');
           }
         } catch {
-          // Leave state as idle — user can still click Connect to retry.
+          // Status check failed (e.g. backend 503). Fall back to idle so the
+          // Connect button is interactive and the user can retry manually.
+          if (this.getState(c.providerId) === 'probing') {
+            this.setState(c.providerId, 'idle');
+          }
         }
       }),
     );
@@ -207,6 +267,39 @@ export class ConnectorsSettingsPage {
       next.set(providerId, state);
       return next;
     });
+  }
+
+  protected async disconnect(connector: UserConnector): Promise<void> {
+    // The "destructive" styling matches the existing pattern for delete
+    // affordances in this codebase (see file-browser bulk delete). The
+    // message flags that the upstream provider may still hold an
+    // authorization the user should revoke separately for full removal.
+    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data: {
+        title: `Disconnect ${connector.displayName}`,
+        message:
+          `Agents will stop using this connector for you, and you'll be ` +
+          `prompted to re-authorize the next time it's needed. For full ` +
+          `revocation (e.g. removing this app from your Google account), ` +
+          `visit your account settings at the provider.`,
+        confirmText: 'Disconnect',
+        cancelText: 'Cancel',
+        destructive: true,
+      } as ConfirmationDialogData,
+    });
+
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (confirmed !== true) return;
+
+    try {
+      await this.connectorsService.disconnect(connector.providerId);
+      this.setState(connector.providerId, 'idle');
+      this.toast.success(`${connector.displayName} disconnected.`);
+    } catch (err: unknown) {
+      console.error('Disconnect failed', err);
+      const detail = (err as { error?: { detail?: string }; message?: string })?.error?.detail;
+      this.toast.error(detail ?? 'Could not disconnect.');
+    }
   }
 
   protected async connect(providerId: string): Promise<void> {

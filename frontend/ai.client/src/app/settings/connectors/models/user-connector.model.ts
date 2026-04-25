@@ -23,3 +23,13 @@ export interface InitiateConsentResponse {
   connected: boolean;
   authorizationUrl: string | null;
 }
+
+/**
+ * Inference-API response for `GET /connectors/{id}/status`. Side-effect-free:
+ * unlike initiate-consent, this never remembers a session_uri server-side
+ * or hands back an authorization URL. Use it to render "Connected" badges
+ * without committing the user to a consent flow.
+ */
+export interface ConnectorStatusResponse {
+  connected: boolean;
+}

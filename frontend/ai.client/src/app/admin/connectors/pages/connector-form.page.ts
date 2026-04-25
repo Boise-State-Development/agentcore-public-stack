@@ -50,6 +50,12 @@ interface ConnectorFormGroup {
   grantAllRoles: FormControl<boolean>;
   enabled: FormControl<boolean>;
   iconName: FormControl<string>;
+  /**
+   * Free-form `key=value` lines (one per line) for vendor-specific OAuth
+   * params. Parsed to `Record<string, string>` before submit. Blank lines
+   * and lines without `=` are silently dropped.
+   */
+  customParameters: FormControl<string>;
 }
 
 @Component({
@@ -367,6 +373,25 @@ interface ConnectorFormGroup {
                     Comma-separated list of OAuth scopes to request during authorization.
                   </p>
                 </div>
+
+                <div>
+                  <label for="customParameters" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Custom OAuth Parameters
+                    <span class="font-normal text-gray-400 dark:text-gray-500">(optional)</span>
+                  </label>
+                  <textarea
+                    id="customParameters"
+                    formControlName="customParameters"
+                    rows="3"
+                    placeholder="hd=mycompany.com&#10;prompt=consent"
+                    spellcheck="false"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
+                  ></textarea>
+                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                    One <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">key=value</code> pair per line, forwarded to AgentCore Identity as <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">customParameters</code>.
+                    Required vendor params (e.g. Google's <code class="rounded-xs bg-gray-100 px-1 py-0.5 dark:bg-gray-700">access_type=offline</code>) are sent automatically and override any conflicting entries here.
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -515,6 +540,7 @@ export class ConnectorFormPage implements OnInit {
     grantAllRoles: this.fb.control(true, { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     iconName: this.fb.control('heroLink', { nonNullable: true }),
+    customParameters: this.fb.control('', { nonNullable: true }),
   });
 
   readonly pageTitle = computed(() => (this.isEditMode() ? 'Edit Connector' : 'Add Connector'));
@@ -592,6 +618,7 @@ export class ConnectorFormPage implements OnInit {
         grantAllRoles: connector.allowedRoles.length === 0,
         enabled: connector.enabled,
         iconName: connector.iconName || 'heroLink',
+        customParameters: this.serializeCustomParameters(connector.customParameters ?? null),
       });
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
@@ -689,6 +716,10 @@ export class ConnectorFormPage implements OnInit {
         ? []
         : (formValue.allowedRoles || []).filter((r: string) => r !== '*');
 
+      // Parse the textarea into a key/value map. The empty case sends `{}`
+      // on update (explicitly clears extras) and is omitted on create.
+      const customParameters = this.parseCustomParameters(formValue.customParameters);
+
       if (this.isEditMode() && this.providerId()) {
         const updates: ConnectorUpdateRequest = {
           displayName: formValue.displayName,
@@ -696,6 +727,7 @@ export class ConnectorFormPage implements OnInit {
           allowedRoles,
           enabled: formValue.enabled,
           iconName: formValue.iconName,
+          customParameters,
         };
         if (formValue.clientId && formValue.clientSecret) {
           updates.clientId = formValue.clientId;
@@ -720,6 +752,9 @@ export class ConnectorFormPage implements OnInit {
         };
         if (this.needsDiscovery() && formValue.oauthDiscoveryUrl) {
           createData.oauthDiscoveryUrl = formValue.oauthDiscoveryUrl;
+        }
+        if (Object.keys(customParameters).length > 0) {
+          createData.customParameters = customParameters;
         }
         const created = await this.connectorsService.createConnector(createData);
         this.createdConnector.set(created);
@@ -753,5 +788,41 @@ export class ConnectorFormPage implements OnInit {
     }
     const message = (error as { message?: string } | null)?.message;
     return message ?? 'Failed to save connector.';
+  }
+
+  /**
+   * Parse the textarea contents (one `key=value` per line) into a map.
+   * Blank lines and lines without `=` are silently dropped — the admin
+   * sees the cleaned-up version when they re-open the form for editing.
+   */
+  private parseCustomParameters(raw: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!raw) return out;
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue; // drop lines with no `=` or empty key
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1).trim();
+      if (!key) continue;
+      out[key] = value;
+    }
+    return out;
+  }
+
+  /**
+   * Serialize a saved map back into the `key=value\nkey=value` textarea
+   * format. Keys are sorted for deterministic display so admin diffs stay
+   * stable across edits.
+   */
+  private serializeCustomParameters(
+    map: Record<string, string> | null,
+  ): string {
+    if (!map) return '';
+    return Object.keys(map)
+      .sort()
+      .map(key => `${key}=${map[key]}`)
+      .join('\n');
   }
 }

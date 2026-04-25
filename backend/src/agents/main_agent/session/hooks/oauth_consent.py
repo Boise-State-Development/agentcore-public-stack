@@ -37,6 +37,7 @@ from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.agentcore_identity import (
     CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
+    custom_parameters_for,
     get_agentcore_identity_client,
 )
 
@@ -108,6 +109,20 @@ ProviderLookup = Callable[[Any], Optional[str]]
 # without forcing a sync wrapper.
 ScopesLookup = Callable[[str], Union[list[str], Awaitable[list[str]]]]
 
+# Returns the provider's vendor type (e.g. "google", "microsoft") for a
+# provider_id, or None if unknown / no per-vendor params needed. Optional —
+# omitted in older tests; without it AgentCore Identity gets no
+# `customParameters`, which means Google won't issue a refresh token and
+# the vault entry expires after ~1 hour.
+ProviderTypeLookup = Callable[[str], Union[Optional[str], Awaitable[Optional[str]]]]
+
+# Returns admin-supplied OAuth params (e.g. `hd=mycorp.com` for Google
+# Workspace domain restriction) for a provider_id. Merged with the
+# vendor baseline by `custom_parameters_for`; baseline wins on conflict.
+CustomParametersLookup = Callable[
+    [str], Union[Optional[dict[str, str]], Awaitable[Optional[dict[str, str]]]]
+]
+
 
 class OAuthConsentHook(HookProvider):
     """Pause the agent if a tool needs OAuth and we don't have a token yet."""
@@ -117,6 +132,8 @@ class OAuthConsentHook(HookProvider):
         user_id: str,
         provider_lookup: ProviderLookup,
         scopes_lookup: ScopesLookup,
+        provider_type_lookup: Optional[ProviderTypeLookup] = None,
+        custom_parameters_lookup: Optional[CustomParametersLookup] = None,
     ):
         """Initialize.
 
@@ -126,14 +143,29 @@ class OAuthConsentHook(HookProvider):
                 fallback (no-op in production).
             provider_lookup: See `ProviderLookup`.
             scopes_lookup: See `ScopesLookup`.
+            provider_type_lookup: See `ProviderTypeLookup`. Optional. When
+                provided, the hook forwards vendor-specific OAuth params
+                (e.g. Google's `access_type=offline`) to AgentCore Identity.
+            custom_parameters_lookup: See `CustomParametersLookup`.
+                Optional. Admin-supplied extras to merge with the vendor
+                baseline.
         """
         self._user_id = user_id
         self._provider_lookup = provider_lookup
         self._scopes_lookup = scopes_lookup
+        self._provider_type_lookup = provider_type_lookup
+        self._custom_parameters_lookup = custom_parameters_lookup
         # Cache scopes per provider for the lifetime of this hook (one agent
         # invocation). Avoids repeated DB hits if the same provider is used
         # across multiple tool calls in a single turn.
         self._scopes_cache: dict[str, list[str]] = {}
+        # Same cache shape for provider_type. `None` is a legitimate value
+        # (vendor without extra params), so we use a separate sentinel set
+        # to distinguish "unknown" from "looked up, no extras needed".
+        self._provider_type_cache: dict[str, Optional[str]] = {}
+        self._provider_type_cache_keys: set[str] = set()
+        self._custom_parameters_cache: dict[str, Optional[dict[str, str]]] = {}
+        self._custom_parameters_cache_keys: set[str] = set()
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeToolCallEvent, self._gate)
@@ -202,6 +234,8 @@ class OAuthConsentHook(HookProvider):
     ) -> Optional[dict]:
         """Return {'token': str|None, 'url': str|None} or None on hard error."""
         scopes = await self._resolve_scopes(provider_id)
+        provider_type = await self._resolve_provider_type(provider_id)
+        admin_extras = await self._resolve_custom_parameters(provider_id)
         identity_client = get_agentcore_identity_client()
 
         try:
@@ -210,6 +244,7 @@ class OAuthConsentHook(HookProvider):
                 scopes=scopes,
                 user_id=self._user_id,
                 force_authentication=force_authentication,
+                custom_parameters=custom_parameters_for(provider_type, admin_extras),
             )
         except WorkloadTokenUnavailableError:
             logger.error(
@@ -294,3 +329,33 @@ class OAuthConsentHook(HookProvider):
         scopes = list(scopes or [])
         self._scopes_cache[provider_id] = scopes
         return scopes
+
+    async def _resolve_provider_type(self, provider_id: str) -> Optional[str]:
+        if self._provider_type_lookup is None:
+            return None
+        if provider_id in self._provider_type_cache_keys:
+            return self._provider_type_cache.get(provider_id)
+        result = self._provider_type_lookup(provider_id)
+        if inspect.isawaitable(result):
+            provider_type = await result
+        else:
+            provider_type = result
+        self._provider_type_cache[provider_id] = provider_type
+        self._provider_type_cache_keys.add(provider_id)
+        return provider_type
+
+    async def _resolve_custom_parameters(
+        self, provider_id: str
+    ) -> Optional[dict[str, str]]:
+        if self._custom_parameters_lookup is None:
+            return None
+        if provider_id in self._custom_parameters_cache_keys:
+            return self._custom_parameters_cache.get(provider_id)
+        result = self._custom_parameters_lookup(provider_id)
+        if inspect.isawaitable(result):
+            extras = await result
+        else:
+            extras = result
+        self._custom_parameters_cache[provider_id] = extras
+        self._custom_parameters_cache_keys.add(provider_id)
+        return extras

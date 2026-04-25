@@ -125,12 +125,12 @@ class TestOAuthConsentHookVaultHit:
             await hook._gate(event)
 
         assert oauth_token_cache.get("alice", "google") == "tok-from-vault"
-        identity.get_token_for_user.assert_called_once_with(
-            provider_name="google",
-            scopes=["openid"],
-            user_id="alice",
-            force_authentication=False,
-        )
+        identity.get_token_for_user.assert_called_once()
+        kwargs = identity.get_token_for_user.call_args.kwargs
+        assert kwargs["provider_name"] == "google"
+        assert kwargs["scopes"] == ["openid"]
+        assert kwargs["user_id"] == "alice"
+        assert kwargs["force_authentication"] is False
 
 
 class TestOAuthConsentHookConsentRequired:
@@ -420,6 +420,97 @@ class TestOAuthConsentHookErrors:
             await hook._gate(event2)
 
         assert scopes_lookup.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_provider_type_lookup_forwards_custom_parameters(self):
+        """When the provider is Google, the hook forwards
+        `custom_parameters={"access_type": "offline"}` to AgentCore Identity
+        so Google issues a refresh token (vault entry would otherwise expire
+        after ~1 hour with no refresh path)."""
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(access_token="t")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+            provider_type_lookup=lambda _: "google",
+        )
+
+        event = _make_event(provider_id="google")
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            await hook._gate(event)
+
+        identity.get_token_for_user.assert_called_once()
+        assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
+            "access_type": "offline",
+        }
+
+    @pytest.mark.asyncio
+    async def test_admin_custom_parameters_merge_with_baseline(self):
+        """Hook merges admin-supplied extras (e.g. Google `hd=` for Workspace
+        domain restriction) with the vendor baseline before forwarding to
+        AgentCore. Baseline still wins on conflict."""
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(access_token="t")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+            provider_type_lookup=lambda _: "google",
+            custom_parameters_lookup=lambda _: {
+                "hd": "mycompany.com",
+                "access_type": "online",  # admin attempts override; ignored
+            },
+        )
+
+        event = _make_event(provider_id="google")
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            await hook._gate(event)
+
+        identity.get_token_for_user.assert_called_once()
+        assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
+            "access_type": "offline",  # baseline wins
+            "hd": "mycompany.com",
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_provider_type_lookup_omits_custom_parameters(self):
+        """When the lookup is omitted (legacy callers / non-Google vendors),
+        no `custom_parameters` is sent — AgentCore handles vendor defaults
+        and we don't accidentally inject Google-specific keys elsewhere."""
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(access_token="t")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "github",
+            scopes_lookup=lambda _: ["read:user"],
+            # no provider_type_lookup
+        )
+
+        event = _make_event(provider_id="github")
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            await hook._gate(event)
+
+        identity.get_token_for_user.assert_called_once()
+        assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] is None
 
 
 class TestLooksLikeAuthFailure:

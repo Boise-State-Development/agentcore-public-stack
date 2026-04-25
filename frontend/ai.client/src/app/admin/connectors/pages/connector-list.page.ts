@@ -7,6 +7,8 @@ import {
 } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
@@ -26,6 +28,10 @@ import {
 import { ConnectorsService } from '../services/connectors.service';
 import { Connector, ConnectorType } from '../models/connector.model';
 import { TooltipDirective } from '../../../components/tooltip/tooltip.directive';
+import {
+  ConfirmationDialogComponent,
+  ConfirmationDialogData,
+} from '../../../components/confirmation-dialog';
 
 @Component({
   selector: 'app-connector-list',
@@ -355,6 +361,7 @@ import { TooltipDirective } from '../../../components/tooltip/tooltip.directive'
 export class ConnectorListPage {
   connectorsService = inject(ConnectorsService);
   private router = inject(Router);
+  private dialog = inject(Dialog);
 
   readonly connectorsResource = this.connectorsService.connectorsResource;
 
@@ -472,9 +479,20 @@ export class ConnectorListPage {
   }
 
   async deleteConnector(connector: Connector): Promise<void> {
-    if (!confirm(`Are you sure you want to delete the connector "${connector.displayName}"?\n\nThis will disconnect all users currently using this connector. This action cannot be undone.`)) {
-      return;
-    }
+    const dialogRef = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+      data: {
+        title: `Delete ${connector.displayName}`,
+        message:
+          `This will disconnect all users currently using this connector ` +
+          `and delete it from AgentCore Identity. This action cannot be undone.`,
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        destructive: true,
+      } as ConfirmationDialogData,
+    });
+
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (confirmed !== true) return;
 
     try {
       await this.connectorsService.deleteConnector(connector.providerId);

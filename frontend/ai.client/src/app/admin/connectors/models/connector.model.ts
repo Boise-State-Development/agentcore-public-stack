@@ -27,6 +27,14 @@ export interface Connector {
   /** Custom/Canvas only — OIDC discovery URL or explicit server metadata. */
   oauthDiscoveryUrl?: string | null;
   authorizationServerMetadata?: Record<string, unknown> | null;
+  /**
+   * Vendor-specific OAuth params merged into AgentCore Identity's
+   * `customParameters` at request time. Examples: Google `hd=mycorp.com`
+   * for Workspace domain restriction, `prompt=consent` for stricter UX.
+   * Hardcoded vendor baselines (e.g. Google's `access_type=offline`)
+   * always win on conflict.
+   */
+  customParameters?: Record<string, string> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,11 +68,15 @@ export interface ConnectorCreateRequest {
   iconName?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  customParameters?: Record<string, string>;
 }
 
 /**
  * Update request. Credential rotation requires `clientId` and
  * `clientSecret` together; metadata-only edits leave them undefined.
+ *
+ * `customParameters: {}` explicitly clears all admin-supplied extras;
+ * `undefined` leaves the existing value alone.
  */
 export interface ConnectorUpdateRequest {
   displayName?: string;
@@ -76,6 +88,7 @@ export interface ConnectorUpdateRequest {
   iconName?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
+  customParameters?: Record<string, string>;
 }
 
 /**
@@ -93,6 +106,11 @@ export interface ConnectorFormData {
   enabled: boolean;
   iconName: string;
   oauthDiscoveryUrl: string;
+  /**
+   * Free-form `key=value` lines for admin-supplied custom OAuth parameters,
+   * one per line. Parsed to `Record<string, string>` before submit.
+   */
+  customParameters: string;
 }
 
 /**

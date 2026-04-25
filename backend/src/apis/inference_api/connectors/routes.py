@@ -23,9 +23,11 @@ import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.agentcore_identity import (
     CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
+    custom_parameters_for,
     get_agentcore_identity_client,
 )
 from apis.shared.auth.dependencies import get_current_user_trusted
@@ -59,6 +61,18 @@ class InitiateConsentResponse(BaseModel):
     authorization_url: str | None = None
 
 
+class ConnectorStatusResponse(BaseModel):
+    """Whether the caller has a usable token in AgentCore's vault.
+
+    Side-effect-free: unlike `initiate-consent`, this endpoint discards
+    the authorization URL when consent is required, and does NOT remember
+    the session_uri server-side. Use it from listing UIs that need a
+    "Connected" badge without committing the user to a consent flow.
+    """
+
+    connected: bool = False
+
+
 class CompleteConsentRequest(BaseModel):
     """Body for finalizing a consent flow after the popup returns."""
 
@@ -78,17 +92,17 @@ def _is_visible_to_user(provider, user_role_ids: list[str]) -> bool:
     return bool(set(provider.allowed_roles) & set(user_role_ids))
 
 
-@router.post(
-    "/{provider_id}/initiate-consent",
-    response_model=InitiateConsentResponse,
-)
-async def initiate_consent(
+async def _resolve_visible_provider(
     provider_id: str,
-    current_user: User = Depends(get_current_user_trusted),
-    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
-    role_service: AppRoleService = Depends(get_app_role_service),
-) -> InitiateConsentResponse:
-    """Start (or verify) AgentCore consent for the given provider."""
+    current_user: User,
+    provider_repo: OAuthProviderRepository,
+    role_service: AppRoleService,
+):
+    """Fetch a provider and 404/403 if it isn't visible to the caller.
+
+    Centralizes the lookup so `initiate_consent` and `connector_status`
+    use identical visibility rules.
+    """
     provider = await provider_repo.get_provider(provider_id)
     if not provider or not provider.enabled:
         raise HTTPException(
@@ -102,6 +116,31 @@ async def initiate_consent(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this connector",
         )
+    return provider
+
+
+@router.post(
+    "/{provider_id}/initiate-consent",
+    response_model=InitiateConsentResponse,
+)
+async def initiate_consent(
+    provider_id: str,
+    current_user: User = Depends(get_current_user_trusted),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+) -> InitiateConsentResponse:
+    """Start (or verify) AgentCore consent for the given provider."""
+    provider = await _resolve_visible_provider(
+        provider_id, current_user, provider_repo, role_service
+    )
+
+    # If the user previously disconnected, force a fresh consent flow even
+    # though AgentCore's vault still holds an unexpired token — they
+    # explicitly opted out, and re-using the cached entry would silently
+    # undo that.
+    force_auth = oauth_token_cache.needs_force_reauth(
+        current_user.user_id, provider.provider_id
+    )
 
     identity = get_agentcore_identity_client()
     try:
@@ -109,6 +148,10 @@ async def initiate_consent(
             provider_name=provider.provider_id,
             scopes=provider.scopes,
             user_id=current_user.user_id,
+            force_authentication=force_auth,
+            custom_parameters=custom_parameters_for(
+                provider.provider_type.value, provider.custom_parameters
+            ),
             # No custom_state: AgentCore appears to treat its presence as a
             # signal to start a fresh flow, never short-circuiting to the
             # cached token. The frontend passes provider_id via the
@@ -141,6 +184,65 @@ async def initiate_consent(
     if result.requires_consent:
         return InitiateConsentResponse(authorization_url=result.authorization_url)
     return InitiateConsentResponse(connected=True)
+
+
+@router.get(
+    "/{provider_id}/status",
+    response_model=ConnectorStatusResponse,
+)
+async def connector_status(
+    provider_id: str,
+    current_user: User = Depends(get_current_user_trusted),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+) -> ConnectorStatusResponse:
+    """Report whether AgentCore's vault has a usable token for this caller.
+
+    Side-effect-free read: when the vault is empty we discard the
+    authorization URL the SDK returns. The settings page uses this to
+    decorate the list with a "Connected" badge without committing the
+    user to a flow.
+
+    GET so it's cache-friendly and idempotent. The HTTP status only
+    reflects request validity (401/403/404/503); whether the user is
+    *connected* is in the response body.
+    """
+    provider = await _resolve_visible_provider(
+        provider_id, current_user, provider_repo, role_service
+    )
+
+    # User just disconnected — they're not connected, regardless of what
+    # AgentCore's vault still holds. This avoids a misleading "Connected"
+    # badge between disconnect and the next re-consent.
+    if oauth_token_cache.needs_force_reauth(
+        current_user.user_id, provider.provider_id
+    ):
+        return ConnectorStatusResponse(connected=False)
+
+    identity = get_agentcore_identity_client()
+    try:
+        result = await identity.get_token_for_user(
+            provider_name=provider.provider_id,
+            scopes=provider.scopes,
+            user_id=current_user.user_id,
+            custom_parameters=custom_parameters_for(
+                provider.provider_type.value, provider.custom_parameters
+            ),
+        )
+    except WorkloadTokenUnavailableError as err:
+        logger.warning("Status check without workload context: %s", err)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(err),
+        )
+    except CallbackUrlUnavailableError as err:
+        logger.warning("Status check missing callback URL: %s", err)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(err),
+        )
+
+    return ConnectorStatusResponse(connected=not result.requires_consent)
 
 
 @router.post(
@@ -188,9 +290,59 @@ async def complete_consent(
             detail=f"Failed to finalize OAuth consent: {err}",
         )
 
+    # Successful re-consent supersedes any prior disconnect — clear the
+    # force-reauth flag so subsequent status checks report the user as
+    # connected without waiting for the agent loop to warm the cache.
+    if body.provider_id:
+        oauth_token_cache.clear_force_reauth(
+            current_user.user_id, body.provider_id
+        )
+
     logger.info(
         "Completed OAuth consent for user=%s provider=%s",
         current_user.user_id,
         body.provider_id,
     )
     return CompleteConsentResponse(ok=True)
+
+
+@router.delete(
+    "/{provider_id}/connection",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def disconnect_connector(
+    provider_id: str,
+    current_user: User = Depends(get_current_user_trusted),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+):
+    """Best-effort disconnect for the caller's connection to this provider.
+
+    AgentCore Identity exposes no per-user vault-delete API, so we cannot
+    actually destroy the user's stored token. What we can do:
+
+    1. Drop the local hot-path cache entry, so no in-flight MCP request
+       continues to inject the (stale-by-intent) bearer token.
+    2. Set a force-reauth flag the agent loop and `/status` endpoint both
+       read — the next attempt to use the connector triggers a fresh
+       consent flow with `force_authentication=True`, which makes
+       AgentCore replace the vault entry rather than reuse it.
+
+    The existing vault entry stays valid at the upstream provider until it
+    expires naturally or the user revokes the application from their
+    provider account (e.g. https://myaccount.google.com/connections). This
+    is documented as part of the disconnect UX.
+    """
+    provider = await _resolve_visible_provider(
+        provider_id, current_user, provider_repo, role_service
+    )
+
+    oauth_token_cache.mark_force_reauth(
+        current_user.user_id, provider.provider_id
+    )
+    logger.info(
+        "Marked connector for re-consent on next use: user=%s provider=%s",
+        current_user.user_id,
+        provider.provider_id,
+    )
+    return None

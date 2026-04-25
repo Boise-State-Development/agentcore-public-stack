@@ -72,3 +72,14 @@ def mark_force_reauth(user_id: str, provider_id: str) -> None:
 def needs_force_reauth(user_id: str, provider_id: str) -> bool:
     with _lock:
         return (user_id, provider_id) in _force_reauth
+
+
+def clear_force_reauth(user_id: str, provider_id: str) -> None:
+    """Clear the force-reauth flag without touching the cached token.
+
+    Called from `complete-consent` after a successful re-authorization, so
+    the next status check or token fetch sees the user as connected again
+    without needing the agent loop to warm the cache via `set()`.
+    """
+    with _lock:
+        _force_reauth.discard((user_id, provider_id))
