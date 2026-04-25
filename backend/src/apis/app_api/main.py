@@ -142,11 +142,16 @@ if os.path.exists(generated_images_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    # Watch the full backend/src tree so edits to shared modules outside
+    # app_api/ (apis/shared/, agents/) trigger reload instead of defaulting
+    # to cwd, which only sees this API's own files.
+    src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     # Run with full module path when executing directly
     uvicorn.run(
         "apis.app_api.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
+        reload_dirs=[src_root],
         log_level="info"
     )

@@ -526,7 +526,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # AgentCore Memory tracks preferences across sessions per user_id
         # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
         # Use augmented message and assistant system prompt if assistant RAG was applied
-        agent = get_agent(
+        agent = await get_agent(
             session_id=input_data.session_id,
             user_id=user_id,
             auth_token=auth_token,

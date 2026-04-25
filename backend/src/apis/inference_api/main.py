@@ -170,10 +170,15 @@ if os.path.exists(generated_images_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    # Watch the full backend/src tree so edits to shared modules (agents/,
+    # apis/shared/) trigger reload. Without this uvicorn defaults to cwd,
+    # which hides changes outside inference_api/.
+    src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     uvicorn.run(
         "apis.inference_api.main:app",
         host="0.0.0.0",
         port=8001,
         reload=True,
+        reload_dirs=[src_root],
         log_level="info"
     )

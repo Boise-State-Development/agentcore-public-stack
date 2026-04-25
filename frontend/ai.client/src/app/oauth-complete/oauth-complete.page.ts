@@ -188,11 +188,14 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
       .join(' ');
   });
 
-  readonly dismissHint = computed(() =>
-    this.isPopup()
-      ? 'You can close this window.'
-      : 'Redirecting back to your chat…',
-  );
+  readonly dismissHint = computed(() => {
+    if (!this.isPopup()) {
+      return 'Redirecting back to your chat…';
+    }
+    return this.state() === 'error'
+      ? 'You can close this window once you\'re done reading the error.'
+      : 'You can close this window.';
+  });
 
   ngOnInit(): void {
     const params = this.route.snapshot.queryParamMap;
@@ -335,6 +338,12 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
     } catch {
       // Cross-origin or COOP-isolated opener — BroadcastChannel above
       // handles the handoff in that case.
+    }
+
+    // Only auto-close on success. On error, leave the window open so the
+    // user can read the failure reason — they dismiss it manually.
+    if (this.state() !== 'success') {
+      return;
     }
 
     this.redirectTimer = setTimeout(() => {

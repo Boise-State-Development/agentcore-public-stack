@@ -47,24 +47,16 @@ def _create_cache_key(
     system_prompt: Optional[str],
     caching_enabled: Optional[bool],
     provider: Optional[str],
-    max_tokens: Optional[int]
+    max_tokens: Optional[int],
+    freshness_hash: str,
 ) -> Tuple:
     """
-    Create a cache key for agent instances
+    Create a cache key for agent instances.
 
-    Args:
-        session_id: Session identifier
-        user_id: User identifier
-        enabled_tools: List of enabled tool names
-        model_id: Model identifier
-        temperature: Model temperature
-        system_prompt: System prompt text
-        caching_enabled: Whether caching is enabled
-        provider: LLM provider
-        max_tokens: Maximum tokens to generate
-
-    Returns:
-        Tuple suitable for use as cache key
+    `freshness_hash` is a short digest of the enabled tools' current
+    `updated_at` values (see `freshness.get_freshness_hash`). When an
+    admin edits a tool's config, the hash changes and the cache misses,
+    so the next turn builds a fresh agent with the new config.
     """
     # Hash the tools list for stable key
     tools_hash = _hash_tools(enabled_tools)
@@ -83,7 +75,8 @@ def _create_cache_key(
         prompt_hash,
         caching_enabled or False,
         provider or "bedrock",
-        max_tokens or 0
+        max_tokens or 0,
+        freshness_hash,
     )
 
 
@@ -94,7 +87,7 @@ _agent_cache: dict = {}
 _CACHE_MAX_SIZE = 100
 
 
-def get_agent(
+async def get_agent(
     session_id: str,
     user_id: Optional[str] = None,
     auth_token: Optional[str] = None,
@@ -110,8 +103,9 @@ def get_agent(
     Get or create agent instance with current configuration for session
 
     Implements LRU caching to reduce agent initialization overhead.
-    Cache key includes all configuration parameters to ensure correct behavior.
-    Session message history is managed by AgentCore Memory automatically.
+    Cache key includes all configuration parameters plus a freshness
+    hash of the enabled tools' `updated_at` values, so admin edits to a
+    tool's config invalidate the cached agent on the next turn.
 
     Args:
         session_id: Session identifier
@@ -127,7 +121,10 @@ def get_agent(
     Returns:
         MainAgent instance (cached or newly created)
     """
-    # Create cache key from all configuration parameters
+    from apis.app_api.tools.freshness import get_freshness_hash
+
+    freshness_hash = await get_freshness_hash(enabled_tools or [])
+
     cache_key = _create_cache_key(
         session_id=session_id,
         user_id=user_id,
@@ -137,7 +134,8 @@ def get_agent(
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        freshness_hash=freshness_hash,
     )
 
     # Check cache

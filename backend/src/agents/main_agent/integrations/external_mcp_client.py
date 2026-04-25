@@ -218,6 +218,11 @@ class ExternalMCPIntegration:
     def __init__(self):
         # Cache key: tool_id for non-OAuth tools, "user_id:tool_id" for OAuth tools
         self.clients: dict[str, MCPClient] = {}
+        # Parallel map of cache_key -> tool updated_at at the time the
+        # client was built. On lookup we compare against the tool's
+        # current updated_at; mismatch means the admin edited the tool
+        # (URL, auth, provider, etc.) and we must rebuild the client.
+        self._client_versions: dict[str, str] = {}
         # MCPClient object identity -> provider_id, populated alongside `clients`.
         # Consumed by OAuthConsentHook via `provider_for_client`.
         self._provider_for_client_id: dict[int, str] = {}
@@ -277,10 +282,24 @@ class ExternalMCPIntegration:
                 requires_user_auth = forward_auth or requires_oauth
 
                 cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
+                tool_version = (
+                    tool.updated_at.isoformat() + "Z" if tool.updated_at else ""
+                )
 
-                if cache_key in self.clients:
+                if (
+                    cache_key in self.clients
+                    and self._client_versions.get(cache_key) == tool_version
+                ):
                     clients.append(self.clients[cache_key])
                     continue
+
+                # Stale entry — admin edited this tool since the client
+                # was built. Drop it so the block below creates a fresh
+                # client with the current config.
+                if cache_key in self.clients:
+                    stale = self.clients.pop(cache_key)
+                    self._client_versions.pop(cache_key, None)
+                    self._provider_for_client_id.pop(id(stale), None)
 
                 static_token: Optional[str] = None
                 token_provider: Optional[Callable[[], Optional[str]]] = None
@@ -319,6 +338,7 @@ class ExternalMCPIntegration:
 
                 if client:
                     self.clients[cache_key] = client
+                    self._client_versions[cache_key] = tool_version
                     if provider_id:
                         self._provider_for_client_id[id(client)] = provider_id
                     clients.append(client)
@@ -362,10 +382,32 @@ class ExternalMCPIntegration:
         ]
         for key in keys_to_remove:
             client = self.clients.pop(key)
+            self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
+
+    def clear_tool_clients(self, tool_id: str) -> None:
+        """
+        Clear cached MCP clients for a specific tool across all users.
+
+        Call this when a tool's config changes (e.g. admin updates the MCP
+        server URL) so the next agent build reconnects using the fresh
+        config. Without this, clients cached at process start continue to
+        point at the old URL for the lifetime of the process.
+        """
+        keys_to_remove = [
+            key for key in self.clients.keys()
+            if key == tool_id or key.endswith(f":{tool_id}")
+        ]
+        for key in keys_to_remove:
+            client = self.clients.pop(key)
+            self._client_versions.pop(key, None)
+            self._provider_for_client_id.pop(id(client), None)
+
+        if keys_to_remove:
+            logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for tool {tool_id}")
 
 
 _external_mcp_integration: Optional[ExternalMCPIntegration] = None

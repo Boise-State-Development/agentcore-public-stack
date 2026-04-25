@@ -8,6 +8,10 @@ MCPClient -> provider_id map that the hook reads from.
 
 Requirements: 25.1–25.3
 """
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from agents.main_agent.integrations.external_mcp_client import (
@@ -109,3 +113,131 @@ class TestProviderForClient:
 
         assert "alice:gmail" not in integration.clients
         assert integration.provider_for_client(client) is None
+
+
+class TestClearToolClients:
+    """Admin updates to a tool must invalidate cached clients for that
+    tool so the next agent build reconnects with the updated config."""
+
+    def test_clears_non_oauth_tool_and_keeps_other_tools(self):
+        integration = ExternalMCPIntegration()
+
+        class FakeClient:
+            pass
+
+        gmail = FakeClient()
+        jira = FakeClient()
+        integration.clients["gmail"] = gmail
+        integration.clients["jira"] = jira
+
+        integration.clear_tool_clients("gmail")
+
+        assert "gmail" not in integration.clients
+        assert integration.clients["jira"] is jira
+
+    def test_clears_all_user_scoped_keys_for_tool(self):
+        integration = ExternalMCPIntegration()
+
+        class FakeClient:
+            pass
+
+        alice_gmail = FakeClient()
+        bob_gmail = FakeClient()
+        alice_jira = FakeClient()
+        integration.clients["alice:gmail"] = alice_gmail
+        integration.clients["bob:gmail"] = bob_gmail
+        integration.clients["alice:jira"] = alice_jira
+        integration._provider_for_client_id[id(alice_gmail)] = "google-workspace"
+        integration._provider_for_client_id[id(bob_gmail)] = "google-workspace"
+
+        integration.clear_tool_clients("gmail")
+
+        assert "alice:gmail" not in integration.clients
+        assert "bob:gmail" not in integration.clients
+        assert integration.clients["alice:jira"] is alice_jira
+        assert integration.provider_for_client(alice_gmail) is None
+        assert integration.provider_for_client(bob_gmail) is None
+
+    def test_does_not_match_tool_id_as_key_suffix_without_colon(self):
+        """Guard against substring false positives: a tool named "gmail"
+        must not clear a tool named "super-gmail"."""
+        integration = ExternalMCPIntegration()
+
+        class FakeClient:
+            pass
+
+        super_gmail = FakeClient()
+        integration.clients["super-gmail"] = super_gmail
+
+        integration.clear_tool_clients("gmail")
+
+        assert integration.clients["super-gmail"] is super_gmail
+
+    def test_no_op_when_tool_not_cached(self):
+        integration = ExternalMCPIntegration()
+        integration.clear_tool_clients("never-loaded")
+        assert integration.clients == {}
+
+
+def _fake_tool(updated_at, tool_id="gmail"):
+    """Minimal tool stand-in for load_external_tools."""
+    return SimpleNamespace(
+        tool_id=tool_id,
+        protocol="mcp_external",
+        mcp_config=SimpleNamespace(server_url="https://example.com/mcp"),
+        forward_auth_token=False,
+        requires_oauth_provider=None,
+        updated_at=updated_at,
+    )
+
+
+class TestLoadExternalToolsVersioning:
+    """`load_external_tools` must rebuild the MCPClient when the tool's
+    `updated_at` changes. Without this, admin edits to MCP config (URL,
+    auth mode, etc.) never take effect for the process lifetime."""
+
+    @pytest.mark.asyncio
+    async def test_reuses_client_when_updated_at_unchanged(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+
+        with patch(
+            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=object(),
+        ) as create_mock:
+            first = await integration.load_external_tools(["gmail"])
+            second = await integration.load_external_tools(["gmail"])
+
+        assert first == second
+        assert create_mock.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_client_when_updated_at_changes(self):
+        integration = ExternalMCPIntegration()
+        old = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        new = _fake_tool(datetime(2025, 2, 1, tzinfo=timezone.utc))
+
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=[old, new]))
+
+        client_old = object()
+        client_new = object()
+
+        with patch(
+            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[client_old, client_new],
+        ):
+            first = await integration.load_external_tools(["gmail"])
+            second = await integration.load_external_tools(["gmail"])
+
+        assert first == [client_old]
+        assert second == [client_new]
+        assert integration.clients["gmail"] is client_new
+        # Old client must be evicted, not left dangling under the same key.
+        assert client_old not in integration.clients.values()

@@ -161,6 +161,7 @@ class AgentCoreRegistrar:
         client_secret: str,
         discovery_url: Optional[str] = None,
         authorization_server_metadata: Optional[Dict[str, Any]] = None,
+        fallback_arn: Optional[str] = None,
     ) -> CredentialProviderInfo:
         """Replace the AgentCore provider's full config.
 
@@ -169,6 +170,12 @@ class AgentCoreRegistrar:
         `client_id` and `client_secret`. There is no "change only the
         secret" path — Get does not return the existing secret, and the API
         does not support partial updates.
+
+        Unlike `CreateOauth2CredentialProvider`, the Update response does
+        NOT include `credentialProviderArn`. Since the ARN is immutable
+        across updates, callers pass the known ARN via `fallback_arn`
+        (typically from the existing DynamoDB record) so the returned
+        `CredentialProviderInfo` has the same shape as create/get.
 
         Raises:
             CredentialProviderNotFoundError: No such provider.
@@ -196,7 +203,10 @@ class AgentCoreRegistrar:
             raise
 
         return self._info_from_response(
-            provider_id=provider_id, vendor=vendor, response=response
+            provider_id=provider_id,
+            vendor=vendor,
+            response=response,
+            fallback_arn=fallback_arn,
         )
 
     # --------------------------------------------------------------------- get
@@ -286,7 +296,11 @@ class AgentCoreRegistrar:
     # ----------------------------------------------------------- parse helpers
     @staticmethod
     def _info_from_response(
-        *, provider_id: str, vendor: str, response: Dict[str, Any]
+        *,
+        provider_id: str,
+        vendor: str,
+        response: Dict[str, Any],
+        fallback_arn: Optional[str] = None,
     ) -> CredentialProviderInfo:
         # AgentCore's documented shape is `clientSecretArn: {secretArn: str}`.
         # If the field is missing (possible for vendors that don't persist a
@@ -321,9 +335,15 @@ class AgentCoreRegistrar:
 
         credential_provider_arn = response.get("credentialProviderArn")
         if not isinstance(credential_provider_arn, str) or not credential_provider_arn:
-            raise TypeError(
-                "AgentCore response missing credentialProviderArn or wrong type"
-            )
+            # UpdateOauth2CredentialProvider omits the ARN; callers pass the
+            # known-immutable ARN as `fallback_arn` in that case. Create/Get
+            # never supply a fallback, so a missing ARN there still fails.
+            if fallback_arn:
+                credential_provider_arn = fallback_arn
+            else:
+                raise TypeError(
+                    "AgentCore response missing credentialProviderArn or wrong type"
+                )
 
         return CredentialProviderInfo(
             provider_id=provider_id,

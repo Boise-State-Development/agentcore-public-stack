@@ -220,6 +220,43 @@ class TestUpdateCredentialProvider:
                 client_secret="sec",
             )
 
+    def test_uses_fallback_arn_when_update_response_omits_it(
+        self, registrar, boto_client
+    ):
+        """AWS's UpdateOauth2CredentialProvider response doesn't include
+        credentialProviderArn. The caller passes the known-immutable ARN
+        via `fallback_arn` so the returned info is well-formed."""
+        update_response = _create_response()
+        update_response.pop("credentialProviderArn")
+        boto_client.update_oauth2_credential_provider.return_value = update_response
+
+        info = registrar.update_credential_provider(
+            provider_id="p",
+            provider_type=OAuthProviderType.GOOGLE,
+            client_id="cid",
+            client_secret="sec",
+            fallback_arn="arn:aws:acps:us-east-1:123:token-vault/default/oauth2credentialprovider/p",
+        )
+
+        assert info.credential_provider_arn == (
+            "arn:aws:acps:us-east-1:123:token-vault/default/oauth2credentialprovider/p"
+        )
+
+    def test_raises_when_response_lacks_arn_and_no_fallback(
+        self, registrar, boto_client
+    ):
+        update_response = _create_response()
+        update_response.pop("credentialProviderArn")
+        boto_client.update_oauth2_credential_provider.return_value = update_response
+
+        with pytest.raises(TypeError, match="credentialProviderArn"):
+            registrar.update_credential_provider(
+                provider_id="p",
+                provider_type=OAuthProviderType.GOOGLE,
+                client_id="cid",
+                client_secret="sec",
+            )
+
 
 class TestGetCredentialProvider:
     def test_returns_info_including_callback_url(self, registrar, boto_client):

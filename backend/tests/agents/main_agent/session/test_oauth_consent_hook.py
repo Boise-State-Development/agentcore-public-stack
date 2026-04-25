@@ -23,14 +23,17 @@ from agents.main_agent.session.hooks.oauth_consent import (
     OAuthConsentHook,
     _looks_like_auth_failure,
 )
+from apis.shared.oauth import session_cache
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """Token cache is process-global; isolate between tests."""
     oauth_token_cache.clear_user("alice")
+    session_cache.forget_user("alice")
     yield
     oauth_token_cache.clear_user("alice")
+    session_cache.forget_user("alice")
 
 
 def _make_event(provider_id: str | None, *, agent=None) -> MagicMock:
@@ -164,6 +167,38 @@ class TestOAuthConsentHookConsentRequired:
         }
         # Cache stays empty until consent actually completes.
         assert oauth_token_cache.get("alice", "google") is None
+
+    @pytest.mark.asyncio
+    async def test_remembers_session_uri_so_complete_consent_accepts_it(self):
+        """The popup's `complete_consent` call verifies the session_uri was
+        initiated by the same user. The tool-call path must remember it —
+        otherwise the popup finalize is rejected 403 even though AgentCore
+        itself would accept it."""
+        auth_url = (
+            "https://identity.amazonaws.com/oauth2/authorize"
+            "?request_uri=urn:agentcore:session:abc123&client_id=foo"
+        )
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(authorization_url=auth_url)
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+        )
+        event = _make_event(provider_id="google")
+
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            with pytest.raises(InterruptException):
+                await hook._gate(event)
+
+        # Same user completing the flow succeeds; a different user is rejected.
+        assert session_cache.consume("alice", "urn:agentcore:session:abc123") is True
 
     @pytest.mark.asyncio
     async def test_resume_warms_cache_with_post_consent_token(self):

@@ -446,7 +446,7 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
         augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks)
 
         # 6. Create agent with assistant's instructions as system prompt
-        agent = get_agent(
+        agent = await get_agent(
             session_id=session_id,
             user_id=user_id,
             enabled_tools=None,  # No tools for test chat

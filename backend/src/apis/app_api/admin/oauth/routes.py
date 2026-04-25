@@ -291,6 +291,7 @@ async def update_provider(
                 client_secret=updates.client_secret,
                 discovery_url=discovery_url,
                 authorization_server_metadata=authorization_server_metadata,
+                fallback_arn=existing.credential_provider_arn,
             )
         except CredentialProviderNotFoundError:
             raise HTTPException(

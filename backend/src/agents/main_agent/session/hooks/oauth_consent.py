@@ -38,6 +38,7 @@ from agents.main_agent.integrations.agentcore_identity import (
     WorkloadTokenUnavailableError,
     get_agentcore_identity_client,
 )
+from apis.shared.oauth import session_cache
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,23 @@ class OAuthConsentHook(HookProvider):
         if token_or_url["token"]:
             oauth_token_cache.set(self._user_id, provider_id, token_or_url["token"])
             return
+
+        # Remember the session_uri so `complete_consent` can verify this
+        # user initiated the flow. Without this, the popup's finalize call
+        # is rejected 403 — the settings-page `initiate_consent` path
+        # remembers its own session, and this tool-triggered path must do
+        # the same. Soft-fails on extraction: AgentCore's userIdentifier
+        # binding still protects completion if we can't track locally.
+        session_uri = session_cache.extract_session_uri(token_or_url["url"] or "")
+        if session_uri:
+            session_cache.remember(self._user_id, session_uri)
+        else:
+            logger.warning(
+                "Could not extract session_uri from tool-triggered consent URL "
+                "for user=%s provider=%s; popup finalize may be rejected",
+                self._user_id,
+                provider_id,
+            )
 
         # Consent required: pause the agent. The interrupt name is namespaced
         # by provider so the SDK generates a stable interrupt id we can

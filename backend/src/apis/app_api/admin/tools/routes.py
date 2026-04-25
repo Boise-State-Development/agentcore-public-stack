@@ -177,6 +177,13 @@ async def admin_update_tool(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
 
+    # Invalidate the freshness TTL entry so the next chat turn in this
+    # process sees the new updated_at immediately (no wait for the TTL
+    # to lapse). Other processes pick the change up within one TTL
+    # window via their own freshness reads.
+    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(tool_id)
+
     return AdminToolResponse.from_tool_definition(updated)
 
 
@@ -209,6 +216,9 @@ async def admin_delete_tool(
 
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
+
+    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(tool_id)
 
     action = "deleted" if hard else "disabled"
     return {"message": f"Tool '{tool_id}' {action} successfully"}

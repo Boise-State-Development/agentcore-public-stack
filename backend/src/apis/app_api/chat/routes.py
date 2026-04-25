@@ -363,7 +363,7 @@ async def chat_stream(request: ChatRequest, current_user: User = Depends(get_cur
     try:
         # Get agent instance (with or without tool filtering)
         # Use assistant's system prompt if provided
-        agent = get_agent(
+        agent = await get_agent(
             session_id=request.session_id,
             user_id=user_id,
             enabled_tools=authorized_tools,  # Filtered by RBAC (may be None for all allowed)
