@@ -364,6 +364,9 @@ def _build_provider_from_create(
         allowed_roles=data.allowed_roles,
         enabled=data.enabled,
         icon_name=data.icon_name,
+        # `""` from the form means "no uploaded icon" — store as None so
+        # absent and explicitly-cleared round-trip identically.
+        icon_data=data.icon_data or None,
         credential_provider_arn=credential_info.credential_provider_arn,
         callback_url=credential_info.callback_url,
         oauth_discovery_url=data.oauth_discovery_url,

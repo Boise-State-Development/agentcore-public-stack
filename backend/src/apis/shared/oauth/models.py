@@ -6,8 +6,10 @@ the callback URL. Our DynamoDB record keeps the display metadata, scopes,
 role gates, and cached pointers (ARN + callback URL) for convenience.
 """
 
+import base64
 import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -16,6 +18,42 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
+
+# Inline-icon data URLs are persisted directly in the provider record so we
+# don't have to stand up an S3 bucket / CDN just for connector icons. The
+# 100KB cap (after base64 decode) keeps the DynamoDB item well under its
+# 400KB limit and is generous for an icon — a tuned 64x64 PNG is < 10KB.
+ICON_DATA_MAX_BYTES = 100 * 1024
+_ICON_DATA_URL_RE = re.compile(
+    r"^data:image/(png|jpeg|jpg|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=]+)$"
+)
+
+
+def validate_icon_data(value: Optional[str]) -> Optional[str]:
+    """Validate an inline icon data URL.
+
+    Returns the value unchanged when valid, raises `ValueError` otherwise.
+    `None` is allowed (no icon set). Empty string is preserved by the caller
+    as a "clear the icon" signal — handled at the repository layer.
+    """
+    if value is None or value == "":
+        return value
+    match = _ICON_DATA_URL_RE.match(value)
+    if not match:
+        raise ValueError(
+            "icon_data must be a base64 data URL of the form "
+            "data:image/<png|jpeg|gif|webp|svg+xml>;base64,<...>"
+        )
+    try:
+        decoded = base64.b64decode(match.group(2), validate=True)
+    except Exception as err:
+        raise ValueError(f"icon_data base64 payload is invalid: {err}")
+    if len(decoded) > ICON_DATA_MAX_BYTES:
+        raise ValueError(
+            f"icon_data exceeds {ICON_DATA_MAX_BYTES // 1024}KB "
+            f"(got {len(decoded) // 1024}KB)"
+        )
+    return value
 
 
 class OAuthProviderType(str, Enum):
@@ -65,6 +103,10 @@ class OAuthProvider:
     allowed_roles: List[str]  # AppRole IDs that can use this provider
     enabled: bool = True
     icon_name: str = "heroLink"
+    # Optional admin-uploaded icon as a base64 data URL. When present,
+    # frontends prefer this over `icon_name`. See `validate_icon_data`
+    # for the accepted shape and size cap.
+    icon_data: Optional[str] = None
     credential_provider_arn: Optional[str] = None
     callback_url: Optional[str] = None
     # Custom vendor only — mirrors AgentCore's Oauth2Discovery union.
@@ -100,6 +142,7 @@ class OAuthProvider:
             "allowedRoles": self.allowed_roles,
             "enabled": self.enabled,
             "iconName": self.icon_name,
+            "iconData": self.icon_data,
             "credentialProviderArn": self.credential_provider_arn,
             "callbackUrl": self.callback_url,
             "oauthDiscoveryUrl": self.oauth_discovery_url,
@@ -119,6 +162,7 @@ class OAuthProvider:
             allowed_roles=item.get("allowedRoles", []),
             enabled=item.get("enabled", True),
             icon_name=item.get("iconName", "heroLink"),
+            icon_data=item.get("iconData"),
             credential_provider_arn=item.get("credentialProviderArn"),
             callback_url=item.get("callbackUrl"),
             oauth_discovery_url=item.get("oauthDiscoveryUrl"),
@@ -155,6 +199,7 @@ class OAuthProviderCreate(BaseModel):
     allowed_roles: List[str] = Field(default_factory=list)
     enabled: bool = True
     icon_name: str = "heroLink"
+    icon_data: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
@@ -186,6 +231,7 @@ class OAuthProviderCreate(BaseModel):
                 f"Discovery config is only valid for custom/canvas providers; "
                 f"provider_type={self.provider_type.value} does not accept it"
             )
+        self.icon_data = validate_icon_data(self.icon_data)
         return self
 
 
@@ -205,6 +251,9 @@ class OAuthProviderUpdate(BaseModel):
     allowed_roles: Optional[List[str]] = None
     enabled: Optional[bool] = None
     icon_name: Optional[str] = None
+    # `""` clears any uploaded icon (falls back to `icon_name`); `None`
+    # leaves the existing value alone. Validated for shape and size cap.
+    icon_data: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
@@ -219,6 +268,8 @@ class OAuthProviderUpdate(BaseModel):
             raise ValueError(
                 "oauth_discovery_url and authorization_server_metadata are mutually exclusive"
             )
+        if self.icon_data is not None:
+            self.icon_data = validate_icon_data(self.icon_data)
         return self
 
 
@@ -232,6 +283,7 @@ class OAuthProviderResponse(BaseModel):
     allowed_roles: List[str]
     enabled: bool
     icon_name: str
+    icon_data: Optional[str] = None
     credential_provider_arn: Optional[str] = None
     callback_url: Optional[str] = None
     oauth_discovery_url: Optional[str] = None
@@ -250,6 +302,7 @@ class OAuthProviderResponse(BaseModel):
             allowed_roles=provider.allowed_roles,
             enabled=provider.enabled,
             icon_name=provider.icon_name,
+            icon_data=provider.icon_data,
             credential_provider_arn=provider.credential_provider_arn,
             callback_url=provider.callback_url,
             oauth_discovery_url=provider.oauth_discovery_url,

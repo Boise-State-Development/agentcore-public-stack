@@ -6,7 +6,7 @@ AgentCore Runtime workload context; this router is purely a data source.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -35,6 +35,7 @@ class UserConnector(BaseModel):
     display_name: str
     provider_type: OAuthProviderType
     icon_name: str
+    icon_data: Optional[str] = None
     scopes: List[str]
 
 
@@ -72,6 +73,7 @@ async def list_connectors(
                 display_name=p.display_name,
                 provider_type=p.provider_type,
                 icon_name=p.icon_name,
+                icon_data=p.icon_data,
                 scopes=p.scopes,
             )
             for p in visible

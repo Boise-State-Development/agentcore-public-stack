@@ -57,12 +57,27 @@ interface ConnectorFormGroup {
   enabled: FormControl<boolean>;
   iconName: FormControl<string>;
   /**
+   * Optional uploaded icon as a base64 data URL. `''` means no upload (fall
+   * back to `iconName`). On update, sending `''` to the backend clears any
+   * previously uploaded icon.
+   */
+  iconData: FormControl<string>;
+  /**
    * Free-form `key=value` lines (one per line) for vendor-specific OAuth
    * params. Parsed to `Record<string, string>` before submit. Blank lines
    * and lines without `=` are silently dropped.
    */
   customParameters: FormControl<string>;
 }
+
+const ICON_DATA_MAX_BYTES = 100 * 1024;
+const ICON_ACCEPTED_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+];
 
 @Component({
   selector: 'app-connector-form',
@@ -243,6 +258,58 @@ interface ConnectorFormGroup {
                   />
                   @if (connectorForm.controls.displayName.invalid && connectorForm.controls.displayName.touched) {
                     <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Display name is required</p>
+                  }
+                </div>
+
+                <div>
+                  <label class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Icon
+                    <span class="font-normal text-gray-400 dark:text-gray-500">(optional)</span>
+                  </label>
+                  <div class="flex items-center gap-4">
+                    <div class="flex size-14 shrink-0 items-center justify-center rounded-sm border border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-900">
+                      @if (connectorForm.controls.iconData.value) {
+                        <img
+                          [src]="connectorForm.controls.iconData.value"
+                          alt="Connector icon preview"
+                          class="size-10 object-contain"
+                        />
+                      } @else {
+                        <ng-icon
+                          [name]="connectorForm.controls.iconName.value || 'heroLink'"
+                          class="size-6 text-gray-400 dark:text-gray-500"
+                          aria-hidden="true"
+                        />
+                      }
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <label
+                        class="inline-flex cursor-pointer items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus-within:outline-hidden focus-within:ring-3 focus-within:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                      >
+                        {{ connectorForm.controls.iconData.value ? 'Replace' : 'Upload' }}
+                        <input
+                          type="file"
+                          class="sr-only"
+                          [accept]="acceptedIconTypes"
+                          (change)="onIconFileSelected($event)"
+                        />
+                      </label>
+                      @if (connectorForm.controls.iconData.value) {
+                        <button
+                          type="button"
+                          (click)="removeUploadedIcon()"
+                          class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                        >
+                          Remove
+                        </button>
+                      }
+                    </div>
+                  </div>
+                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                    PNG, JPEG, GIF, WebP, or SVG. Max 100KB. Falls back to the default icon when no image is uploaded.
+                  </p>
+                  @if (iconUploadError(); as iconErr) {
+                    <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">{{ iconErr }}</p>
                   }
                 </div>
 
@@ -519,6 +586,7 @@ export class ConnectorFormPage implements OnInit {
   readonly rolesResource = this.appRolesService.rolesResource;
 
   readonly presets = CONNECTOR_PRESETS;
+  readonly acceptedIconTypes = ICON_ACCEPTED_MIME_TYPES.join(',');
 
   readonly isEditMode = signal(false);
   readonly providerId = signal<string | null>(null);
@@ -528,6 +596,14 @@ export class ConnectorFormPage implements OnInit {
   readonly loadedConnector = signal<Connector | null>(null);
   readonly createdConnector = signal<Connector | null>(null);
   readonly callbackCopied = signal(false);
+  /** Validation error from the most recent file pick (null when ok). */
+  readonly iconUploadError = signal<string | null>(null);
+  /**
+   * Tracks the icon_data value that was loaded from the server, so we know
+   * whether to send `iconData: ""` on update (clear) when the admin removes
+   * the upload. `null` means no icon was loaded; a string means one was.
+   */
+  private readonly iconLoadedFromServer = signal<string | null>(null);
 
   readonly connectorForm: FormGroup<ConnectorFormGroup> = this.fb.group({
     providerId: this.fb.control('', {
@@ -552,6 +628,7 @@ export class ConnectorFormPage implements OnInit {
     grantAllRoles: this.fb.control(true, { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     iconName: this.fb.control('heroLink', { nonNullable: true }),
+    iconData: this.fb.control('', { nonNullable: true }),
     customParameters: this.fb.control('', { nonNullable: true }),
   });
 
@@ -653,8 +730,10 @@ export class ConnectorFormPage implements OnInit {
         grantAllRoles: connector.allowedRoles.length === 0,
         enabled: connector.enabled,
         iconName: connector.iconName || 'heroLink',
+        iconData: connector.iconData ?? '',
         customParameters: this.serializeCustomParameters(connector.customParameters ?? null),
       });
+      this.iconLoadedFromServer.set(connector.iconData ?? null);
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
     } catch (error) {
@@ -780,6 +859,14 @@ export class ConnectorFormPage implements OnInit {
           iconName: formValue.iconName,
           customParameters,
         };
+        // Tri-state for iconData: only send when the admin actually changed
+        // it. Replaced upload → send the new data URL. Removed an existing
+        // upload → send `""` so the backend clears it. No change → omit.
+        const previousIcon = this.iconLoadedFromServer();
+        const currentIcon = formValue.iconData || '';
+        if (currentIcon !== (previousIcon ?? '')) {
+          updates.iconData = currentIcon;
+        }
         if (formValue.clientId && formValue.clientSecret) {
           updates.clientId = formValue.clientId;
           updates.clientSecret = formValue.clientSecret;
@@ -801,6 +888,9 @@ export class ConnectorFormPage implements OnInit {
           enabled: formValue.enabled,
           iconName: formValue.iconName,
         };
+        if (formValue.iconData) {
+          createData.iconData = formValue.iconData;
+        }
         if (this.needsDiscovery() && formValue.oauthDiscoveryUrl) {
           createData.oauthDiscoveryUrl = formValue.oauthDiscoveryUrl;
         }
@@ -875,5 +965,54 @@ export class ConnectorFormPage implements OnInit {
       .sort()
       .map(key => `${key}=${map[key]}`)
       .join('\n');
+  }
+
+  async onIconFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    if (!ICON_ACCEPTED_MIME_TYPES.includes(file.type)) {
+      this.iconUploadError.set(
+        'Unsupported file type. Use PNG, JPEG, GIF, WebP, or SVG.',
+      );
+      input.value = '';
+      return;
+    }
+    if (file.size > ICON_DATA_MAX_BYTES) {
+      this.iconUploadError.set(
+        `Icon must be ${Math.floor(ICON_DATA_MAX_BYTES / 1024)}KB or smaller.`,
+      );
+      input.value = '';
+      return;
+    }
+
+    try {
+      const dataUrl = await this.readFileAsDataUrl(file);
+      this.connectorForm.controls.iconData.setValue(dataUrl);
+      this.connectorForm.controls.iconData.markAsDirty();
+      this.iconUploadError.set(null);
+    } catch (err) {
+      console.error('Icon upload read failed', err);
+      this.iconUploadError.set('Failed to read the file. Try again.');
+    } finally {
+      // Reset so picking the same file again still re-fires the change event.
+      input.value = '';
+    }
+  }
+
+  removeUploadedIcon(): void {
+    this.connectorForm.controls.iconData.setValue('');
+    this.connectorForm.controls.iconData.markAsDirty();
+    this.iconUploadError.set(null);
+  }
+
+  private readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
   }
 }

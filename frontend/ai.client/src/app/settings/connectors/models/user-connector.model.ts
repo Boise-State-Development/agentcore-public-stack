@@ -7,6 +7,8 @@ export interface UserConnector {
   displayName: string;
   providerType: 'google' | 'microsoft' | 'github' | 'canvas' | 'custom';
   iconName: string;
+  /** Optional admin-uploaded icon (base64 data URL). Wins over `iconName`. */
+  iconData?: string | null;
   scopes: string[];
 }
 

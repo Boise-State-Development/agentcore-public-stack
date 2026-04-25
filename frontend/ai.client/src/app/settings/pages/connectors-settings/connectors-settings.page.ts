@@ -99,9 +99,19 @@ type ConnectState =
               class="flex items-start justify-between gap-4 rounded-sm border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
             >
               <div class="flex items-start gap-3">
-                <div [class]="iconClasses(connector.providerType)">
-                  <ng-icon [name]="connector.iconName || defaultIcon(connector.providerType)" class="size-5" />
-                </div>
+                @if (connector.iconData) {
+                  <div class="flex size-10 shrink-0 items-center justify-center rounded-md bg-gray-50 dark:bg-gray-900">
+                    <img
+                      [src]="connector.iconData"
+                      [alt]="connector.displayName + ' icon'"
+                      class="size-8 object-contain"
+                    />
+                  </div>
+                } @else {
+                  <div [class]="iconClasses(connector.providerType)">
+                    <ng-icon [name]="connector.iconName || defaultIcon(connector.providerType)" class="size-5" />
+                  </div>
+                }
                 <div>
                   <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
                     {{ connector.displayName }}

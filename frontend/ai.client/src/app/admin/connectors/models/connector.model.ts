@@ -34,6 +34,11 @@ export interface Connector {
   allowedRoles: string[];
   enabled: boolean;
   iconName: string;
+  /**
+   * Optional admin-uploaded icon as a base64 data URL. When set, frontends
+   * prefer this over `iconName`. Stored inline on the provider record.
+   */
+  iconData?: string | null;
   credentialProviderArn?: string | null;
   callbackUrl?: string | null;
   /** Custom/Canvas only — OIDC discovery URL or explicit server metadata. */
@@ -78,6 +83,8 @@ export interface ConnectorCreateRequest {
   allowedRoles?: string[];
   enabled?: boolean;
   iconName?: string;
+  /** Optional admin-uploaded icon as a base64 data URL. */
+  iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
   customParameters?: Record<string, string>;
@@ -88,7 +95,8 @@ export interface ConnectorCreateRequest {
  * `clientSecret` together; metadata-only edits leave them undefined.
  *
  * `customParameters: {}` explicitly clears all admin-supplied extras;
- * `undefined` leaves the existing value alone.
+ * `undefined` leaves the existing value alone. `iconData: ""` clears any
+ * uploaded icon (frontends fall back to `iconName`); `undefined` leaves it.
  */
 export interface ConnectorUpdateRequest {
   displayName?: string;
@@ -98,6 +106,7 @@ export interface ConnectorUpdateRequest {
   allowedRoles?: string[];
   enabled?: boolean;
   iconName?: string;
+  iconData?: string;
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
   customParameters?: Record<string, string>;

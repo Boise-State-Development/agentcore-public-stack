@@ -207,9 +207,19 @@ import {
                     <!-- Connector Info -->
                     <td class="whitespace-nowrap py-4 pl-4 pr-3 sm:pl-6">
                       <div class="flex items-center gap-3">
-                        <div [class]="getConnectorIconClasses(connector.providerType)">
-                          <ng-icon [name]="getConnectorIcon(connector)" class="size-5" />
-                        </div>
+                        @if (connector.iconData) {
+                          <div class="flex size-10 shrink-0 items-center justify-center rounded-sm bg-gray-50 dark:bg-gray-900">
+                            <img
+                              [src]="connector.iconData"
+                              [alt]="connector.displayName + ' icon'"
+                              class="size-7 object-contain"
+                            />
+                          </div>
+                        } @else {
+                          <div [class]="getConnectorIconClasses(connector.providerType)">
+                            <ng-icon [name]="getConnectorIcon(connector)" class="size-5" />
+                          </div>
+                        }
                         <div class="min-w-0">
                           <p class="font-medium text-gray-900 dark:text-white">
                             {{ connector.displayName }}

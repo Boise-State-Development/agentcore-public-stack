@@ -141,6 +141,11 @@ class OAuthProviderRepository:
             existing.enabled = updates.enabled
         if updates.icon_name is not None:
             existing.icon_name = updates.icon_name
+        if updates.icon_data is not None:
+            # Empty string explicitly clears any uploaded icon (frontends
+            # then fall back to `icon_name`); a populated data URL replaces
+            # it. `None` on the update model leaves the existing value alone.
+            existing.icon_data = updates.icon_data or None
         if updates.oauth_discovery_url is not None:
             existing.oauth_discovery_url = updates.oauth_discovery_url
         if updates.authorization_server_metadata is not None:
