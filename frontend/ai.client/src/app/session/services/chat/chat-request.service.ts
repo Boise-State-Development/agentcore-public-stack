@@ -11,7 +11,9 @@ import { ToolService } from '../../../services/tool/tool.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ErrorService } from '../../../services/error/error.service';
 import { StreamParserService } from './stream-parser.service';
+import { HttpErrorResponse } from '@angular/common/http';
 
 export interface ContentFile {
   fileName: string;
@@ -35,6 +37,7 @@ export class ChatRequestService implements OnDestroy {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private streamParserService = inject(StreamParserService);
+  private errorService = inject(ErrorService);
   private router = inject(Router);
   // TODO: Inject proper logging service
 
@@ -44,8 +47,8 @@ export class ChatRequestService implements OnDestroy {
   private lastRequestObject: Record<string, unknown> | null = null;
 
   constructor() {
-    this.oauthConsentService.setResumeHandler((interruptIds) =>
-      this.resumeFromOAuthConsent(interruptIds),
+    this.oauthConsentService.setResumeHandler((interruptIds, context) =>
+      this.resumeFromOAuthConsent(interruptIds, context?.sessionId),
     );
   }
 
@@ -180,12 +183,20 @@ export class ChatRequestService implements OnDestroy {
    * one. Triggered by OAuthConsentService after the user completes a
    * consent popup.
    */
-  private async resumeFromOAuthConsent(interruptIds: string[]): Promise<void> {
-    if (!this.lastRequestObject || interruptIds.length === 0) {
+  private async resumeFromOAuthConsent(
+    interruptIds: string[],
+    fallbackSessionId?: string,
+  ): Promise<void> {
+    if (interruptIds.length === 0) {
       return;
     }
 
-    const sessionId = this.lastRequestObject['session_id'] as string | undefined;
+    // Live flow: the same tab that originated the turn still has its
+    // payload — replay it with `interrupt_responses` attached.
+    // Refresh flow: ``lastRequestObject`` is null, so we synthesize a
+    // minimal resume payload from the consent service's session context.
+    const liveSessionId = this.lastRequestObject?.['session_id'] as string | undefined;
+    const sessionId = liveSessionId ?? fallbackSessionId;
     if (!sessionId) {
       return;
     }
@@ -198,8 +209,12 @@ export class ChatRequestService implements OnDestroy {
     this.chatStateService.createNewAbortController();
     this.chatStateService.setChatLoading(true);
 
+    const baseRequest: Record<string, unknown> = this.lastRequestObject
+      ? { ...this.lastRequestObject }
+      : { session_id: sessionId };
+
     const resumeRequest: Record<string, unknown> = {
-      ...this.lastRequestObject,
+      ...baseRequest,
       // The original prompt is already in the agent's interrupt context;
       // sending an empty string keeps the request valid without
       // re-augmenting or re-charging quota.
@@ -218,8 +233,40 @@ export class ChatRequestService implements OnDestroy {
     } catch (error) {
       this.chatStateService.setChatLoading(false);
       this.messageMapService.endStreaming();
+
+      // 400 from the resume route means the agent's `_interrupt_state` no
+      // longer holds the submitted ids — the cache evicted, the pod
+      // restarted, or the breadcrumb outlived its agent. Surface a
+      // conversational error so the user knows to retry the prompt
+      // instead of staring at a stuck spinner.
+      if (this.isExpiredInterruptError(error)) {
+        this.errorService.addError(
+          'Authorization expired',
+          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+        );
+        return;
+      }
       throw error;
     }
+  }
+
+  /** Detect the 400 the inference-api returns for unknown/expired interrupt
+   *  ids. Both fetch-based and HttpClient-based flows are checked because
+   *  the resume path uses `fetch-event-source`, which surfaces errors as
+   *  plain Error/Response objects rather than HttpErrorResponse. */
+  private isExpiredInterruptError(error: unknown): boolean {
+    if (error instanceof HttpErrorResponse) {
+      return error.status === 400;
+    }
+    if (typeof error === 'object' && error !== null) {
+      const status = (error as { status?: unknown }).status;
+      if (status === 400) return true;
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === 'string' && /expired interrupt/i.test(message)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

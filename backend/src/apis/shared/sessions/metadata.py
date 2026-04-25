@@ -11,11 +11,11 @@ import logging
 import json
 import os
 import base64
-from typing import Optional, Tuple, Any, Dict
+from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
-from .models import MessageMetadata, SessionMetadata
+from .models import MessageMetadata, PendingInterrupt, SessionMetadata
 
 # Import preview session helper
 from agents.main_agent.session.preview_session_manager import is_preview_session
@@ -1183,3 +1183,157 @@ def _deep_merge(base: dict, updates: dict) -> dict:
             result[key] = value
 
     return result
+
+
+# ============================================================================
+# Pending OAuth interrupts
+# ============================================================================
+#
+# Pending interrupts persist the breadcrumb the SSE stream emits when the
+# agent pauses on `oauth_required`, so the frontend can rediscover them on
+# reload. We do read-modify-write through the SessionLookupIndex GSI:
+# OAuth flows are rare and one-at-a-time per user, so the simplicity wins
+# over an UpdateExpression with list_append/REMOVE-by-index gymnastics.
+
+
+def _interrupts_to_dynamo(interrupts: Iterable[PendingInterrupt]) -> List[Dict[str, Any]]:
+    """Serialize PendingInterrupt list for DynamoDB storage (camelCase keys)."""
+    return [item.model_dump(by_alias=True, exclude_none=True) for item in interrupts]
+
+
+def _interrupts_from_dynamo(raw: Any) -> List[PendingInterrupt]:
+    """Best-effort parse of stored interrupt entries; tolerate missing/legacy items."""
+    if not raw or not isinstance(raw, list):
+        return []
+    parsed: List[PendingInterrupt] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            parsed.append(PendingInterrupt.model_validate(entry))
+        except Exception as exc:  # pragma: no cover — corrupted entry shouldn't break load
+            logger.warning("Skipping unparseable pending_interrupts entry: %s", exc)
+    return parsed
+
+
+async def add_pending_interrupt(
+    session_id: str,
+    user_id: str,
+    interrupt: PendingInterrupt,
+) -> None:
+    """Idempotently append a pending OAuth interrupt to the session record.
+
+    If an entry with the same ``interrupt_id`` already exists, it's replaced
+    rather than duplicated — the agent may re-emit the same interrupt across
+    re-streams of a paused turn.
+
+    No-op when the session metadata record is missing (preview sessions,
+    sessions deleted mid-turn). The frontend will fall back to its in-memory
+    consent state in that case.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping pending_interrupts persistence")
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info("Skipping pending_interrupts add — session %s not found", session_id)
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning("Session %s has no SK; cannot update pending_interrupts", session_id)
+            return
+
+        current_raw = existing.get("pendingInterrupts") or []
+        current = _interrupts_from_dynamo(current_raw)
+
+        # Replace any existing entry with the same interrupt_id
+        merged = [p for p in current if p.interrupt_id != interrupt.interrupt_id]
+        merged.append(interrupt)
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #pi = :pi",
+            ExpressionAttributeNames={"#pi": "pendingInterrupts"},
+            ExpressionAttributeValues={":pi": _interrupts_to_dynamo(merged)},
+        )
+        logger.info(
+            "Persisted pending_interrupt %s (provider=%s) for session %s",
+            interrupt.interrupt_id, interrupt.provider_id, session_id,
+        )
+    except Exception as e:
+        # Persistence failure must not break the live SSE flow — the in-memory
+        # consent on the live tab still works; refresh-resume just won't.
+        logger.error("Failed to persist pending_interrupt: %s", e, exc_info=True)
+
+
+async def remove_pending_interrupts(
+    session_id: str,
+    user_id: str,
+    interrupt_ids: Iterable[str],
+) -> None:
+    """Drop the given ``interrupt_ids`` from the session's pending list.
+
+    No-op for unknown ids and missing sessions. Used by the resume path
+    (after the agent successfully completes the resumed turn) and by the
+    explicit dismiss endpoint.
+    """
+    drop_set = {iid for iid in interrupt_ids if iid}
+    if not drop_set:
+        return
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            return
+
+        current = _interrupts_from_dynamo(existing.get("pendingInterrupts") or [])
+        kept = [p for p in current if p.interrupt_id not in drop_set]
+
+        if len(kept) == len(current):
+            return  # Nothing matched
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #pi = :pi",
+            ExpressionAttributeNames={"#pi": "pendingInterrupts"},
+            ExpressionAttributeValues={":pi": _interrupts_to_dynamo(kept)},
+        )
+        logger.info(
+            "Cleared %d pending_interrupt(s) from session %s",
+            len(current) - len(kept), session_id,
+        )
+    except Exception as e:
+        logger.error("Failed to remove pending_interrupts: %s", e, exc_info=True)
+
+
+async def get_pending_interrupts(session_id: str, user_id: str) -> List[PendingInterrupt]:
+    """Return the current pending OAuth interrupts for a session.
+
+    Returns an empty list when the session doesn't exist or has none.
+    """
+    metadata = await get_session_metadata(session_id, user_id)
+    if not metadata:
+        return []
+    return list(metadata.pending_interrupts or [])

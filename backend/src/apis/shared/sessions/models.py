@@ -20,6 +20,31 @@ class VisualDisplayState(BaseModel):
     expanded: bool = Field(default=True, description="Visual is expanded vs collapsed")
 
 
+class PendingInterrupt(BaseModel):
+    """An OAuth consent request that paused an agent turn and is awaiting user action.
+
+    Persisted to session metadata when ``OAuthConsentHook`` fires the interrupt
+    so the frontend can rediscover pending consents on reload — without it, a
+    browser refresh leaves the consent prompt stuck and the tool call orphaned
+    in ``pending`` forever.
+
+    Note: ``authorization_url`` is intentionally omitted. AgentCore Identity's
+    consent URLs are short-lived; storing them invites stale-URL bugs on
+    refresh-after-an-hour. Frontend re-fetches via ``initiate-consent`` on
+    Connect.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
+    provider_id: str = Field(..., alias="providerId", description="Connector providerId needing consent")
+    triggering_message_id: Optional[str] = Field(
+        None,
+        alias="triggeringMessageId",
+        description="Id of the assistant message whose tool call triggered this interrupt, when known",
+    )
+    created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp when the interrupt was recorded")
+
+
 class SessionPreferences(BaseModel):
     """User preferences for a session"""
 
@@ -77,6 +102,13 @@ class SessionMetadata(BaseModel):
     # Soft delete fields
     deleted: Optional[bool] = Field(False, description="Whether session is soft-deleted")
     deleted_at: Optional[str] = Field(None, alias="deletedAt", description="ISO 8601 timestamp of deletion")
+
+    # OAuth consent state
+    pending_interrupts: Optional[List[PendingInterrupt]] = Field(
+        default=None,
+        alias="pendingInterrupts",
+        description="Pending OAuth consent interrupts that paused agent turns in this session",
+    )
 
 
 class UpdateSessionMetadataRequest(BaseModel):
@@ -298,3 +330,8 @@ class MessagesListResponse(BaseModel):
 
     messages: List[MessageResponse] = Field(..., description="List of messages in the session")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")
+    pending_interrupts: List[PendingInterrupt] = Field(
+        default_factory=list,
+        alias="pendingInterrupts",
+        description="OAuth consent interrupts that paused agent turns in this session and are awaiting user action",
+    )

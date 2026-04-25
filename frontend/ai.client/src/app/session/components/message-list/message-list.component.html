@@ -30,6 +30,15 @@
     }
   }
 
+  <!-- OAuth consent prompts not anchored to a loaded message — usually
+       hydrated from session metadata after a refresh, when the partial
+       assistant message wasn't persisted. -->
+  @for (request of unanchoredInterrupts(); track request.providerId) {
+    <div class="flex justify-start">
+      <app-oauth-consent-prompt [request]="request" />
+    </div>
+  }
+
   <!-- Loading indicator -->
   @if (isChatLoading()) {
     <div class="py-4">

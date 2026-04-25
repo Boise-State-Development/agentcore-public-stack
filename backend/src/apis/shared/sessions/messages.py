@@ -411,9 +411,20 @@ async def get_messages_from_cloud(
 
             return await get_all_message_metadata(session_id, user_id)
 
+        async def fetch_pending_interrupts():
+            """Fetch pending OAuth consent interrupts from session metadata.
+
+            Returns an empty list when the session has none — the only signal
+            the frontend needs to know whether a refresh-restored conversation
+            still has a paused turn awaiting consent.
+            """
+            from .metadata import get_pending_interrupts
+
+            return await get_pending_interrupts(session_id, user_id)
+
         # Run fetches in parallel
-        messages_raw, metadata_index = await asyncio.gather(
-            fetch_messages(), fetch_metadata()
+        messages_raw, metadata_index, pending_interrupts = await asyncio.gather(
+            fetch_messages(), fetch_metadata(), fetch_pending_interrupts()
         )
 
         messages_raw = list(messages_raw or [])
@@ -462,7 +473,11 @@ async def get_messages_from_cloud(
 
         message_responses = [_convert_message_to_response(msg, session_id, start_seq + idx) for idx, msg in enumerate(paginated_messages)]
 
-        return MessagesListResponse(messages=message_responses, next_token=next_page_token)
+        return MessagesListResponse(
+            messages=message_responses,
+            next_token=next_page_token,
+            pending_interrupts=pending_interrupts,
+        )
 
     except Exception as e:
         logger.error(f"Error retrieving messages from AgentCore Memory: {e}")

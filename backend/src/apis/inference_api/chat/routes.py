@@ -622,6 +622,34 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             ):
                 yield event
 
+            # Resume bookkeeping: any interrupt that was submitted in this
+            # request and is no longer present in the agent's interrupt state
+            # has been resolved — drop the persisted breadcrumb so a refresh
+            # doesn't redisplay a stale prompt. Interrupts that re-paused
+            # (same provider, new url) are left in place; the next event
+            # extractor will refresh them.
+            if is_resume and input_data.interrupt_responses:
+                try:
+                    strands_agent = getattr(agent, "agent", None)
+                    interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
+                    still_paused: set[str] = set()
+                    if interrupt_state and getattr(interrupt_state, "activated", False):
+                        still_paused = set((getattr(interrupt_state, "interrupts", None) or {}).keys())
+                    resolved_ids = [
+                        entry.interruptId
+                        for entry in input_data.interrupt_responses
+                        if entry.interruptId not in still_paused
+                    ]
+                    if resolved_ids:
+                        from apis.shared.sessions.metadata import remove_pending_interrupts
+                        await remove_pending_interrupts(
+                            session_id=input_data.session_id,
+                            user_id=user_id,
+                            interrupt_ids=resolved_ids,
+                        )
+                except Exception as cleanup_err:
+                    logger.error("Failed to clear resolved pending_interrupts: %s", cleanup_err, exc_info=True)
+
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py
         return StreamingResponse(

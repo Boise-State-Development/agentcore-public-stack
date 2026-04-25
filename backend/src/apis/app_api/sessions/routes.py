@@ -19,7 +19,12 @@ from apis.shared.sessions.models import (
     MessagesListResponse
 )
 from apis.shared.sessions.messages import get_messages
-from apis.shared.sessions.metadata import store_session_metadata, get_session_metadata, list_user_sessions
+from apis.shared.sessions.metadata import (
+    list_user_sessions,
+    get_session_metadata,
+    remove_pending_interrupts,
+    store_session_metadata,
+)
 from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
 from apis.shared.auth.dependencies import get_current_user
@@ -545,4 +550,39 @@ async def get_session_messages_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve messages: {str(e)}"
+        )
+
+
+@router.delete("/{session_id}/pending-interrupts/{interrupt_id:path}", status_code=204)
+async def dismiss_pending_interrupt_endpoint(
+    session_id: str,
+    interrupt_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Dismiss a pending OAuth consent interrupt for the caller's session.
+
+    The frontend calls this when the user clicks the dismiss button on an
+    inline consent prompt, so a refresh doesn't redisplay it. The id is
+    matched as-is — Strands generates ids like ``oauth:google-calendar``,
+    so we accept ``:path`` to keep the colon literal in the URL.
+
+    No-op for unknown ids and missing sessions, returning 204 in both
+    cases (the user's intent is satisfied).
+    """
+    user_id = current_user.user_id
+
+    logger.info("DELETE /sessions/%s/pending-interrupts/%s", session_id, interrupt_id)
+
+    try:
+        await remove_pending_interrupts(
+            session_id=session_id,
+            user_id=user_id,
+            interrupt_ids=[interrupt_id],
+        )
+        return Response(status_code=204)
+    except Exception as e:
+        logger.error("Error dismissing pending interrupt", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to dismiss interrupt: {str(e)}",
         )

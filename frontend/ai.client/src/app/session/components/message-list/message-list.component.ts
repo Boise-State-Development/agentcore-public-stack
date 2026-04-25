@@ -1,4 +1,4 @@
-import { Component, input, signal, effect, OnDestroy, inject, PLATFORM_ID } from '@angular/core';
+import { Component, computed, input, signal, effect, OnDestroy, inject, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import { UserMessageComponent } from './components/user-message.component';
@@ -6,10 +6,22 @@ import { AssistantMessageComponent } from './components/assistant-message.compon
 import { MessageMetadataBadgesComponent } from './components/message-metadata-badges.component';
 import { CitationDisplayComponent } from '../citation-display/citation-display.component';
 import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.component';
+import { OAuthConsentPromptComponent } from '../../../components/oauth-consent-prompt/oauth-consent-prompt.component';
+import {
+  OAuthConsentRequest,
+  OAuthConsentService,
+} from '../../../services/oauth-consent/oauth-consent.service';
 
 @Component({
   selector: 'app-message-list',
-  imports: [UserMessageComponent, AssistantMessageComponent, MessageMetadataBadgesComponent, CitationDisplayComponent, PulsatingLoaderComponent],
+  imports: [
+    UserMessageComponent,
+    AssistantMessageComponent,
+    MessageMetadataBadgesComponent,
+    CitationDisplayComponent,
+    PulsatingLoaderComponent,
+    OAuthConsentPromptComponent,
+  ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
 })
@@ -26,6 +38,18 @@ export class MessageListComponent implements OnDestroy {
   isChatLoading = input<boolean>(false);
   streamingMessageId = input<string | null>(null);
   embeddedMode = input<boolean>(false);
+
+  private consentService = inject(OAuthConsentService);
+
+  /** Pending consent prompts whose anchor message id isn't in the loaded
+   *  message list — typically the case when an interrupt fires on a turn
+   *  whose partial assistant message wasn't persisted to AgentCore Memory.
+   *  Rendered at the end of the conversation so the user still sees the
+   *  affordance instead of a silently stalled tool call. */
+  protected unanchoredInterrupts = computed<OAuthConsentRequest[]>(() => {
+    const ids = new Set(this.messages().map((m) => m.id));
+    return this.consentService.pending().filter((req) => !req.messageId || !ids.has(req.messageId));
+  });
 
   // Calculate the spacer height dynamically
   // This creates space at the bottom so user messages can scroll to the top

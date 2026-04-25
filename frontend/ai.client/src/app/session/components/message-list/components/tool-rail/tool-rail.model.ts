@@ -20,8 +20,11 @@ export interface ToolCallDisplay {
     content: ToolResultContent[];
   };
 
-  /** Execution status (from toolUseData.status, defaults to 'pending') */
-  status: 'pending' | 'complete' | 'error';
+  /** Execution status (from toolUseData.status, defaults to 'pending').
+   *  ``awaiting_auth`` is derived in the message renderer when the tool was
+   *  paused on an OAuth consent gate — the tool didn't fail, it's waiting
+   *  for the user to authorize. */
+  status: 'pending' | 'complete' | 'error' | 'awaiting_auth';
 
   /** Optional LLM-generated one-line summary of this tool call's result */
   summary?: string;

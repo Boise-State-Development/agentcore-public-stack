@@ -200,9 +200,15 @@ class StreamCoordinator:
                 # stream closes. The frontend uses these to drive the consent
                 # popup and then POSTs interrupt responses to resume the turn.
                 # Done before the metadata branch so the events land between
-                # message_stop and the final metadata/done block.
+                # message_stop and the final metadata/done block. Persistence
+                # to session metadata happens inside the extractor so a refresh
+                # rediscovers the consent prompt.
                 if event.get("type") == "done":
-                    for sse in self._extract_oauth_required_events(agent):
+                    for sse in await self._extract_oauth_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
                         yield sse
 
                 # Check if this is the "done" event - send final metadata before it
@@ -540,9 +546,16 @@ class StreamCoordinator:
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
 
-    def _extract_oauth_required_events(self, agent: Any) -> List[str]:
+    async def _extract_oauth_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        triggering_message_id: Optional[str] = None,
+    ) -> List[str]:
         """Yield one SSE-formatted `oauth_required` event per pending OAuth
-        interrupt on the agent.
+        interrupt on the agent, persisting each one to session metadata so
+        the frontend can rediscover them after a refresh.
 
         The Strands `_interrupt_state` is populated when `OAuthConsentHook`
         calls `event.interrupt(...)`. We look for interrupts whose `reason`
@@ -550,8 +563,13 @@ class StreamCoordinator:
         shape the frontend already understands. Non-OAuth interrupts (other
         approval gates added later) are ignored here so they can be handled
         by their own SSE event types.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
         """
         from apis.shared.oauth.models import OAuthRequiredEvent
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
 
         interrupt_state = getattr(agent, "_interrupt_state", None)
         if not interrupt_state or not getattr(interrupt_state, "activated", False):
@@ -570,6 +588,29 @@ class StreamCoordinator:
                     interrupt.id,
                 )
                 continue
+
+            # Persist the breadcrumb before yielding so a client that loads
+            # the session a moment later sees this interrupt. Only attempt
+            # when we have session/user context — preview/anonymous flows
+            # don't have a metadata record to write to.
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            provider_id=provider_id,
+                            triggering_message_id=triggering_message_id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
             events.append(
                 OAuthRequiredEvent(
                     provider_id=provider_id,

@@ -1,6 +1,8 @@
 import { Injectable, signal, computed, inject, DestroyRef } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { fromEvent } from 'rxjs';
+import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
+import { SessionService } from '../../session/services/session/session.service';
 
 /**
  * Pending OAuth consent request surfaced by the backend when an external
@@ -13,9 +15,21 @@ import { fromEvent } from 'rxjs';
  */
 export interface OAuthConsentRequest {
   providerId: string;
-  authorizationUrl: string;
+  /** Authorization URL captured from a live `oauth_required` SSE event.
+   *  Absent on requests hydrated from session metadata after a refresh —
+   *  AgentCore's URLs expire quickly, so the service re-fetches a fresh one
+   *  via `initiate-consent` when the user clicks Connect. */
+  authorizationUrl?: string;
   interruptId?: string;
   receivedAt: number;
+  /** Id of the assistant message whose tool call triggered this consent request.
+   *  Used by the inline message renderer to anchor the prompt to the turn that
+   *  needs it. Omitted for proactive consents from the settings page. */
+  messageId?: string;
+  /** Session id the request belongs to. Required for the backend dismiss
+   *  endpoint to clear the persisted breadcrumb so a refresh doesn't
+   *  resurrect a dismissed prompt. */
+  sessionId?: string;
 }
 
 /**
@@ -33,10 +47,15 @@ export interface OAuthCompleteMessage {
 /**
  * Handler the chat layer registers to resume a paused agent turn after
  * one or more OAuth consents complete. Receives the interrupt ids whose
- * tokens are now available; the handler is expected to POST a resume
+ * tokens are now available, plus the originating session id so the
+ * handler can resume even when the live ``lastRequestObject`` is gone
+ * (post-refresh hydration). The handler is expected to POST a resume
  * request to `/invocations` with `interrupt_responses` populated.
  */
-export type OAuthResumeHandler = (interruptIds: string[]) => void | Promise<void>;
+export type OAuthResumeHandler = (
+  interruptIds: string[],
+  context?: { sessionId?: string },
+) => void | Promise<void>;
 
 function isOAuthCompleteMessage(data: unknown): data is OAuthCompleteMessage {
   if (!data || typeof data !== 'object') {
@@ -76,6 +95,8 @@ function isSafeConsentUrl(raw: string): boolean {
 @Injectable({ providedIn: 'root' })
 export class OAuthConsentService {
   private readonly destroyRef = inject(DestroyRef);
+  private readonly userConnectorsService = inject(UserConnectorsService);
+  private readonly sessionService = inject(SessionService);
 
   /** Map of providerId → request. A provider only appears once, even if
    *  the backend emits duplicates mid-stream. */
@@ -153,8 +174,17 @@ export class OAuthConsentService {
    *
    * Rejects non-https URLs — see {@link isSafeConsentUrl}.
    */
-  requestConsent(providerId: string, authorizationUrl: string, interruptId?: string): void {
-    if (!isSafeConsentUrl(authorizationUrl)) {
+  requestConsent(
+    providerId: string,
+    authorizationUrl: string | undefined,
+    interruptId?: string,
+    messageId?: string,
+    sessionId?: string,
+  ): void {
+    // Hydration from session metadata passes undefined — the URL gets fetched
+    // lazily on Connect. Live SSE flows still pass the URL up front for the
+    // fast-path popup with no extra roundtrip.
+    if (authorizationUrl !== undefined && !isSafeConsentUrl(authorizationUrl)) {
       console.error(
         'OAuth consent rejected: authorizationUrl is not https',
         { providerId },
@@ -167,6 +197,8 @@ export class OAuthConsentService {
         providerId,
         authorizationUrl,
         interruptId,
+        messageId,
+        sessionId,
         receivedAt: Date.now(),
       });
       return next;
@@ -193,19 +225,70 @@ export class OAuthConsentService {
    * Returns true if the popup opened, false if it was blocked or the URL
    * failed validation. Callers can use this to trigger a fallback UI.
    */
-  openConsentPopup(providerId: string): boolean {
+  async openConsentPopup(providerId: string): Promise<boolean> {
     const request = this.requests().get(providerId);
     if (!request) {
       return false;
     }
 
+    // Hydrated requests don't carry a URL — fetch a fresh one. Stored URLs
+    // can also be stale if the live SSE event fired more than a few minutes
+    // ago, so we treat any missing/expired URL as a refresh trigger.
+    let authorizationUrl = request.authorizationUrl;
+    if (!authorizationUrl) {
+      this.inFlight.update((set) => {
+        const next = new Set(set);
+        next.add(providerId);
+        return next;
+      });
+      try {
+        const response = await this.userConnectorsService.initiateConsent(providerId);
+        if (response.connected || !response.authorizationUrl) {
+          // Already consented while paused (e.g. the user authorized in
+          // another tab). Drop the request and let the resume handler — if
+          // any — fire so the agent can finish the turn.
+          this.dismiss(providerId);
+          if (request.interruptId && this.resumeHandler) {
+            void Promise.resolve(this.resumeHandler([request.interruptId])).catch((err) =>
+              console.error('OAuth resume handler failed after pre-consented refresh', err),
+            );
+          }
+          return false;
+        }
+        authorizationUrl = response.authorizationUrl;
+        this.requests.update((map) => {
+          const next = new Map(map);
+          const current = next.get(providerId);
+          if (current) {
+            next.set(providerId, { ...current, authorizationUrl });
+          }
+          return next;
+        });
+      } catch (err) {
+        console.error('Failed to fetch fresh authorization URL', err);
+        this.inFlight.update((set) => {
+          if (!set.has(providerId)) return set;
+          const next = new Set(set);
+          next.delete(providerId);
+          return next;
+        });
+        return false;
+      }
+    }
+
     // Re-validate on the hot path even though requestConsent already
     // checked — defensive against anyone mutating the stored entry.
-    if (!isSafeConsentUrl(request.authorizationUrl)) {
+    if (!isSafeConsentUrl(authorizationUrl)) {
       console.error(
         'OAuth consent rejected at open: authorizationUrl is not https',
         { providerId },
       );
+      this.inFlight.update((set) => {
+        if (!set.has(providerId)) return set;
+        const next = new Set(set);
+        next.delete(providerId);
+        return next;
+      });
       return false;
     }
 
@@ -227,7 +310,7 @@ export class OAuthConsentService {
       'location=no',
     ].join(',');
 
-    const popup = window.open(request.authorizationUrl, `oauth-${providerId}`, features);
+    const popup = window.open(authorizationUrl, `oauth-${providerId}`, features);
 
     if (!popup) {
       this.blocked.update((set) => {
@@ -324,7 +407,7 @@ export class OAuthConsentService {
    */
   getAuthorizationUrl(providerId: string): string | null {
     const request = this.requests().get(providerId);
-    return request ? request.authorizationUrl : null;
+    return request?.authorizationUrl ?? null;
   }
 
   /**
@@ -338,10 +421,20 @@ export class OAuthConsentService {
   }
 
   /**
-   * Clear a single consent request — called from the UI after the user
-   * completes or dismisses a provider, or when the chat is reset.
+   * Drop a single consent request from local state, and (when called from
+   * the UI's explicit dismiss button) clear the persisted breadcrumb so a
+   * refresh doesn't resurrect the prompt.
+   *
+   * On completion-driven cleanup ({@link handleCompletion}) we set
+   * ``syncServer: false`` because the resume request that follows will
+   * remove the same breadcrumb server-side — a separate DELETE would just
+   * be redundant network noise.
    */
-  dismiss(providerId: string): void {
+  dismiss(providerId: string, options?: { syncServer?: boolean }): void {
+    const entry = this.requests().get(providerId);
+    const sessionId = entry?.sessionId;
+    const interruptId = entry?.interruptId;
+
     this.requests.update((map) => {
       if (!map.has(providerId)) {
         return map;
@@ -366,6 +459,18 @@ export class OAuthConsentService {
       next.delete(providerId);
       return next;
     });
+
+    if (options?.syncServer === false || !sessionId || !interruptId) {
+      return;
+    }
+
+    // Best-effort: a backend cleanup failure shouldn't block the UI from
+    // hiding the prompt — the prompt is already gone locally.
+    void this.sessionService
+      .dismissPendingInterrupt(sessionId, interruptId)
+      .catch((err) => {
+        console.warn('Failed to clear persisted pending_interrupt; local dismiss still applied', err);
+      });
   }
 
   /** Reset all state (new session, logout). */
@@ -396,14 +501,18 @@ export class OAuthConsentService {
     // Capture the paused interrupt id BEFORE dismissing the request, since
     // dismiss removes the entry the handler needs. A user-initiated
     // settings-page consent has no interruptId — nothing to resume.
+    // Skip server sync: the resume request fired below clears the persisted
+    // interrupt server-side, so a separate DELETE would just be redundant.
     const request = this.requests().get(message.providerId);
-    this.dismiss(message.providerId);
+    this.dismiss(message.providerId, { syncServer: false });
 
     if (!request?.interruptId || !this.resumeHandler) {
       return;
     }
 
-    void Promise.resolve(this.resumeHandler([request.interruptId])).catch((err) => {
+    void Promise.resolve(
+      this.resumeHandler([request.interruptId], { sessionId: request.sessionId }),
+    ).catch((err) => {
       // Resume failures are surfaced through the resume request's own error
       // handling — log here for diagnostics but don't crash the consent flow.
       console.error('OAuth resume handler failed', err);

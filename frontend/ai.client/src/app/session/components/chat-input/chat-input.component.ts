@@ -10,7 +10,6 @@ import {
 import { heroPaperAirplaneSolid, heroStopSolid } from '@ng-icons/heroicons/solid';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
 import { QuotaWarningBannerComponent } from '../../../components/quota-warning-banner/quota-warning-banner.component';
-import { OAuthConsentBannerComponent } from '../../../components/oauth-consent-banner/oauth-consent-banner.component';
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
@@ -33,7 +32,7 @@ interface Message {
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, OAuthConsentBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent],
+  imports: [FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent],
   providers: [
     provideIcons({
       heroPlus,

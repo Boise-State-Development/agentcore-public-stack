@@ -295,12 +295,27 @@ export class StreamParserService {
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
 
-      onOAuthRequired: (data: OAuthRequiredEvent) =>
+      onOAuthRequired: (data: OAuthRequiredEvent) => {
+        // oauth_required arrives after message_stop, so the triggering
+        // assistant message is normally in completedMessages; fall back
+        // to the in-flight builder for tool_use stop reasons that keep
+        // the message active.
+        const messages = this.allMessages();
+        let lastAssistantId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            lastAssistantId = messages[i].id;
+            break;
+          }
+        }
         this.oauthConsentService.requestConsent(
           data.providerId,
           data.authorizationUrl,
           data.interruptId,
-        ),
+          lastAssistantId,
+          this.sessionId ?? undefined,
+        );
+      },
 
       onError: (data) => this.handleError(data),
       onStreamError: (data) =>

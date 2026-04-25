@@ -81,9 +81,11 @@ export class ToolRailComponent {
   /** CSS class for status dot */
   statusDotClass(call: ToolCallDisplay): string {
     switch (call.status) {
-      case 'complete': return 'status-dot bg-green-500';
-      case 'pending':  return 'status-dot bg-amber-400 shimmer';
-      case 'error':    return 'status-dot bg-red-500';
+      case 'complete':       return 'status-dot bg-green-500';
+      case 'pending':        return 'status-dot bg-amber-400 shimmer';
+      case 'error':          return 'status-dot bg-red-500';
+      case 'awaiting_auth':  return 'status-dot bg-primary-500 ring-2 ring-primary-300/40 dark:ring-primary-400/30';
+      default:               return 'status-dot bg-gray-400';
     }
   }
 

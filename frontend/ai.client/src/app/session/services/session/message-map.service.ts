@@ -2,8 +2,9 @@
 import { Injectable, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
 import { ContentBlock, FileAttachmentData, Message } from '../models/message.model';
 import { StreamParserService } from '../chat/stream-parser.service';
-import { SessionService } from './session.service';
+import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -42,6 +43,7 @@ export class MessageMapService {
   private streamParser = inject(StreamParserService);
   private sessionService = inject(SessionService);
   private fileUploadService = inject(FileUploadService);
+  private oauthConsentService = inject(OAuthConsentService);
 
   constructor() {
     // Reactive effect: automatically sync streaming messages to the message map
@@ -278,12 +280,51 @@ export class MessageMapService {
 
         return updated;
       });
+
+      // Hydrate OAuth consent service from any persisted pending interrupts
+      // so a reload restores the consent prompt anchored to the right turn.
+      // Anchor falls back to the most recent assistant message in history,
+      // matching how the live SSE flow already attaches prompts. Authorization
+      // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
+      this.hydratePendingInterrupts(sessionId, messagesResponse.pending_interrupts, processedMessages);
     } catch (error) {
       console.error('Failed to load messages for session:', sessionId, error);
       throw error;
     } finally {
       // Clear loading state
       this._isLoadingSession.set(null);
+    }
+  }
+
+  /**
+   * Replay persisted pending OAuth interrupts into the consent service so
+   * the inline prompt re-renders. If the backend records a triggering message
+   * id we use it directly; otherwise we anchor to the most recent assistant
+   * message (mirroring the live-stream behavior in stream-parser.service.ts).
+   */
+  private hydratePendingInterrupts(
+    sessionId: string,
+    interrupts: PendingInterrupt[] | undefined,
+    messages: Message[],
+  ): void {
+    if (!interrupts || interrupts.length === 0) {
+      return;
+    }
+    let lastAssistantId: string | undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        lastAssistantId = messages[i].id;
+        break;
+      }
+    }
+    for (const interrupt of interrupts) {
+      this.oauthConsentService.requestConsent(
+        interrupt.provider_id,
+        undefined, // URL is fetched lazily on Connect — stored URLs go stale
+        interrupt.interrupt_id,
+        interrupt.triggering_message_id ?? lastAssistantId,
+        sessionId,
+      );
     }
   }
 
