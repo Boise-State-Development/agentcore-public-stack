@@ -24,12 +24,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from agents.main_agent.integrations.agentcore_identity import (
+    CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
     get_agentcore_identity_client,
 )
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
-from apis.shared.oauth import session_cache
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
@@ -128,23 +128,17 @@ async def initiate_consent(
                 "AGENTCORE_RUNTIME_WORKLOAD_NAME to enable the mint fallback."
             ),
         )
+    except CallbackUrlUnavailableError as err:
+        # Frontend is expected to send the OAuth2CallbackUrl header on this
+        # path; if the header is missing AND the env-var fallback is unset,
+        # tell the caller exactly what to fix.
+        logger.warning("Consent initiation missing callback URL: %s", err)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(err),
+        )
 
     if result.requires_consent:
-        # Record the session_uri AgentCore embedded in the authorize URL so
-        # `complete_consent` can prove this user is the one who started the
-        # flow. We soft-fail when the URL doesn't carry an identifier we
-        # recognise — AgentCore's own binding still applies in that case,
-        # and logs capture the shape change for investigation.
-        session_uri = session_cache.extract_session_uri(result.authorization_url or "")
-        if session_uri:
-            session_cache.remember(current_user.user_id, session_uri)
-        else:
-            logger.warning(
-                "Could not extract session_uri from AgentCore authorization URL "
-                "for user=%s provider=%s; skipping server-side session tracking",
-                current_user.user_id,
-                provider_id,
-            )
         return InitiateConsentResponse(authorization_url=result.authorization_url)
     return InitiateConsentResponse(connected=True)
 
@@ -168,26 +162,13 @@ async def complete_consent(
 
     Returns `ok: true` on success; errors from AgentCore bubble up as 502.
 
-    Authorization: the submitted `session_uri` must have been remembered
-    for `current_user` at `initiate_consent`. This is defence-in-depth on
-    top of AgentCore's own `userIdentifier`-bound check, so that a
-    leaked `session_uri` cannot be driven to completion under a
-    different user's identity here.
+    Authorization: the inbound JWT (`current_user`) is verified by
+    `get_current_user_trusted`, and we pass that user's id as
+    `userIdentifier` to AgentCore. AgentCore's own binding rejects a
+    completion attempt whose `userIdentifier` doesn't match the identity
+    that initiated the session, so a leaked `session_uri` cannot be
+    redeemed under a different user.
     """
-    if not session_cache.consume(current_user.user_id, body.session_uri):
-        logger.warning(
-            "Rejecting complete_consent: session_uri not issued to user=%s provider=%s",
-            current_user.user_id,
-            body.provider_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "This consent session was not initiated by you, or it has "
-                "expired. Start the connection again from Settings."
-            ),
-        )
-
     control = _agentcore_control_client()
 
     try:

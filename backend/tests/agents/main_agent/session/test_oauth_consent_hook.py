@@ -23,17 +23,14 @@ from agents.main_agent.session.hooks.oauth_consent import (
     OAuthConsentHook,
     _looks_like_auth_failure,
 )
-from apis.shared.oauth import session_cache
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """Token cache is process-global; isolate between tests."""
     oauth_token_cache.clear_user("alice")
-    session_cache.forget_user("alice")
     yield
     oauth_token_cache.clear_user("alice")
-    session_cache.forget_user("alice")
 
 
 def _make_event(provider_id: str | None, *, agent=None) -> MagicMock:
@@ -167,38 +164,6 @@ class TestOAuthConsentHookConsentRequired:
         }
         # Cache stays empty until consent actually completes.
         assert oauth_token_cache.get("alice", "google") is None
-
-    @pytest.mark.asyncio
-    async def test_remembers_session_uri_so_complete_consent_accepts_it(self):
-        """The popup's `complete_consent` call verifies the session_uri was
-        initiated by the same user. The tool-call path must remember it —
-        otherwise the popup finalize is rejected 403 even though AgentCore
-        itself would accept it."""
-        auth_url = (
-            "https://identity.amazonaws.com/oauth2/authorize"
-            "?request_uri=urn:agentcore:session:abc123&client_id=foo"
-        )
-        identity = MagicMock()
-        identity.get_token_for_user = AsyncMock(
-            return_value=TokenResult(authorization_url=auth_url)
-        )
-
-        hook = OAuthConsentHook(
-            user_id="alice",
-            provider_lookup=lambda _tool: "google",
-            scopes_lookup=lambda _: ["openid"],
-        )
-        event = _make_event(provider_id="google")
-
-        with patch(
-            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
-            return_value=identity,
-        ):
-            with pytest.raises(InterruptException):
-                await hook._gate(event)
-
-        # Same user completing the flow succeeds; a different user is rejected.
-        assert session_cache.consume("alice", "urn:agentcore:session:abc123") is True
 
     @pytest.mark.asyncio
     async def test_resume_warms_cache_with_post_consent_token(self):
@@ -471,9 +436,15 @@ class TestLooksLikeAuthFailure:
     @pytest.mark.parametrize(
         "text",
         [
+            # HTTP 401 in various shapes.
             "HTTP 401 Unauthorized",
             "Request failed: 401",
             "status=401 message=unauthorized",
+            "401 Client Error: Unauthorized for url: https://...",
+            # "Unauthorized" paired with an HTTP/status/code keyword.
+            "HTTP response: Unauthorized",
+            "status code Unauthorized",
+            # Unambiguous OAuth/token signals stand alone.
             "The server rejected the OAuth token",
             "invalid_token",
             "invalid-token",
@@ -483,7 +454,12 @@ class TestLooksLikeAuthFailure:
             "token_expired",
             "oauth token expired",
             "oauth token has expired",
-            "Unauthorized",
+            # Refresh-token revocation surfaces with this OAuth error code.
+            "invalid_grant: Token has been expired or revoked",
+            # Google API auth signals.
+            "Request had invalid authentication credentials",
+            "Request had invalid_authentication_credentials",
+            'status "UNAUTHENTICATED"',
         ],
     )
     def test_matches_genuine_auth_errors(self, text):
@@ -501,22 +477,25 @@ class TestLooksLikeAuthFailure:
             # Token as substring of longer words should not match.
             "refreshtokenRequired",
             "ExpiredTokens",  # plural — not \btoken\b
-            # Prose that shouldn't trigger.
-            "The weather today is unauthorized-feeling, but fine",  # still matches \bunauthorized\b
-            # ^ confirms we accept this as a fair trigger; pure prose without
-            # the keyword should not.
+            # Prose mentions of "unauthorized" without HTTP/status context.
+            # Previously fired off the bare \bunauthorized\b alternative;
+            # tightening means application-level "not authorized" prose no
+            # longer triggers an OAuth re-auth.
+            "The weather today is unauthorized-feeling, but fine",
+            "Unauthorized",  # bare — too ambiguous on its own
+            "You are not authorized to view this calendar entry",
+            # Prose that shouldn't trigger anything.
             "Everything is fine, nothing to see here",
             "Rate limit exceeded",
             "500 Internal Server Error",
+            # "PERMISSION_DENIED" is intentionally NOT matched — it's a
+            # scope/ACL problem at the provider, not an OAuth credential
+            # failure, and re-consenting won't change the outcome.
+            "PERMISSION_DENIED",
+            "Insufficient permissions",
         ],
     )
     def test_avoids_false_positives(self, text):
-        # All cases above either have no auth keyword OR have the keyword
-        # embedded in a longer word — the regex must reject them.
-        if "unauthorized-feeling" in text:
-            # Word boundary intentionally matches "unauthorized" even when
-            # followed by a hyphen. This is expected; skip from negative set.
-            pytest.skip("hyphen after keyword is a legitimate match")
         assert _looks_like_auth_failure(self._err(text)) is False
 
     def test_ignores_non_error_status(self):

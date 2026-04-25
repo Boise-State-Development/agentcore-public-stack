@@ -69,6 +69,17 @@ class _ShortCircuitPoller(TokenPoller):
 # principal must be authorised for that action on the target workload.
 _RUNTIME_WORKLOAD_ENV = "AGENTCORE_RUNTIME_WORKLOAD_NAME"
 
+# Same shape as above for the OAuth2 callback URL. The runtime injects an
+# `OAuth2CallbackUrl` header on every proxied request; in local dev that
+# header is absent and `BedrockAgentCoreContext.get_oauth2_callback_url()`
+# returns None. Without a callback URL the SDK builds an authorize URL whose
+# redirect points to a default that never reaches our `/oauth-complete`
+# page, so consent silently fails to finalize and the user is re-prompted on
+# every request. Set this env var to your frontend's `/oauth-complete` URL
+# (e.g. `http://localhost:4200/oauth-complete`) to make chat-triggered
+# consent work outside the runtime.
+_LOCAL_CALLBACK_URL_ENV = "AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"
+
 
 @dataclass(frozen=True)
 class TokenResult:
@@ -96,6 +107,16 @@ class WorkloadTokenUnavailableError(RuntimeError):
 
     This indicates the caller is running outside an AgentCore Runtime
     invocation, or the `AgentCoreContextMiddleware` was not applied.
+    """
+
+
+class CallbackUrlUnavailableError(RuntimeError):
+    """Raised when no OAuth2 callback URL can be resolved for an authorize call.
+
+    Surfaced instead of silently passing `None` to the SDK, which builds an
+    authorize URL whose redirect never reaches `/oauth-complete` — the user
+    finishes consent at the provider but the token is never persisted to
+    AgentCore's vault, so the next request prompts them to consent again.
     """
 
 
@@ -155,24 +176,11 @@ class AgentCoreIdentityClient:
             WorkloadTokenUnavailableError: No token on context and the
                 local-dev fallback is unavailable (env var unset, user_id
                 missing, or IAM denies the mint call).
+            CallbackUrlUnavailableError: No callback URL on context and the
+                local-dev fallback env var is unset.
         """
         workload_token = self._resolve_workload_token(user_id)
-
-        resolved_callback_url = (
-            callback_url or BedrockAgentCoreContext.get_oauth2_callback_url()
-        )
-
-        # AgentCore's return-URL redirect doesn't include any hint about which
-        # provider resolved, so the frontend's /oauth-complete page has no way
-        # to tell the consent service which pending entry to dismiss. Append
-        # provider_id as a query param so the page can read it back.
-        if resolved_callback_url:
-            from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
-
-            parsed = urlparse(resolved_callback_url)
-            existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
-            existing.setdefault("provider_id", provider_name)
-            resolved_callback_url = urlunparse(parsed._replace(query=urlencode(existing)))
+        resolved_callback_url = self._resolve_callback_url(callback_url, provider_name)
 
         captured_url: dict[str, Optional[str]] = {"url": None}
 
@@ -214,6 +222,42 @@ class AgentCoreIdentityClient:
             )
 
         return TokenResult(access_token=token)
+
+    def _resolve_callback_url(
+        self, explicit: Optional[str], provider_name: str
+    ) -> str:
+        """Pick the OAuth2 callback URL and tag it with `provider_id`.
+
+        Resolution order: explicit arg → request-scoped context (Runtime
+        header) → `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` env var (local-dev
+        escape hatch). Raises `CallbackUrlUnavailableError` when none is
+        available — passing None to the SDK silently breaks consent.
+
+        AgentCore's redirect doesn't echo any provider hint, so we append
+        `provider_id` as a query param so `/oauth-complete` can dismiss the
+        right pending consent entry.
+        """
+        from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
+
+        base = (
+            explicit
+            or BedrockAgentCoreContext.get_oauth2_callback_url()
+            or os.environ.get(_LOCAL_CALLBACK_URL_ENV)
+        )
+        if not base:
+            raise CallbackUrlUnavailableError(
+                "No OAuth2 callback URL available. In production the "
+                "AgentCore Runtime injects this via the `OAuth2CallbackUrl` "
+                "header; for local dev set "
+                f"{_LOCAL_CALLBACK_URL_ENV} to your frontend's "
+                "/oauth-complete URL (e.g. "
+                "http://localhost:4200/oauth-complete)."
+            )
+
+        parsed = urlparse(base)
+        existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        existing.setdefault("provider_id", provider_name)
+        return urlunparse(parsed._replace(query=urlencode(existing)))
 
     def _resolve_workload_token(self, user_id: Optional[str]) -> str:
         """Return a workload access token, preferring the runtime-supplied one.

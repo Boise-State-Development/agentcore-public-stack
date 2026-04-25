@@ -35,32 +35,45 @@ from strands.hooks import (
 
 from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.agentcore_identity import (
+    CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
     get_agentcore_identity_client,
 )
-from apis.shared.oauth import session_cache
 
 logger = logging.getLogger(__name__)
 
 
-# String markers that indicate an OAuth-style auth failure in a tool
-# result. MCP servers vary in how they format errors, so we match a small
-# set of unambiguous signals: the literal HTTP code, "Unauthorized", and
-# explicit OAuth/token-rejected language.
+# Markers that indicate an OAuth-style auth failure in a tool result.
+# A false positive triggers an unnecessary OAuth popup — far more
+# disruptive than a missed match (which surfaces the underlying error to
+# the user). So we err on the side of high-confidence signals only.
 #
-# Every alternative is word-bounded. `401` additionally excludes adjacent
-# `/` so path segments like `/v1/401/...` in an error message do not
-# trigger a false-positive reauth. We only run the pattern on results
-# whose `status == "error"` (see `_looks_like_auth_failure`), so this
-# plus `\b` on every other clause is tight enough in practice.
+# Tiers:
+#   1. HTTP 401 with negative lookarounds for path segments / adjacent
+#      digits. Bare "401" in MCP error text is almost always an HTTP
+#      status code in practice.
+#   2. "Unauthorized" only when paired with an HTTP/status/code keyword.
+#      The bare word fires on prose like "you are not authorized to view
+#      this calendar" — which is application-level, not OAuth.
+#   3. Unambiguous OAuth/token signals stand alone — `invalid_token`,
+#      `invalid_grant` (refresh-token revocation), Google API's
+#      `UNAUTHENTICATED` and `invalid authentication credentials`.
+#
+# We only run this on results whose `status == "error"`
+# (see `_looks_like_auth_failure`), so even the broader patterns above
+# are gated by an explicit failure signal from the MCP framework.
 _AUTH_FAILURE_PATTERN = re.compile(
     r"(?<![\w/])401(?![\w/])"
-    r"|\bunauthorized\b"
-    r"|\binvalid[_\s-]token\b"
-    r"|\bexpired[_\s-]token\b"
-    r"|\btoken[_\s-]expired\b"
+    r"|\b(?:http|status|response|code)\b[^\n]{0,20}\bunauthoriz(?:ed|e)\b"
+    r"|\bunauthoriz(?:ed|e)\b[^\n]{0,20}\b(?:http|status|response|code|401)\b"
+    r"|\binvalid[_\s-]?token\b"
+    r"|\bexpired[_\s-]?token\b"
+    r"|\btoken[_\s-]?expired\b"
     r"|\brejected the oauth token\b"
-    r"|\boauth token (?:has )?expired\b",
+    r"|\boauth token (?:has )?expired\b"
+    r"|\binvalid[_\s-]?grant\b"
+    r"|\binvalid[_\s-]?authentication[_\s-]?credentials\b"
+    r"|\bUNAUTHENTICATED\b",
     re.IGNORECASE,
 )
 
@@ -155,23 +168,6 @@ class OAuthConsentHook(HookProvider):
             oauth_token_cache.set(self._user_id, provider_id, token_or_url["token"])
             return
 
-        # Remember the session_uri so `complete_consent` can verify this
-        # user initiated the flow. Without this, the popup's finalize call
-        # is rejected 403 — the settings-page `initiate_consent` path
-        # remembers its own session, and this tool-triggered path must do
-        # the same. Soft-fails on extraction: AgentCore's userIdentifier
-        # binding still protects completion if we can't track locally.
-        session_uri = session_cache.extract_session_uri(token_or_url["url"] or "")
-        if session_uri:
-            session_cache.remember(self._user_id, session_uri)
-        else:
-            logger.warning(
-                "Could not extract session_uri from tool-triggered consent URL "
-                "for user=%s provider=%s; popup finalize may be rejected",
-                self._user_id,
-                provider_id,
-            )
-
         # Consent required: pause the agent. The interrupt name is namespaced
         # by provider so the SDK generates a stable interrupt id we can
         # correlate with the user's response.
@@ -220,6 +216,13 @@ class OAuthConsentHook(HookProvider):
                 "No workload token on context for provider=%s — "
                 "AgentCoreContextMiddleware may be misconfigured",
                 provider_id,
+            )
+            return None
+        except CallbackUrlUnavailableError as err:
+            logger.error(
+                "No OAuth2 callback URL for provider=%s: %s",
+                provider_id,
+                err,
             )
             return None
         except asyncio.CancelledError:
