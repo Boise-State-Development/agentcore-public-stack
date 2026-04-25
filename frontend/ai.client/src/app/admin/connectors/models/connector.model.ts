@@ -4,8 +4,20 @@
  * `canvas` routes through AgentCore's `CustomOauth2` vendor but is kept
  * distinct so the UI can surface Canvas-specific guidance if we add a
  * preset later. Today it is treated like `custom`.
+ *
+ * `slack`, `salesforce`, and `zoom` are first-class AgentCore Identity
+ * vendors — endpoints + provider defaults are pre-configured by AgentCore,
+ * so admins only supply credentials and scopes (no discovery URL).
  */
-export type ConnectorType = 'google' | 'microsoft' | 'github' | 'canvas' | 'custom';
+export type ConnectorType =
+  | 'google'
+  | 'microsoft'
+  | 'github'
+  | 'slack'
+  | 'salesforce'
+  | 'zoom'
+  | 'canvas'
+  | 'custom';
 
 /**
  * Connector record as returned by the admin API.
@@ -116,12 +128,20 @@ export interface ConnectorFormData {
 /**
  * Preset configuration for the connector picker. Endpoints are owned by
  * AgentCore Identity and not configurable here.
+ *
+ * `defaultScopes` and `defaultCustomParameters` populate the form when the
+ * admin clicks a preset. `scopesPlaceholder` and `customParametersPlaceholder`
+ * are vendor-relevant examples shown when the field is empty (e.g. after
+ * the admin clears one to type their own).
  */
 export interface ConnectorPreset {
   type: ConnectorType;
   displayName: string;
   defaultScopes: string[];
+  defaultCustomParameters?: Record<string, string>;
   iconName: string;
+  scopesPlaceholder?: string;
+  customParametersPlaceholder?: string;
   /** Optional hint shown to the admin when selecting the preset. */
   hint?: string;
 }
@@ -130,26 +150,65 @@ export const CONNECTOR_PRESETS: ConnectorPreset[] = [
   {
     type: 'google',
     displayName: 'Google',
-    defaultScopes: ['openid', 'email', 'profile'],
+    // No defaults — Google connectors are too multi-purpose to pre-pick
+    // (Calendar / Gmail / Drive / Docs all need different scopes, and the
+    // OIDC-only `openid email profile` set doesn't let an agent do
+    // anything useful). The placeholder shows the URL format so admins
+    // know what to type.
+    defaultScopes: [],
     iconName: 'heroCloud',
+    scopesPlaceholder:
+      'openid, email, profile, https://www.googleapis.com/auth/calendar.readonly',
+    customParametersPlaceholder: 'hd=mycompany.com\nprompt=consent',
   },
   {
     type: 'microsoft',
     displayName: 'Microsoft',
     defaultScopes: ['openid', 'email', 'profile', 'offline_access'],
     iconName: 'heroCloud',
+    scopesPlaceholder:
+      'openid, email, profile, offline_access, User.Read, Calendars.Read',
+    customParametersPlaceholder: 'domain_hint=mycompany.com\nprompt=consent',
   },
   {
     type: 'github',
     displayName: 'GitHub',
     defaultScopes: ['read:user', 'user:email'],
     iconName: 'heroCodeBracket',
+    scopesPlaceholder: 'read:user, user:email, repo',
+  },
+  {
+    type: 'slack',
+    displayName: 'Slack',
+    defaultScopes: ['chat:write', 'channels:read', 'users:read'],
+    iconName: 'heroChatBubbleLeftRight',
+    scopesPlaceholder:
+      'chat:write, channels:read, channels:history, users:read, files:read',
+    customParametersPlaceholder: 'team=T0123456789',
+  },
+  {
+    type: 'salesforce',
+    displayName: 'Salesforce',
+    defaultScopes: ['api', 'refresh_token', 'offline_access', 'id', 'openid'],
+    iconName: 'heroCloud',
+    scopesPlaceholder:
+      'api, refresh_token, offline_access, id, openid, lightning, content',
+    customParametersPlaceholder: 'prompt=login\nlogin_hint=user@mycompany.com',
+  },
+  {
+    type: 'zoom',
+    displayName: 'Zoom',
+    defaultScopes: ['user:read:user', 'meeting:read:meeting'],
+    iconName: 'heroVideoCamera',
+    scopesPlaceholder:
+      'user:read:user, meeting:read:meeting, recording:read:recording',
   },
   {
     type: 'custom',
     displayName: 'Custom (OIDC)',
     defaultScopes: [],
     iconName: 'heroLink',
+    scopesPlaceholder: 'openid, email, profile',
     hint: 'Requires an OpenID Connect discovery URL',
   },
 ];

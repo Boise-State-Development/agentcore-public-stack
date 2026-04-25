@@ -37,13 +37,21 @@ logger = logging.getLogger(__name__)
 
 
 # Mapping from our OAuthProviderType to AgentCore's credentialProviderVendor
-# and the corresponding vendor-specific config key inside oauth2ProviderConfigInput.
-# CANVAS routes through CustomOauth2 because AgentCore Identity does not ship
-# a first-class Canvas vendor.
+# and the corresponding vendor-specific config key inside
+# `oauth2ProviderConfigInput`. AgentCore exposes a dedicated config struct
+# for some vendors (Google, Microsoft, GitHub, Slack, Salesforce, Custom) and
+# a shared `includedOauth2ProviderConfig` for "simpler" vendors that just
+# need clientId/clientSecret (Zoom and most of the long tail). The vendor
+# enum string is unchanged either way — only the surrounding config key
+# differs. CANVAS routes through CustomOauth2 because AgentCore does not
+# ship a first-class Canvas vendor.
 _VENDOR_BY_TYPE: Dict[OAuthProviderType, str] = {
     OAuthProviderType.GOOGLE: "GoogleOauth2",
     OAuthProviderType.MICROSOFT: "MicrosoftOauth2",
     OAuthProviderType.GITHUB: "GithubOauth2",
+    OAuthProviderType.SLACK: "SlackOauth2",
+    OAuthProviderType.SALESFORCE: "SalesforceOauth2",
+    OAuthProviderType.ZOOM: "ZoomOauth2",
     OAuthProviderType.CANVAS: "CustomOauth2",
     OAuthProviderType.CUSTOM: "CustomOauth2",
 }
@@ -52,6 +60,13 @@ _CONFIG_KEY_BY_TYPE: Dict[OAuthProviderType, str] = {
     OAuthProviderType.GOOGLE: "googleOauth2ProviderConfig",
     OAuthProviderType.MICROSOFT: "microsoftOauth2ProviderConfig",
     OAuthProviderType.GITHUB: "githubOauth2ProviderConfig",
+    OAuthProviderType.SLACK: "slackOauth2ProviderConfig",
+    OAuthProviderType.SALESFORCE: "salesforceOauth2ProviderConfig",
+    # Zoom shares the `includedOauth2ProviderConfig` slot with most of the
+    # long-tail vendors (Okta, Notion, Dropbox, etc). The vendor enum
+    # string still discriminates the actual provider; the shared config
+    # key just carries the credentials.
+    OAuthProviderType.ZOOM: "includedOauth2ProviderConfig",
     OAuthProviderType.CANVAS: "customOauth2ProviderConfig",
     OAuthProviderType.CUSTOM: "customOauth2ProviderConfig",
 }

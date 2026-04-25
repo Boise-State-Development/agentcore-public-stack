@@ -24,6 +24,12 @@ import {
   heroCheckCircle,
   heroClipboard,
   heroClipboardDocumentCheck,
+  heroCloud,
+  heroCodeBracket,
+  heroAcademicCap,
+  heroLink,
+  heroChatBubbleLeftRight,
+  heroVideoCamera,
 } from '@ng-icons/heroicons/outline';
 import { ConnectorsService } from '../services/connectors.service';
 import { AppRolesService } from '../../roles/services/app-roles.service';
@@ -72,6 +78,12 @@ interface ConnectorFormGroup {
       heroCheckCircle,
       heroClipboard,
       heroClipboardDocumentCheck,
+      heroCloud,
+      heroCodeBracket,
+      heroAcademicCap,
+      heroLink,
+      heroChatBubbleLeftRight,
+      heroVideoCamera,
     }),
   ],
   host: { class: 'block' },
@@ -366,7 +378,7 @@ interface ConnectorFormGroup {
                     type="text"
                     id="scopes"
                     formControlName="scopes"
-                    placeholder="openid, email, profile"
+                    [placeholder]="scopesPlaceholder()"
                     class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   />
                   <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
@@ -383,7 +395,7 @@ interface ConnectorFormGroup {
                     id="customParameters"
                     formControlName="customParameters"
                     rows="3"
-                    placeholder="hd=mycompany.com&#10;prompt=consent"
+                    [placeholder]="customParametersPlaceholder()"
                     spellcheck="false"
                     class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500"
                   ></textarea>
@@ -550,11 +562,33 @@ export class ConnectorFormPage implements OnInit {
   readonly selectedRoles = signal<string[]>(['*']);
 
   // Form controls aren't observable signals, so mirror providerType into a
-  // signal updated from valueChanges. This drives both the template's @if
-  // and the submit-time discovery gating.
+  // signal updated from valueChanges. This drives the template's @if for
+  // discovery, the placeholder lookups, and the submit-time discovery
+  // gating.
   readonly needsDiscovery = signal(
     requiresDiscovery(this.connectorForm.controls.providerType.value)
   );
+
+  /** Mirrors `providerType` so computed placeholders react to changes. */
+  private readonly providerTypeSignal = signal<ConnectorType>(
+    this.connectorForm.controls.providerType.value,
+  );
+
+  /** Vendor-relevant scopes example shown when the field is empty. */
+  readonly scopesPlaceholder = computed<string>(() => {
+    const preset = getConnectorPreset(this.providerTypeSignal());
+    return preset?.scopesPlaceholder ?? 'openid, email, profile';
+  });
+
+  /**
+   * Vendor-relevant `key=value` example for the custom-parameters
+   * textarea. Generic `key=value` fallback for vendors with no
+   * commonly-used extras.
+   */
+  readonly customParametersPlaceholder = computed<string>(() => {
+    const preset = getConnectorPreset(this.providerTypeSignal());
+    return preset?.customParametersPlaceholder ?? 'key=value';
+  });
 
   /**
    * Returns a user-facing error string when clientId and clientSecret are
@@ -582,9 +616,10 @@ export class ConnectorFormPage implements OnInit {
       this.applyDiscoveryValidator();
     }
 
-    this.connectorForm.controls.providerType.valueChanges.subscribe(() =>
-      this.applyDiscoveryValidator()
-    );
+    this.connectorForm.controls.providerType.valueChanges.subscribe((value) => {
+      this.providerTypeSignal.set(value);
+      this.applyDiscoveryValidator();
+    });
   }
 
   private applyDiscoveryValidator(): void {
@@ -639,6 +674,16 @@ export class ConnectorFormPage implements OnInit {
         displayName: preset.displayName,
         scopes: preset.defaultScopes.join(', '),
         iconName: preset.iconName,
+        // Only seed customParameters from a preset if the preset declares
+        // them — most don't, and we don't want to clobber whatever the
+        // admin has already typed.
+        ...(preset.defaultCustomParameters
+          ? {
+              customParameters: this.serializeCustomParameters(
+                preset.defaultCustomParameters,
+              ),
+            }
+          : {}),
       });
     }
     this.applyDiscoveryValidator();
@@ -653,6 +698,12 @@ export class ConnectorFormPage implements OnInit {
         return `${base} bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400`;
       case 'github':
         return `${base} bg-gray-800 text-white dark:bg-gray-600`;
+      case 'slack':
+        return `${base} bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-300`;
+      case 'salesforce':
+        return `${base} bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300`;
+      case 'zoom':
+        return `${base} bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300`;
       case 'canvas':
         return `${base} bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400`;
       default:

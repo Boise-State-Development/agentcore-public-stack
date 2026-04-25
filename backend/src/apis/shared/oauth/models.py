@@ -24,11 +24,20 @@ class OAuthProviderType(str, Enum):
     `CANVAS` routes through AgentCore's `CustomOauth2` vendor but is kept
     as a distinct type so the admin UI can surface Canvas-specific guidance
     if/when we add a preset. Today the admin form treats it as Custom.
+
+    `SLACK`, `SALESFORCE`, and `ZOOM` are first-class AgentCore Identity
+    vendors (per
+    https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-idps.html)
+    — endpoints and provider-specific defaults are pre-configured by
+    AgentCore, so admins only need to supply client credentials and scopes.
     """
 
     GOOGLE = "google"
     MICROSOFT = "microsoft"
     GITHUB = "github"
+    SLACK = "slack"
+    SALESFORCE = "salesforce"
+    ZOOM = "zoom"
     CANVAS = "canvas"
     CUSTOM = "custom"
 

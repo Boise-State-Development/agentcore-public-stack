@@ -77,6 +77,17 @@ class TestCreateCredentialProvider:
         [
             (OAuthProviderType.MICROSOFT, "MicrosoftOauth2", "microsoftOauth2ProviderConfig"),
             (OAuthProviderType.GITHUB, "GithubOauth2", "githubOauth2ProviderConfig"),
+            (OAuthProviderType.SLACK, "SlackOauth2", "slackOauth2ProviderConfig"),
+            (
+                OAuthProviderType.SALESFORCE,
+                "SalesforceOauth2",
+                "salesforceOauth2ProviderConfig",
+            ),
+            # Zoom is a first-class vendor but uses the shared
+            # `includedOauth2ProviderConfig` slot rather than its own
+            # config struct — see the SDK's Oauth2ProviderConfigInput
+            # shape for the authoritative list.
+            (OAuthProviderType.ZOOM, "ZoomOauth2", "includedOauth2ProviderConfig"),
         ],
     )
     def test_other_known_vendors(
@@ -94,6 +105,9 @@ class TestCreateCredentialProvider:
         call = boto_client.create_oauth2_credential_provider.call_args.kwargs
         assert call["credentialProviderVendor"] == expected_vendor
         assert expected_key in call["oauth2ProviderConfigInput"]
+        # And no `oauthDiscovery` block — that's customOauth2-only.
+        config = call["oauth2ProviderConfigInput"][expected_key]
+        assert "oauthDiscovery" not in config
 
     def test_custom_requires_discovery(self, registrar):
         with pytest.raises(InvalidCustomProviderConfigError):
@@ -151,11 +165,25 @@ class TestCreateCredentialProvider:
         assert call["credentialProviderVendor"] == "CustomOauth2"
         assert "customOauth2ProviderConfig" in call["oauth2ProviderConfigInput"]
 
-    def test_known_vendor_rejects_discovery_params(self, registrar):
+    @pytest.mark.parametrize(
+        "provider_type",
+        [
+            OAuthProviderType.GOOGLE,
+            OAuthProviderType.MICROSOFT,
+            OAuthProviderType.GITHUB,
+            OAuthProviderType.SLACK,
+            OAuthProviderType.SALESFORCE,
+            OAuthProviderType.ZOOM,
+        ],
+    )
+    def test_known_vendor_rejects_discovery_params(self, registrar, provider_type):
+        # Every first-class vendor (Google, Microsoft, GitHub, Slack,
+        # Salesforce, Zoom) has its endpoints baked in by AgentCore. A
+        # discovery URL only makes sense for the CustomOauth2 path.
         with pytest.raises(ValueError, match="only valid for CustomOauth2"):
             registrar.create_credential_provider(
                 provider_id="p",
-                provider_type=OAuthProviderType.GOOGLE,
+                provider_type=provider_type,
                 client_id="cid",
                 client_secret="sec",
                 discovery_url="https://idp.example/.well-known/openid-configuration",
