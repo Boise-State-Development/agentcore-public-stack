@@ -41,11 +41,6 @@ export class ChatRequestService implements OnDestroy {
   private router = inject(Router);
   // TODO: Inject proper logging service
 
-  /** Last request payload — replayed (with `interrupt_responses` added) when
-   *  the user completes an OAuth consent so the paused agent turn resumes
-   *  without retyping. Cleared on a true new turn. */
-  private lastRequestObject: Record<string, unknown> | null = null;
-
   constructor() {
     this.oauthConsentService.setResumeHandler((interruptIds, context) =>
       this.resumeFromOAuthConsent(interruptIds, context?.sessionId),
@@ -99,12 +94,6 @@ export class ChatRequestService implements OnDestroy {
       fileUploadIds,
       assistantId,
     );
-
-    // Remember this turn's params so the OAuth resume handler can replay
-    // them with `interrupt_responses` attached. Snapshotting the *exact*
-    // payload keeps the agent cache key stable, so the resume hits the
-    // same paused agent instance.
-    this.lastRequestObject = { ...requestObject };
 
     try {
       await this.chatHttpService.sendChatRequest(requestObject);
@@ -178,26 +167,17 @@ export class ChatRequestService implements OnDestroy {
   }
 
   /**
-   * Replay the last turn's request with `interrupt_responses` attached so
-   * the backend resumes the paused agent turn instead of starting a new
-   * one. Triggered by OAuthConsentService after the user completes a
-   * consent popup.
+   * Resume the paused agent turn by POSTing the interrupt responses. The
+   * backend rebuilds the agent from its persisted ``PausedTurnSnapshot``,
+   * so this request only needs to identify the session and the interrupts —
+   * no model / tools / prompt context is sent or required. Triggered by
+   * OAuthConsentService after the user completes a consent popup.
    */
   private async resumeFromOAuthConsent(
     interruptIds: string[],
-    fallbackSessionId?: string,
+    sessionId?: string,
   ): Promise<void> {
-    if (interruptIds.length === 0) {
-      return;
-    }
-
-    // Live flow: the same tab that originated the turn still has its
-    // payload — replay it with `interrupt_responses` attached.
-    // Refresh flow: ``lastRequestObject`` is null, so we synthesize a
-    // minimal resume payload from the consent service's session context.
-    const liveSessionId = this.lastRequestObject?.['session_id'] as string | undefined;
-    const sessionId = liveSessionId ?? fallbackSessionId;
-    if (!sessionId) {
+    if (interruptIds.length === 0 || !sessionId) {
       return;
     }
 
@@ -209,12 +189,8 @@ export class ChatRequestService implements OnDestroy {
     this.chatStateService.createNewAbortController();
     this.chatStateService.setChatLoading(true);
 
-    const baseRequest: Record<string, unknown> = this.lastRequestObject
-      ? { ...this.lastRequestObject }
-      : { session_id: sessionId };
-
     const resumeRequest: Record<string, unknown> = {
-      ...baseRequest,
+      session_id: sessionId,
       // The original prompt is already in the agent's interrupt context;
       // sending an empty string keeps the request valid without
       // re-augmenting or re-charging quota.
@@ -234,11 +210,9 @@ export class ChatRequestService implements OnDestroy {
       this.chatStateService.setChatLoading(false);
       this.messageMapService.endStreaming();
 
-      // 400 from the resume route means the agent's `_interrupt_state` no
-      // longer holds the submitted ids — the cache evicted, the pod
-      // restarted, or the breadcrumb outlived its agent. Surface a
-      // conversational error so the user knows to retry the prompt
-      // instead of staring at a stuck spinner.
+      // 400 from the resume route means either the persisted snapshot is
+      // missing/expired, or the agent's `_interrupt_state` doesn't recognize
+      // the submitted ids. Either way the user needs to retry the prompt.
       if (this.isExpiredInterruptError(error)) {
         this.errorService.addError(
           'Authorization expired',

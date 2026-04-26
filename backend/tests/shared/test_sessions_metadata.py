@@ -494,3 +494,139 @@ class TestInterruptsFromDynamoDedupe:
         assert _interrupts_from_dynamo(None) == []
         assert _interrupts_from_dynamo([]) == []
         assert _interrupts_from_dynamo("not a list") == []
+
+
+class TestPausedTurnSnapshot:
+    """PausedTurnSnapshot persistence — singleton, idempotent, round-trippable.
+
+    The snapshot is the durable contract that lets a refresh / cache eviction
+    resume a paused agent turn — without it, the resume rebuilds an agent
+    with an empty tool registry and the paused tool call has nothing to
+    resume against.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_get_round_trip(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, set_paused_turn, get_paused_turn,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        await ensure_session_metadata_exists("s1", "u1")
+        snap = PausedTurnSnapshot(
+            enabledTools=["calendar", "gmail"], modelId="claude-sonnet-4-6",
+            provider="bedrock", temperature=0.2, systemPrompt="prompt-text",
+            cachingEnabled=True, maxTokens=4096,
+            capturedAt="2026-04-25T00:00:00Z", expiresAt="2026-04-25T01:00:00Z",
+        )
+        await set_paused_turn("s1", "u1", snap)
+        got = await get_paused_turn("s1", "u1")
+        assert got is not None
+        assert got.enabled_tools == ["calendar", "gmail"]
+        assert got.model_id == "claude-sonnet-4-6"
+        assert got.system_prompt == "prompt-text"
+        assert got.temperature == 0.2
+        assert got.caching_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_idempotent_overwrite(self, sessions_metadata_table):
+        """Multiple OAuth interrupts in one turn share a single snapshot —
+        re-writing replaces in place rather than accumulating."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, set_paused_turn, get_paused_turn,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        await ensure_session_metadata_exists("s1", "u1")
+        first = PausedTurnSnapshot(
+            enabledTools=["calendar"], capturedAt="2026-04-25T00:00:00Z",
+            expiresAt="2026-04-25T01:00:00Z",
+        )
+        second = PausedTurnSnapshot(
+            enabledTools=["calendar", "gmail"], capturedAt="2026-04-25T00:00:01Z",
+            expiresAt="2026-04-25T01:00:01Z",
+        )
+        await set_paused_turn("s1", "u1", first)
+        await set_paused_turn("s1", "u1", second)
+        got = await get_paused_turn("s1", "u1")
+        assert got is not None
+        assert got.enabled_tools == ["calendar", "gmail"]
+        assert got.captured_at == "2026-04-25T00:00:01Z"
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_snapshot(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, set_paused_turn,
+            get_paused_turn, clear_paused_turn,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await set_paused_turn(
+            "s1", "u1",
+            PausedTurnSnapshot(
+                enabledTools=["calendar"], capturedAt="2026-04-25T00:00:00Z",
+                expiresAt="2026-04-25T01:00:00Z",
+            ),
+        )
+        assert await get_paused_turn("s1", "u1") is not None
+        await clear_paused_turn("s1", "u1")
+        assert await get_paused_turn("s1", "u1") is None
+
+    @pytest.mark.asyncio
+    async def test_clear_is_noop_when_already_clear(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, clear_paused_turn, get_paused_turn,
+        )
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await clear_paused_turn("s1", "u1")
+        assert await get_paused_turn("s1", "u1") is None
+
+    @pytest.mark.asyncio
+    async def test_set_noop_when_session_missing(self, sessions_metadata_table):
+        """Preview/anonymous sessions don't have a metadata row — write must
+        not crash and a subsequent get returns None."""
+        from apis.shared.sessions.metadata import set_paused_turn, get_paused_turn
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        await set_paused_turn(
+            "never-created", "u1",
+            PausedTurnSnapshot(
+                enabledTools=["calendar"], capturedAt="2026-04-25T00:00:00Z",
+                expiresAt="2026-04-25T01:00:00Z",
+            ),
+        )
+        assert await get_paused_turn("never-created", "u1") is None
+
+    @pytest.mark.asyncio
+    async def test_paused_turn_independent_of_pending_interrupts(self, sessions_metadata_table):
+        """``paused_turn`` and ``pending_interrupts`` live on the same row
+        but their lifecycles don't intrude on each other — clearing one
+        leaves the other intact."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, set_paused_turn, clear_paused_turn,
+            add_pending_interrupt, get_pending_interrupts, get_paused_turn,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot, PendingInterrupt
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await set_paused_turn(
+            "s1", "u1",
+            PausedTurnSnapshot(
+                enabledTools=["calendar"], capturedAt="2026-04-25T00:00:00Z",
+                expiresAt="2026-04-25T01:00:00Z",
+            ),
+        )
+        await add_pending_interrupt(
+            "s1", "u1",
+            PendingInterrupt(
+                interruptId="i1", providerId="calendar", createdAt="2026-04-25T00:00:00Z",
+            ),
+        )
+
+        await clear_paused_turn("s1", "u1")
+        assert await get_paused_turn("s1", "u1") is None
+        interrupts = await get_pending_interrupts("s1", "u1")
+        assert len(interrupts) == 1
+        assert interrupts[0].interrupt_id == "i1"

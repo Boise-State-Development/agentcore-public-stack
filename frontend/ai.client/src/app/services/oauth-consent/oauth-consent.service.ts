@@ -249,7 +249,9 @@ export class OAuthConsentService {
           // any — fire so the agent can finish the turn.
           this.dismiss(providerId);
           if (request.interruptId && this.resumeHandler) {
-            void Promise.resolve(this.resumeHandler([request.interruptId])).catch((err) =>
+            void Promise.resolve(
+              this.resumeHandler([request.interruptId], { sessionId: request.sessionId }),
+            ).catch((err) =>
               console.error('OAuth resume handler failed after pre-consented refresh', err),
             );
           }

@@ -15,7 +15,7 @@ from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
-from .models import MessageMetadata, PendingInterrupt, SessionMetadata, SessionPreferences
+from .models import MessageMetadata, PausedTurnSnapshot, PendingInterrupt, SessionMetadata, SessionPreferences
 
 # Import preview session helper
 from agents.main_agent.session.preview_session_manager import is_preview_session
@@ -1588,3 +1588,102 @@ async def get_pending_interrupts(session_id: str, user_id: str) -> List[PendingI
     if not metadata:
         return []
     return list(metadata.pending_interrupts or [])
+
+
+async def set_paused_turn(
+    session_id: str,
+    user_id: str,
+    snapshot: PausedTurnSnapshot,
+) -> None:
+    """Persist (or replace) the agent-construction snapshot for a paused turn.
+
+    Idempotent overwrite: re-emits within the same turn replace the prior
+    snapshot rather than accumulating, since the snapshot is turn-scoped
+    rather than interrupt-scoped — multiple OAuth interrupts in a single
+    turn share the same construction context.
+
+    No-op when the session metadata record is missing or when the table
+    name env var is unset (preview/anonymous flows).
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping paused_turn persistence")
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info("Skipping paused_turn write — session %s not found", session_id)
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning("Session %s has no SK; cannot update paused_turn", session_id)
+            return
+
+        snapshot_dict = _convert_floats_to_decimal(
+            snapshot.model_dump(by_alias=True, exclude_none=True)
+        )
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #pt = :pt",
+            ExpressionAttributeNames={"#pt": "pausedTurn"},
+            ExpressionAttributeValues={":pt": snapshot_dict},
+        )
+        logger.info("Persisted paused_turn snapshot for session %s", session_id)
+    except Exception as e:
+        # Best-effort: a write failure shouldn't break the live SSE flow.
+        # The same-process resume still works via the in-memory agent cache.
+        logger.error("Failed to persist paused_turn: %s", e, exc_info=True)
+
+
+async def get_paused_turn(session_id: str, user_id: str) -> Optional[PausedTurnSnapshot]:
+    """Return the persisted paused-turn snapshot for a session, if any."""
+    metadata = await get_session_metadata(session_id, user_id)
+    if not metadata:
+        return None
+    return metadata.paused_turn
+
+
+async def clear_paused_turn(session_id: str, user_id: str) -> None:
+    """Drop the paused-turn snapshot for a session.
+
+    Called on successful resume completion, on explicit dismiss, and at the
+    start of a non-resume invocation so a stale snapshot from an abandoned
+    turn doesn't poison a fresh one.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            return
+
+        if "pausedTurn" not in existing:
+            return  # Already clear
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pt",
+            ExpressionAttributeNames={"#pt": "pausedTurn"},
+        )
+        logger.info("Cleared paused_turn for session %s", session_id)
+    except Exception as e:
+        logger.error("Failed to clear paused_turn: %s", e, exc_info=True)

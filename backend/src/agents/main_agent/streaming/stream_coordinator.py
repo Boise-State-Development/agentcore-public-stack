@@ -208,6 +208,7 @@ class StreamCoordinator:
                         agent,
                         session_id=session_id,
                         user_id=user_id,
+                        main_agent_wrapper=main_agent_wrapper,
                     ):
                         yield sse
 
@@ -552,6 +553,7 @@ class StreamCoordinator:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         triggering_message_id: Optional[str] = None,
+        main_agent_wrapper: Any = None,
     ) -> List[str]:
         """Yield one SSE-formatted `oauth_required` event per pending OAuth
         interrupt on the agent, persisting each one to session metadata so
@@ -564,16 +566,51 @@ class StreamCoordinator:
         approval gates added later) are ignored here so they can be handled
         by their own SSE event types.
 
+        Also persists a ``PausedTurnSnapshot`` capturing the agent's
+        construction params, so a resume after refresh / cache eviction
+        rebuilds the same agent shape (matching tool registry) and lets
+        Strands restore ``_interrupt_state`` from AgentCore Memory.
+
         Persistence is best-effort: a DynamoDB write failure logs but does
         not break the live SSE flow.
         """
+        from datetime import timedelta
         from apis.shared.oauth.models import OAuthRequiredEvent
-        from apis.shared.sessions.metadata import add_pending_interrupt
-        from apis.shared.sessions.models import PendingInterrupt
+        from apis.shared.sessions.metadata import add_pending_interrupt, set_paused_turn
+        from apis.shared.sessions.models import PausedTurnSnapshot, PendingInterrupt
 
         interrupt_state = getattr(agent, "_interrupt_state", None)
         if not interrupt_state or not getattr(interrupt_state, "activated", False):
             return []
+
+        # Snapshot the turn-construction context once per pause, before the
+        # per-interrupt loop. Multiple OAuth interrupts in the same turn
+        # share one snapshot — they were all built against the same agent.
+        # TTL matches AgentCore Identity's consent window so stale snapshots
+        # don't pin storage and a too-late resume returns a clean 400.
+        snapshot_source = (
+            getattr(main_agent_wrapper, "_construction_snapshot", None) if main_agent_wrapper else None
+        )
+        if session_id and user_id and snapshot_source:
+            try:
+                now = datetime.now(timezone.utc)
+                snapshot = PausedTurnSnapshot(
+                    enabled_tools=snapshot_source.get("enabled_tools"),
+                    model_id=snapshot_source.get("model_id"),
+                    provider=snapshot_source.get("provider"),
+                    temperature=snapshot_source.get("temperature"),
+                    system_prompt=snapshot_source.get("system_prompt"),
+                    caching_enabled=snapshot_source.get("caching_enabled"),
+                    max_tokens=snapshot_source.get("max_tokens"),
+                    captured_at=now.isoformat(),
+                    expires_at=(now + timedelta(hours=1)).isoformat(),
+                )
+                await set_paused_turn(session_id, user_id, snapshot)
+            except Exception as e:
+                logger.error(
+                    "Failed to persist paused_turn snapshot for session %s: %s",
+                    session_id, e, exc_info=True,
+                )
 
         events: List[str] = []
         for interrupt in interrupt_state.interrupts.values():

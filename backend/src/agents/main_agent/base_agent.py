@@ -89,6 +89,19 @@ class BaseAgent(ABC):
             model_id=model_id, temperature=temperature, caching_enabled=caching_enabled, provider=provider, max_tokens=max_tokens
         )
 
+        # Frozen snapshot of agent-construction params, used when the turn
+        # pauses on OAuth consent so the resume request can rebuild this exact
+        # agent shape without depending on the in-process agent cache.
+        # ``system_prompt`` is captured below after the prompt builder resolves.
+        self._construction_snapshot: dict = {
+            "enabled_tools": enabled_tools,
+            "model_id": model_id,
+            "provider": provider,
+            "temperature": temperature,
+            "caching_enabled": caching_enabled,
+            "max_tokens": max_tokens,
+        }
+
         # Load retry configuration from environment variables
         from agents.main_agent.core.model_config import RetryConfig
         self.model_config.retry_config = RetryConfig.from_env()
@@ -100,6 +113,10 @@ class BaseAgent(ABC):
         else:
             self.prompt_builder = SystemPromptBuilder()
             self.system_prompt = self.prompt_builder.build(include_date=True)
+
+        # Capture the resolved system prompt — what we'd need to pass back to
+        # ``get_agent`` to land on the same cache key on resume.
+        self._construction_snapshot["system_prompt"] = self.system_prompt
 
         # Initialize tool registry and filter
         self.tool_registry = create_default_registry()

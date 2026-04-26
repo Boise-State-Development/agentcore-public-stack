@@ -45,6 +45,33 @@ class PendingInterrupt(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp when the interrupt was recorded")
 
 
+class PausedTurnSnapshot(BaseModel):
+    """Frozen agent-construction context for a turn that paused on OAuth consent.
+
+    Written once per paused turn so the resume request can rebuild the same
+    ``MainAgent`` shape (matching tool registry, model, prompt) regardless of
+    whether the in-process agent cache still holds it. Strands' session
+    manager separately persists ``_interrupt_state`` to AgentCore Memory, so
+    once the agent is rebuilt with the right shape the interrupt restores
+    automatically and the paused tool call can resume.
+
+    Snapshot wins over current request state on resume: a turn the user
+    already authorized completes with the connector set it was authorized
+    against, even if the user toggled connectors mid-pause.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    enabled_tools: Optional[List[str]] = Field(default=None, alias="enabledTools")
+    model_id: Optional[str] = Field(default=None, alias="modelId")
+    provider: Optional[str] = Field(default=None)
+    temperature: Optional[float] = Field(default=None)
+    system_prompt: Optional[str] = Field(default=None, alias="systemPrompt")
+    caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
+    max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
+    captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
+    expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
+
+
 class SessionPreferences(BaseModel):
     """User preferences for a session"""
 
@@ -108,6 +135,11 @@ class SessionMetadata(BaseModel):
         default=None,
         alias="pendingInterrupts",
         description="Pending OAuth consent interrupts that paused agent turns in this session",
+    )
+    paused_turn: Optional[PausedTurnSnapshot] = Field(
+        default=None,
+        alias="pausedTurn",
+        description="Agent-construction snapshot for a turn paused on OAuth consent; cleared on successful resume or when a new turn supersedes it",
     )
 
 
