@@ -337,6 +337,21 @@ class ExternalMCPIntegration:
                 )
 
                 if client:
+                    # Pre-flight the MCP session so a single unreachable
+                    # server (e.g. a connector that isn't running locally)
+                    # drops out of the registry instead of failing the
+                    # whole turn when Strands later calls load_tools().
+                    # On success this also primes the client's tool cache,
+                    # so Strands' subsequent load_tools() is a no-op.
+                    try:
+                        await client.load_tools()
+                    except Exception as exc:
+                        logger.warning(
+                            f"Skipping external MCP tool {tool_id}: "
+                            f"failed to start client ({exc})"
+                        )
+                        continue
+
                     self.clients[cache_key] = client
                     self._client_versions[cache_key] = tool_version
                     if provider_id:

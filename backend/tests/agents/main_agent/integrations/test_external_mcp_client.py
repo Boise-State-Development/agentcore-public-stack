@@ -202,12 +202,14 @@ class TestLoadExternalToolsVersioning:
         tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
         repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
 
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
         with patch(
             "apis.app_api.tools.repository.get_tool_catalog_repository",
             return_value=repo,
         ), patch(
             "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
-            return_value=object(),
+            return_value=client,
         ) as create_mock:
             first = await integration.load_external_tools(["gmail"])
             second = await integration.load_external_tools(["gmail"])
@@ -223,8 +225,8 @@ class TestLoadExternalToolsVersioning:
 
         repo = SimpleNamespace(get_tool=AsyncMock(side_effect=[old, new]))
 
-        client_old = object()
-        client_new = object()
+        client_old = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        client_new = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
 
         with patch(
             "apis.app_api.tools.repository.get_tool_catalog_repository",
@@ -241,3 +243,63 @@ class TestLoadExternalToolsVersioning:
         assert integration.clients["gmail"] is client_new
         # Old client must be evicted, not left dangling under the same key.
         assert client_old not in integration.clients.values()
+
+
+class TestLoadExternalToolsPreflight:
+    """A single unreachable MCP server must not fail the whole turn —
+    `load_external_tools` pre-flights each new client and silently drops
+    the ones whose session can't be opened."""
+
+    @pytest.mark.asyncio
+    async def test_skips_client_when_preflight_fails(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+
+        bad_client = SimpleNamespace(
+            load_tools=AsyncMock(side_effect=RuntimeError("connection refused"))
+        )
+
+        with patch(
+            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=bad_client,
+        ):
+            result = await integration.load_external_tools(["gmail"])
+
+        assert result == []
+        # Failed clients must not be cached — otherwise we'd serve a
+        # broken client back on subsequent turns.
+        assert "gmail" not in integration.clients
+
+    @pytest.mark.asyncio
+    async def test_one_failing_client_does_not_block_others(self):
+        integration = ExternalMCPIntegration()
+        bad_tool = _fake_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), tool_id="calendar"
+        )
+        good_tool = _fake_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), tool_id="gmail"
+        )
+        repo = SimpleNamespace(
+            get_tool=AsyncMock(side_effect=[bad_tool, good_tool])
+        )
+
+        bad_client = SimpleNamespace(
+            load_tools=AsyncMock(side_effect=RuntimeError("connection refused"))
+        )
+        good_client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[bad_client, good_client],
+        ):
+            result = await integration.load_external_tools(["calendar", "gmail"])
+
+        assert result == [good_client]
+        assert integration.clients == {"gmail": good_client}
