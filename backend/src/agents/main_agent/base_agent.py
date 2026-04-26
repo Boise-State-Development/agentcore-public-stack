@@ -284,12 +284,38 @@ class BaseAgent(ABC):
             provider = await get_provider_repository().get_provider(provider_id)
             return provider.custom_parameters if provider else None
 
+        async def disconnected_lookup(provider_id: str) -> bool:
+            # Durable per-(user, provider) disconnect intent. Read from DDB
+            # on every gate call so a /disconnect on another replica is
+            # picked up before the next tool runs.
+            from apis.shared.oauth.disconnect_repository import (
+                get_disconnect_repository,
+            )
+
+            return await get_disconnect_repository().is_disconnected(
+                self.user_id, provider_id
+            )
+
+        async def mark_disconnected(provider_id: str) -> None:
+            # Persist a disconnect from the AfterToolCallEvent 401-retry
+            # path so subsequent requests (potentially on other replicas)
+            # also force a fresh consent.
+            from apis.shared.oauth.disconnect_repository import (
+                get_disconnect_repository,
+            )
+
+            await get_disconnect_repository().mark_disconnected(
+                self.user_id, provider_id
+            )
+
         return OAuthConsentHook(
             user_id=self.user_id,
             provider_lookup=provider_lookup,
             scopes_lookup=scopes_lookup,
             provider_type_lookup=provider_type_lookup,
             custom_parameters_lookup=custom_parameters_lookup,
+            disconnected_lookup=disconnected_lookup,
+            mark_disconnected=mark_disconnected,
         )
 
     def _build_filtered_tools(self) -> List:

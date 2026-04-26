@@ -25,6 +25,7 @@ from agents.main_agent.integrations.agentcore_identity import (
 )
 from apis.inference_api.connectors import routes
 from apis.shared.auth.models import User
+from apis.shared.oauth.disconnect_repository import get_disconnect_repository
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 from apis.shared.oauth.provider_repository import get_provider_repository
 from apis.shared.rbac.models import UserEffectivePermissions
@@ -146,6 +147,22 @@ def _make_permissions(user_id: str, *, roles: list[str] | None = None) -> UserEf
     )
 
 
+class _FakeDisconnectRepo:
+    """In-memory stand-in for the durable DDB-backed disconnect repository."""
+
+    def __init__(self) -> None:
+        self.disconnected: set[tuple[str, str]] = set()
+
+    async def is_disconnected(self, user_id: str, provider_id: str) -> bool:
+        return (user_id, provider_id) in self.disconnected
+
+    async def mark_disconnected(self, user_id: str, provider_id: str) -> None:
+        self.disconnected.add((user_id, provider_id))
+
+    async def clear_disconnected(self, user_id: str, provider_id: str) -> None:
+        self.disconnected.discard((user_id, provider_id))
+
+
 @pytest.fixture
 def app_with_deps(app_for_user, monkeypatch):
     """Mount the router and stub provider repo, role service, identity client.
@@ -160,7 +177,8 @@ def app_with_deps(app_for_user, monkeypatch):
         permissions: UserEffectivePermissions | None = None,
         identity_result: TokenResult | None = None,
         identity_raises: Exception | None = None,
-    ) -> tuple[FastAPI, MagicMock]:
+        disconnect_repo: _FakeDisconnectRepo | None = None,
+    ) -> tuple[FastAPI, MagicMock, _FakeDisconnectRepo]:
         app = app_for_user(user_id)
 
         repo = MagicMock()
@@ -173,6 +191,9 @@ def app_with_deps(app_for_user, monkeypatch):
         )
         app.dependency_overrides[get_app_role_service] = lambda: role_service
 
+        disconnect_repo = disconnect_repo or _FakeDisconnectRepo()
+        app.dependency_overrides[get_disconnect_repository] = lambda: disconnect_repo
+
         identity = MagicMock()
         if identity_raises is not None:
             identity.get_token_for_user = AsyncMock(side_effect=identity_raises)
@@ -183,14 +204,14 @@ def app_with_deps(app_for_user, monkeypatch):
             )
         monkeypatch.setattr(routes, "get_agentcore_identity_client", lambda: identity)
 
-        return app, identity
+        return app, identity, disconnect_repo
 
     return _build
 
 
 class TestConnectorStatus:
     def test_returns_connected_when_vault_has_token(self, app_with_deps):
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(access_token="vault-token"),
@@ -205,7 +226,7 @@ class TestConnectorStatus:
         # The point of /status: when the vault is empty we report it as
         # {connected: false} and discard the auth URL — the listing UI
         # only wants the badge, not to start a flow.
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(
@@ -221,14 +242,14 @@ class TestConnectorStatus:
         assert "authorizationUrl" not in response.json()
 
     def test_404_when_provider_missing(self, app_with_deps):
-        app, identity = app_with_deps("alice", provider=None)
+        app, identity, _ = app_with_deps("alice", provider=None)
         response = TestClient(app).get("/connectors/google/status")
 
         assert response.status_code == 404
         identity.get_token_for_user.assert_not_called()
 
     def test_404_when_provider_disabled(self, app_with_deps):
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice", provider=_make_provider(enabled=False)
         )
         response = TestClient(app).get("/connectors/google/status")
@@ -238,7 +259,7 @@ class TestConnectorStatus:
         identity.get_token_for_user.assert_not_called()
 
     def test_403_when_user_lacks_role(self, app_with_deps):
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(allowed_roles=["admins"]),
             permissions=_make_permissions("alice", roles=["users"]),
@@ -249,7 +270,7 @@ class TestConnectorStatus:
         identity.get_token_for_user.assert_not_called()
 
     def test_503_when_workload_token_unavailable(self, app_with_deps):
-        app, _ = app_with_deps(
+        app, _, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_raises=WorkloadTokenUnavailableError("no workload token"),
@@ -259,7 +280,7 @@ class TestConnectorStatus:
         assert "no workload token" in response.json()["detail"]
 
     def test_503_when_callback_url_unavailable(self, app_with_deps):
-        app, _ = app_with_deps(
+        app, _, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_raises=CallbackUrlUnavailableError("no callback URL"),
@@ -268,15 +289,20 @@ class TestConnectorStatus:
         assert response.status_code == 503
         assert "no callback URL" in response.json()["detail"]
 
-    def test_force_reauth_overrides_vault_state(self, app_with_deps):
+    def test_disconnected_overrides_vault_state(self, app_with_deps):
         # After a disconnect, the user is "not connected" even if AgentCore's
         # vault still holds a valid token — and AgentCore is not consulted,
         # so a stale vault entry can't accidentally flip the badge back on.
-        oauth_token_cache.mark_force_reauth("alice", "google")
-        app, identity = app_with_deps(
+        # The flag lives in the DDB-backed disconnect repository so a
+        # disconnect on one replica is honored on every subsequent request,
+        # even if it lands on a different replica.
+        repo = _FakeDisconnectRepo()
+        repo.disconnected.add(("alice", "google"))
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(access_token="vault-token"),
+            disconnect_repo=repo,
         )
         response = TestClient(app).get("/connectors/google/status")
 
@@ -286,35 +312,35 @@ class TestConnectorStatus:
 
 
 class TestDisconnect:
-    def test_marks_provider_for_force_reauth(self, app_with_deps):
-        app, _ = app_with_deps("alice", provider=_make_provider())
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is False
+    def test_marks_provider_disconnected_durably(self, app_with_deps):
+        app, _, repo = app_with_deps("alice", provider=_make_provider())
+        assert ("alice", "google") not in repo.disconnected
 
         response = TestClient(app).delete("/connectors/google/connection")
 
         assert response.status_code == 204
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is True
+        assert ("alice", "google") in repo.disconnected
 
     def test_clears_cached_token_on_disconnect(self, app_with_deps):
-        # The cache must not keep serving the disconnected token to in-flight
-        # MCP requests — otherwise a tool call still in progress could leak
-        # past the disconnect.
+        # The local hot-path cache must not keep serving the disconnected
+        # token to in-flight MCP requests — otherwise a tool call still in
+        # progress on this replica could leak past the disconnect.
         oauth_token_cache.set("alice", "google", "warm-token")
-        app, _ = app_with_deps("alice", provider=_make_provider())
+        app, _, _ = app_with_deps("alice", provider=_make_provider())
 
         TestClient(app).delete("/connectors/google/connection")
 
         assert oauth_token_cache.get("alice", "google") is None
 
     def test_404_when_provider_missing(self, app_with_deps):
-        app, _ = app_with_deps("alice", provider=None)
+        app, _, repo = app_with_deps("alice", provider=None)
         response = TestClient(app).delete("/connectors/google/connection")
 
         assert response.status_code == 404
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is False
+        assert ("alice", "google") not in repo.disconnected
 
     def test_403_when_user_lacks_role(self, app_with_deps):
-        app, _ = app_with_deps(
+        app, _, repo = app_with_deps(
             "alice",
             provider=_make_provider(allowed_roles=["admins"]),
             permissions=_make_permissions("alice", roles=["users"]),
@@ -322,7 +348,7 @@ class TestDisconnect:
         response = TestClient(app).delete("/connectors/google/connection")
 
         assert response.status_code == 403
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is False
+        assert ("alice", "google") not in repo.disconnected
 
 
 class TestForceReauthLifecycle:
@@ -332,13 +358,15 @@ class TestForceReauthLifecycle:
         # disconnect → next initiate-consent must pass force_authentication
         # so AgentCore returns a fresh authorize URL instead of the cached
         # token (which we just told the user we'd stop using).
-        oauth_token_cache.mark_force_reauth("alice", "google")
-        app, identity = app_with_deps(
+        repo = _FakeDisconnectRepo()
+        repo.disconnected.add(("alice", "google"))
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(
                 authorization_url="https://example.com/auth?request_uri=abc",
             ),
+            disconnect_repo=repo,
         )
         TestClient(app).post("/connectors/google/initiate-consent")
 
@@ -346,7 +374,7 @@ class TestForceReauthLifecycle:
         assert identity.get_token_for_user.call_args.kwargs["force_authentication"] is True
 
     def test_initiate_consent_does_not_force_when_not_disconnected(self, app_with_deps):
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(access_token="vault-token"),
@@ -359,7 +387,7 @@ class TestForceReauthLifecycle:
     def test_status_forwards_google_access_type_offline(self, app_with_deps):
         # Per AgentCore docs, Google needs `access_type=offline` in
         # customParameters so the vault gets a refresh token.
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),  # default is OAuthProviderType.GOOGLE
             identity_result=TokenResult(access_token="vault-token"),
@@ -372,7 +400,7 @@ class TestForceReauthLifecycle:
         }
 
     def test_initiate_consent_forwards_google_access_type_offline(self, app_with_deps):
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
             identity_result=TokenResult(access_token="vault-token"),
@@ -388,7 +416,7 @@ class TestForceReauthLifecycle:
         # Admin set Workspace domain restriction. The route must merge
         # admin extras with the hardcoded baseline before forwarding to
         # AgentCore — and the baseline still wins on key conflict.
-        app, identity = app_with_deps(
+        app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(
                 custom_parameters={
@@ -406,19 +434,23 @@ class TestForceReauthLifecycle:
             "hd": "mycompany.com",
         }
 
-    def test_complete_consent_clears_force_reauth(self, app_for_user, monkeypatch):
+    def test_complete_consent_clears_disconnect_flag(self, app_for_user, monkeypatch):
         # After a successful re-consent the disconnect intent is satisfied —
         # the next status check should report connected without waiting for
         # the agent loop to warm the cache.
-        oauth_token_cache.mark_force_reauth("alice", "google")
+        repo = _FakeDisconnectRepo()
+        repo.disconnected.add(("alice", "google"))
+
         mock_client = MagicMock()
         monkeypatch.setattr(routes, "_agentcore_control_client", lambda: mock_client)
 
         app = app_for_user("alice")
+        app.dependency_overrides[get_disconnect_repository] = lambda: repo
+
         response = TestClient(app).post(
             "/connectors/complete-consent",
             json={"session_uri": "uri-abc", "provider_id": "google"},
         )
 
         assert response.status_code == 200
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is False
+        assert ("alice", "google") not in repo.disconnected

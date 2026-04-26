@@ -80,6 +80,40 @@ class TestOAuthConsentHookCacheHit:
         assert event.cancel_tool is None
 
     @pytest.mark.asyncio
+    async def test_disconnected_lookup_bypasses_token_cache(self):
+        """When the durable disconnect flag is set, the in-process token
+        cache must not short-circuit — even on the same replica that holds
+        a warm token. Confirms the source-of-truth reordering: DDB first,
+        then cache."""
+        oauth_token_cache.set("alice", "google", "stale-cached-token")
+
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(authorization_url="https://accounts/consent")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+            disconnected_lookup=lambda _pid: True,
+        )
+        event = _make_event(provider_id="google")
+
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            with pytest.raises(InterruptException):
+                await hook._gate(event)
+
+        # Identity was consulted with force_authentication=True so AgentCore
+        # bypasses its vault and returns a fresh consent URL.
+        identity.get_token_for_user.assert_called_once()
+        kwargs = identity.get_token_for_user.call_args.kwargs
+        assert kwargs["force_authentication"] is True
+
+    @pytest.mark.asyncio
     async def test_uses_cached_token_without_calling_identity(self):
         oauth_token_cache.set("alice", "google", "cached-token")
 
@@ -263,11 +297,17 @@ class TestOAuthConsentHookAuthFailureRetry:
         return event
 
     @pytest.mark.asyncio
-    async def test_401_marks_force_reauth_and_retries(self):
+    async def test_401_records_disconnect_and_retries(self):
+        recorded: list[str] = []
+
+        async def mark_disconnected(pid: str) -> None:
+            recorded.append(pid)
+
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: [],
+            mark_disconnected=mark_disconnected,
         )
         oauth_token_cache.set("alice", "google", "stale-token")
         event = self._after_event(
@@ -278,8 +318,11 @@ class TestOAuthConsentHookAuthFailureRetry:
         await hook._handle_auth_failure(event)
 
         assert event.retry is True
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is True
-        # Cache cleared so the BeforeToolCallEvent retry doesn't short-circuit.
+        # Durable record of the disconnect intent so other replicas force
+        # fresh consent on the next request, too.
+        assert recorded == ["google"]
+        # Local cache cleared so the BeforeToolCallEvent retry doesn't
+        # short-circuit on this replica.
         assert oauth_token_cache.get("alice", "google") is None
 
     @pytest.mark.asyncio
@@ -297,17 +340,24 @@ class TestOAuthConsentHookAuthFailureRetry:
 
     @pytest.mark.asyncio
     async def test_non_auth_error_is_ignored(self):
+        recorded: list[str] = []
+
+        async def mark_disconnected(pid: str) -> None:
+            recorded.append(pid)
+
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: [],
+            mark_disconnected=mark_disconnected,
         )
         event = self._after_event("google", "Network unreachable")
 
         await hook._handle_auth_failure(event)
 
         assert event.retry is False
-        assert oauth_token_cache.needs_force_reauth("alice", "google") is False
+        # No disconnect persisted — the failure wasn't auth-related.
+        assert recorded == []
 
     @pytest.mark.asyncio
     async def test_does_not_retry_twice_for_same_tool_use(self):

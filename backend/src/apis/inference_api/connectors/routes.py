@@ -32,6 +32,10 @@ from agents.main_agent.integrations.agentcore_identity import (
 )
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
+from apis.shared.oauth.disconnect_repository import (
+    OAuthDisconnectRepository,
+    get_disconnect_repository,
+)
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
@@ -128,6 +132,7 @@ async def initiate_consent(
     current_user: User = Depends(get_current_user_trusted),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
+    disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
 ) -> InitiateConsentResponse:
     """Start (or verify) AgentCore consent for the given provider."""
     provider = await _resolve_visible_provider(
@@ -138,7 +143,7 @@ async def initiate_consent(
     # though AgentCore's vault still holds an unexpired token — they
     # explicitly opted out, and re-using the cached entry would silently
     # undo that.
-    force_auth = oauth_token_cache.needs_force_reauth(
+    force_auth = await disconnect_repo.is_disconnected(
         current_user.user_id, provider.provider_id
     )
 
@@ -195,6 +200,7 @@ async def connector_status(
     current_user: User = Depends(get_current_user_trusted),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
+    disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
 ) -> ConnectorStatusResponse:
     """Report whether AgentCore's vault has a usable token for this caller.
 
@@ -214,7 +220,7 @@ async def connector_status(
     # User just disconnected — they're not connected, regardless of what
     # AgentCore's vault still holds. This avoids a misleading "Connected"
     # badge between disconnect and the next re-consent.
-    if oauth_token_cache.needs_force_reauth(
+    if await disconnect_repo.is_disconnected(
         current_user.user_id, provider.provider_id
     ):
         return ConnectorStatusResponse(connected=False)
@@ -252,6 +258,7 @@ async def connector_status(
 async def complete_consent(
     body: CompleteConsentRequest,
     current_user: User = Depends(get_current_user_trusted),
+    disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
 ) -> CompleteConsentResponse:
     """Finalize an OAuth consent flow after the popup redirects home.
 
@@ -291,10 +298,10 @@ async def complete_consent(
         )
 
     # Successful re-consent supersedes any prior disconnect — clear the
-    # force-reauth flag so subsequent status checks report the user as
-    # connected without waiting for the agent loop to warm the cache.
+    # durable flag so subsequent status checks report the user as connected
+    # without waiting for the agent loop to warm the cache.
     if body.provider_id:
-        oauth_token_cache.clear_force_reauth(
+        await disconnect_repo.clear_disconnected(
             current_user.user_id, body.provider_id
         )
 
@@ -315,18 +322,22 @@ async def disconnect_connector(
     current_user: User = Depends(get_current_user_trusted),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
+    disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
 ):
     """Best-effort disconnect for the caller's connection to this provider.
 
     AgentCore Identity exposes no per-user vault-delete API, so we cannot
     actually destroy the user's stored token. What we can do:
 
-    1. Drop the local hot-path cache entry, so no in-flight MCP request
-       continues to inject the (stale-by-intent) bearer token.
-    2. Set a force-reauth flag the agent loop and `/status` endpoint both
-       read — the next attempt to use the connector triggers a fresh
-       consent flow with `force_authentication=True`, which makes
-       AgentCore replace the vault entry rather than reuse it.
+    1. Persist the disconnect intent in DynamoDB so every replica's agent
+       loop and `/status` endpoint reads the same state — the next attempt
+       to use the connector triggers a fresh consent flow with
+       `force_authentication=True`, which makes AgentCore replace the vault
+       entry rather than reuse it.
+    2. Drop the local hot-path cache entry on this replica, so no in-flight
+       MCP request continues to inject the (stale-by-intent) bearer token.
+       Other replicas pick up the change on their next `BeforeToolCallEvent`
+       (the consent hook reads the disconnect repo every gate call).
 
     The existing vault entry stays valid at the upstream provider until it
     expires naturally or the user revokes the application from their
@@ -337,7 +348,10 @@ async def disconnect_connector(
         provider_id, current_user, provider_repo, role_service
     )
 
-    oauth_token_cache.mark_force_reauth(
+    await disconnect_repo.mark_disconnected(
+        current_user.user_id, provider.provider_id
+    )
+    oauth_token_cache.clear_user_provider(
         current_user.user_id, provider.provider_id
     )
     logger.info(

@@ -123,6 +123,18 @@ CustomParametersLookup = Callable[
     [str], Union[Optional[dict[str, str]], Awaitable[Optional[dict[str, str]]]]
 ]
 
+# Returns whether the caller has been marked disconnected from this provider
+# (set by the /disconnect route or by a prior 401 retry). When True, the
+# hook bypasses the local token cache and asks AgentCore Identity for a
+# fresh consent URL with `force_authentication=True`.
+DisconnectedLookup = Callable[[str], Union[bool, Awaitable[bool]]]
+
+# Records a disconnect for the caller — invoked from the AfterToolCallEvent
+# path when a tool returns a 401 against the cached vault token. Called
+# instead of mutating per-process state so the intent is durable across
+# replicas.
+MarkDisconnected = Callable[[str], Union[None, Awaitable[None]]]
+
 
 class OAuthConsentHook(HookProvider):
     """Pause the agent if a tool needs OAuth and we don't have a token yet."""
@@ -134,6 +146,8 @@ class OAuthConsentHook(HookProvider):
         scopes_lookup: ScopesLookup,
         provider_type_lookup: Optional[ProviderTypeLookup] = None,
         custom_parameters_lookup: Optional[CustomParametersLookup] = None,
+        disconnected_lookup: Optional[DisconnectedLookup] = None,
+        mark_disconnected: Optional[MarkDisconnected] = None,
     ):
         """Initialize.
 
@@ -149,12 +163,24 @@ class OAuthConsentHook(HookProvider):
             custom_parameters_lookup: See `CustomParametersLookup`.
                 Optional. Admin-supplied extras to merge with the vendor
                 baseline.
+            disconnected_lookup: See `DisconnectedLookup`. Optional. When
+                omitted, the hook never bypasses the local token cache —
+                effectively assumes the user has not disconnected. Wire
+                this to the durable disconnect repository in production so
+                a /disconnect on one replica is visible from any other.
+            mark_disconnected: See `MarkDisconnected`. Optional. Invoked
+                from the 401-retry path; without it, a 401 still flips
+                `event.retry = True` but leaves no durable record, so the
+                next BeforeToolCallEvent on a different replica won't know
+                to force a fresh consent.
         """
         self._user_id = user_id
         self._provider_lookup = provider_lookup
         self._scopes_lookup = scopes_lookup
         self._provider_type_lookup = provider_type_lookup
         self._custom_parameters_lookup = custom_parameters_lookup
+        self._disconnected_lookup = disconnected_lookup
+        self._mark_disconnected = mark_disconnected
         # Cache scopes per provider for the lifetime of this hook (one agent
         # invocation). Avoids repeated DB hits if the same provider is used
         # across multiple tool calls in a single turn.
@@ -176,11 +202,13 @@ class OAuthConsentHook(HookProvider):
         if not provider_id:
             return  # Not an OAuth-gated tool
 
-        force_reauth = oauth_token_cache.needs_force_reauth(self._user_id, provider_id)
+        force_reauth = await self._is_disconnected(provider_id)
 
         # Fast path: token already in cache (from a prior call this process,
-        # or warmed by a previous turn). Skipped when a prior tool call
-        # surfaced a 401 and asked us to bypass the cache.
+        # or warmed by a previous turn). Skipped when the durable disconnect
+        # repository says this user wants a fresh consent — either because
+        # they pressed "Disconnect" (possibly on a different replica) or
+        # because a prior tool call returned 401.
         if not force_reauth and oauth_token_cache.get(self._user_id, provider_id):
             return
 
@@ -315,7 +343,12 @@ class OAuthConsentHook(HookProvider):
             event.tool_use.get("name"),
             provider_id,
         )
-        oauth_token_cache.mark_force_reauth(self._user_id, provider_id)
+        # Drop the local hot-path token so the BeforeToolCallEvent retry
+        # doesn't short-circuit to it, and record the intent durably so
+        # other replicas (and subsequent requests on this one) also force a
+        # fresh consent.
+        oauth_token_cache.clear_user_provider(self._user_id, provider_id)
+        await self._record_disconnect(provider_id)
         event.retry = True
 
     async def _resolve_scopes(self, provider_id: str) -> list[str]:
@@ -359,3 +392,26 @@ class OAuthConsentHook(HookProvider):
         self._custom_parameters_cache[provider_id] = extras
         self._custom_parameters_cache_keys.add(provider_id)
         return extras
+
+    async def _is_disconnected(self, provider_id: str) -> bool:
+        """Read the durable disconnect flag (DDB-backed in production).
+
+        Not memoized: a disconnect request can land on this replica between
+        two tool calls in the same turn, and we want the second tool call
+        to honor it. The DDB read is a single GetItem keyed on
+        `(user_id, provider_id)`, so the cost is negligible.
+        """
+        if self._disconnected_lookup is None:
+            return False
+        result = self._disconnected_lookup(provider_id)
+        if inspect.isawaitable(result):
+            return bool(await result)
+        return bool(result)
+
+    async def _record_disconnect(self, provider_id: str) -> None:
+        """Persist a disconnect from the AfterToolCallEvent retry path."""
+        if self._mark_disconnected is None:
+            return
+        result = self._mark_disconnected(provider_id)
+        if inspect.isawaitable(result):
+            await result
