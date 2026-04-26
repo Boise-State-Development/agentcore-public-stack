@@ -19,6 +19,7 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 from typing import Any, Callable, List, Optional
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException, status
@@ -26,6 +27,29 @@ from fastapi.testclient import TestClient
 
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
+
+
+# ---------------------------------------------------------------------------
+# Auto-stub session-metadata pre-stream hook
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _stub_ensure_session_metadata_exists(monkeypatch):
+    """The /invocations route calls ensure_session_metadata_exists() before
+    streaming, which raises RuntimeError when DYNAMODB_SESSIONS_METADATA_TABLE_NAME
+    is unset. Route tests don't exercise metadata persistence, so stub it to a
+    no-op that reports "session already exists" (False) — this skips the
+    first-turn title-generation branch too.
+
+    Tests that need real metadata behavior should provision the
+    `sessions_metadata_table` fixture from tests/shared/conftest.py and
+    monkeypatch this back to the real implementation.
+    """
+    monkeypatch.setattr(
+        "apis.inference_api.chat.routes.ensure_session_metadata_exists",
+        AsyncMock(return_value=False),
+    )
 
 
 # ---------------------------------------------------------------------------
