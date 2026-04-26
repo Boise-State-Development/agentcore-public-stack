@@ -15,7 +15,7 @@ from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
-from .models import MessageMetadata, PendingInterrupt, SessionMetadata
+from .models import MessageMetadata, PendingInterrupt, SessionMetadata, SessionPreferences
 
 # Import preview session helper
 from agents.main_agent.session.preview_session_manager import is_preview_session
@@ -697,6 +697,230 @@ async def _store_session_metadata_cloud(
         )
 
 
+async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
+    """Idempotently create a session metadata row if it doesn't exist yet.
+
+    Uses a conditional ``put_item`` keyed on ``attribute_not_exists(PK)`` so
+    concurrent first-turn requests for the same session can't clobber each
+    other. Returns ``True`` when a new row was created (caller can use this
+    as the "first turn" signal, e.g. to fire title generation).
+
+    No-op for preview sessions, which intentionally skip persistence.
+    """
+    if is_preview_session(session_id):
+        return False
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        now = datetime.now(timezone.utc).isoformat()
+        item = {
+            "PK": f"USER#{user_id}",
+            "SK": f"S#ACTIVE#{now}#{session_id}",
+            "GSI_PK": f"SESSION#{session_id}",
+            "GSI_SK": "META",
+            "sessionId": session_id,
+            "userId": user_id,
+            "title": "New Conversation",
+            "status": "active",
+            "createdAt": now,
+            "lastMessageAt": now,
+            "messageCount": 0,
+            "starred": False,
+            "tags": [],
+        }
+
+        try:
+            table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+            logger.info(f"💾 Pre-created session metadata for {session_id}")
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                # Session already exists — expected for continuing conversations.
+                return False
+            raise
+    except Exception as e:
+        # Best-effort: failures must not block the stream. update_session_activity
+        # self-heals by retrying this call once if the row is missing post-stream.
+        logger.error(f"ensure_session_metadata_exists failed: {e}", exc_info=True)
+        return False
+
+
+async def update_session_title(session_id: str, user_id: str, title: str) -> None:
+    """Update only the title attribute on the session row.
+
+    Uses a targeted ``UpdateExpression`` so it can run concurrently with
+    ``store_session_metadata`` (which does a full-row merge) without racing
+    on other fields like ``messageCount`` or ``lastMessageAt``. Looks up the
+    current SK via the GSI because the SK contains a timestamp.
+
+    No-op when the session row doesn't exist (preview sessions, sessions
+    deleted mid-turn).
+    """
+    if is_preview_session(session_id):
+        return
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info(f"update_session_title: session {session_id} not found, skipping")
+            return
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning(f"update_session_title: session {session_id} has no SK")
+            return
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET title = :t",
+            ExpressionAttributeValues={":t": title},
+        )
+        logger.info(f"💾 Updated title for session {session_id}")
+    except Exception as e:
+        logger.error(f"update_session_title failed: {e}", exc_info=True)
+
+
+async def update_session_activity(
+    session_id: str,
+    user_id: str,
+    *,
+    last_model: Optional[str] = None,
+    last_temperature: Optional[float] = None,
+    enabled_tools: Optional[List[str]] = None,
+    system_prompt_hash: Optional[str] = None,
+) -> bool:
+    """Per-turn session activity update with targeted writes.
+
+    Increments ``messageCount``, advances ``lastMessageAt`` to now, and
+    merges agent-derived preferences. No other attributes are written, so
+    concurrent writers (``update_session_title``, ``add_pending_interrupt``)
+    cannot be clobbered by this path.
+
+    Phase A is a targeted ``UpdateExpression`` on the current SK. Phase B
+    rotates the SK because ``lastMessageAt`` is encoded in it for recency
+    listing — fresh-read after Phase A, put at the new SK, delete the old.
+    The Phase B carry picks up any concurrent write that landed between
+    Phase A and the fresh read; the residual race window is bounded to
+    that small interval (full elimination requires the schema change in
+    issue #175).
+
+    Self-heals when the row is missing by calling
+    ``ensure_session_metadata_exists`` and retrying the lookup once.
+    No-op for preview sessions. Returns ``True`` when the update applied.
+    """
+    if is_preview_session(session_id):
+        return False
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            # Pre-create may have failed at /invocations entry — try once
+            # more so we don't lose the session record entirely.
+            await ensure_session_metadata_exists(session_id, user_id)
+            existing = await _get_session_by_gsi(session_id, user_id, table)
+            if not existing:
+                logger.warning(
+                    "update_session_activity: session %s missing and could not be created",
+                    session_id,
+                )
+                return False
+
+        old_sk = existing.get("SK")
+        if not old_sk:
+            logger.warning("update_session_activity: session %s has no SK", session_id)
+            return False
+
+        # Merge preferences: existing values take effect for keys the
+        # caller didn't pass (e.g. assistantId set by the assistant-attach
+        # flow). We replace the whole `preferences` map in one SET so the
+        # update works whether the attribute exists yet or not — DynamoDB
+        # disallows updating both a parent path and its children in the
+        # same expression.
+        existing_prefs_raw = existing.get("preferences") or {}
+        try:
+            existing_prefs = SessionPreferences.model_validate(existing_prefs_raw)
+        except Exception:
+            existing_prefs = SessionPreferences()
+        prefs_dict = existing_prefs.model_dump(by_alias=False, exclude_none=True)
+        if last_model is not None:
+            prefs_dict["last_model"] = last_model
+        if last_temperature is not None:
+            prefs_dict["last_temperature"] = last_temperature
+        if enabled_tools is not None:
+            prefs_dict["enabled_tools"] = enabled_tools
+        if system_prompt_hash is not None:
+            prefs_dict["system_prompt_hash"] = system_prompt_hash
+        merged_prefs = SessionPreferences(**prefs_dict).model_dump(by_alias=True, exclude_none=True)
+
+        now = datetime.now(timezone.utc).isoformat()
+        pk = f"USER#{user_id}"
+
+        # Phase A: targeted update of owned attributes on the current SK.
+        # Disjoint from title, starred, tags, pendingInterrupts.
+        table.update_item(
+            Key={"PK": pk, "SK": old_sk},
+            UpdateExpression="ADD messageCount :one SET lastMessageAt = :t, preferences = :p",
+            ExpressionAttributeValues={
+                ":one": 1,
+                ":t": now,
+                ":p": _convert_floats_to_decimal(merged_prefs),
+            },
+        )
+
+        # Phase B: SK rotation. lastMessageAt is encoded in the SK for
+        # recency listing, so a per-turn change forces a row move. Fresh
+        # read carries any concurrent write (e.g. title-gen) that landed
+        # between Phase A and now.
+        new_sk = f"S#ACTIVE#{now}#{session_id}"
+        if new_sk != old_sk:
+            fresh_resp = table.get_item(Key={"PK": pk, "SK": old_sk})
+            fresh = fresh_resp.get("Item")
+            if not fresh:
+                logger.warning(
+                    "update_session_activity: row vanished between Phase A and Phase B for %s",
+                    session_id,
+                )
+                return True
+            carried = {k: v for k, v in fresh.items() if k not in ("PK", "SK")}
+            new_item = {"PK": pk, "SK": new_sk, **carried}
+            table.put_item(Item=new_item)
+            table.delete_item(Key={"PK": pk, "SK": old_sk})
+
+        logger.info("Updated session activity for %s (sk_rotated=%s)", session_id, new_sk != old_sk)
+        return True
+    except Exception as e:
+        logger.error("update_session_activity failed for %s: %s", session_id, e, exc_info=True)
+        return False
+
+
 async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[dict]:
     """
     Get session record using GSI (SessionLookupIndex)
@@ -929,6 +1153,11 @@ async def _get_session_metadata_cloud(
         for key in ['PK', 'SK', 'GSI_PK', 'GSI_SK']:
             item.pop(key, None)
 
+        # Dedupe pending interrupts at the storage boundary so list_append
+        # re-emits don't surface as duplicate consent prompts.
+        if "pendingInterrupts" in item:
+            item["pendingInterrupts"] = _dedupe_interrupt_dicts(item["pendingInterrupts"])
+
         return SessionMetadata.model_validate(item)
 
     except Exception as e:
@@ -1110,6 +1339,9 @@ async def _list_user_sessions_cloud(
                     if is_preview_session(session_id):
                         continue
 
+                    if "pendingInterrupts" in item:
+                        item["pendingInterrupts"] = _dedupe_interrupt_dicts(item["pendingInterrupts"])
+
                     metadata = SessionMetadata.model_validate(item)
                     sessions.append(metadata)
 
@@ -1201,14 +1433,36 @@ def _interrupts_to_dynamo(interrupts: Iterable[PendingInterrupt]) -> List[Dict[s
     return [item.model_dump(by_alias=True, exclude_none=True) for item in interrupts]
 
 
-def _interrupts_from_dynamo(raw: Any) -> List[PendingInterrupt]:
-    """Best-effort parse of stored interrupt entries; tolerate missing/legacy items."""
+def _dedupe_interrupt_dicts(raw: Any) -> List[Dict[str, Any]]:
+    """Last-write-wins dedupe of raw interrupt dicts by ``interruptId``.
+
+    ``add_pending_interrupt`` uses ``list_append`` to be race-free against
+    concurrent writers, which means re-emits of the same interrupt across
+    stream replays accumulate as duplicate list entries. Storage-layer
+    callers run this on the raw list before handing it to the model so
+    Pydantic validation sees a clean list. Insertion order of the first
+    occurrence is preserved.
+    """
     if not raw or not isinstance(raw, list):
         return []
-    parsed: List[PendingInterrupt] = []
+    by_id: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
     for entry in raw:
         if not isinstance(entry, dict):
             continue
+        iid = entry.get("interruptId") or entry.get("interrupt_id")
+        if not iid:
+            continue
+        if iid not in by_id:
+            order.append(iid)
+        by_id[iid] = entry
+    return [by_id[iid] for iid in order]
+
+
+def _interrupts_from_dynamo(raw: Any) -> List[PendingInterrupt]:
+    """Parse stored interrupt entries with dedupe and corrupted-entry tolerance."""
+    parsed: List[PendingInterrupt] = []
+    for entry in _dedupe_interrupt_dicts(raw):
         try:
             parsed.append(PendingInterrupt.model_validate(entry))
         except Exception as exc:  # pragma: no cover — corrupted entry shouldn't break load
@@ -1221,11 +1475,13 @@ async def add_pending_interrupt(
     user_id: str,
     interrupt: PendingInterrupt,
 ) -> None:
-    """Idempotently append a pending OAuth interrupt to the session record.
+    """Append a pending OAuth interrupt to the session record.
 
-    If an entry with the same ``interrupt_id`` already exists, it's replaced
-    rather than duplicated — the agent may re-emit the same interrupt across
-    re-streams of a paused turn.
+    Uses ``list_append`` with ``if_not_exists`` so concurrent writers can't
+    lose each other's entries — no read-modify-write window. Re-emits of
+    the same ``interrupt_id`` across stream replays accumulate as duplicate
+    list entries and are collapsed last-write-wins by
+    ``_interrupts_from_dynamo`` on read.
 
     No-op when the session metadata record is missing (preview sessions,
     sessions deleted mid-turn). The frontend will fall back to its in-memory
@@ -1252,18 +1508,13 @@ async def add_pending_interrupt(
             logger.warning("Session %s has no SK; cannot update pending_interrupts", session_id)
             return
 
-        current_raw = existing.get("pendingInterrupts") or []
-        current = _interrupts_from_dynamo(current_raw)
-
-        # Replace any existing entry with the same interrupt_id
-        merged = [p for p in current if p.interrupt_id != interrupt.interrupt_id]
-        merged.append(interrupt)
+        new_entry = interrupt.model_dump(by_alias=True, exclude_none=True)
 
         table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
-            UpdateExpression="SET #pi = :pi",
+            UpdateExpression="SET #pi = list_append(if_not_exists(#pi, :empty), :new)",
             ExpressionAttributeNames={"#pi": "pendingInterrupts"},
-            ExpressionAttributeValues={":pi": _interrupts_to_dynamo(merged)},
+            ExpressionAttributeValues={":empty": [], ":new": [new_entry]},
         )
         logger.info(
             "Persisted pending_interrupt %s (provider=%s) for session %s",

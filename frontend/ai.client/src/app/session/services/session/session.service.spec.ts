@@ -55,7 +55,7 @@ describe('SessionService', () => {
 
   describe('getMessages (no ensureAuthenticated)', () => {
     it('should GET messages', async () => {
-      const resp: MessagesListResponse = { messages: [mockMessage], next_token: null };
+      const resp: MessagesListResponse = { messages: [mockMessage], nextToken: null };
       const promise = service.getMessages('s1');
       httpMock.expectOne('http://localhost:8000/sessions/s1/messages').flush(resp);
       expect(await promise).toEqual(resp);

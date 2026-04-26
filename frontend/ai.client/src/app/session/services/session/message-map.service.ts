@@ -286,7 +286,7 @@ export class MessageMapService {
       // Anchor falls back to the most recent assistant message in history,
       // matching how the live SSE flow already attaches prompts. Authorization
       // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
-      this.hydratePendingInterrupts(sessionId, messagesResponse.pending_interrupts, processedMessages);
+      this.hydratePendingInterrupts(sessionId, messagesResponse.pendingInterrupts, processedMessages);
     } catch (error) {
       console.error('Failed to load messages for session:', sessionId, error);
       throw error;
@@ -319,10 +319,10 @@ export class MessageMapService {
     }
     for (const interrupt of interrupts) {
       this.oauthConsentService.requestConsent(
-        interrupt.provider_id,
+        interrupt.providerId,
         undefined, // URL is fetched lazily on Connect — stored URLs go stale
-        interrupt.interrupt_id,
-        interrupt.triggering_message_id ?? lastAssistantId,
+        interrupt.interruptId,
+        interrupt.triggeringMessageId ?? lastAssistantId,
         sessionId,
       );
     }

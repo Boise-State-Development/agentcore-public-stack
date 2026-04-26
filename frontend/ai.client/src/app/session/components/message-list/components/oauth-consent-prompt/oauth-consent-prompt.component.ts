@@ -12,9 +12,9 @@ import {
 import {
   OAuthConsentRequest,
   OAuthConsentService,
-} from '../../services/oauth-consent/oauth-consent.service';
-import { UserConnector } from '../../settings/connectors/models/user-connector.model';
-import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
+} from '../../../../../services/oauth-consent/oauth-consent.service';
+import { UserConnector } from '../../../../../settings/connectors/models/user-connector.model';
+import { UserConnectorsService } from '../../../../../settings/connectors/services/user-connectors.service';
 
 /**
  * Inline OAuth consent prompt rendered alongside the assistant message whose
@@ -40,24 +40,24 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
   host: { class: 'block' },
   template: `
     <div
-      class="oauth-prompt group relative flex max-w-xl items-center gap-3 overflow-hidden rounded-xl border border-gray-200/80 bg-white py-3 pr-3 pl-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)] dark:border-white/10 dark:bg-slate-800/70"
+      class="oauth-prompt group relative flex max-w-xl items-center gap-2.5 overflow-hidden rounded-lg border border-gray-200/80 bg-white py-1.5 pr-1.5 pl-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-white/10 dark:bg-slate-800/70"
       role="region"
       aria-live="polite"
       [attr.aria-label]="'Authorization required for ' + displayName()"
     >
       <span
-        class="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b from-primary-400 via-primary-500 to-primary-600 dark:from-primary-300 dark:via-primary-400 dark:to-primary-500"
+        class="absolute inset-y-0 left-0 w-[2px] bg-primary-500 dark:bg-primary-400"
         aria-hidden="true"
       ></span>
 
       <div
-        class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-gray-50 ring-1 ring-gray-200/70 dark:bg-slate-900 dark:ring-white/10"
+        class="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-50 ring-1 ring-gray-200/70 dark:bg-slate-900 dark:ring-white/10"
       >
         @if (iconDataUrl(); as data) {
           <img
             [src]="data"
             [alt]="displayName() + ' icon'"
-            class="size-7 object-contain"
+            class="size-full object-contain"
           />
         } @else {
           <ng-icon
@@ -70,12 +70,12 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 
       <div class="min-w-0 flex-1">
         <p
-          class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary-600 dark:text-primary-300"
+          class="inline-flex items-center gap-1 text-[10px] leading-none font-semibold uppercase tracking-[0.08em] text-primary-600 dark:text-primary-300"
         >
           <ng-icon name="heroLockClosed" class="size-3" aria-hidden="true" />
           Authorization needed
         </p>
-        <p class="mt-0.5 text-sm/5 text-gray-900 dark:text-gray-100">
+        <p class="text-xs/5 text-gray-900 dark:text-gray-100">
           @if (isBlocked()) {
             Popup blocked. Open
             <span class="font-semibold">{{ displayName() }}</span>
@@ -88,7 +88,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
         </p>
       </div>
 
-      <div class="flex shrink-0 items-center gap-1.5">
+      <div class="flex shrink-0 items-center gap-1">
         @if (isBlocked() && request().authorizationUrl; as blockedUrl) {
           <a
             [href]="blockedUrl"
@@ -98,7 +98,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
             [attr.aria-label]="'Open ' + displayName() + ' authorization in a new tab'"
           >
             <span>Open</span>
-            <ng-icon name="heroArrowTopRightOnSquare" class="size-3.5" aria-hidden="true" />
+            <ng-icon name="heroArrowTopRightOnSquare" class="ml-1 size-3" aria-hidden="true" />
           </a>
         } @else {
           <button
@@ -110,7 +110,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
           >
             @if (isInFlight()) {
               <svg
-                class="size-3.5 animate-spin"
+                class="size-3 animate-spin"
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
@@ -133,17 +133,16 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
               <span>Waiting…</span>
             } @else {
               <span>Connect</span>
-              <ng-icon name="heroArrowTopRightOnSquare" class="size-3.5" aria-hidden="true" />
             }
           </button>
         }
         <button
           type="button"
           (click)="dismiss($event)"
-          class="dismiss-btn flex size-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/10 dark:hover:text-gray-200"
+          class="dismiss-btn flex size-6 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/10 dark:hover:text-gray-200"
           aria-label="Dismiss authorization prompt"
         >
-          <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+          <ng-icon name="heroXMark" class="size-3.5" aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -163,31 +162,20 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
     .action-btn {
       display: inline-flex;
       align-items: center;
-      gap: 0.375rem;
-      border-radius: 0.5rem;
-      padding: 0.375rem 0.75rem;
-      font-size: 0.8125rem;
+      gap: 0.25rem;
+      border-radius: 0.375rem;
+      padding: 0.25rem 0.625rem;
+      font-size: 0.75rem;
       font-weight: 600;
       color: white;
-      background: linear-gradient(
-        180deg,
-        var(--color-primary-500) 0%,
-        var(--color-primary-600) 100%
-      );
-      box-shadow:
-        0 1px 2px rgba(15, 23, 42, 0.12),
-        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      background: var(--color-secondary-500);
       transition:
-        transform 120ms ease,
-        box-shadow 160ms ease,
-        filter 120ms ease;
+        background-color 120ms ease,
+        transform 120ms ease;
     }
 
     .action-btn:hover:not(:disabled) {
-      filter: brightness(1.05);
-      box-shadow:
-        0 4px 14px -4px rgba(15, 23, 42, 0.25),
-        inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      background: var(--color-secondary-600);
     }
 
     .action-btn:active:not(:disabled) {
@@ -195,7 +183,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
     }
 
     .action-btn:focus-visible {
-      outline: 2px solid var(--color-primary-500);
+      outline: 2px solid var(--color-secondary-500);
       outline-offset: 2px;
     }
 

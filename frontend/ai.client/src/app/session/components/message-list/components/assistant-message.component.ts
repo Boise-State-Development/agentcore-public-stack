@@ -6,7 +6,7 @@ import { ToolCallGroup, ToolCallDisplay } from './tool-rail/tool-rail.model';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
-import { OAuthConsentPromptComponent } from '../../../../components/oauth-consent-prompt/oauth-consent-prompt.component';
+import { OAuthConsentPromptComponent } from './oauth-consent-prompt/oauth-consent-prompt.component';
 import {
   OAuthConsentRequest,
   OAuthConsentService,

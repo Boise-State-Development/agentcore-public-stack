@@ -7,6 +7,7 @@ Implements AgentCore Runtime required endpoints:
 These endpoints are at the root level to comply with AWS Bedrock AgentCore Runtime requirements.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -35,9 +36,10 @@ from apis.shared.quota import (
 )
 
 from apis.shared.rbac.service import get_app_role_service
+from apis.shared.sessions.metadata import ensure_session_metadata_exists
 
 from .models import FileContent, InvocationRequest
-from .service import get_agent
+from .service import generate_conversation_title, get_agent
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +249,26 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         except Exception as e:
             logger.warning("Failed to resolve file upload IDs")
             # Continue without files rather than failing the request
+
+    # Pre-create session metadata so OAuth interrupts and other state can
+    # attach to the session row from turn one. Best-effort; on failure the
+    # post-stream lazy-create in StreamCoordinator still covers it.
+    is_new_session = False
+    if not is_resume:
+        is_new_session = await ensure_session_metadata_exists(input_data.session_id, user_id)
+
+    # First turn → kick off title generation concurrently with the stream.
+    # Runs as a background task so it doesn't add latency to TTFT. The
+    # targeted UpdateExpression in update_session_title is race-safe with
+    # the post-stream _update_session_metadata write.
+    if is_new_session and input_data.message:
+        asyncio.create_task(
+            generate_conversation_title(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                user_input=input_data.message,
+            )
+        )
 
     # Check quota if enforcement is enabled
     quota_warning_event = None

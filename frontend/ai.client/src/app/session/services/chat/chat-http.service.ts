@@ -137,20 +137,10 @@ export class ChatHttpService {
         this.messageMapService.endStreaming();
         this.chatStateService.setChatLoading(false);
 
-        // Generate title only for new sessions (fire and forget - don't block on this)
+        // Title is generated server-side concurrently with the stream
+        // (see /invocations). Refresh metadata so the sidebar reflects it.
         if (this.sessionService.isNewSession(requestObject.session_id)) {
-          this.generateTitle(requestObject.session_id, requestObject.message)
-            .then((response) => {
-              // Update the session title in the local cache
-              this.sessionService.updateSessionTitleInCache(
-                requestObject.session_id,
-                response.title,
-              );
-            })
-            .catch((error) => {
-              // Log error but don't block the user experience
-              console.error('Failed to generate session title:', error);
-            });
+          this.refreshTitleFromServer(requestObject.session_id);
         }
       },
       onerror: (err) => {
@@ -185,6 +175,29 @@ export class ChatHttpService {
 
     // Cleanup request-conversation mapping when cancelled
     this.chatStateService.resetState();
+  }
+
+  /**
+   * Pull the server-generated title into the local sidebar cache.
+   *
+   * Title generation runs concurrently with the agent stream on the backend.
+   * Nova Micro typically finishes well before the stream does, but on fast
+   * responses we may race past it — so on a "New Conversation" placeholder
+   * we retry once after a short delay before giving up.
+   */
+  private async refreshTitleFromServer(sessionId: string, retried = false): Promise<void> {
+    try {
+      const metadata = await this.sessionService.getSessionMetadata(sessionId);
+      if (metadata.title && metadata.title !== 'New Conversation') {
+        this.sessionService.updateSessionTitleInCache(sessionId, metadata.title);
+        return;
+      }
+      if (!retried) {
+        setTimeout(() => this.refreshTitleFromServer(sessionId, true), 1500);
+      }
+    } catch (error) {
+      console.error('Failed to refresh session title:', error);
+    }
   }
 
   /**

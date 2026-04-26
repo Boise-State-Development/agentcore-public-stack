@@ -6,7 +6,7 @@ import { AssistantMessageComponent } from './components/assistant-message.compon
 import { MessageMetadataBadgesComponent } from './components/message-metadata-badges.component';
 import { CitationDisplayComponent } from '../citation-display/citation-display.component';
 import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.component';
-import { OAuthConsentPromptComponent } from '../../../components/oauth-consent-prompt/oauth-consent-prompt.component';
+import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/oauth-consent-prompt.component';
 import {
   OAuthConsentRequest,
   OAuthConsentService,

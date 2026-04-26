@@ -1180,149 +1180,39 @@ class StreamCoordinator:
             return None
 
     async def _update_session_metadata(self, session_id: str, user_id: str, message_id: int, agent: Any = None) -> None:
-        """
-        Update session-level metadata after each message
+        """Update per-turn session activity (lastMessageAt, messageCount, preferences).
 
-        This updates conversation-level tracking after each message:
-        - lastMessageAt: Timestamp of this message
-        - messageCount: Incremented by 1
-        - preferences: Model/temperature/tools/system_prompt_hash from agent config
-        - Auto-creates session metadata on first message
-
-        Args:
-            session_id: Session identifier
-            user_id: User identifier
-            message_id: Message ID that was just flushed
-            agent: Agent instance for extracting model preferences
+        Delegates to ``update_session_activity``, which uses targeted writes
+        so concurrent writers (title-gen, pending-interrupt persistence)
+        cannot be clobbered. Pre-create is handled at /invocations entry, so
+        no lazy-create branch is needed here.
         """
         try:
             import hashlib
 
-            from apis.shared.sessions.models import SessionMetadata, SessionPreferences
-            from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
+            from apis.shared.sessions.metadata import update_session_activity
 
-            logger.info(f"🔍 _update_session_metadata called for session {session_id}, message_id {message_id}")
-
-            # Get existing metadata or create new
-            existing = await get_session_metadata(session_id, user_id)
-
-            if existing:
-                logger.info(f"📄 Found existing metadata: messageCount={existing.message_count}, has_preferences={existing.preferences is not None}")
+            last_model = None
+            last_temperature = None
+            enabled_tools = None
+            system_prompt_hash = None
+            if agent and hasattr(agent, "model_config"):
+                last_model = agent.model_config.model_id
+                last_temperature = getattr(agent.model_config, "temperature", None)
+                enabled_tools = getattr(agent, "enabled_tools", None)
+                if hasattr(agent, "system_prompt") and agent.system_prompt:
+                    system_prompt_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]
             else:
-                logger.info(f"📄 No existing metadata found - creating new")
+                logger.warning("⚠️ Agent is None or missing model_config — skipping preference update")
 
-            # Calculate message count incrementally
-            # NOTE: We cannot query AgentCore Memory immediately after flush due to eventual consistency.
-            # The turn-based session manager calls create_message() then immediately calls list_messages(),
-            # but the newly created message is not yet available for reading (can take several seconds).
-            #
-            # Instead, we use incremental counting:
-            # - Each streaming turn creates 1 merged message in AgentCore Memory
-            # - We increment the count by 1 per turn
-            #
-            # This count represents "turns" (user-assistant exchanges), not individual message events.
-            # Tool use creates multiple content blocks within a single turn/message.
-            if not existing:
-                actual_message_count = 1
-                logger.info(f"📊 First turn in session - message_count: {actual_message_count}")
-            else:
-                actual_message_count = existing.message_count + 1
-                logger.info(f"📊 Incremental turn count: {existing.message_count} + 1 = {actual_message_count}")
-
-            now = datetime.now(timezone.utc).isoformat()
-
-            if not existing:
-                # First message - create session metadata
-                preferences = None
-                if agent and hasattr(agent, "model_config"):
-                    logger.info(f"📦 Agent has model_config: model_id={agent.model_config.model_id}")
-
-                    # Generate system prompt hash for tracking exact prompt version
-                    # This hash represents the FINAL rendered system prompt (after date injection, etc.)
-                    system_prompt_hash = None
-                    if hasattr(agent, "system_prompt") and agent.system_prompt:
-                        system_prompt_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]  # 16 char hash for uniqueness
-                        logger.debug(f"Generated system_prompt_hash: {system_prompt_hash}")
-
-                    # Extract enabled tools from agent
-                    enabled_tools = getattr(agent, "enabled_tools", None)
-
-                    preferences = SessionPreferences(
-                        last_model=agent.model_config.model_id,
-                        last_temperature=getattr(agent.model_config, "temperature", None),
-                        enabled_tools=enabled_tools,
-                        system_prompt_hash=system_prompt_hash,
-                    )
-                    logger.info(f"✨ Created new preferences: last_model={preferences.last_model}")
-                else:
-                    logger.warning(f"⚠️ Agent is None or missing model_config")
-
-                metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title="New Conversation",  # Will be updated by frontend
-                    status="active",
-                    created_at=now,
-                    last_message_at=now,
-                    message_count=actual_message_count,
-                    starred=False,
-                    tags=[],
-                    preferences=preferences,
-                )
-            else:
-                # Update existing - only update what changed
-                preferences = existing.preferences
-                if agent and hasattr(agent, "model_config"):
-                    logger.info(f"📦 Updating preferences with model_id={agent.model_config.model_id}")
-
-                    # Update preferences if model/temperature/tools/system_prompt changed
-                    prefs_dict = preferences.model_dump(by_alias=False) if preferences else {}
-                    logger.info(f"📝 Existing prefs_dict: {prefs_dict}")
-
-                    prefs_dict["last_model"] = agent.model_config.model_id
-                    prefs_dict["last_temperature"] = getattr(agent.model_config, "temperature", None)
-
-                    # Update enabled_tools from agent
-                    prefs_dict["enabled_tools"] = getattr(agent, "enabled_tools", None)
-
-                    # Update system_prompt_hash if system prompt changed
-                    # This allows tracking when the prompt was modified during a conversation
-                    if hasattr(agent, "system_prompt") and agent.system_prompt:
-                        new_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]
-                        # Only update if hash changed (prompt was modified)
-                        if prefs_dict.get("system_prompt_hash") != new_hash:
-                            logger.info(f"System prompt changed - updating hash from {prefs_dict.get('system_prompt_hash')} to {new_hash}")
-                            prefs_dict["system_prompt_hash"] = new_hash
-
-                    preferences = SessionPreferences(**prefs_dict)
-                    logger.info(f"✨ Updated preferences: last_model={preferences.last_model}")
-                else:
-                    logger.warning(f"⚠️ Agent is None or missing model_config - keeping existing preferences")
-
-                metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title=existing.title,
-                    status=existing.status,
-                    created_at=existing.created_at,
-                    last_message_at=now,
-                    message_count=actual_message_count,
-                    starred=existing.starred,
-                    tags=existing.tags,
-                    preferences=preferences,
-                )
-
-            # Store updated metadata (uses deep merge in storage layer)
-            await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
-
-            logger.info(
-                f"✅ Updated session metadata - last_model: {metadata.preferences.last_model if metadata.preferences else 'None'}, message_count: {metadata.message_count}"
+            await update_session_activity(
+                session_id=session_id,
+                user_id=user_id,
+                last_model=last_model,
+                last_temperature=last_temperature,
+                enabled_tools=enabled_tools,
+                system_prompt_hash=system_prompt_hash,
             )
-
-            # Return message count for use as a fallback message_id
-            return metadata.message_count
-
         except Exception as e:
             logger.error(f"Failed to update session metadata: {e}", exc_info=True)
-            # Don't raise - metadata failures shouldn't break streaming
-            return None
+            # Don't raise — metadata failures shouldn't break streaming.

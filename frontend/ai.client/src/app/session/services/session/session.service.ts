@@ -37,13 +37,13 @@ export interface SessionsListResponse {
  */
 export interface PendingInterrupt {
   /** Strands interrupt id used to resume the paused turn */
-  interrupt_id: string;
+  interruptId: string;
   /** Connector providerId needing consent */
-  provider_id: string;
+  providerId: string;
   /** Id of the assistant message whose tool call triggered this interrupt, if known */
-  triggering_message_id?: string | null;
+  triggeringMessageId?: string | null;
   /** ISO 8601 timestamp when the interrupt was recorded */
-  created_at: string;
+  createdAt: string;
 }
 
 /**
@@ -55,9 +55,9 @@ export interface MessagesListResponse {
   /** List of messages in the session */
   messages: Message[];
   /** Pagination token for retrieving the next page of results */
-  next_token: string | null;
+  nextToken: string | null;
   /** OAuth consent interrupts that paused agent turns and are awaiting user action */
-  pending_interrupts?: PendingInterrupt[];
+  pendingInterrupts?: PendingInterrupt[];
 }
 
 /**
@@ -389,7 +389,7 @@ export class SessionService {
    * // Get next page
    * const nextPage = await sessionService.getSessions({
    *   limit: 20,
-   *   next_token: response.next_token
+   *   next_token: response.nextToken
    * });
    * ```
    */
@@ -437,7 +437,7 @@ export class SessionService {
    * // Get next page
    * const nextPage = await sessionService.getMessages(
    *   '8e70ae89-93af-4db7-ba60-f13ea201f4cd',
-   *   { limit: 20, next_token: response.next_token }
+   *   { limit: 20, next_token: response.nextToken }
    * );
    * ```
    */
