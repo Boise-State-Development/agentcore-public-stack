@@ -133,6 +133,11 @@ import { UserConnectorsService } from '../../../../../settings/connectors/servic
               <span>Waiting…</span>
             } @else {
               <span>Connect</span>
+              <ng-icon
+                name="heroArrowTopRightOnSquare"
+                class="size-3"
+                aria-hidden="true"
+              />
             }
           </button>
         }
@@ -157,6 +162,13 @@ import { UserConnectorsService } from '../../../../../settings/connectors/servic
 
     .oauth-prompt {
       animation: oauth-rise 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Override the global \`.message-block p\` rule (styles.css) which adds
+       a 16px margin-bottom for prose paragraphs. Inside the prompt the two
+       <p>s are a tight label + description pair. */
+    .oauth-prompt p {
+      margin-bottom: 0;
     }
 
     .action-btn {
