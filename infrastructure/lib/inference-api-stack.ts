@@ -6,6 +6,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from './config';
 
@@ -1239,16 +1240,36 @@ export class InferenceApiStack extends cdk.Stack {
     });
 
     // AgentCore Identity auto-creates a workload identity when the runtime is
-    // created and exposes the ARN as a CFN attribute. App-api (which lives
-    // outside the runtime gateway) needs the name segment to mint workload
-    // tokens via GetWorkloadAccessTokenForUserId — i.e. to act as this same
-    // workload so its OAuth vault is shared with the runtime.
+    // created. App-api (which lives outside the runtime gateway) needs the
+    // name segment to mint workload tokens via GetWorkloadAccessTokenForUserId
+    // — i.e. to act as this same workload so its OAuth vault is shared with
+    // the runtime.
+    //
+    // The runtime resource exposes WorkloadIdentityDetails as a top-level CFN
+    // attribute, but Fn::GetAtt rejects the nested `.WorkloadIdentityArn` path
+    // because the resource provider schema doesn't declare it as readable.
+    // Look it up via the control plane SDK instead.
     //
     // ARN format:
     //   arn:aws:bedrock-agentcore:<region>:<account>:workload-identity-directory/default/workload-identity/<name>
-    const workloadIdentityArn = cdk.Token.asString(
-      cdk.Fn.getAtt(this.runtime.logicalId, 'WorkloadIdentityDetails.WorkloadIdentityArn')
-    );
+    const runtimeLookup = new cr.AwsCustomResource(this, 'RuntimeWorkloadIdentityLookup', {
+      onUpdate: {
+        service: '@aws-sdk/client-bedrock-agentcore-control',
+        action: 'GetAgentRuntime',
+        parameters: { agentRuntimeId: this.runtime.attrAgentRuntimeId },
+        physicalResourceId: cr.PhysicalResourceId.fromResponse('agentRuntimeId'),
+        outputPaths: ['workloadIdentityDetails.workloadIdentityArn'],
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['bedrock-agentcore:GetAgentRuntime'],
+          resources: [this.runtime.attrAgentRuntimeArn],
+        }),
+      ]),
+      installLatestAwsSdk: true,
+    });
+    runtimeLookup.node.addDependency(this.runtime);
+    const workloadIdentityArn = runtimeLookup.getResponseField('workloadIdentityDetails.workloadIdentityArn');
     const workloadIdentityName = cdk.Fn.select(
       1,
       cdk.Fn.split('workload-identity/', workloadIdentityArn)
