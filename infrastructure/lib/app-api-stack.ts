@@ -929,14 +929,27 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
-    // DeleteOauth2CredentialProvider synchronously deletes the underlying
-    // Secrets Manager secret AgentCore created to hold the OAuth client secret,
-    // and authorizes that DeleteSecret call against the caller's identity.
+    // AgentCore Identity stores each provider's OAuth client secret in a
+    // Secrets Manager secret it provisions under `bedrock-agentcore-identity!
+    // default/oauth2/*`. Create/Update/Delete on the provider authorize the
+    // corresponding Secrets Manager call against the caller's identity (the
+    // app-api ECS task role), so the full lifecycle of admin CRUD needs:
+    //   - CreateSecret + TagResource: CreateOauth2CredentialProvider
+    //   - PutSecretValue + UpdateSecret: UpdateOauth2CredentialProvider
+    //     (re-submits the full config including a new clientSecret)
+    //   - DeleteSecret: DeleteOauth2CredentialProvider
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        sid: 'AgentCoreOAuthSecretDelete',
+        sid: 'AgentCoreOAuthSecretLifecycle',
         effect: iam.Effect.ALLOW,
-        actions: ['secretsmanager:DeleteSecret'],
+        actions: [
+          'secretsmanager:CreateSecret',
+          'secretsmanager:DeleteSecret',
+          'secretsmanager:PutSecretValue',
+          'secretsmanager:UpdateSecret',
+          'secretsmanager:TagResource',
+          'secretsmanager:DescribeSecret',
+        ],
         resources: [
           `arn:aws:secretsmanager:${config.awsRegion}:${config.awsAccount}:secret:bedrock-agentcore-identity!default/oauth2/*`,
         ],
