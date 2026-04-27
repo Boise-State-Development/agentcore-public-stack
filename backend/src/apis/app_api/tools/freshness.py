@@ -37,16 +37,18 @@ logger = logging.getLogger(__name__)
 # TTL-cached — a deleted tool doesn't trigger a DynamoDB read every turn.
 _cache: Dict[str, Tuple[Optional[str], float]] = {}
 
-# (frozen_set_of_tool_ids, monotonic_fetched_at) — None means uncached.
-_all_tool_ids_cache: Optional[Tuple[FrozenSet[str], float]] = None
+# Single-slot snapshot of (frozen_set_of_tool_ids, monotonic_fetched_at).
+# Held in a list so we mutate index 0 in place rather than rebinding the
+# module-level name — same pattern as `_cache` above (mutated, never
+# reassigned), which keeps the module state easy to reason about.
+_all_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 
 _TTL_SECONDS = 10.0
 
 
 def _reset_for_tests() -> None:
-    global _all_tool_ids_cache
     _cache.clear()
-    _all_tool_ids_cache = None
+    _all_tool_ids_cache[0] = None
 
 
 async def _fetch_updated_at(tool_id: str) -> Optional[str]:
@@ -111,9 +113,8 @@ async def get_all_tool_ids() -> FrozenSet[str]:
     an empty frozenset — never raises (auth must not break on a transient
     DB blip).
     """
-    global _all_tool_ids_cache
     now = time.monotonic()
-    cached = _all_tool_ids_cache
+    cached = _all_tool_ids_cache[0]
     if cached is not None and now - cached[1] < _TTL_SECONDS:
         return cached[0]
 
@@ -127,7 +128,7 @@ async def get_all_tool_ids() -> FrozenSet[str]:
         logger.exception("Failed to list tool IDs for catalog snapshot")
         return cached[0] if cached is not None else frozenset()
 
-    _all_tool_ids_cache = (ids, now)
+    _all_tool_ids_cache[0] = (ids, now)
     return ids
 
 
@@ -141,9 +142,8 @@ def invalidate(tool_id: Optional[str] = None) -> None:
     Call this from admin write paths so changes are visible in the same
     process on the very next turn, without waiting for the TTL to lapse.
     """
-    global _all_tool_ids_cache
     if tool_id is None:
         _cache.clear()
     else:
         _cache.pop(tool_id, None)
-    _all_tool_ids_cache = None
+    _all_tool_ids_cache[0] = None
