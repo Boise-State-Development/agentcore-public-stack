@@ -995,6 +995,16 @@ export class InferenceApiStack extends cdk.Stack {
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
         CORS_ORIGINS: corsOrigins,
 
+        // OAuth2 callback URL fallback for the agent loop's consent flow.
+        // Frontends send `OAuth2CallbackUrl` on /invocations, but the
+        // AgentCore Runtime gateway strips custom headers before they reach
+        // the container, so `BedrockAgentCoreContext.get_oauth2_callback_url()`
+        // is empty here. `_resolve_callback_url` falls back to this env var —
+        // see apis/shared/oauth/agentcore_identity.py.
+        AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: config.domainName
+          ? `https://${config.domainName}/oauth-complete`
+          : 'http://localhost:4200/oauth-complete',
+
         // Shared platform workload identity (created in InfrastructureStack).
         // Both inference-api and app-api mint user-scoped workload tokens
         // against this identity so they share a single OAuth token vault.

@@ -405,6 +405,11 @@ export class AppApiStack extends cdk.Stack {
         PROJECT_PREFIX: config.projectPrefix,
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
         CORS_ORIGINS: buildCorsOrigins(config, config.appApi.additionalCorsOrigins).join(','),
+        // OAuth2 callback URL fallback when the frontend's `OAuth2CallbackUrl`
+        // header is absent — see apis/shared/oauth/agentcore_identity.py.
+        AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: config.domainName
+          ? `https://${config.domainName}/oauth-complete`
+          : 'http://localhost:4200/oauth-complete',
         DYNAMODB_QUOTA_TABLE: userQuotasTableName,
         DYNAMODB_EVENTS_TABLE: quotaEventsTableName,
         DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTableName,

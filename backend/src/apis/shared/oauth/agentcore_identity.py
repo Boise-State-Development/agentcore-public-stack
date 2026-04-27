@@ -76,16 +76,16 @@ class _ShortCircuitPoller(TokenPoller):
 # workload) — kept to avoid churning every deployment workflow at once.
 _RUNTIME_WORKLOAD_ENV = "AGENTCORE_RUNTIME_WORKLOAD_NAME"
 
-# Same shape as above for the OAuth2 callback URL. The runtime injects an
-# `OAuth2CallbackUrl` header on every proxied request; in local dev that
-# header is absent and `BedrockAgentCoreContext.get_oauth2_callback_url()`
-# returns None. Without a callback URL the SDK builds an authorize URL whose
-# redirect points to a default that never reaches our `/oauth-complete`
-# page, so consent silently fails to finalize and the user is re-prompted on
-# every request. Set this env var to your frontend's `/oauth-complete` URL
-# (e.g. `http://localhost:4200/oauth-complete`) to make chat-triggered
-# consent work outside the runtime.
-_LOCAL_CALLBACK_URL_ENV = "AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"
+# Same shape as above for the OAuth2 callback URL. App-api receives an
+# `OAuth2CallbackUrl` header from the frontend on settings-page connector
+# calls. Inference-api does not — the AgentCore Runtime gateway strips
+# custom request headers before they reach the container, so the frontend's
+# header on /invocations never arrives and `get_oauth2_callback_url()`
+# returns None. Both APIs therefore set this env var via CDK
+# (`<frontend-url>/oauth-complete`) as the runtime-stripped-header fallback
+# for the agent loop's consent flow. Local dev sets the same var to
+# `http://localhost:4200/oauth-complete`.
+_CALLBACK_URL_ENV = "AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"
 
 
 def _vendor_baseline_params(provider_type: Optional[str]) -> Dict[str, str]:
@@ -274,10 +274,12 @@ class AgentCoreIdentityClient:
     ) -> str:
         """Pick the OAuth2 callback URL and tag it with `provider_id`.
 
-        Resolution order: explicit arg → request-scoped context (Runtime
-        header) → `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` env var (local-dev
-        escape hatch). Raises `CallbackUrlUnavailableError` when none is
-        available — passing None to the SDK silently breaks consent.
+        Resolution order: explicit arg → request-scoped context (frontend
+        header on app-api; absent on inference-api because the runtime
+        strips custom headers) → `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` env
+        var (set by CDK on both API tasks; also used in local dev). Raises
+        `CallbackUrlUnavailableError` when none is available — passing None
+        to the SDK silently breaks consent.
 
         AgentCore's redirect doesn't echo any provider hint, so we append
         `provider_id` as a query param so `/oauth-complete` can dismiss the
@@ -288,16 +290,15 @@ class AgentCoreIdentityClient:
         base = (
             explicit
             or BedrockAgentCoreContext.get_oauth2_callback_url()
-            or os.environ.get(_LOCAL_CALLBACK_URL_ENV)
+            or os.environ.get(_CALLBACK_URL_ENV)
         )
         if not base:
             raise CallbackUrlUnavailableError(
-                "No OAuth2 callback URL available. In production the "
-                "AgentCore Runtime injects this via the `OAuth2CallbackUrl` "
-                "header; for local dev set "
-                f"{_LOCAL_CALLBACK_URL_ENV} to your frontend's "
-                "/oauth-complete URL (e.g. "
-                "http://localhost:4200/oauth-complete)."
+                "No OAuth2 callback URL available. App-api expects the "
+                "`OAuth2CallbackUrl` header from the frontend; inference-api "
+                f"reads {_CALLBACK_URL_ENV} (set by CDK) because the runtime "
+                "gateway strips custom headers. For local dev export "
+                f"{_CALLBACK_URL_ENV}=http://localhost:4200/oauth-complete."
             )
 
         parsed = urlparse(base)
