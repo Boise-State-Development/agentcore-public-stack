@@ -59,7 +59,6 @@ export class UserConnectorsService {
   async getStatus(providerId: string): Promise<ConnectorStatusResponse> {
     await this.auth.ensureAuthenticated();
     const callback = new URL('/oauth-complete', window.location.origin);
-    callback.searchParams.set('provider_id', providerId);
     return await firstValueFrom(
       this.http.get<ConnectorStatusResponse>(
         `${this.appApiUrl()}/${providerId}/status`,
@@ -75,11 +74,11 @@ export class UserConnectorsService {
   async initiateConsent(providerId: string): Promise<InitiateConsentResponse> {
     await this.auth.ensureAuthenticated();
     // AgentCore's GetResourceOauth2Token requires a callback URL. App-api
-    // reads this header via the shared AgentCoreContextMiddleware. We tack
-    // the provider_id onto the callback URL as a query param so
-    // /oauth-complete can surface the right providerId in its postMessage.
+    // reads this header via the shared AgentCoreContextMiddleware. The
+    // backend's `_resolve_callback_url` re-appends `provider_id` itself,
+    // and AgentCoreContextMiddleware rejects any URL with a query string
+    // as a redirect-pivot guard — so we send a bare `/oauth-complete`.
     const callback = new URL('/oauth-complete', window.location.origin);
-    callback.searchParams.set('provider_id', providerId);
     const raw = await firstValueFrom(
       this.http.post<Record<string, unknown>>(
         `${this.appApiUrl()}/${providerId}/initiate-consent`,
