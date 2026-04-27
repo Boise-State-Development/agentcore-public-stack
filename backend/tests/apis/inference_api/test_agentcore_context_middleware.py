@@ -49,16 +49,102 @@ class TestAgentCoreContextMiddleware:
         assert response.status_code == 200
         ctx.set_workload_access_token.assert_called_once_with("wat-abc123")
 
-    def test_copies_oauth2_callback_url_to_context(self, client: TestClient) -> None:
+    def test_copies_allowlisted_oauth2_callback_url_to_context(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com,https://staging.example.com")
         with patch(
             "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
-                headers={HEADER_OAUTH2_CALLBACK_URL: "https://example.com/cb"},
+                headers={HEADER_OAUTH2_CALLBACK_URL: "https://app.example.com/oauth-complete"},
             )
 
-        ctx.set_oauth2_callback_url.assert_called_once_with("https://example.com/cb")
+        ctx.set_oauth2_callback_url.assert_called_once_with(
+            "https://app.example.com/oauth-complete"
+        )
+
+    def test_rejects_callback_url_with_origin_outside_allowlist(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+        with patch(
+            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+        ) as ctx:
+            response = client.get(
+                "/echo",
+                headers={HEADER_OAUTH2_CALLBACK_URL: "https://evil.example.com/oauth-complete"},
+            )
+
+        assert response.status_code == 200
+        ctx.set_oauth2_callback_url.assert_not_called()
+
+    def test_rejects_callback_url_with_wrong_path(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+        with patch(
+            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+        ) as ctx:
+            client.get(
+                "/echo",
+                headers={HEADER_OAUTH2_CALLBACK_URL: "https://app.example.com/admin"},
+            )
+
+        ctx.set_oauth2_callback_url.assert_not_called()
+
+    def test_rejects_callback_url_with_query_or_fragment(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+        with patch(
+            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+        ) as ctx:
+            client.get(
+                "/echo",
+                headers={
+                    HEADER_OAUTH2_CALLBACK_URL: "https://app.example.com/oauth-complete?next=/admin"
+                },
+            )
+            client.get(
+                "/echo",
+                headers={
+                    HEADER_OAUTH2_CALLBACK_URL: "https://app.example.com/oauth-complete#x"
+                },
+            )
+
+        ctx.set_oauth2_callback_url.assert_not_called()
+
+    def test_rejects_callback_url_with_unsupported_scheme(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
+        with patch(
+            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+        ) as ctx:
+            client.get(
+                "/echo",
+                headers={
+                    HEADER_OAUTH2_CALLBACK_URL: "javascript:alert(1)//app.example.com/oauth-complete"
+                },
+            )
+
+        ctx.set_oauth2_callback_url.assert_not_called()
+
+    def test_rejects_callback_url_when_allowlist_empty(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CORS_ORIGINS", raising=False)
+        with patch(
+            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+        ) as ctx:
+            client.get(
+                "/echo",
+                headers={HEADER_OAUTH2_CALLBACK_URL: "https://app.example.com/oauth-complete"},
+            )
+
+        ctx.set_oauth2_callback_url.assert_not_called()
 
     def test_copies_session_and_request_id_to_context(
         self, client: TestClient
