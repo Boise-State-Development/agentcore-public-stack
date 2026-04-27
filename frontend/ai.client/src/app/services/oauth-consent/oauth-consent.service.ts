@@ -102,6 +102,14 @@ export class OAuthConsentService {
    *  the backend emits duplicates mid-stream. */
   private readonly requests = signal<Map<string, OAuthConsentRequest>>(new Map());
 
+  /** Interrupt ids we've already surfaced or resolved this session. Used to
+   *  ignore re-emissions of the same `oauth_required` event after a stream
+   *  replay or a late server-side breadcrumb clear — without this, a popup
+   *  that already completed consent would resurrect once dismissed. New
+   *  tool calls always carry a fresh interrupt id (Strands generates it
+   *  from `toolUseId`), so legitimate prompts are never suppressed. */
+  private readonly seenInterruptIds = new Set<string>();
+
   /** ProviderIds whose popup is currently open. */
   private readonly inFlight = signal<Set<string>>(new Set());
 
@@ -190,6 +198,16 @@ export class OAuthConsentService {
         { providerId },
       );
       return;
+    }
+    // Drop re-emissions of an already-handled interrupt. Stream replays after
+    // refresh, or a delayed server-side breadcrumb clear, can fire the same
+    // `oauth_required` event again — without this guard a successfully
+    // consented or dismissed prompt would resurrect.
+    if (interruptId && this.seenInterruptIds.has(interruptId)) {
+      return;
+    }
+    if (interruptId) {
+      this.seenInterruptIds.add(interruptId);
     }
     this.requests.update((map) => {
       const next = new Map(map);
@@ -481,6 +499,7 @@ export class OAuthConsentService {
     this.inFlight.set(new Set());
     this.blocked.set(new Set());
     this.lastCompletion.set(null);
+    this.seenInterruptIds.clear();
   }
 
   /** Acknowledge the last completion signal after the UI has reacted. */
