@@ -21,10 +21,10 @@ function toCamelCase<T>(obj: Record<string, unknown>): T {
 /**
  * User-facing connectors service.
  *
- * Catalog lives on app-api (`GET /connectors`). Consent initiation lives
- * on inference-api (`POST /connectors/{id}/initiate-consent`) because
- * AgentCore's IdentityClient needs the workload token that the runtime
- * middleware injects only on the inference path.
+ * All routes live on app-api. The AgentCore runtime data plane only proxies
+ * `/invocations` and `/ping`, so the previous inference-api consent endpoints
+ * were unreachable in cloud — app-api mints workload context via the
+ * `AGENTCORE_RUNTIME_WORKLOAD_NAME` fallback in `agentcore_identity.py`.
  */
 @Injectable({ providedIn: 'root' })
 export class UserConnectorsService {
@@ -33,9 +33,6 @@ export class UserConnectorsService {
   private readonly config = inject(ConfigService);
 
   private readonly appApiUrl = computed(() => `${this.config.appApiUrl()}/connectors`);
-  private readonly inferenceUrl = computed(
-    () => `${this.config.inferenceApiUrl()}/connectors`,
-  );
 
   readonly connectorsResource = resource<UserConnector[], void>({
     loader: async () => {
@@ -65,7 +62,7 @@ export class UserConnectorsService {
     callback.searchParams.set('provider_id', providerId);
     return await firstValueFrom(
       this.http.get<ConnectorStatusResponse>(
-        `${this.inferenceUrl()}/${providerId}/status`,
+        `${this.appApiUrl()}/${providerId}/status`,
         {
           headers: {
             OAuth2CallbackUrl: callback.toString(),
@@ -77,16 +74,15 @@ export class UserConnectorsService {
 
   async initiateConsent(providerId: string): Promise<InitiateConsentResponse> {
     await this.auth.ensureAuthenticated();
-    // AgentCore's GetResourceOauth2Token requires a callback URL. The runtime
-    // reads this header in prod via AgentCoreContextMiddleware; the settings
-    // page bypasses the runtime, so we set it explicitly on the request.
-    // We also tack the provider_id onto the callback URL as a query param so
+    // AgentCore's GetResourceOauth2Token requires a callback URL. App-api
+    // reads this header via the shared AgentCoreContextMiddleware. We tack
+    // the provider_id onto the callback URL as a query param so
     // /oauth-complete can surface the right providerId in its postMessage.
     const callback = new URL('/oauth-complete', window.location.origin);
     callback.searchParams.set('provider_id', providerId);
     const raw = await firstValueFrom(
       this.http.post<Record<string, unknown>>(
-        `${this.inferenceUrl()}/${providerId}/initiate-consent`,
+        `${this.appApiUrl()}/${providerId}/initiate-consent`,
         {},
         {
           headers: {
@@ -99,16 +95,15 @@ export class UserConnectorsService {
   }
 
   /**
-   * Best-effort disconnect: clears the inference-api's local token cache
-   * for this user/provider and flags it for forced re-consent on next
-   * use. AgentCore Identity exposes no per-user vault-delete, so the
-   * upstream token at the provider keeps existing until it expires or
-   * the user revokes our app from their provider account.
+   * Best-effort disconnect: persists the disconnect intent so the next tool
+   * call forces a fresh consent flow. AgentCore Identity exposes no per-user
+   * vault-delete, so the upstream token at the provider keeps existing
+   * until it expires or the user revokes our app from their provider account.
    */
   async disconnect(providerId: string): Promise<void> {
     await this.auth.ensureAuthenticated();
     await firstValueFrom(
-      this.http.delete(`${this.inferenceUrl()}/${providerId}/connection`),
+      this.http.delete(`${this.appApiUrl()}/${providerId}/connection`),
     );
   }
 

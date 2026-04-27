@@ -266,9 +266,9 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
     sessionUri: string,
     providerId: string | null,
   ): Promise<void> {
-    const baseUrl = this.config.inferenceApiUrl().replace(/\/invocations\/?$/, '');
+    const baseUrl = this.config.appApiUrl();
     if (!baseUrl) {
-      throw new Error('inferenceApiUrl not configured');
+      throw new Error('appApiUrl not configured');
     }
     const token = this.authService.getAccessToken();
     if (!token) {
