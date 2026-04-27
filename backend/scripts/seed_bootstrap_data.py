@@ -338,7 +338,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "description": "Perform mathematical calculations and evaluations.",
         "category": "utility",
         "protocol": "local",
-        "enabledByDefault": False,
+        "enabledByDefault": True,
         "isPublic": False,
         "forwardAuthToken": False,
     },

@@ -420,9 +420,9 @@ All modules are properly packaged and can be imported directly:
 # Import shared auth utilities
 from apis.shared.auth import get_current_user, User, StateStore
 
-# Import agentcore modules
-from agentcore.agent.agent import ChatbotAgent
-from agentcore.local_tools.weather import get_weather
+# Import agent modules
+from agents.main_agent import MainAgent
+from agents.local_tools.url_fetcher import fetch_url_content
 ```
 
 ## Dependencies Overview

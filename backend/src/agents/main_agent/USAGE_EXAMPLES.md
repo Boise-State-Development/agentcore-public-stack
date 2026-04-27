@@ -14,7 +14,7 @@ async def simple_chat():
     # Create agent with default settings
     agent = MainAgent(
         session_id="demo-session-001",
-        enabled_tools=["calculator", "weather"]
+        enabled_tools=["calculator", "fetch_url_content"]
     )
 
     # Stream a simple message
@@ -33,7 +33,7 @@ from agents.main_agent import MainAgent
 agent = MainAgent(
     session_id="session-001",
     user_id="user-123",
-    enabled_tools=["calculator", "weather", "visualization"],
+    enabled_tools=["calculator", "fetch_url_content", "create_visualization"],
     model_id="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     temperature=0.3,
     caching_enabled=True
@@ -268,7 +268,7 @@ os.environ['AWS_REGION'] = 'us-west-2'
 agent = MainAgent(
     session_id="cloud-session",
     user_id="user-123",  # For cross-session preferences
-    enabled_tools=["calculator", "weather"]
+    enabled_tools=["calculator", "fetch_url_content"]
 )
 
 # User preferences and facts are automatically retrieved
@@ -299,7 +299,7 @@ from agents.main_agent import MainAgent
 
 agent = MainAgent(
     session_id="stats-session",
-    enabled_tools=["calculator", "weather", "gateway_wikipedia", "unknown_tool"]
+    enabled_tools=["calculator", "fetch_url_content", "gateway_wikipedia", "unknown_tool"]
 )
 
 # Get tool statistics
@@ -370,7 +370,7 @@ async def safe_stream():
     agent = MainAgent(session_id="safe-session")
 
     try:
-        async for event in agent.stream_async("What's the weather?"):
+        async for event in agent.stream_async("Summarize https://example.com"):
             print(event)
     except Exception as e:
         print(f"Error: {e}")
@@ -393,7 +393,7 @@ logging.basicConfig(
 
 agent = MainAgent(
     session_id="monitored-session",
-    enabled_tools=["calculator", "weather"]
+    enabled_tools=["calculator", "fetch_url_content"]
 )
 
 # All agent operations are logged
@@ -462,7 +462,7 @@ from agentcore.agent.agent import ChatbotAgent
 agent = ChatbotAgent(
     session_id="session-123",
     user_id="user-456",
-    enabled_tools=["calculator", "weather"],
+    enabled_tools=["calculator", "fetch_url_content"],
     model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     temperature=0.7,
     system_prompt=None,
@@ -480,7 +480,7 @@ from agents.main_agent import MainAgent
 agent = MainAgent(
     session_id="session-123",
     user_id="user-456",
-    enabled_tools=["calculator", "weather"],
+    enabled_tools=["calculator", "fetch_url_content"],
     model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     temperature=0.7,
     system_prompt=None,
