@@ -10,7 +10,6 @@ import {
   ToolUpdateRequest,
   ToolRolesResponse,
   ToolRoleAssignment,
-  SyncResult,
 } from '../models/admin-tool.model';
 
 /**
@@ -197,30 +196,6 @@ export class AdminToolService {
       this.http.post(`${this.baseUrl()}/${toolId}/roles/remove`, { appRoleIds: roleIds })
     );
     this.toolsResource.reload();
-  }
-
-  /**
-   * Sync catalog from code registry.
-   */
-  async syncFromRegistry(dryRun: boolean = true): Promise<SyncResult> {
-    this._loading.set(true);
-    this._error.set(null);
-
-    try {
-      const response = await firstValueFrom(
-        this.http.post<SyncResult>(`${this.baseUrl()}/sync?dry_run=${dryRun}`, {})
-      );
-      if (!dryRun) {
-        this.toolsResource.reload();
-      }
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to sync catalog';
-      this._error.set(message);
-      throw err;
-    } finally {
-      this._loading.set(false);
-    }
   }
 
   /**

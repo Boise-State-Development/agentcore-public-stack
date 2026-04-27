@@ -18,13 +18,13 @@ Main entry point:
     agent = MainAgent(
         session_id="session-123",
         user_id="user-456",
-        enabled_tools=["calculator", "weather", "gateway_wikipedia"],
+        enabled_tools=["calculator", "fetch_url_content", "gateway_wikipedia"],
         model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         temperature=0.7,
         caching_enabled=True
     )
 
-    async for event in agent.stream_async("What's the weather in Seattle?"):
+    async for event in agent.stream_async("Summarize this page: https://example.com"):
         print(event)
 """
 from .main_agent import MainAgent

@@ -243,12 +243,12 @@ class ToolDefinition(BaseModel):
 
     # Identity
     tool_id: str = Field(
-        ..., description="Unique identifier (e.g., 'get_current_weather')"
+        ..., description="Unique identifier (e.g., 'fetch_url_content')"
     )
 
     # Display metadata
     display_name: str = Field(
-        ..., description="Human-readable name (e.g., 'Weather Lookup')"
+        ..., description="Human-readable name (e.g., 'URL Fetcher')"
     )
     description: str = Field(..., description="Description of what the tool does")
     category: ToolCategory = Field(default=ToolCategory.UTILITY)
@@ -771,18 +771,3 @@ class AdminToolListResponse(BaseModel):
     total: int
 
 
-class SyncResult(BaseModel):
-    """Result of syncing tool catalog from registry."""
-
-    discovered: List[dict] = Field(
-        default_factory=list, description="Tools found in registry but not in catalog"
-    )
-    orphaned: List[dict] = Field(
-        default_factory=list, description="Tools in catalog but not in registry"
-    )
-    unchanged: List[str] = Field(
-        default_factory=list, description="Tools that exist in both"
-    )
-    dry_run: bool = Field(..., alias="dryRun")
-
-    model_config = {"populate_by_name": True}

@@ -15,7 +15,6 @@ from apis.app_api.tools.models import (
     AddRemoveRolesRequest,
     AdminToolResponse,
     AdminToolListResponse,
-    SyncResult,
     ToolDefinition,
 )
 
@@ -353,35 +352,3 @@ async def remove_roles_from_tool(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# =============================================================================
-# Sync Endpoints
-# =============================================================================
-
-
-@router.post("/sync", response_model=SyncResult)
-async def sync_from_registry(
-    dry_run: bool = Query(True, description="If true, only report what would happen"),
-    admin: User = Depends(require_admin),
-):
-    """
-    Sync catalog from code registry.
-
-    Discovers tools from the backend tool registry and updates the catalog:
-    - Creates entries for new tools
-    - Marks orphaned tools as deprecated
-
-    Requires admin access.
-
-    Args:
-        dry_run: If true, only report changes without applying
-        admin: Authenticated admin user (injected)
-
-    Returns:
-        SyncResult with discovered, orphaned, and unchanged tools
-    """
-    logger.info("Admin syncing tool catalog")
-
-    service = get_tool_catalog_service()
-    result = await service.sync_catalog_from_registry(admin, dry_run=dry_run)
-
-    return result

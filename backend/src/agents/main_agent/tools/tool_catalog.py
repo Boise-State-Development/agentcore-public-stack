@@ -58,13 +58,6 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         icon="link",
     ),
     # --- Local Tools (Data & Visualization) ---
-    "get_current_weather": ToolMetadata(
-        tool_id="get_current_weather",
-        name="Weather",
-        description="Get current weather conditions for US locations using coordinates.",
-        category=ToolCategory.DATA,
-        icon="cloud",
-    ),
     "create_visualization": ToolMetadata(
         tool_id="create_visualization",
         name="Charts & Graphs",

@@ -2,7 +2,7 @@
 Tool Catalog Service
 
 Service for tool catalog operations with AppRole integration.
-Provides CRUD operations, user access computation, and bidirectional sync.
+Provides CRUD operations, user access computation, and bidirectional role sync.
 """
 
 import logging
@@ -18,19 +18,9 @@ from .models import (
     UserToolAccess,
     UserToolPreference,
     ToolCategory,
-    ToolProtocol,
-    ToolStatus,
     ToolRoleAssignment,
-    SyncResult,
 )
 from .repository import ToolCatalogRepository, get_tool_catalog_repository
-
-# Import the existing in-memory catalog for fallback
-from agents.main_agent.tools.tool_catalog import (
-    TOOL_CATALOG,
-    ToolMetadata,
-    ToolCategory as LegacyToolCategory,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +34,6 @@ class ToolCatalogService:
     - User preference management
     - Access computation using AppRoleService
     - Bidirectional sync between tools and AppRoles
-    - Fallback to in-memory catalog during migration
     """
 
     def __init__(
@@ -57,7 +46,6 @@ class ToolCatalogService:
         self.repository = repository or get_tool_catalog_repository()
         self.app_role_service = app_role_service or get_app_role_service()
         self.app_role_admin_service = app_role_admin_service or get_app_role_admin_service()
-        self._use_fallback = True  # Use in-memory catalog as fallback
 
     # =========================================================================
     # User-Facing Methods
@@ -200,15 +188,7 @@ class ToolCatalogService:
 
     async def get_tool(self, tool_id: str) -> Optional[ToolDefinition]:
         """Get a specific tool by ID."""
-        tool = await self.repository.get_tool(tool_id)
-
-        # Fallback to in-memory catalog if not found in DB
-        if not tool and self._use_fallback:
-            legacy = TOOL_CATALOG.get(tool_id)
-            if legacy:
-                tool = self._legacy_to_definition(legacy)
-
-        return tool
+        return await self.repository.get_tool(tool_id)
 
     def _validate_auth_config(self, tool: ToolDefinition) -> None:
         """
@@ -499,145 +479,14 @@ class ToolCatalogService:
             await self.app_role_admin_service.update_role(role_id, updates, admin)
 
     # =========================================================================
-    # Registry Sync
-    # =========================================================================
-
-    async def sync_catalog_from_registry(
-        self, admin: User, dry_run: bool = True
-    ) -> SyncResult:
-        """
-        Discover new tools from the backend registry and add them to the catalog.
-
-        Only adds tools that are in the registry but not yet in the catalog.
-        Does NOT modify or deprecate existing catalog entries, since those may
-        include externally configured tools (MCP external, A2A, etc.).
-
-        Args:
-            admin: Admin user performing the action
-            dry_run: If True, only report what would happen
-
-        Returns:
-            SyncResult with discovered and unchanged tools
-        """
-        # Get registered tools from in-memory catalog
-        registered_tools = TOOL_CATALOG
-        registered_ids = set(registered_tools.keys())
-
-        # Get catalog tools from DynamoDB
-        catalog_tools = await self.repository.list_tools()
-        catalog_ids = {t.tool_id for t in catalog_tools}
-
-        discovered = []
-        for tool_id, legacy in registered_tools.items():
-            if tool_id not in catalog_ids:
-                discovered.append({
-                    "tool_id": tool_id,
-                    "display_name": legacy.name,
-                    "description": legacy.description,
-                    "category": self._map_legacy_category(legacy.category),
-                    "protocol": ToolProtocol.LOCAL,
-                    "action": "create",
-                })
-
-        unchanged = list(catalog_ids & registered_ids)
-
-        if not dry_run:
-            # Create discovered tools
-            for item in discovered:
-                tool = ToolDefinition(
-                    tool_id=item["tool_id"],
-                    display_name=item["display_name"],
-                    description=item["description"],
-                    category=item["category"],
-                    protocol=item["protocol"],
-                    status=ToolStatus.ACTIVE,
-                    is_public=self._is_public_tool(item["tool_id"]),
-                    enabled_by_default=self._get_default_enabled(item["tool_id"]),
-                )
-                await self.create_tool(tool, admin)
-
-            logger.info(
-                f"Admin {admin.email} synced tool catalog",
-                extra={
-                    "event": "tool_catalog_synced",
-                    "admin_user_id": admin.user_id,
-                    "discovered": len(discovered),
-                },
-            )
-
-        return SyncResult(
-            discovered=discovered,
-            orphaned=[],
-            unchanged=unchanged,
-            dry_run=dry_run,
-        )
-
-    # =========================================================================
     # Helper Methods
     # =========================================================================
 
     async def _get_all_active_tools(
         self, status: Optional[str] = None
     ) -> List[ToolDefinition]:
-        """
-        Get all tools, using DynamoDB with fallback to in-memory catalog.
-        """
-        # Try to get from DynamoDB first
-        tools = await self.repository.list_tools(status=status)
-
-        # If no tools in DB and fallback enabled, use in-memory catalog
-        if not tools and self._use_fallback:
-            tools = [
-                self._legacy_to_definition(legacy)
-                for legacy in TOOL_CATALOG.values()
-            ]
-            # Apply status filter
-            if status:
-                tools = [t for t in tools if t.status == status]
-
-        return tools
-
-    def _legacy_to_definition(self, legacy: ToolMetadata) -> ToolDefinition:
-        """Convert legacy ToolMetadata to ToolDefinition."""
-        return ToolDefinition(
-            tool_id=legacy.tool_id,
-            display_name=legacy.name,
-            description=legacy.description,
-            category=self._map_legacy_category(legacy.category),
-            protocol=ToolProtocol.MCP_GATEWAY if legacy.is_gateway_tool else ToolProtocol.LOCAL,
-            status=ToolStatus.ACTIVE,
-            requires_oauth_provider=legacy.requires_oauth_provider,
-            is_public=self._is_public_tool(legacy.tool_id),
-            enabled_by_default=self._get_default_enabled(legacy.tool_id),
-        )
-
-    def _map_legacy_category(self, legacy_cat: LegacyToolCategory) -> ToolCategory:
-        """Map legacy category to new category enum."""
-        mapping = {
-            LegacyToolCategory.SEARCH: ToolCategory.SEARCH,
-            LegacyToolCategory.DATA: ToolCategory.DATA,
-            LegacyToolCategory.UTILITIES: ToolCategory.UTILITY,
-            LegacyToolCategory.CODE: ToolCategory.CODE,
-            LegacyToolCategory.GATEWAY: ToolCategory.GATEWAY,
-        }
-        return mapping.get(legacy_cat, ToolCategory.UTILITY)
-
-    def _is_public_tool(self, tool_id: str) -> bool:
-        """Determine if a tool should be public (available to all users)."""
-        public_tools = {
-            "calculator",
-            "get_current_weather",
-        }
-        return tool_id in public_tools
-
-    def _get_default_enabled(self, tool_id: str) -> bool:
-        """Determine default enabled state for a tool."""
-        # Based on current frontend defaults
-        enabled_by_default = {
-            "fetch_url_content",
-            "calculator",
-        }
-        return tool_id in enabled_by_default
+        """Get all tools from the catalog, optionally filtered by status."""
+        return await self.repository.list_tools(status=status)
 
 
 # Global service instance

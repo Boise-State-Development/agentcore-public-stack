@@ -162,16 +162,6 @@ export interface SetToolRolesRequest {
 }
 
 /**
- * Result of syncing tool catalog from registry.
- */
-export interface SyncResult {
-  discovered: { tool_id: string; display_name: string; action: string }[];
-  orphaned: { tool_id: string; action: string }[];
-  unchanged: string[];
-  dryRun: boolean;
-}
-
-/**
  * Form data model for creating/editing a tool.
  */
 export interface ToolFormData {

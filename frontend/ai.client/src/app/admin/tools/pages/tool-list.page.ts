@@ -17,7 +17,6 @@ import {
   heroTrash,
   heroUserGroup,
   heroXMark,
-  heroArrowPath,
   heroGlobeAlt,
   heroCheck,
   heroXCircle,
@@ -26,7 +25,6 @@ import {
 import { AdminToolService } from '../services/admin-tool.service';
 import { AdminTool, TOOL_CATEGORIES, TOOL_STATUSES } from '../models/admin-tool.model';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
-import { SyncResultDialogComponent, SyncResultDialogData, SyncResultDialogResult } from '../components/sync-result-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
 import { TooltipDirective } from '../../../components/tooltip';
 
@@ -42,7 +40,6 @@ import { TooltipDirective } from '../../../components/tooltip';
       heroTrash,
       heroUserGroup,
       heroXMark,
-      heroArrowPath,
       heroGlobeAlt,
       heroCheck,
       heroXCircle,
@@ -70,18 +67,6 @@ import { TooltipDirective } from '../../../components/tooltip';
         </p>
       </div>
       <div class="flex gap-2">
-        <button
-          (click)="syncFromRegistry()"
-          [disabled]="syncing()"
-          class="inline-flex items-center gap-2 rounded-sm border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 disabled:opacity-50"
-        >
-          <ng-icon
-            name="heroArrowPath"
-            class="size-5"
-            [class.animate-spin]="syncing()"
-          />
-          Sync from Registry
-        </button>
         <a
           routerLink="/admin/tools/new"
           class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
@@ -281,14 +266,14 @@ import { TooltipDirective } from '../../../components/tooltip';
             <p class="text-sm/6">Try adjusting your search or filter criteria</p>
           } @else {
             <p class="text-lg/7">No tools in catalog</p>
-            <p class="text-sm/6 mb-4">Sync from registry or add tools manually</p>
-            <button
-              (click)="syncFromRegistry()"
+            <p class="text-sm/6 mb-4">Add a tool to get started.</p>
+            <a
+              routerLink="/admin/tools/new"
               class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700"
             >
-              <ng-icon name="heroArrowPath" class="size-5" />
-              Sync from Registry
-            </button>
+              <ng-icon name="heroPlus" class="size-5" />
+              Add Tool
+            </a>
           }
         </div>
       }
@@ -308,7 +293,6 @@ export class ToolListPage {
   searchQuery = signal('');
   statusFilter = signal('');
   categoryFilter = signal('');
-  syncing = signal(false);
 
   // Computed
   readonly tools = computed(() => this.adminToolService.getTools());
@@ -402,42 +386,6 @@ export class ToolListPage {
         console.error('Error deleting tool:', error);
         const message = error instanceof Error ? error.message : 'Failed to delete tool.';
         alert(message);
-      }
-    }
-  }
-
-  async syncFromRegistry(): Promise<void> {
-    this.syncing.set(true);
-    try {
-      const result = await this.adminToolService.syncFromRegistry(true);
-      await this.openSyncResultDialog(result);
-    } catch (error: unknown) {
-      console.error('Error syncing:', error);
-      const message = error instanceof Error ? error.message : 'Failed to sync catalog.';
-      alert(message);
-    } finally {
-      this.syncing.set(false);
-    }
-  }
-
-  private async openSyncResultDialog(result: SyncResultDialogData): Promise<void> {
-    const dialogRef = this.dialog.open<SyncResultDialogResult>(SyncResultDialogComponent, {
-      data: result,
-    });
-
-    const shouldApply = await firstValueFrom(dialogRef.closed);
-    if (shouldApply) {
-      this.syncing.set(true);
-      try {
-        const applyResult = await this.adminToolService.syncFromRegistry(false);
-        // Show the result of applying changes
-        await this.openSyncResultDialog(applyResult);
-      } catch (error: unknown) {
-        console.error('Error applying sync:', error);
-        const message = error instanceof Error ? error.message : 'Failed to apply sync.';
-        alert(message);
-      } finally {
-        this.syncing.set(false);
       }
     }
   }

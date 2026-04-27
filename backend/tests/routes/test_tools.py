@@ -26,10 +26,10 @@ from tests.routes.conftest import mock_auth_user, mock_no_auth
 ROUTES_MODULE = "apis.app_api.tools.routes"
 
 SAMPLE_TOOL = UserToolAccess(
-    tool_id="get_current_weather",
-    display_name="Weather Lookup",
-    description="Get current weather for a location",
-    category="utility",
+    tool_id="fetch_url_content",
+    display_name="URL Fetcher",
+    description="Fetch and extract text content from web pages",
+    category="search",
     protocol="local",
     status="active",
     requires_oauth_provider=None,

@@ -332,6 +332,26 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": False,
         "forwardAuthToken": False,
     },
+    {
+        "toolId": "calculator",
+        "displayName": "Calculator",
+        "description": "Perform mathematical calculations and evaluations.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "generate_diagram_and_validate",
+        "displayName": "Code Interpreter",
+        "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
+        "category": "code",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
 ]
 
 

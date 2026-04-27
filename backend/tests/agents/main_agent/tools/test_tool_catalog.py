@@ -35,12 +35,12 @@ def _build_test_catalog() -> dict[str, ToolMetadata]:
             category=ToolCategory.SEARCH,
             icon="link",
         ),
-        "get_current_weather": ToolMetadata(
-            tool_id="get_current_weather",
-            name="Weather",
-            description="Current weather",
+        "create_visualization": ToolMetadata(
+            tool_id="create_visualization",
+            name="Charts & Graphs",
+            description="Create charts",
             category=ToolCategory.DATA,
-            icon="cloud",
+            icon="chart-bar",
         ),
     }
 
@@ -61,7 +61,7 @@ class TestGetAllTools:
         tools = catalog_service.get_all_tools()
         assert len(tools) == 3
         ids = {t.tool_id for t in tools}
-        assert ids == {"calculator", "fetch_url_content", "get_current_weather"}
+        assert ids == {"calculator", "fetch_url_content", "create_visualization"}
 
     def test_default_catalog_used_when_none_provided(self):
         """Validates: Requirement 7.1 (edge case — default catalog)"""

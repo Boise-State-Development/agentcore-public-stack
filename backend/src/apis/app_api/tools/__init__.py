@@ -17,7 +17,6 @@ from .models import (
     AddRemoveRolesRequest,
     AdminToolResponse,
     AdminToolListResponse,
-    SyncResult,
 )
 from .repository import ToolCatalogRepository, get_tool_catalog_repository
 from .service import ToolCatalogService, get_tool_catalog_service
@@ -41,7 +40,6 @@ __all__ = [
     "AddRemoveRolesRequest",
     "AdminToolResponse",
     "AdminToolListResponse",
-    "SyncResult",
     # Repository
     "ToolCatalogRepository",
     "get_tool_catalog_repository",
