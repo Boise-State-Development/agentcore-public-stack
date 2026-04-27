@@ -929,6 +929,20 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
+    // DeleteOauth2CredentialProvider synchronously deletes the underlying
+    // Secrets Manager secret AgentCore created to hold the OAuth client secret,
+    // and authorizes that DeleteSecret call against the caller's identity.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreOAuthSecretDelete',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:DeleteSecret'],
+        resources: [
+          `arn:aws:secretsmanager:${config.awsRegion}:${config.awsAccount}:secret:bedrock-agentcore-identity!default/oauth2/*`,
+        ],
+      })
+    );
+
     // Admin CRUD for OAuth2 credential providers stored in AgentCore Identity.
     // Provider-scoped actions are scoped to the default token vault; List
     // requires a broader resource since it enumerates the vault itself.
