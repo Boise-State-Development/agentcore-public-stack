@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -147,6 +148,42 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/secret-name`,
       stringValue: this.authSecret.secretName,
       description: 'Authentication Secret Name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
+    // AgentCore Identity - Shared Platform Workload
+    // ============================================================
+    // AgentCore Runtimes auto-create their own workload identity, but it is
+    // service-linked: only the runtime container itself can mint tokens
+    // against it via GetWorkloadAccessTokenForUserId. App-api lives outside
+    // the runtime gateway and was failing 500 with `WorkloadIdentity is
+    // linked to a service and cannot retrieve an access token by the caller`.
+    //
+    // We create our own workload identity here so both APIs can mint against
+    // it. The OAuth token vault is keyed by (workload identity, user,
+    // provider), so sharing one identity is what lets the settings-page
+    // consent flow and the runtime agent loop see the same vaulted tokens —
+    // a user consents once and both code paths find the token.
+    //
+    // The runtime's auto-created identity is left in place (we can't tell
+    // CreateAgentRuntime to use a pre-existing one) but is no longer used
+    // for vault calls — see `_resolve_workload_token` in the backend.
+    const platformWorkloadIdentity = new bedrock.CfnWorkloadIdentity(this, 'PlatformWorkloadIdentity', {
+      name: getResourceName(config, 'platform-workload'),
+    });
+
+    new ssm.StringParameter(this, 'PlatformWorkloadIdentityNameParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/platform-workload-identity-name`,
+      stringValue: platformWorkloadIdentity.name,
+      description: 'Shared AgentCore workload identity used by both inference-api and app-api for OAuth vault calls',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'PlatformWorkloadIdentityArnParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/platform-workload-identity-arn`,
+      stringValue: platformWorkloadIdentity.attrWorkloadIdentityArn,
+      description: 'Shared AgentCore workload identity ARN',
       tier: ssm.ParameterTier.STANDARD,
     });
 

@@ -9,12 +9,17 @@ calls) and the app API (settings-page connector status / consent flows).
 Lives in `apis/shared/oauth/` so neither API has to reach into the other's
 package.
 
-The client pulls the per-invocation workload identity token from
-`BedrockAgentCoreContext`, which is populated by `AgentCoreContextMiddleware`
-when the request comes through the AgentCore Runtime gateway. Outside the
-runtime (app-api, local dev), the mint fallback at `_resolve_workload_token`
-takes over — set `AGENTCORE_RUNTIME_WORKLOAD_NAME` to the runtime workload
-identity to act as that workload.
+Both APIs mint user-scoped workload access tokens against a shared platform
+workload identity (defined in InfrastructureStack, exported as
+`/<projectPrefix>/oauth/platform-workload-identity-name`). They cannot
+share the runtime's auto-created identity — that one is service-linked and
+only mintable from inside the runtime container — so we own a separate
+identity that both APIs act as via `GetWorkloadAccessTokenForUserId`.
+
+`AGENTCORE_RUNTIME_WORKLOAD_NAME` (env var, name kept for diff hygiene)
+points at this shared identity. When unset, `_resolve_workload_token`
+falls back to the runtime-injected `BedrockAgentCoreContext` token — used
+by tests and legacy code paths.
 
 Two results are possible when fetching a token:
 
@@ -63,17 +68,12 @@ class _ShortCircuitPoller(TokenPoller):
     async def poll_for_token(self) -> str:
         raise _ConsentRequired()
 
-# In production, the AgentCore Runtime proxies every request to the inference
-# API with a `WorkloadAccessToken` header bound to (runtime workload, user).
-# `AgentCoreContextMiddleware` copies that header onto `BedrockAgentCoreContext`
-# so downstream code can fetch user-federated OAuth tokens without threading
-# it through function args.
-#
-# Local dev doesn't go through the runtime, so the header is absent. When
-# `AGENTCORE_RUNTIME_WORKLOAD_NAME` is set, we fall back to minting a workload
-# token against that runtime ourselves via
-# `bedrock-agentcore:GetWorkloadAccessTokenForUserId`. The caller's AWS
-# principal must be authorised for that action on the target workload.
+# Name of the shared platform workload identity. Both inference-api and
+# app-api mint user-scoped workload tokens against this identity via
+# `bedrock-agentcore:GetWorkloadAccessTokenForUserId`, so they share a
+# single OAuth token vault. The env var name is historical (it pre-dates
+# the shared-identity design when it pointed at the runtime's own
+# workload) — kept to avoid churning every deployment workflow at once.
 _RUNTIME_WORKLOAD_ENV = "AGENTCORE_RUNTIME_WORKLOAD_NAME"
 
 # Same shape as above for the OAuth2 callback URL. The runtime injects an
@@ -190,12 +190,11 @@ class AgentCoreIdentityClient:
     ) -> TokenResult:
         """Fetch a user-federated OAuth2 access token for `provider_name`.
 
-        In production the workload identity token comes from
-        `BedrockAgentCoreContext` (populated by `AgentCoreContextMiddleware`
-        from the AgentCore Runtime's request header). For local dev the
-        header is absent — when `AGENTCORE_RUNTIME_WORKLOAD_NAME` is set
-        and `user_id` is provided, we mint a workload token ourselves
-        against that runtime.
+        In production both APIs mint a fresh workload token against the
+        shared platform workload identity (configured via
+        `AGENTCORE_RUNTIME_WORKLOAD_NAME`), bound to `user_id`. When the
+        env var is unset, falls back to the runtime-injected
+        `BedrockAgentCoreContext` token — used by tests.
 
         If the user has not consented (or re-consent is required), returns a
         `TokenResult` with `authorization_url` populated instead of raising.
@@ -210,9 +209,9 @@ class AgentCoreIdentityClient:
             force_authentication: If True, bypasses the token vault cache and
                 forces the user through the consent flow again. Used for
                 scope upgrades.
-            user_id: User identifier for the local-dev workload-token
-                fallback. Ignored in production where the context already
-                has a token.
+            user_id: User identifier for workload-token minting. Required
+                when `AGENTCORE_RUNTIME_WORKLOAD_NAME` is set (the
+                production path).
 
         Returns:
             `TokenResult` with either `access_token` or `authorization_url`.
@@ -307,45 +306,54 @@ class AgentCoreIdentityClient:
         return urlunparse(parsed._replace(query=urlencode(existing)))
 
     def _resolve_workload_token(self, user_id: Optional[str]) -> str:
-        """Return a workload access token, preferring the runtime-supplied one.
+        """Return a workload access token bound to the configured workload.
 
-        Falls back to minting via `GetWorkloadAccessTokenForUserId` when the
-        context has no token, the `AGENTCORE_RUNTIME_WORKLOAD_NAME` env var
-        is set, and the caller passed `user_id`. Any other combination
-        raises `WorkloadTokenUnavailableError`.
+        When `AGENTCORE_RUNTIME_WORKLOAD_NAME` is set we always mint a fresh
+        token against that workload via `GetWorkloadAccessTokenForUserId`,
+        regardless of whether a context token is present. The runtime
+        injects its own workload token (bound to its auto-created
+        service-linked identity), but vault entries are keyed by workload
+        — so using the runtime-injected token here would fragment the vault
+        across services. Both APIs mint against the same shared platform
+        workload identity instead, so app-api's settings-page consent flow
+        and the runtime's agent loop see the same vaulted tokens.
+
+        When the env var is not set (tests, legacy code paths), fall back
+        to the runtime-injected context token if present, otherwise raise.
         """
+        workload_name = os.environ.get(_RUNTIME_WORKLOAD_ENV)
+        if workload_name:
+            if not user_id:
+                raise WorkloadTokenUnavailableError(
+                    f"{_RUNTIME_WORKLOAD_ENV} is set but no user_id was "
+                    "provided. Workload token minting requires a user_id."
+                )
+            logger.info(
+                "Minting workload access token for user=%s workload=%s",
+                user_id,
+                workload_name,
+            )
+            response = self._control_client.get_workload_access_token_for_user_id(
+                workloadName=workload_name,
+                userId=user_id,
+            )
+            minted_token = response.get("workloadAccessToken")
+            if not minted_token:
+                raise WorkloadTokenUnavailableError(
+                    "GetWorkloadAccessTokenForUserId returned no token"
+                )
+            return minted_token
+
         context_token = BedrockAgentCoreContext.get_workload_access_token()
         if context_token:
             return context_token
 
-        workload_name = os.environ.get(_RUNTIME_WORKLOAD_ENV)
-        if not workload_name:
-            raise WorkloadTokenUnavailableError(
-                "No WorkloadAccessToken on context. For local dev, set "
-                f"{_RUNTIME_WORKLOAD_ENV} to your deployed runtime's "
-                "workload identity name (e.g. hosted_agent_XXXXX)."
-            )
-        if not user_id:
-            raise WorkloadTokenUnavailableError(
-                "No WorkloadAccessToken on context and no user_id provided "
-                "for the local-dev mint fallback."
-            )
-
-        logger.info(
-            "Minting workload access token for user=%s workload=%s (local dev)",
-            user_id,
-            workload_name,
+        raise WorkloadTokenUnavailableError(
+            f"No WorkloadAccessToken on context and {_RUNTIME_WORKLOAD_ENV} "
+            "is unset. Set the env var to the shared platform workload "
+            "identity name (exported as "
+            "/<projectPrefix>/oauth/platform-workload-identity-name)."
         )
-        response = self._control_client.get_workload_access_token_for_user_id(
-            workloadName=workload_name,
-            userId=user_id,
-        )
-        minted_token = response.get("workloadAccessToken")
-        if not minted_token:
-            raise WorkloadTokenUnavailableError(
-                "GetWorkloadAccessTokenForUserId returned no token"
-            )
-        return minted_token
 
 
 _default_client: Optional[AgentCoreIdentityClient] = None

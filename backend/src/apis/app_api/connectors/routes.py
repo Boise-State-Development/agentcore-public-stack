@@ -10,13 +10,13 @@ fronts the inference API only proxies `/invocations` and `/ping`, so custom
 paths like `/connectors/{id}/status` get a 404 from AWS before reaching the
 container.
 
-The IdentityClient still needs a workload access token to talk to AgentCore
-Identity. App-api isn't behind the runtime gateway, so the
-WorkloadAccessToken header isn't injected — the client falls back to
-minting one via `bedrock-agentcore:GetWorkloadAccessTokenForUserId` against
-the runtime workload identified by `AGENTCORE_RUNTIME_WORKLOAD_NAME`. This
-keeps both APIs operating against a single shared OAuth vault so the agent
-loop on inference-api sees tokens vaulted from the settings page here.
+The IdentityClient mints workload access tokens against the shared
+platform workload identity (configured via `AGENTCORE_RUNTIME_WORKLOAD_NAME`,
+populated from `/<projectPrefix>/oauth/platform-workload-identity-name`).
+The runtime's auto-created workload identity is service-linked and only
+mintable from inside the runtime container, so we own a separate identity
+that both APIs share. That keeps the OAuth vault unified — tokens vaulted
+from the settings page here are visible to the agent loop on inference-api.
 
 The frontend supplies `OAuth2CallbackUrl` as an explicit header on these
 calls; `AgentCoreContextMiddleware` (installed on app-api in `main.py`)
@@ -245,8 +245,8 @@ async def initiate_consent(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
                 "AgentCore workload context unavailable. Set "
-                "AGENTCORE_RUNTIME_WORKLOAD_NAME to the runtime workload "
-                "identity and grant the task role "
+                "AGENTCORE_RUNTIME_WORKLOAD_NAME to the shared platform "
+                "workload identity and grant the task role "
                 "bedrock-agentcore:GetWorkloadAccessTokenForUserId."
             ),
         )

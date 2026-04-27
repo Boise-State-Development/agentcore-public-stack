@@ -447,14 +447,16 @@ export class AppApiStack extends cdk.Stack {
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
         DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
         DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: oauthUserTokensTableName,
-        // Lets the connector consent flow mint workload tokens against the
-        // runtime's workload identity so its OAuth vault is shared with the
-        // agent loop on inference-api. Required by IdentityClient when the
-        // request isn't proxied through the AgentCore Runtime gateway (i.e.
-        // every app-api request).
+        // Shared platform workload identity (created in InfrastructureStack).
+        // Both app-api and inference-api mint against this same identity so
+        // the OAuth token vault is shared: a user consents once via the
+        // settings page and the runtime agent loop sees the same vaulted
+        // token. The runtime's own auto-created identity is service-linked
+        // and only mintable from inside the runtime container, so we cannot
+        // share that one across services.
         AGENTCORE_RUNTIME_WORKLOAD_NAME: ssm.StringParameter.valueForStringParameter(
           this,
-          `/${config.projectPrefix}/inference-api/runtime-workload-identity-name`
+          `/${config.projectPrefix}/oauth/platform-workload-identity-name`
         ),
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
@@ -980,11 +982,11 @@ export class AppApiStack extends cdk.Stack {
       })
     );
 
-    // User-facing consent flows: app-api impersonates the runtime's workload
-    // identity to look up vaulted tokens and finalize OAuth2 sessions on
-    // behalf of users. Mirrors the inference-api task role's permissions —
-    // both APIs need to act as the same workload so they read/write a single
-    // shared token vault. Without these, /connectors/{id}/{status,initiate,
+    // User-facing consent flows: app-api mints user-scoped workload tokens
+    // against the shared platform workload identity (defined in
+    // InfrastructureStack) so it shares the OAuth vault with the
+    // inference-api agent loop. Mirrors the runtime task role's
+    // permissions. Without these, /connectors/{id}/{status,initiate,
     // disconnect,complete} return 503 from the app-api routes.
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({

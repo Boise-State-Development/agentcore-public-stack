@@ -6,7 +6,6 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
-import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from './config';
 
@@ -479,7 +478,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
       resources: [
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
-        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/hosted_agent_*`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
       ],
     }));
 
@@ -498,7 +497,7 @@ export class InferenceApiStack extends cdk.Stack {
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/*`,
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
-        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/hosted_agent_*`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
       ],
     }));
 
@@ -976,6 +975,17 @@ export class InferenceApiStack extends cdk.Stack {
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
         CORS_ORIGINS: corsOrigins,
+
+        // Shared platform workload identity (created in InfrastructureStack).
+        // Both inference-api and app-api mint user-scoped workload tokens
+        // against this identity so they share a single OAuth token vault.
+        // The runtime auto-creates its own service-linked identity, but it
+        // cannot be shared cross-service — see InfrastructureStack and
+        // `_resolve_workload_token` in apis/shared/oauth/agentcore_identity.py.
+        AGENTCORE_RUNTIME_WORKLOAD_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/oauth/platform-workload-identity-name`
+        ),
       },
     });
     this.runtime.node.addDependency(runtimeExecutionRole);
@@ -1239,55 +1249,10 @@ export class InferenceApiStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    // AgentCore Identity auto-creates a workload identity when the runtime is
-    // created. App-api (which lives outside the runtime gateway) needs the
-    // name segment to mint workload tokens via GetWorkloadAccessTokenForUserId
-    // — i.e. to act as this same workload so its OAuth vault is shared with
-    // the runtime.
-    //
-    // The runtime resource exposes WorkloadIdentityDetails as a top-level CFN
-    // attribute, but Fn::GetAtt rejects the nested `.WorkloadIdentityArn` path
-    // because the resource provider schema doesn't declare it as readable.
-    // Look it up via the control plane SDK instead.
-    //
-    // ARN format:
-    //   arn:aws:bedrock-agentcore:<region>:<account>:workload-identity-directory/default/workload-identity/<name>
-    const runtimeLookup = new cr.AwsCustomResource(this, 'RuntimeWorkloadIdentityLookup', {
-      onUpdate: {
-        service: '@aws-sdk/client-bedrock-agentcore-control',
-        action: 'GetAgentRuntime',
-        parameters: { agentRuntimeId: this.runtime.attrAgentRuntimeId },
-        physicalResourceId: cr.PhysicalResourceId.fromResponse('agentRuntimeId'),
-        outputPaths: ['workloadIdentityDetails.workloadIdentityArn'],
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ['bedrock-agentcore:GetAgentRuntime'],
-          resources: [this.runtime.attrAgentRuntimeArn],
-        }),
-      ]),
-      installLatestAwsSdk: true,
-    });
-    runtimeLookup.node.addDependency(this.runtime);
-    const workloadIdentityArn = runtimeLookup.getResponseField('workloadIdentityDetails.workloadIdentityArn');
-    const workloadIdentityName = cdk.Fn.select(
-      1,
-      cdk.Fn.split('workload-identity/', workloadIdentityArn)
-    );
-
-    new ssm.StringParameter(this, 'RuntimeWorkloadIdentityArnParameter', {
-      parameterName: `/${config.projectPrefix}/inference-api/runtime-workload-identity-arn`,
-      stringValue: workloadIdentityArn,
-      description: 'AgentCore Runtime workload identity ARN (auto-created by AgentCore Identity)',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    new ssm.StringParameter(this, 'RuntimeWorkloadIdentityNameParameter', {
-      parameterName: `/${config.projectPrefix}/inference-api/runtime-workload-identity-name`,
-      stringValue: workloadIdentityName,
-      description: 'AgentCore Runtime workload identity name (last segment of WorkloadIdentityArn)',
-      tier: ssm.ParameterTier.STANDARD,
-    });
+    // The runtime auto-creates its own service-linked workload identity, but
+    // we don't surface it: it's only mintable from inside the runtime
+    // container, so cross-service callers can't use it. Both APIs share the
+    // platform workload identity defined in InfrastructureStack instead.
 
     // Construct the full runtime endpoint URL for frontend consumption
     const runtimeEndpointUrl = cdk.Fn.sub(
