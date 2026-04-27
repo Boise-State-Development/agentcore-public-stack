@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 
 from strands.hooks import (
     AfterToolCallEvent,
+    BeforeInvocationEvent,
     BeforeToolCallEvent,
     HookProvider,
     HookRegistry,
@@ -192,10 +193,29 @@ class OAuthConsentHook(HookProvider):
         self._provider_type_cache_keys: set[str] = set()
         self._custom_parameters_cache: dict[str, Optional[dict[str, str]]] = {}
         self._custom_parameters_cache_keys: set[str] = set()
+        # Providers that already burned their one 401-retry in the current
+        # turn. The agent instance is cached across turns by `get_agent`, so
+        # this set must be reset on `BeforeInvocationEvent`. Without the cap,
+        # a misconfigured provider (wrong scope, perma-401) would surface a
+        # consent prompt on every tool call in the turn — `_record_disconnect`
+        # forces fresh consent on the next BeforeToolCallEvent, the user
+        # consents, the tool 401s again, and the loop repeats per tool use.
+        self._reauth_attempted_providers: set[str] = set()
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._on_invocation_start)
         registry.add_callback(BeforeToolCallEvent, self._gate)
         registry.add_callback(AfterToolCallEvent, self._handle_auth_failure)
+
+    def _on_invocation_start(self, event: BeforeInvocationEvent) -> None:
+        """Reset per-turn state at the start of each agent invocation.
+
+        Both fresh turns and resumes (with `interrupt_responses`) trigger
+        BeforeInvocationEvent. Resetting on resume is intentional: the user
+        just took an action (consent), so they've signaled they want to
+        keep trying — start their retry budget fresh.
+        """
+        self._reauth_attempted_providers.clear()
 
     async def _gate(self, event: BeforeToolCallEvent) -> None:
         provider_id = self._provider_lookup(event.selected_tool)
@@ -228,9 +248,15 @@ class OAuthConsentHook(HookProvider):
             oauth_token_cache.set(self._user_id, provider_id, token_or_url["token"])
             return
 
-        # Consent required: pause the agent. The interrupt name is namespaced
-        # by provider so the SDK generates a stable interrupt id we can
-        # correlate with the user's response.
+        # Consent required: pause the agent. The interrupt name is
+        # provider-scoped, but Strands' BeforeToolCallEvent._interrupt_id
+        # also folds in `tool_use.toolUseId` (see strands/hooks/events.py),
+        # so two parallel tool calls to the same provider in one turn
+        # produce distinct interrupt ids and surface as separate
+        # `oauth_required` events. If Strands ever changes that ID scheme
+        # we'd need to incorporate toolUseId here ourselves —
+        # `test_parallel_tool_calls_same_provider_produce_distinct_interrupts`
+        # is the regression guard.
         response = event.interrupt(
             name=f"oauth:{provider_id}",
             reason={
@@ -323,20 +349,20 @@ class OAuthConsentHook(HookProvider):
         if not _looks_like_auth_failure(event.result):
             return
 
-        # Avoid an infinite retry loop if the refreshed token also fails:
-        # retry once per (toolUseId, provider) per turn. We piggyback on
-        # invocation_state, which Strands carries across the retry inside
-        # the same BeforeToolCallEvent → AfterToolCallEvent cycle.
-        attempted = event.invocation_state.setdefault("_oauth_reauth_attempted", set())
-        key = (event.tool_use.get("toolUseId"), provider_id)
-        if key in attempted:
+        # Avoid both an infinite retry loop within a single tool call and a
+        # consent-prompt storm across multiple tool calls in the same turn:
+        # retry at most once per provider per turn. The set is reset on
+        # `BeforeInvocationEvent`, so a fresh turn (or a resume after the
+        # user re-consented) gets a fresh budget.
+        if provider_id in self._reauth_attempted_providers:
             logger.warning(
-                "OAuth re-auth already attempted for tool=%s provider=%s; not retrying again",
-                event.tool_use.get("name"),
+                "OAuth re-auth already attempted this turn for provider=%s "
+                "(tool=%s); not retrying again",
                 provider_id,
+                event.tool_use.get("name"),
             )
             return
-        attempted.add(key)
+        self._reauth_attempted_providers.add(provider_id)
 
         logger.info(
             "Detected OAuth 401 for tool=%s provider=%s; clearing token cache and retrying",

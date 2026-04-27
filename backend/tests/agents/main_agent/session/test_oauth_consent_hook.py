@@ -273,6 +273,48 @@ class TestOAuthConsentHookConsentRequired:
         assert "google" in event.cancel_tool
 
 
+class TestParallelToolCallsSameProvider:
+    """Regression guard for the OAuth interrupt collision concern.
+
+    `_gate` calls `event.interrupt(name=f"oauth:{provider_id}")` with a
+    name that is *not* unique across parallel tool calls to the same
+    provider. We rely on Strands' BeforeToolCallEvent._interrupt_id to
+    fold `tool_use.toolUseId` into the final id, so two parallel calls
+    produce distinct entries in `_interrupt_state.interrupts`.
+
+    If Strands ever drops `toolUseId` from the id formula, this test
+    fails and we'd need to incorporate it ourselves in the hook.
+    """
+
+    def test_parallel_tool_calls_same_provider_produce_distinct_interrupt_ids(self):
+        from strands.hooks import BeforeToolCallEvent
+
+        agent = MagicMock()
+        event_a = BeforeToolCallEvent(
+            agent=agent,
+            selected_tool=MagicMock(),
+            tool_use={"toolUseId": "tu_parallel_a", "name": "search"},
+            invocation_state={},
+        )
+        event_b = BeforeToolCallEvent(
+            agent=agent,
+            selected_tool=MagicMock(),
+            tool_use={"toolUseId": "tu_parallel_b", "name": "search"},
+            invocation_state={},
+        )
+
+        id_a = event_a._interrupt_id("oauth:google")
+        id_b = event_b._interrupt_id("oauth:google")
+
+        assert id_a != id_b, (
+            "Strands no longer disambiguates BeforeToolCallEvent interrupts "
+            "by toolUseId. OAuthConsentHook must now incorporate toolUseId "
+            "into the interrupt name to prevent parallel-call collision."
+        )
+        assert "tu_parallel_a" in id_a
+        assert "tu_parallel_b" in id_b
+
+
 class TestOAuthConsentHookAuthFailureRetry:
     """The AfterToolCallEvent handler turns a 401-style tool error into
     a retry that forces re-consent at AgentCore Identity."""
@@ -283,13 +325,15 @@ class TestOAuthConsentHookAuthFailureRetry:
         result_text: str,
         *,
         result_status: str = "error",
+        tool_use_id: str = "tu_1",
+        tool_name: str = "whoami",
     ) -> MagicMock:
         event = MagicMock()
         event.selected_tool = MagicMock()
-        event.tool_use = {"name": "whoami", "toolUseId": "tu_1"}
+        event.tool_use = {"name": tool_name, "toolUseId": tool_use_id}
         event.invocation_state = {}
         event.result = {
-            "toolUseId": "tu_1",
+            "toolUseId": tool_use_id,
             "status": result_status,
             "content": [{"text": result_text}],
         }
@@ -371,12 +415,97 @@ class TestOAuthConsentHookAuthFailureRetry:
         await hook._handle_auth_failure(event1)
         assert event1.retry is True
 
-        # Same tool_use_id, same invocation_state — second failure must
-        # surrender so the user sees the error.
+        # Same tool_use, second failure must surrender so the user sees
+        # the error instead of looping.
         event2 = self._after_event("google", "401 Unauthorized")
-        event2.invocation_state = event1.invocation_state
         await hook._handle_auth_failure(event2)
         assert event2.retry is False
+
+    @pytest.mark.asyncio
+    async def test_caps_retry_across_tool_calls_in_same_turn(self):
+        """A misconfigured provider would otherwise spawn a consent prompt
+        on every tool call in a turn. Cap at one retry per provider per
+        turn so subsequent 401s for the same provider just surface to the
+        model instead of triggering another consent flow."""
+        recorded: list[str] = []
+
+        async def mark_disconnected(pid: str) -> None:
+            recorded.append(pid)
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: [],
+            mark_disconnected=mark_disconnected,
+        )
+
+        # First tool call 401s — retry path fires.
+        event1 = self._after_event(
+            "google", "401 Unauthorized", tool_use_id="tu_1", tool_name="search"
+        )
+        await hook._handle_auth_failure(event1)
+        assert event1.retry is True
+
+        # A *different* tool call (different toolUseId) on the same
+        # provider 401s later in the same turn. The per-turn cap must
+        # block another retry even though invocation_state is fresh.
+        event2 = self._after_event(
+            "google", "401 Unauthorized", tool_use_id="tu_2", tool_name="list"
+        )
+        await hook._handle_auth_failure(event2)
+        assert event2.retry is False
+        # Disconnect was already recorded on the first 401 — don't write
+        # again.
+        assert recorded == ["google"]
+
+    @pytest.mark.asyncio
+    async def test_before_invocation_event_resets_per_turn_budget(self):
+        """The agent instance is cached across turns by `get_agent`, so
+        the per-provider retry budget on the hook must be reset whenever
+        a new agent invocation begins (fresh turn or resume)."""
+        from unittest.mock import MagicMock
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: [],
+        )
+
+        event1 = self._after_event("google", "401 Unauthorized", tool_use_id="tu_1")
+        await hook._handle_auth_failure(event1)
+        assert event1.retry is True
+
+        # Simulate a new turn starting (Strands fires BeforeInvocationEvent
+        # on each `agent.stream_async` call, including resume).
+        hook._on_invocation_start(MagicMock())
+
+        event2 = self._after_event("google", "401 Unauthorized", tool_use_id="tu_2")
+        await hook._handle_auth_failure(event2)
+        assert event2.retry is True
+
+    @pytest.mark.asyncio
+    async def test_cap_is_per_provider_not_global(self):
+        """One provider hitting its cap mustn't starve a different
+        provider that just happens to 401 later in the same turn."""
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda tool: getattr(tool, "_provider", None),
+            scopes_lookup=lambda _: [],
+        )
+
+        google_event = self._after_event(
+            "google", "401 Unauthorized", tool_use_id="tu_g"
+        )
+        google_event.selected_tool._provider = "google"
+        await hook._handle_auth_failure(google_event)
+        assert google_event.retry is True
+
+        slack_event = self._after_event(
+            "slack", "401 Unauthorized", tool_use_id="tu_s"
+        )
+        slack_event.selected_tool._provider = "slack"
+        await hook._handle_auth_failure(slack_event)
+        assert slack_event.retry is True
 
 
 class TestOAuthConsentHookErrors:
