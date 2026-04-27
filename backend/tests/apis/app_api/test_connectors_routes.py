@@ -1,4 +1,4 @@
-"""Route-level tests for the inference-API connectors endpoints.
+"""Route-level tests for the app-API connectors endpoints.
 
 Covers `complete-consent` (forwards to AgentCore, surfaces errors), and
 the side-effect-free `GET /{provider_id}/status`.
@@ -17,29 +17,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agents.main_agent.integrations import oauth_token_cache
-from agents.main_agent.integrations.agentcore_identity import (
+from apis.app_api.connectors import routes
+from apis.shared.auth.models import User
+from apis.shared.oauth.agentcore_identity import (
     CallbackUrlUnavailableError,
     TokenResult,
     WorkloadTokenUnavailableError,
 )
-from apis.inference_api.connectors import routes
-from apis.shared.auth.models import User
 from apis.shared.oauth.disconnect_repository import get_disconnect_repository
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 from apis.shared.oauth.provider_repository import get_provider_repository
 from apis.shared.rbac.models import UserEffectivePermissions
 from apis.shared.rbac.service import get_app_role_service
-
-
-@pytest.fixture(autouse=True)
-def _reset_token_cache():
-    """`oauth_token_cache` is process-global; isolate between tests."""
-    oauth_token_cache.clear_user("alice")
-    oauth_token_cache.clear_user("bob")
-    yield
-    oauth_token_cache.clear_user("alice")
-    oauth_token_cache.clear_user("bob")
 
 
 @pytest.fixture(autouse=True)
@@ -63,14 +52,14 @@ def _make_user(user_id: str) -> User:
 @pytest.fixture
 def app_for_user():
     """Build a minimal FastAPI app with the connectors router mounted and
-    the `get_current_user_trusted` dependency stubbed to a specific user.
+    the `get_current_user` dependency stubbed to a specific user.
     Returns a factory so each test picks the caller's identity.
     """
 
     def _build(user_id: str) -> FastAPI:
         app = FastAPI()
         app.include_router(routes.router)
-        app.dependency_overrides[routes.get_current_user_trusted] = lambda: _make_user(user_id)
+        app.dependency_overrides[routes.get_current_user] = lambda: _make_user(user_id)
         return app
 
     return _build
@@ -79,7 +68,7 @@ def app_for_user():
 class TestCompleteConsent:
     """`complete-consent` is a thin wrapper around AgentCore's
     `CompleteResourceTokenAuth`. The auth boundary is `current_user`
-    (verified by `get_current_user_trusted`) — we forward that identity
+    (verified by `get_current_user`) — we forward that identity
     as `userIdentifier` and AgentCore's own binding rejects mismatches.
     """
 
@@ -321,16 +310,13 @@ class TestDisconnect:
         assert response.status_code == 204
         assert ("alice", "google") in repo.disconnected
 
-    def test_clears_cached_token_on_disconnect(self, app_with_deps):
-        # The local hot-path cache must not keep serving the disconnected
-        # token to in-flight MCP requests — otherwise a tool call still in
-        # progress on this replica could leak past the disconnect.
-        oauth_token_cache.set("alice", "google", "warm-token")
-        app, _, _ = app_with_deps("alice", provider=_make_provider())
-
-        TestClient(app).delete("/connectors/google/connection")
-
-        assert oauth_token_cache.get("alice", "google") is None
+    # Note: the inference-api process keeps a per-replica in-memory token
+    # cache; we used to clear it inline here, but app-api can't reach into
+    # another process's cache. The disconnect-repo flag is the durable
+    # cross-process signal — the consent hook on inference-api consults it
+    # on every gate call, so the next tool invocation rejects the cached
+    # token regardless. Cache-clearing behavior is covered in the consent
+    # hook's tests, not here.
 
     def test_404_when_provider_missing(self, app_with_deps):
         app, _, repo = app_with_deps("alice", provider=None)

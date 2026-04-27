@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.inference_api.middleware.agentcore_context import (
+from apis.shared.middleware.agentcore_context import (
     HEADER_OAUTH2_CALLBACK_URL,
     HEADER_REQUEST_ID,
     HEADER_SESSION_ID,
@@ -40,7 +40,7 @@ def client(app: FastAPI) -> TestClient:
 class TestAgentCoreContextMiddleware:
     def test_copies_workload_access_token_to_context(self, client: TestClient) -> None:
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             response = client.get(
                 "/echo", headers={HEADER_WORKLOAD_ACCESS_TOKEN: "wat-abc123"}
@@ -54,7 +54,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com,https://staging.example.com")
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -70,7 +70,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             response = client.get(
                 "/echo",
@@ -85,7 +85,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -99,7 +99,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -121,7 +121,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.setenv("CORS_ORIGINS", "https://app.example.com")
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -137,7 +137,7 @@ class TestAgentCoreContextMiddleware:
     ) -> None:
         monkeypatch.delenv("CORS_ORIGINS", raising=False)
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -150,7 +150,7 @@ class TestAgentCoreContextMiddleware:
         self, client: TestClient
     ) -> None:
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get(
                 "/echo",
@@ -167,7 +167,7 @@ class TestAgentCoreContextMiddleware:
     def test_noop_when_headers_absent(self, client: TestClient) -> None:
         """Local dev and tests without AgentCore Runtime must still work."""
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             response = client.get("/echo")
 
@@ -180,7 +180,7 @@ class TestAgentCoreContextMiddleware:
         """When session is present but request-id header is missing, the
         request_id falls back to empty string rather than None."""
         with patch(
-            "apis.inference_api.middleware.agentcore_context.BedrockAgentCoreContext"
+            "apis.shared.middleware.agentcore_context.BedrockAgentCoreContext"
         ) as ctx:
             client.get("/echo", headers={HEADER_SESSION_ID: "sess-1"})
 

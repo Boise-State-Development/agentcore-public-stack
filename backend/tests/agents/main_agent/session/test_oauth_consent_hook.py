@@ -15,7 +15,7 @@ import pytest
 from strands.interrupt import Interrupt, InterruptException
 
 from agents.main_agent.integrations import oauth_token_cache
-from agents.main_agent.integrations.agentcore_identity import (
+from apis.shared.oauth.agentcore_identity import (
     TokenResult,
     WorkloadTokenUnavailableError,
 )

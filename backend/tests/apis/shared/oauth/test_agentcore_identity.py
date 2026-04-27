@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.main_agent.integrations.agentcore_identity import (
+from apis.shared.oauth.agentcore_identity import (
     AgentCoreIdentityClient,
     TokenResult,
     WorkloadTokenUnavailableError,
@@ -92,7 +92,7 @@ class TestTokenResult:
 def mock_identity_sdk():
     """Patch the IdentityClient class used inside the wrapper."""
     with patch(
-        "agents.main_agent.integrations.agentcore_identity.IdentityClient"
+        "apis.shared.oauth.agentcore_identity.IdentityClient"
     ) as sdk_cls:
         yield sdk_cls
 
@@ -101,7 +101,7 @@ def mock_identity_sdk():
 def mock_context():
     """Patch BedrockAgentCoreContext accessors used inside the wrapper."""
     with patch(
-        "agents.main_agent.integrations.agentcore_identity.BedrockAgentCoreContext"
+        "apis.shared.oauth.agentcore_identity.BedrockAgentCoreContext"
     ) as ctx:
         ctx.get_workload_access_token.return_value = "workload-token-xyz"
         ctx.get_oauth2_callback_url.return_value = "https://cb.example.com/oauth"
