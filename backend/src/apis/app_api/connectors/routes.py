@@ -30,7 +30,7 @@ from typing import List, Optional
 
 import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apis.shared.auth import User, get_current_user
 from apis.shared.oauth.agentcore_identity import (
@@ -157,7 +157,13 @@ class CompleteConsentRequest(BaseModel):
     """Body for finalizing a consent flow after the popup returns."""
 
     session_uri: str
-    provider_id: Optional[str] = None
+    # Constrain to the same shape as OAuthProviderCreate.provider_id so a
+    # malicious client can't smuggle newlines or control characters into the
+    # log lines that echo this field (CWE-117 / log injection). Pydantic
+    # rejects mismatches at parse time with a 422.
+    provider_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$"
+    )
 
 
 class CompleteConsentResponse(BaseModel):

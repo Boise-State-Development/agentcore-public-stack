@@ -103,6 +103,37 @@ class TestCompleteConsent:
         assert response.status_code == 502
         assert "agentcore down" in response.json()["detail"]
 
+    @pytest.mark.parametrize(
+        "bad_provider_id",
+        [
+            "google\nFAKE LOG ENTRY",  # newline → log injection
+            "google\rINJECT",  # carriage return → log injection
+            "Google",  # uppercase rejected by [a-z0-9-]
+            "google!",  # punctuation rejected
+            "g" * 65,  # over max_length
+            "",  # empty
+        ],
+    )
+    def test_rejects_malformed_provider_id_with_422(
+        self, app_for_user, monkeypatch, bad_provider_id
+    ):
+        # The provider_id field is echoed into log lines on success and
+        # failure paths. Constraining it at the request boundary prevents
+        # CWE-117 log injection from authenticated callers.
+        mock_client = MagicMock()
+        monkeypatch.setattr(routes, "_agentcore_control_client", lambda: mock_client)
+
+        app = app_for_user("alice")
+        response = TestClient(app).post(
+            "/connectors/complete-consent",
+            json={"session_uri": "uri-abc", "provider_id": bad_provider_id},
+        )
+
+        assert response.status_code == 422
+        # The downstream call must not have fired — Pydantic rejected the
+        # request before we ever reached the handler body.
+        mock_client.complete_resource_token_auth.assert_not_called()
+
 
 def _make_provider(
     provider_id: str = "google",
