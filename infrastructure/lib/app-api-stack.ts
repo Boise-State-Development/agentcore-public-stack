@@ -445,6 +445,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_API_KEYS_TABLE_NAME: apiKeysTableName,
         OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
+        DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
@@ -921,11 +922,14 @@ export class AppApiStack extends cdk.Stack {
     // Admin CRUD for OAuth2 credential providers stored in AgentCore Identity.
     // Provider-scoped actions are scoped to the default token vault; List
     // requires a broader resource since it enumerates the vault itself.
+    // CreateTokenVault is required because the first CreateOauth2CredentialProvider
+    // call in a region implicitly provisions the `default` token vault.
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'AgentCoreCredentialProviderAdmin',
         effect: iam.Effect.ALLOW,
         actions: [
+          'bedrock-agentcore:CreateTokenVault',
           'bedrock-agentcore:CreateOauth2CredentialProvider',
           'bedrock-agentcore:UpdateOauth2CredentialProvider',
           'bedrock-agentcore:DeleteOauth2CredentialProvider',
