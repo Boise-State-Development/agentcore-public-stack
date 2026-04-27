@@ -1238,6 +1238,36 @@ export class InferenceApiStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // AgentCore Identity auto-creates a workload identity when the runtime is
+    // created and exposes the ARN as a CFN attribute. App-api (which lives
+    // outside the runtime gateway) needs the name segment to mint workload
+    // tokens via GetWorkloadAccessTokenForUserId — i.e. to act as this same
+    // workload so its OAuth vault is shared with the runtime.
+    //
+    // ARN format:
+    //   arn:aws:bedrock-agentcore:<region>:<account>:workload-identity-directory/default/workload-identity/<name>
+    const workloadIdentityArn = cdk.Token.asString(
+      cdk.Fn.getAtt(this.runtime.logicalId, 'WorkloadIdentityDetails.WorkloadIdentityArn')
+    );
+    const workloadIdentityName = cdk.Fn.select(
+      1,
+      cdk.Fn.split('workload-identity/', workloadIdentityArn)
+    );
+
+    new ssm.StringParameter(this, 'RuntimeWorkloadIdentityArnParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-workload-identity-arn`,
+      stringValue: workloadIdentityArn,
+      description: 'AgentCore Runtime workload identity ARN (auto-created by AgentCore Identity)',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'RuntimeWorkloadIdentityNameParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/runtime-workload-identity-name`,
+      stringValue: workloadIdentityName,
+      description: 'AgentCore Runtime workload identity name (last segment of WorkloadIdentityArn)',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // Construct the full runtime endpoint URL for frontend consumption
     const runtimeEndpointUrl = cdk.Fn.sub(
       'https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/${RuntimeArn}',

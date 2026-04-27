@@ -32,7 +32,7 @@ npx cdk deploy --all
 
 ## Key Conventions
 
-- **Deploy order:** Infrastructure → Gateway → App API → Inference API → Frontend
+- **Deploy order:** Infrastructure → Gateway → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API)
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)

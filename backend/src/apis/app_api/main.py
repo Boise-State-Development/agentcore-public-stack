@@ -69,6 +69,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Bridge OAuth2CallbackUrl (sent by the frontend on connector calls) onto
+# BedrockAgentCoreContext so IdentityClient can read it during consent flows.
+# WorkloadAccessToken is absent here (no runtime gateway in front of app-api);
+# IdentityClient mints one via AGENTCORE_RUNTIME_WORKLOAD_NAME.
+from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
+app.add_middleware(AgentCoreContextMiddleware)
+logger.info("Added AgentCore context middleware")
+
 
 # Import routers
 from apis.app_api.health import router as health_router
@@ -108,7 +116,7 @@ app.include_router(converse_router)  # Proxies to Inference API for cost account
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
-app.include_router(connectors_router)  # User-facing connector catalog
+app.include_router(connectors_router)  # User-facing connector catalog + consent flows
 app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)

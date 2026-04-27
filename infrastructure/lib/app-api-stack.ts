@@ -446,6 +446,16 @@ export class AppApiStack extends cdk.Stack {
         OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
         OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
         DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
+        DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: oauthUserTokensTableName,
+        // Lets the connector consent flow mint workload tokens against the
+        // runtime's workload identity so its OAuth vault is shared with the
+        // agent loop on inference-api. Required by IdentityClient when the
+        // request isn't proxied through the AgentCore Runtime gateway (i.e.
+        // every app-api request).
+        AGENTCORE_RUNTIME_WORKLOAD_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/inference-api/runtime-workload-identity-name`
+        ),
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
@@ -939,6 +949,45 @@ export class AppApiStack extends cdk.Stack {
         resources: [
           `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
           `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/oauth2credentialprovider/*`,
+        ],
+      })
+    );
+
+    // User-facing consent flows: app-api impersonates the runtime's workload
+    // identity to look up vaulted tokens and finalize OAuth2 sessions on
+    // behalf of users. Mirrors the inference-api task role's permissions —
+    // both APIs need to act as the same workload so they read/write a single
+    // shared token vault. Without these, /connectors/{id}/{status,initiate,
+    // disconnect,complete} return 503 from the app-api routes.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreWorkloadAccessToken',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:GetWorkloadAccessToken',
+          'bedrock-agentcore:GetWorkloadAccessTokenForJWT',
+          'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
+        ],
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreResourceOauth2Token',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:GetResourceOauth2Token',
+          'bedrock-agentcore:CompleteResourceTokenAuth',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/*`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
         ],
       })
     );

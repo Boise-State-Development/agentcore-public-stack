@@ -1,13 +1,20 @@
-"""AgentCore Identity integration for external MCP tool authorization.
+"""AgentCore Identity integration for OAuth2 user-federated tokens.
 
 Wraps `bedrock_agentcore.services.identity.IdentityClient` with a narrower,
 platform-friendly surface for retrieving OAuth2 access tokens on behalf of a
 user via the USER_FEDERATION (3LO) flow.
 
+Used by both the inference API (agent-loop tool gating, external MCP tool
+calls) and the app API (settings-page connector status / consent flows).
+Lives in `apis/shared/oauth/` so neither API has to reach into the other's
+package.
+
 The client pulls the per-invocation workload identity token from
 `BedrockAgentCoreContext`, which is populated by `AgentCoreContextMiddleware`
-on the Inference API request path. No workload token has to be threaded
-through function arguments.
+when the request comes through the AgentCore Runtime gateway. Outside the
+runtime (app-api, local dev), the mint fallback at `_resolve_workload_token`
+takes over — set `AGENTCORE_RUNTIME_WORKLOAD_NAME` to the runtime workload
+identity to act as that workload.
 
 Two results are possible when fetching a token:
 

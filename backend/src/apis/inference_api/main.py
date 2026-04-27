@@ -33,7 +33,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from apis.inference_api.middleware.agentcore_context import AgentCoreContextMiddleware
+from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
 
 # Set up logging
 logging.basicConfig(
@@ -140,13 +140,14 @@ app.add_middleware(
 from apis.inference_api.chat.routes import router as agentcore_router
 from apis.inference_api.chat.converse_routes import router as converse_router
 from apis.inference_api.chat.voice_routes import router as voice_router
-from apis.inference_api.connectors.routes import router as connectors_router
 # Include routers
 #app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
 app.include_router(converse_router)  # API-key authenticated converse endpoint
 app.include_router(voice_router)  # WebSocket voice streaming endpoint
-app.include_router(connectors_router)  # User-initiated OAuth consent
+# Connector consent flows live on app-api now: the AgentCore Runtime data plane
+# only proxies /invocations and /ping, so user-facing /connectors/* paths can't
+# be reached through this service. See apis/app_api/connectors/routes.py.
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)

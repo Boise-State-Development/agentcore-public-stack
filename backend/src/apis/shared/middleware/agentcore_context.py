@@ -1,22 +1,23 @@
-"""AgentCore Runtime context middleware.
+"""AgentCore context middleware.
 
-Bridges AgentCore Runtime request headers into BedrockAgentCoreContext so that
-downstream code (e.g. IdentityClient token lookups) can access the per-invocation
-workload identity token without threading it through every function call.
+Bridges request headers into BedrockAgentCoreContext so that downstream code
+(e.g. IdentityClient token lookups) can access the per-invocation workload
+identity token and OAuth2 callback URL without threading them through every
+function call.
 
-AgentCore Runtime injects these headers on every invocation:
-    - WorkloadAccessToken: per-user workload identity token, derived from the
-      validated inbound JWT by the Runtime's managed JWT authorizer.
-    - OAuth2CallbackUrl: OAuth2 callback URL registered on the workload identity.
-    - X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: current session ID.
-    - X-Amzn-Request-Id: per-request trace ID.
+Header sources differ by API:
+    - Inference API: the AgentCore Runtime gateway injects WorkloadAccessToken,
+      OAuth2CallbackUrl, X-Amzn-Bedrock-AgentCore-Runtime-Session-Id, and
+      X-Amzn-Request-Id automatically on every proxied invocation.
+    - App API: the frontend supplies OAuth2CallbackUrl explicitly on the
+      settings-page connector calls; WorkloadAccessToken is absent (the
+      IdentityClient mints one via the AGENTCORE_RUNTIME_WORKLOAD_NAME
+      fallback instead).
 
-When the inference API is wrapped by BedrockAgentCoreApp, these are populated
-automatically. Because this service runs as a plain FastAPI app inside
-AgentCore Runtime, we populate the context ourselves.
-
-The middleware is a no-op in local development where these headers are absent,
-which keeps tests and `python -m main` runs working without mocks.
+The middleware is a no-op when headers are absent (local dev, app-api calls
+that don't need OAuth context), which keeps tests and `python -m main` runs
+working without mocks. Each header is independently validated and applied,
+so a missing or rejected header doesn't suppress the others.
 """
 
 import logging
@@ -45,9 +46,10 @@ _ALLOWED_CALLBACK_PATH = "/oauth-complete"
 def _allowed_callback_origins() -> frozenset[str]:
     """Origins that are allowed to set `OAuth2CallbackUrl`.
 
-    Reuses `CORS_ORIGINS` (set by CDK on the inference-api task) as the trust
-    boundary: the frontend lives at one of those origins, so its callback URL
-    must too. Read at request time so tests can monkeypatch the env var.
+    Reuses `CORS_ORIGINS` (set by CDK on both inference-api and app-api
+    tasks) as the trust boundary: the frontend lives at one of those origins,
+    so its callback URL must too. Read at request time so tests can
+    monkeypatch the env var.
     """
     raw = os.environ.get("CORS_ORIGINS", "")
     return frozenset(o.strip().rstrip("/") for o in raw.split(",") if o.strip())
