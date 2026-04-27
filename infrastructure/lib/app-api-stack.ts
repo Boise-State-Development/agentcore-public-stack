@@ -940,6 +940,9 @@ export class AppApiStack extends cdk.Stack {
     //   - PutSecretValue + UpdateSecret: UpdateOauth2CredentialProvider
     //     (re-submits the full config including a new clientSecret)
     //   - DeleteSecret: DeleteOauth2CredentialProvider
+    //   - GetSecretValue: GetResourceOauth2Token (AgentCore reads the
+    //     client secret on every consent / token-refresh call, using the
+    //     caller's IAM identity)
     taskDefinition.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'AgentCoreOAuthSecretLifecycle',
@@ -947,6 +950,7 @@ export class AppApiStack extends cdk.Stack {
         actions: [
           'secretsmanager:CreateSecret',
           'secretsmanager:DeleteSecret',
+          'secretsmanager:GetSecretValue',
           'secretsmanager:PutSecretValue',
           'secretsmanager:UpdateSecret',
           'secretsmanager:TagResource',

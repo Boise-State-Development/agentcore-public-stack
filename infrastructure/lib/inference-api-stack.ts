@@ -218,6 +218,25 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // AgentCore Identity stores each provider's OAuth client secret in a
+    // Secrets Manager secret under `bedrock-agentcore-identity!default/oauth2/*`.
+    // GetResourceOauth2Token (called by the agent loop's tool gating
+    // hooks) reads that secret using the caller's IAM identity. Since the
+    // shared platform workload design (#187) routes inference-api through
+    // the same explicit-mint path as app-api, the runtime now needs the
+    // same permission.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreOAuthSecretRead',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'secretsmanager:GetSecretValue',
+        'secretsmanager:DescribeSecret',
+      ],
+      resources: [
+        `arn:aws:secretsmanager:${config.awsRegion}:${config.awsAccount}:secret:bedrock-agentcore-identity!default/oauth2/*`,
+      ],
+    }));
+
     // DynamoDB Users Table permissions (imported from Infrastructure Stack)
     const usersTableArn = ssm.StringParameter.valueForStringParameter(
       this,
