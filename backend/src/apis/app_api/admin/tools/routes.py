@@ -130,9 +130,15 @@ async def admin_create_tool(
 
     try:
         created = await service.create_tool(tool, admin)
-        return AdminToolResponse.from_tool_definition(created)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Drop the all-tool-ids snapshot so the new tool is recognized by
+    # ToolAccessService on the very next chat turn in this process.
+    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(created.tool_id)
+
+    return AdminToolResponse.from_tool_definition(created)
 
 
 @router.put("/{tool_id}", response_model=AdminToolResponse)

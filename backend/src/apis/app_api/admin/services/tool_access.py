@@ -7,9 +7,10 @@ Similar to ModelAccessService but for tools.
 import logging
 from typing import List, Optional, Set
 
+from agents.main_agent.config.constants import Prefixes
+from apis.app_api.tools.freshness import get_all_tool_ids
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
-from agents.main_agent.tools import get_tool_catalog_service
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,6 @@ class ToolAccessService:
     def __init__(self, app_role_service: Optional[AppRoleService] = None):
         """Initialize with optional AppRoleService."""
         self._app_role_service = app_role_service
-        self._tool_catalog = get_tool_catalog_service()
 
     @property
     def app_role_service(self) -> AppRoleService:
@@ -69,6 +69,13 @@ class ToolAccessService:
 
         If no tools are requested, returns all tools the user can access.
 
+        The "universe of known tools" is sourced from the DynamoDB-backed
+        tool catalog (TTL-cached via `freshness.get_all_tool_ids`) so
+        admin-managed MCP-external and A2A tools are recognized. Gateway
+        tools (`gateway_*` prefix) are also accepted: they're loaded
+        dynamically from the AgentCore Gateway at runtime and don't need
+        a catalog entry.
+
         Args:
             user: The user to check
             requested_tools: Optional list of tool IDs the user wants to use.
@@ -80,8 +87,8 @@ class ToolAccessService:
         allowed_tools = await self.get_user_allowed_tools(user)
         has_wildcard = "*" in allowed_tools
 
-        # Get all available tool IDs from catalog
-        all_tool_ids = set(self._tool_catalog.get_tool_ids())
+        # Get all available tool IDs from the DynamoDB catalog
+        all_tool_ids = await get_all_tool_ids()
 
         if requested_tools is None:
             # No specific tools requested - return all allowed
@@ -93,11 +100,11 @@ class ToolAccessService:
 
         # Filter requested tools to only allowed ones
         if has_wildcard:
-            # Wildcard: allow all requested tools that exist
-            # (allow gateway tools even if not in catalog)
+            # Wildcard: allow all requested tools that exist in the catalog,
+            # plus any gateway-prefixed tools (loaded dynamically at runtime)
             return [
                 t for t in requested_tools
-                if t in all_tool_ids or t.startswith("gateway_")
+                if t in all_tool_ids or t.startswith(Prefixes.GATEWAY_TOOL)
             ]
         else:
             # Only return intersection of requested and allowed
