@@ -52,6 +52,10 @@ class InvocationRequest(BaseModel):
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
     interrupt_responses: Optional[List[InterruptResponseEntry]] = None
+    # Selects which agent factory variant builds the turn. Defaults to "chat"
+    # (MainAgent / ChatAgent) when omitted, so existing clients are unaffected.
+    # Pass "skill" to route through SkillAgent's progressive skill disclosure.
+    agent_type: Optional[str] = None
 
 
 class InvocationResponse(BaseModel):

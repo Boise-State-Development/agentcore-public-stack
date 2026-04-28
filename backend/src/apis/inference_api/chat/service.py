@@ -11,7 +11,8 @@ from typing import Optional, List, Tuple
 import boto3
 
 # from agentcore.agent.agent import ChatbotAgent
-from agents.main_agent.main_agent import MainAgent
+from agents.main_agent.agent_types import create_agent
+from agents.main_agent.base_agent import BaseAgent
 from apis.shared.sessions.metadata import update_session_title
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ def _create_cache_key(
     provider: Optional[str],
     max_tokens: Optional[int],
     freshness_hash: str,
+    agent_type: Optional[str],
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -75,6 +77,7 @@ def _create_cache_key(
         provider or "bedrock",
         max_tokens or 0,
         freshness_hash,
+        agent_type or "chat",
     )
 
 
@@ -95,8 +98,9 @@ async def get_agent(
     system_prompt: Optional[str] = None,
     caching_enabled: Optional[bool] = None,
     provider: Optional[str] = None,
-    max_tokens: Optional[int] = None
-) -> MainAgent:
+    max_tokens: Optional[int] = None,
+    agent_type: Optional[str] = None,
+) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
 
@@ -117,7 +121,7 @@ async def get_agent(
         max_tokens: Maximum tokens to generate
 
     Returns:
-        MainAgent instance (cached or newly created)
+        BaseAgent subclass instance (cached or newly created)
     """
     from apis.app_api.tools.freshness import get_freshness_hash
 
@@ -134,6 +138,7 @@ async def get_agent(
         provider=provider,
         max_tokens=max_tokens,
         freshness_hash=freshness_hash,
+        agent_type=agent_type,
     )
 
     # Check cache
@@ -144,8 +149,12 @@ async def get_agent(
     # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")
 
-    # Create agent with multi-provider support
-    agent = MainAgent(
+    # Create agent via the type registry. Default "chat" preserves the
+    # existing MainAgent (= ChatAgent) behavior; "skill" routes through
+    # SkillAgent's progressive skill disclosure.
+    resolved_agent_type = agent_type or "chat"
+    agent = create_agent(
+        agent_type=resolved_agent_type,
         session_id=session_id,
         user_id=user_id,
         auth_token=auth_token,
@@ -155,8 +164,13 @@ async def get_agent(
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
     )
+
+    # Stamp the type onto the construction snapshot so a paused turn can
+    # resume on the same factory variant after cache eviction.
+    if hasattr(agent, "_construction_snapshot"):
+        agent._construction_snapshot["agent_type"] = resolved_agent_type
 
     # Add to cache with LRU eviction
     if len(_agent_cache) >= _CACHE_MAX_SIZE:

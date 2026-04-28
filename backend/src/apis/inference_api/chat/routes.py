@@ -596,6 +596,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=snapshot.caching_enabled,
                 provider=snapshot.provider,
                 max_tokens=snapshot.max_tokens,
+                agent_type=snapshot.agent_type,
             )
         else:
             # Resolve caching_enabled based on managed model configuration
@@ -620,6 +621,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
                 max_tokens=input_data.max_tokens,
+                agent_type=input_data.agent_type,
             )
 
         # Resume requests must target interrupts that the cached agent

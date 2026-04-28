@@ -68,6 +68,7 @@ class PausedTurnSnapshot(BaseModel):
     system_prompt: Optional[str] = Field(default=None, alias="systemPrompt")
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
+    agent_type: Optional[str] = Field(default=None, alias="agentType")
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 

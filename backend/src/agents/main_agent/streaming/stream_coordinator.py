@@ -602,6 +602,7 @@ class StreamCoordinator:
                     system_prompt=snapshot_source.get("system_prompt"),
                     caching_enabled=snapshot_source.get("caching_enabled"),
                     max_tokens=snapshot_source.get("max_tokens"),
+                    agent_type=snapshot_source.get("agent_type"),
                     captured_at=now.isoformat(),
                     expires_at=(now + timedelta(hours=1)).isoformat(),
                 )
