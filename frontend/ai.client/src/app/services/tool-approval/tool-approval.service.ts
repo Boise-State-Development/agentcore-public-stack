@@ -7,10 +7,10 @@ import { Injectable, computed, signal } from '@angular/core';
  * approve/decline prompt and resumes the same turn with the user's
  * decision via {@link ToolApprovalResumeHandler}.
  *
- * Unlike OAuth, these prompts are inline in the chat stream and tied to
- * the live SSE turn — a refresh during the prompt orphans it. That's
- * acceptable for v1; if persistent recovery is needed later, mirror
- * the `PendingInterrupt` breadcrumb the OAuth flow uses.
+ * Refresh recovery: the backend persists a `PendingInterrupt` breadcrumb
+ * (`kind: "tool_approval"`) on the same `done` event, so reloading the
+ * page mid-prompt rehydrates it via `MessageMapService.hydratePendingInterrupts`
+ * — same flow as OAuth consent.
  */
 export interface ToolApprovalRequest {
   interruptId: string;

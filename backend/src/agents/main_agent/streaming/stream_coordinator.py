@@ -200,16 +200,21 @@ class StreamCoordinator:
                 # uses these to drive its prompts (OAuth popup, tool-approval
                 # modal) and POSTs the user's response back to resume the turn.
                 # Done before the metadata branch so the events land between
-                # message_stop and the final metadata/done block. The OAuth
-                # extractor also writes the PausedTurnSnapshot — running first
-                # means the tool-approval extractor doesn't need to duplicate
-                # that work for tool-approval-only pauses.
+                # message_stop and the final metadata/done block. The
+                # PausedTurnSnapshot is persisted once per pause regardless of
+                # interrupt flavor, so any extractor's resume path can rebuild
+                # the agent shape after a refresh / cache eviction.
                 if event.get("type") == "done":
-                    for sse in await self._extract_oauth_required_events(
+                    await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
                         user_id=user_id,
                         main_agent_wrapper=main_agent_wrapper,
+                    )
+                    for sse in await self._extract_oauth_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
                     ):
                         yield sse
                     for sse in await self._extract_tool_approval_required_events(
@@ -554,13 +559,73 @@ class StreamCoordinator:
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
 
+    async def _persist_paused_turn_snapshot(
+        self,
+        agent: Any,
+        session_id: Optional[str],
+        user_id: Optional[str],
+        main_agent_wrapper: Any,
+    ) -> None:
+        """Persist a ``PausedTurnSnapshot`` capturing the agent's construction
+        params so a resume after refresh / cache eviction rebuilds the same
+        agent shape (matching tool registry) and lets Strands restore
+        ``_interrupt_state`` from AgentCore Memory.
+
+        Called once per pause from the ``done`` branch — shared across
+        interrupt extractors so any flavor of pause (OAuth consent, tool
+        approval, future variants) gets a snapshot. Multiple interrupts in
+        the same turn share one snapshot; they were all built against the
+        same agent. TTL matches AgentCore Identity's consent window so stale
+        snapshots don't pin storage and a too-late resume returns a clean
+        400.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
+        """
+        from datetime import timedelta
+        from apis.shared.sessions.metadata import set_paused_turn
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return
+        if not (session_id and user_id):
+            return
+        snapshot_source = (
+            getattr(main_agent_wrapper, "_construction_snapshot", None)
+            if main_agent_wrapper
+            else None
+        )
+        if not snapshot_source:
+            return
+
+        try:
+            now = datetime.now(timezone.utc)
+            snapshot = PausedTurnSnapshot(
+                enabled_tools=snapshot_source.get("enabled_tools"),
+                model_id=snapshot_source.get("model_id"),
+                provider=snapshot_source.get("provider"),
+                temperature=snapshot_source.get("temperature"),
+                system_prompt=snapshot_source.get("system_prompt"),
+                caching_enabled=snapshot_source.get("caching_enabled"),
+                max_tokens=snapshot_source.get("max_tokens"),
+                agent_type=snapshot_source.get("agent_type"),
+                captured_at=now.isoformat(),
+                expires_at=(now + timedelta(hours=1)).isoformat(),
+            )
+            await set_paused_turn(session_id, user_id, snapshot)
+        except Exception as e:
+            logger.error(
+                "Failed to persist paused_turn snapshot for session %s: %s",
+                session_id, e, exc_info=True,
+            )
+
     async def _extract_oauth_required_events(
         self,
         agent: Any,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         triggering_message_id: Optional[str] = None,
-        main_agent_wrapper: Any = None,
     ) -> List[str]:
         """Yield one SSE-formatted `oauth_required` event per pending OAuth
         interrupt on the agent, persisting each one to session metadata so
@@ -573,52 +638,20 @@ class StreamCoordinator:
         approval gates added later) are ignored here so they can be handled
         by their own SSE event types.
 
-        Also persists a ``PausedTurnSnapshot`` capturing the agent's
-        construction params, so a resume after refresh / cache eviction
-        rebuilds the same agent shape (matching tool registry) and lets
-        Strands restore ``_interrupt_state`` from AgentCore Memory.
+        The ``PausedTurnSnapshot`` is written separately by
+        :meth:`_persist_paused_turn_snapshot` on the same ``done`` event —
+        any pause flavor needs the snapshot, so it's hoisted out of here.
 
         Persistence is best-effort: a DynamoDB write failure logs but does
         not break the live SSE flow.
         """
-        from datetime import timedelta
         from apis.shared.oauth.models import OAuthRequiredEvent
-        from apis.shared.sessions.metadata import add_pending_interrupt, set_paused_turn
-        from apis.shared.sessions.models import PausedTurnSnapshot, PendingInterrupt
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
 
         interrupt_state = getattr(agent, "_interrupt_state", None)
         if not interrupt_state or not getattr(interrupt_state, "activated", False):
             return []
-
-        # Snapshot the turn-construction context once per pause, before the
-        # per-interrupt loop. Multiple OAuth interrupts in the same turn
-        # share one snapshot — they were all built against the same agent.
-        # TTL matches AgentCore Identity's consent window so stale snapshots
-        # don't pin storage and a too-late resume returns a clean 400.
-        snapshot_source = (
-            getattr(main_agent_wrapper, "_construction_snapshot", None) if main_agent_wrapper else None
-        )
-        if session_id and user_id and snapshot_source:
-            try:
-                now = datetime.now(timezone.utc)
-                snapshot = PausedTurnSnapshot(
-                    enabled_tools=snapshot_source.get("enabled_tools"),
-                    model_id=snapshot_source.get("model_id"),
-                    provider=snapshot_source.get("provider"),
-                    temperature=snapshot_source.get("temperature"),
-                    system_prompt=snapshot_source.get("system_prompt"),
-                    caching_enabled=snapshot_source.get("caching_enabled"),
-                    max_tokens=snapshot_source.get("max_tokens"),
-                    agent_type=snapshot_source.get("agent_type"),
-                    captured_at=now.isoformat(),
-                    expires_at=(now + timedelta(hours=1)).isoformat(),
-                )
-                await set_paused_turn(session_id, user_id, snapshot)
-            except Exception as e:
-                logger.error(
-                    "Failed to persist paused_turn snapshot for session %s: %s",
-                    session_id, e, exc_info=True,
-                )
 
         events: List[str] = []
         for interrupt in interrupt_state.interrupts.values():
@@ -675,9 +708,10 @@ class StreamCoordinator:
         per-tool approval interrupt on the agent, persisting each one to
         session metadata so the frontend can rediscover them after a refresh.
 
-        The PausedTurnSnapshot is written by the OAuth extractor on the same
-        ``done`` event, so a tool-approval-only pause still has the
-        construction context needed to rebuild the agent on resume.
+        The ``PausedTurnSnapshot`` needed to rebuild the agent on resume is
+        written by :meth:`_persist_paused_turn_snapshot` on the same
+        ``done`` event — independent of which interrupt flavor caused the
+        pause.
 
         Persistence is best-effort: a DynamoDB write failure logs but does
         not break the live SSE flow.

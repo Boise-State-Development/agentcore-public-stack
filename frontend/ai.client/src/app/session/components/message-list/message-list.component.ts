@@ -58,9 +58,14 @@ export class MessageListComponent implements OnDestroy {
     return this.consentService.pending().filter((req) => !req.messageId || !ids.has(req.messageId));
   });
 
-  /** Pending tool-approval prompts. Always rendered at the end of the
-   *  conversation since these are tied to the live SSE turn (no refresh
-   *  hydration in v1). */
+  /** Pending tool-approval prompts, rendered at the end of the conversation.
+   *  Sourced from both live `tool_approval_required` SSE events during a
+   *  turn and the `PendingInterrupt(kind="tool_approval")` rows that
+   *  `MessageMapService.hydratePendingInterrupts` replays on session load,
+   *  so a mid-prompt refresh rehydrates the prompt rather than orphaning
+   *  it. We don't anchor next to the triggering assistant message (the way
+   *  OAuth prompts do) because the approval is for the *next* tool call,
+   *  not the assistant text that just streamed. */
   protected pendingToolApprovals = computed<ToolApprovalRequest[]>(() =>
     this.toolApprovalService.pending(),
   );

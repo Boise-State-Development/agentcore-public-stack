@@ -250,6 +250,15 @@ async def admin_discover_mcp_tools(
     asking admins to type each name. OAuth-gated servers are not supported —
     the admin's session can't supply an end-user token.
 
+    Trust boundary: this endpoint deliberately accepts an arbitrary
+    ``server_url`` from an authenticated admin and connects to it from the
+    backend's network position. That's the same trust we already extend
+    when the admin saves an MCP tool configuration (the agent loop will
+    connect to whatever URL is in the catalog), so we don't add an
+    SSRF allowlist here. Admins are expected to be able to reach internal
+    MCP servers — that's the deployment shape. If a future change exposes
+    this beyond admins, add an allowlist (scheme + host) before shipping.
+
     Args:
         request: MCP server connection details (URL, transport, auth)
         admin: Authenticated admin user (injected)
