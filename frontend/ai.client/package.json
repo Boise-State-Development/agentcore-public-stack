@@ -50,7 +50,7 @@
     "uuid": "13.0.0"
   },
   "devDependencies": {
-    "@analogjs/vite-plugin-angular": "3.0.0-alpha.26",
+    "@analogjs/vite-plugin-angular": "3.0.0-alpha.53",
     "@analogjs/vitest-angular": "3.0.0-alpha.30",
     "@angular/build": "21.2.6",
     "@angular/cli": "21.2.6",
