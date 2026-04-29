@@ -4,6 +4,7 @@ import { Message } from '../../services/models/message.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
 import { MessageMetadataBadgesComponent } from './components/message-metadata-badges.component';
+import { MessageActionsComponent } from './components/message-actions.component';
 import { CitationDisplayComponent } from '../citation-display/citation-display.component';
 import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.component';
 import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/oauth-consent-prompt.component';
@@ -22,6 +23,7 @@ import {
   imports: [
     UserMessageComponent,
     AssistantMessageComponent,
+    MessageActionsComponent,
     MessageMetadataBadgesComponent,
     CitationDisplayComponent,
     PulsatingLoaderComponent,

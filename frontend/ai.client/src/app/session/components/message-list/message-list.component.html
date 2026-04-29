@@ -18,7 +18,10 @@
             <div class="rounded-2xl bg-gray-50 px-4 py-3 text-base/6 text-gray-800 dark:bg-gray-900 dark:text-gray-200 overflow-hidden">
                 <app-assistant-message class="min-w-0 block" [message]="message" [isStreaming]="message.id === streamingMessageId()"></app-assistant-message>
             </div>
-            <div class="invisible mt-2 flex flex-wrap items-center gap-2 opacity-0 transition-opacity duration-200 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100" aria-live="polite" aria-atomic="true">
+            <div class="mt-1 flex justify-start">
+                <app-message-actions [message]="message"></app-message-actions>
+            </div>
+            <div class="invisible mt-1 flex flex-wrap items-center gap-2 opacity-0 transition-opacity duration-200 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100" aria-live="polite" aria-atomic="true">
                 @if (message.metadata) {
                     <app-message-metadata-badges [metadata]="message.metadata"></app-message-metadata-badges>
                 }
