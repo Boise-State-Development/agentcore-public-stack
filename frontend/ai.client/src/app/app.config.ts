@@ -5,8 +5,20 @@ import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { authInterceptor } from './auth/auth.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
-import { provideMarkdown } from 'ngx-markdown';
+import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
 import { ConfigService } from './services/config.service';
+
+function markedOptionsFactory(): MarkedOptions {
+  const renderer = new MarkedRenderer();
+  const renderLink = renderer.link;
+
+  renderer.link = function (link) {
+    const html = renderLink.call(this, link);
+    return html.replace(/^<a /, '<a target="_blank" rel="noopener noreferrer" ');
+  };
+
+  return { renderer };
+}
 
 /**
  * Application initialization factory
@@ -33,7 +45,12 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(
       withInterceptors([authInterceptor, errorInterceptor]),
     ),
-    provideMarkdown(),
+    provideMarkdown({
+      markedOptions: {
+        provide: MARKED_OPTIONS,
+        useFactory: markedOptionsFactory,
+      },
+    }),
     provideRouter(routes, withComponentInputBinding()),
     
     // Load runtime configuration before app starts
