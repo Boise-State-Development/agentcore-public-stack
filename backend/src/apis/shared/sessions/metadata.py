@@ -700,10 +700,23 @@ async def _store_session_metadata_cloud(
 async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
     """Idempotently create a session metadata row if it doesn't exist yet.
 
-    Uses a conditional ``put_item`` keyed on ``attribute_not_exists(PK)`` so
-    concurrent first-turn requests for the same session can't clobber each
-    other. Returns ``True`` when a new row was created (caller can use this
-    as the "first turn" signal, e.g. to fire title generation).
+    Returns ``True`` when a new row was created (caller can use this as the
+    "first turn" signal, e.g. to fire title generation).
+
+    Existence is gated on a ``SessionLookupIndex`` GSI lookup rather than a
+    conditional ``put_item``: the main-table SK encodes ``lastMessageAt``
+    (rotated each turn by ``update_session_activity`` to keep recency
+    listing correct), so each call generates a different SK and an
+    ``attribute_not_exists(PK)`` ConditionExpression would be evaluated
+    against an item that never existed at that exact key — the put would
+    always succeed and the same session would gain a new duplicate row
+    every turn.
+
+    The GSI is eventually consistent, so a residual race remains for
+    genuinely concurrent first-turn requests for the same brand-new
+    session_id. That window is bounded to the GSI replication lag (sub-
+    100ms typical) and is the same one tracked alongside the schema
+    change in issue #175.
 
     No-op for preview sessions, which intentionally skip persistence.
     """
@@ -716,11 +729,14 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
 
     try:
         import boto3
-        from botocore.exceptions import ClientError
         from datetime import datetime, timezone
 
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if existing is not None:
+            return False
 
         now = datetime.now(timezone.utc).isoformat()
         item = {
@@ -739,15 +755,9 @@ async def ensure_session_metadata_exists(session_id: str, user_id: str) -> bool:
             "tags": [],
         }
 
-        try:
-            table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
-            logger.info(f"💾 Pre-created session metadata for {session_id}")
-            return True
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-                # Session already exists — expected for continuing conversations.
-                return False
-            raise
+        table.put_item(Item=item)
+        logger.info(f"💾 Pre-created session metadata for {session_id}")
+        return True
     except Exception as e:
         # Best-effort: failures must not block the stream. update_session_activity
         # self-heals by retrying this call once if the row is missing post-stream.

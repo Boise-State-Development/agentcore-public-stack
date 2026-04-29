@@ -370,6 +370,48 @@ class TestUpdateSessionActivity:
         assert items == []
 
 
+class TestEnsureSessionMetadataExists:
+    @pytest.mark.asyncio
+    async def test_repeated_calls_do_not_create_duplicates(self, sessions_metadata_table):
+        """Regression: each turn calls ensure_session_metadata_exists; the SK
+        encodes a timestamp, so a put-with-conditional cannot gate creation
+        and would produce one duplicate row per turn (sidebar duplication bug).
+        """
+        from apis.shared.sessions.metadata import ensure_session_metadata_exists
+
+        first = await ensure_session_metadata_exists("s1", "u1")
+        second = await ensure_session_metadata_exists("s1", "u1")
+        third = await ensure_session_metadata_exists("s1", "u1")
+
+        assert first is True
+        assert second is False
+        assert third is False
+
+        items = sessions_metadata_table.scan()["Items"]
+        s_items = [i for i in items if i["SK"].startswith("S#ACTIVE#") and i.get("sessionId") == "s1"]
+        assert len(s_items) == 1
+
+    @pytest.mark.asyncio
+    async def test_survives_sk_rotation(self, sessions_metadata_table):
+        """After update_session_activity rotates the SK, a subsequent ensure
+        call must still recognize the session via the GSI and skip the put.
+        """
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            update_session_activity,
+        )
+
+        await ensure_session_metadata_exists("s1", "u1")
+        await update_session_activity(session_id="s1", user_id="u1", last_model="claude-3")
+
+        again = await ensure_session_metadata_exists("s1", "u1")
+        assert again is False
+
+        items = sessions_metadata_table.scan()["Items"]
+        s_items = [i for i in items if i["SK"].startswith("S#ACTIVE#") and i.get("sessionId") == "s1"]
+        assert len(s_items) == 1
+
+
 class TestAddPendingInterruptListAppend:
     """list_append-based persistence — race-free with no read-modify-write."""
 
