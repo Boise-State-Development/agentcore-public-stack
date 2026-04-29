@@ -38,12 +38,26 @@ export interface SessionsListResponse {
 export interface PendingInterrupt {
   /** Strands interrupt id used to resume the paused turn */
   interruptId: string;
-  /** Connector providerId needing consent */
-  providerId: string;
+  /**
+   * Discriminator: which variant this interrupt represents. Older rows
+   * written before per-tool approval shipped omit this — backend defaults
+   * to "oauth" on read.
+   */
+  kind?: 'oauth' | 'tool_approval';
   /** Id of the assistant message whose tool call triggered this interrupt, if known */
   triggeringMessageId?: string | null;
   /** ISO 8601 timestamp when the interrupt was recorded */
   createdAt: string;
+  /** (oauth) Connector providerId needing consent */
+  providerId?: string | null;
+  /** (tool_approval) Strands tool-use id of the paused call */
+  toolUseId?: string | null;
+  /** (tool_approval) MCP-server-exposed tool name */
+  toolName?: string | null;
+  /** (tool_approval) JSON-encoded tool input arguments */
+  toolInput?: string | null;
+  /** (tool_approval) Message to display in the approval prompt */
+  message?: string | null;
 }
 
 /**

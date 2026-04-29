@@ -21,28 +21,66 @@ class VisualDisplayState(BaseModel):
 
 
 class PendingInterrupt(BaseModel):
-    """An OAuth consent request that paused an agent turn and is awaiting user action.
+    """A paused-turn breadcrumb the frontend uses to rediscover prompts on
+    reload — without it, a browser refresh leaves the prompt stuck and the
+    tool call orphaned in ``pending`` forever.
 
-    Persisted to session metadata when ``OAuthConsentHook`` fires the interrupt
-    so the frontend can rediscover pending consents on reload — without it, a
-    browser refresh leaves the consent prompt stuck and the tool call orphaned
-    in ``pending`` forever.
+    Two variants share this shape (discriminated by ``kind``):
 
-    Note: ``authorization_url`` is intentionally omitted. AgentCore Identity's
-    consent URLs are short-lived; storing them invites stale-URL bugs on
-    refresh-after-an-hour. Frontend re-fetches via ``initiate-consent`` on
-    Connect.
+    - ``oauth`` — written by ``OAuthConsentHook``. Carries ``provider_id``;
+      the frontend re-fetches a fresh consent URL via ``initiate-consent``
+      on Connect (URLs are short-lived; storing them invites stale-URL bugs).
+    - ``tool_approval`` — written by ``MCPExternalApprovalHook``. Carries
+      ``tool_name`` + ``tool_input`` + ``message`` so the inline approve/decline
+      prompt rehydrates with the same context the user saw before refresh.
+      ``tool_input`` is stored as a JSON-encoded string to avoid DynamoDB's
+      Decimal/float coercion when the agent's tool input contains nested
+      objects with floats.
+
+    Default ``kind`` is ``oauth`` for backward compatibility with rows
+    written before per-tool approval shipped.
     """
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    provider_id: str = Field(..., alias="providerId", description="Connector providerId needing consent")
+    kind: Literal["oauth", "tool_approval"] = Field(
+        default="oauth",
+        description="Discriminator: which variant this interrupt represents",
+    )
     triggering_message_id: Optional[str] = Field(
         None,
         alias="triggeringMessageId",
         description="Id of the assistant message whose tool call triggered this interrupt, when known",
     )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp when the interrupt was recorded")
+
+    # OAuth-only fields
+    provider_id: Optional[str] = Field(
+        default=None,
+        alias="providerId",
+        description="(oauth) Connector providerId needing consent",
+    )
+
+    # tool_approval-only fields
+    tool_use_id: Optional[str] = Field(
+        default=None,
+        alias="toolUseId",
+        description="(tool_approval) Strands tool-use id of the paused call",
+    )
+    tool_name: Optional[str] = Field(
+        default=None,
+        alias="toolName",
+        description="(tool_approval) MCP-server-exposed name of the tool",
+    )
+    tool_input: Optional[str] = Field(
+        default=None,
+        alias="toolInput",
+        description="(tool_approval) JSON-encoded tool input arguments",
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="(tool_approval) Admin-supplied or default approval message",
+    )
 
 
 class PausedTurnSnapshot(BaseModel):

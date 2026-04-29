@@ -184,7 +184,10 @@ def _fake_tool(updated_at, tool_id="gmail"):
     return SimpleNamespace(
         tool_id=tool_id,
         protocol="mcp_external",
-        mcp_config=SimpleNamespace(server_url="https://example.com/mcp"),
+        mcp_config=SimpleNamespace(
+            server_url="https://example.com/mcp",
+            approval_required_names=lambda: set(),
+        ),
         forward_auth_token=False,
         requires_oauth_provider=None,
         updated_at=updated_at,

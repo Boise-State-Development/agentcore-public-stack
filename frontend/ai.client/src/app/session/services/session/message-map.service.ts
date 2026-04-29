@@ -5,6 +5,7 @@ import { StreamParserService } from '../chat/stream-parser.service';
 import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -44,6 +45,7 @@ export class MessageMapService {
   private sessionService = inject(SessionService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
 
   constructor() {
     // Reactive effect: automatically sync streaming messages to the message map
@@ -297,10 +299,12 @@ export class MessageMapService {
   }
 
   /**
-   * Replay persisted pending OAuth interrupts into the consent service so
-   * the inline prompt re-renders. If the backend records a triggering message
-   * id we use it directly; otherwise we anchor to the most recent assistant
-   * message (mirroring the live-stream behavior in stream-parser.service.ts).
+   * Replay persisted pending interrupts into the matching service so the
+   * inline prompt re-renders. Branches on `kind` (defaults to "oauth" for
+   * legacy rows written before per-tool approval shipped). If the backend
+   * recorded a triggering message id we use it directly; otherwise we
+   * anchor to the most recent assistant message, mirroring the live-stream
+   * behavior in stream-parser.service.ts.
    */
   private hydratePendingInterrupts(
     sessionId: string,
@@ -318,11 +322,42 @@ export class MessageMapService {
       }
     }
     for (const interrupt of interrupts) {
+      const messageId = interrupt.triggeringMessageId ?? lastAssistantId;
+      const kind = interrupt.kind ?? 'oauth';
+
+      if (kind === 'tool_approval') {
+        if (!interrupt.toolName) {
+          console.warn(
+            'Skipping tool_approval interrupt with no toolName',
+            interrupt.interruptId,
+          );
+          continue;
+        }
+        this.toolApprovalService.requestApproval({
+          interruptId: interrupt.interruptId,
+          toolUseId: interrupt.toolUseId ?? '',
+          toolName: interrupt.toolName,
+          toolInput: interrupt.toolInput ?? undefined,
+          message: interrupt.message ?? '',
+          messageId,
+          sessionId,
+        });
+        continue;
+      }
+
+      // OAuth (default for legacy rows without `kind`)
+      if (!interrupt.providerId) {
+        console.warn(
+          'Skipping oauth interrupt with no providerId',
+          interrupt.interruptId,
+        );
+        continue;
+      }
       this.oauthConsentService.requestConsent(
         interrupt.providerId,
         undefined, // URL is fetched lazily on Connect — stored URLs go stale
         interrupt.interruptId,
-        interrupt.triggeringMessageId ?? lastAssistantId,
+        messageId,
         sessionId,
       );
     }

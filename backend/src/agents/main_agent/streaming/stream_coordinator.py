@@ -195,20 +195,27 @@ class StreamCoordinator:
                     # Don't yield this event to the client (will send final metadata before done)
                     continue
 
-                # If the agent paused on an OAuth interrupt, surface one
-                # `oauth_required` SSE event per pending interrupt before the
-                # stream closes. The frontend uses these to drive the consent
-                # popup and then POSTs interrupt responses to resume the turn.
+                # If the agent paused on an interrupt, surface one SSE event
+                # per pending interrupt before the stream closes. The frontend
+                # uses these to drive its prompts (OAuth popup, tool-approval
+                # modal) and POSTs the user's response back to resume the turn.
                 # Done before the metadata branch so the events land between
-                # message_stop and the final metadata/done block. Persistence
-                # to session metadata happens inside the extractor so a refresh
-                # rediscovers the consent prompt.
+                # message_stop and the final metadata/done block. The OAuth
+                # extractor also writes the PausedTurnSnapshot — running first
+                # means the tool-approval extractor doesn't need to duplicate
+                # that work for tool-approval-only pauses.
                 if event.get("type") == "done":
                     for sse in await self._extract_oauth_required_events(
                         agent,
                         session_id=session_id,
                         user_id=user_id,
                         main_agent_wrapper=main_agent_wrapper,
+                    ):
+                        yield sse
+                    for sse in await self._extract_tool_approval_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
                     ):
                         yield sse
 
@@ -654,6 +661,83 @@ class StreamCoordinator:
                     provider_id=provider_id,
                     authorization_url=authorization_url,
                     interrupt_id=interrupt.id,
+                ).to_sse_format()
+            )
+        return events
+
+    async def _extract_tool_approval_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted `tool_approval_required` event per pending
+        per-tool approval interrupt on the agent, persisting each one to
+        session metadata so the frontend can rediscover them after a refresh.
+
+        The PausedTurnSnapshot is written by the OAuth extractor on the same
+        ``done`` event, so a tool-approval-only pause still has the
+        construction context needed to rebuild the agent on resume.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
+        """
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+        from apis.shared.tool_approval.models import ToolApprovalRequiredEvent
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != "tool_approval_required":
+                continue
+            tool_name = reason.get("toolName")
+            if not tool_name:
+                logger.warning(
+                    "Tool approval interrupt missing toolName: id=%s", interrupt.id
+                )
+                continue
+
+            tool_use_id = reason.get("toolUseId", "")
+            tool_input = reason.get("toolInput")
+            message = reason.get("message", "")
+
+            # Persist the breadcrumb before yielding so a client that
+            # refreshes mid-prompt can rehydrate the approve/decline UI.
+            # Only attempt when we have session/user context — preview /
+            # anonymous flows have no metadata record to write to.
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="tool_approval",
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            message=message,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist tool_approval pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(
+                ToolApprovalRequiredEvent(
+                    interrupt_id=interrupt.id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    message=message,
                 ).to_sse_format()
             )
         return events

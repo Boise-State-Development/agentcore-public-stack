@@ -11,6 +11,10 @@ import { ToolService } from '../../../services/tool/tool.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import {
+  ToolApprovalDecision,
+  ToolApprovalService,
+} from '../../../services/tool-approval/tool-approval.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { StreamParserService } from './stream-parser.service';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -36,6 +40,7 @@ export class ChatRequestService implements OnDestroy {
   private toolService = inject(ToolService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
   private streamParserService = inject(StreamParserService);
   private errorService = inject(ErrorService);
   private router = inject(Router);
@@ -45,10 +50,14 @@ export class ChatRequestService implements OnDestroy {
     this.oauthConsentService.setResumeHandler((interruptIds, context) =>
       this.resumeFromOAuthConsent(interruptIds, context?.sessionId),
     );
+    this.toolApprovalService.setResumeHandler((interruptId, decision, context) =>
+      this.resumeFromToolApproval(interruptId, decision, context?.sessionId),
+    );
   }
 
   ngOnDestroy(): void {
     this.oauthConsentService.setResumeHandler(null);
+    this.toolApprovalService.setResumeHandler(null);
   }
 
   async submitChatRequest(
@@ -216,6 +225,54 @@ export class ChatRequestService implements OnDestroy {
       if (this.isExpiredInterruptError(error)) {
         this.errorService.addError(
           'Authorization expired',
+          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Resume the paused agent turn after the user approves or declines a
+   * flagged MCP tool call. The hook on the backend reads the response
+   * string ("approved" / "declined") and either lets the tool proceed or
+   * cancels it.
+   */
+  private async resumeFromToolApproval(
+    interruptId: string,
+    decision: ToolApprovalDecision,
+    sessionId?: string,
+  ): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    this.streamParserService.reset(sessionId);
+    this.messageMapService.startStreaming(sessionId);
+    this.chatStateService.createNewAbortController();
+    this.chatStateService.setChatLoading(true);
+
+    const resumeRequest: Record<string, unknown> = {
+      session_id: sessionId,
+      message: '',
+      interrupt_responses: [
+        {
+          interruptId,
+          response: decision,
+        },
+      ],
+    };
+
+    try {
+      await this.chatHttpService.sendChatRequest(resumeRequest);
+    } catch (error) {
+      this.chatStateService.setChatLoading(false);
+      this.messageMapService.endStreaming();
+
+      if (this.isExpiredInterruptError(error)) {
+        this.errorService.addError(
+          'Approval expired',
           'The agent paused too long ago to resume this turn automatically. Please send your message again.',
         );
         return;

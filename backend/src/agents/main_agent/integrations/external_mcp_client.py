@@ -226,6 +226,13 @@ class ExternalMCPIntegration:
         # MCPClient object identity -> provider_id, populated alongside `clients`.
         # Consumed by OAuthConsentHook via `provider_for_client`.
         self._provider_for_client_id: dict[int, str] = {}
+        # MCPClient identity -> set of MCP-server-exposed tool names that the
+        # admin has flagged needs_approval=True. Snapshotted at client-build
+        # time from the tool's MCPServerConfig. Consumed by the per-tool
+        # approval hook, which keys off the parent ToolDefinition rather
+        # than a global tool-name list (so two MCP servers can share a tool
+        # name and only one is gated).
+        self._approval_names_for_client_id: dict[int, set[str]] = {}
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         if requires_oauth and user_id:
@@ -235,6 +242,10 @@ class ExternalMCPIntegration:
     def provider_for_client(self, client: Any) -> Optional[str]:
         """Return the OAuth provider_id backing `client`, or None."""
         return self._provider_for_client_id.get(id(client))
+
+    def approval_names_for_client(self, client: Any) -> set[str]:
+        """Return the set of tool names on `client` flagged needs_approval."""
+        return self._approval_names_for_client_id.get(id(client), set())
 
     async def load_external_tools(
         self,
@@ -300,6 +311,7 @@ class ExternalMCPIntegration:
                     stale = self.clients.pop(cache_key)
                     self._client_versions.pop(cache_key, None)
                     self._provider_for_client_id.pop(id(stale), None)
+                    self._approval_names_for_client_id.pop(id(stale), None)
 
                 static_token: Optional[str] = None
                 token_provider: Optional[Callable[[], Optional[str]]] = None
@@ -356,6 +368,9 @@ class ExternalMCPIntegration:
                     self._client_versions[cache_key] = tool_version
                     if provider_id:
                         self._provider_for_client_id[id(client)] = provider_id
+                    approval_names = tool.mcp_config.approval_required_names()
+                    if approval_names:
+                        self._approval_names_for_client_id[id(client)] = approval_names
                     clients.append(client)
                     auth_label = (
                         " (with OIDC forwarding)" if forward_auth and static_token
@@ -399,6 +414,7 @@ class ExternalMCPIntegration:
             client = self.clients.pop(key)
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
+            self._approval_names_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
@@ -420,6 +436,7 @@ class ExternalMCPIntegration:
             client = self.clients.pop(key)
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
+            self._approval_names_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for tool {tool_id}")

@@ -39,6 +39,14 @@
     </div>
   }
 
+  <!-- Per-tool approval prompts (catalog-flagged needs_approval). Tied to
+       the live SSE turn; refresh during the prompt orphans it. -->
+  @for (request of pendingToolApprovals(); track request.interruptId) {
+    <div class="flex justify-start">
+      <app-tool-approval-prompt [request]="request" />
+    </div>
+  }
+
   <!-- Loading indicator -->
   @if (isChatLoading()) {
     <div class="py-4">

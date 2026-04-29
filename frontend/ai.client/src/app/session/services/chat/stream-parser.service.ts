@@ -15,7 +15,11 @@ import {
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
-import type { OAuthRequiredEvent } from '../../../shared/utils/stream-parser';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import type {
+  OAuthRequiredEvent,
+  ToolApprovalRequiredEvent,
+} from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
   createStreamLineParser,
@@ -51,6 +55,7 @@ export class StreamParserService {
   private errorService = inject(ErrorService);
   private quotaWarningService = inject(QuotaWarningService);
   private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
 
   // =========================================================================
   // State Signals
@@ -315,6 +320,26 @@ export class StreamParserService {
           lastAssistantId,
           this.sessionId ?? undefined,
         );
+      },
+
+      onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
+        const messages = this.allMessages();
+        let lastAssistantId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            lastAssistantId = messages[i].id;
+            break;
+          }
+        }
+        this.toolApprovalService.requestApproval({
+          interruptId: data.interruptId,
+          toolUseId: data.toolUseId,
+          toolName: data.toolName,
+          toolInput: data.toolInput ?? undefined,
+          message: data.message,
+          messageId: lastAssistantId,
+          sessionId: this.sessionId ?? undefined,
+        });
       },
 
       onError: (data) => this.handleError(data),

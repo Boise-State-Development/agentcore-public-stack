@@ -79,6 +79,51 @@ class ToolStatus(str, Enum):
 # =============================================================================
 
 
+class MCPToolEntry(BaseModel):
+    """A single tool exposed by an MCP server, with per-tool flags."""
+
+    name: str = Field(..., description="Tool name as exposed by the MCP server")
+    needs_approval: bool = Field(
+        default=False,
+        description="If true, the agent must request user confirmation before invoking this tool.",
+    )
+    description: Optional[str] = Field(
+        None, description="Optional admin-supplied description for this tool"
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "needsApproval": self.needs_approval,
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MCPToolEntry":
+        return cls(
+            name=data.get("name", ""),
+            needs_approval=bool(data.get("needsApproval", False)),
+            description=data.get("description"),
+        )
+
+
+def _parse_mcp_tools(raw: object) -> List[MCPToolEntry]:
+    """Parse the mcp_config.tools field, accepting either the new entry-dict
+    format or the legacy `List[str]` format written by older catalog rows.
+    """
+    if not isinstance(raw, list):
+        return []
+    entries: List[MCPToolEntry] = []
+    for item in raw:
+        if isinstance(item, MCPToolEntry):
+            entries.append(item)
+        elif isinstance(item, dict):
+            entries.append(MCPToolEntry.from_dict(item))
+        elif isinstance(item, str):
+            entries.append(MCPToolEntry(name=item))
+    return entries
+
+
 class MCPServerConfig(BaseModel):
     """
     Configuration for external MCP server connections.
@@ -112,9 +157,10 @@ class MCPServerConfig(BaseModel):
     )
 
     # MCP tool discovery
-    tools: List[str] = Field(
+    tools: List[MCPToolEntry] = Field(
         default_factory=list,
-        description="List of tool names available on this MCP server. Empty means discover at runtime.",
+        description="Tools available on this MCP server, with per-tool flags. "
+        "Empty means discover at runtime (no per-tool flags applied).",
     )
 
     # Health check
@@ -140,14 +186,16 @@ class MCPServerConfig(BaseModel):
             "awsRegion": self.aws_region,
             "apiKeyHeader": self.api_key_header,
             "secretArn": self.secret_arn,
-            "tools": self.tools,
+            "tools": [entry.to_dict() for entry in self.tools],
             "healthCheckEnabled": self.health_check_enabled,
             "healthCheckIntervalSeconds": self.health_check_interval_seconds,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "MCPServerConfig":
-        """Create from dictionary."""
+        """Create from dictionary. Accepts the legacy `List[str]` tools format
+        for rows written before per-tool flags shipped — same precedent as the
+        legacy-protocol mapping in ToolDefinition.from_dynamo_item."""
         return cls(
             server_url=data.get("serverUrl", ""),
             transport=data.get("transport", MCPTransport.STREAMABLE_HTTP),
@@ -155,10 +203,14 @@ class MCPServerConfig(BaseModel):
             aws_region=data.get("awsRegion"),
             api_key_header=data.get("apiKeyHeader"),
             secret_arn=data.get("secretArn"),
-            tools=data.get("tools", []),
+            tools=_parse_mcp_tools(data.get("tools", [])),
             health_check_enabled=data.get("healthCheckEnabled", False),
             health_check_interval_seconds=data.get("healthCheckIntervalSeconds", 300),
         )
+
+    def approval_required_names(self) -> set[str]:
+        """Return the names of tools flagged as requiring user approval."""
+        return {entry.name for entry in self.tools if entry.needs_approval}
 
 
 class A2AAgentConfig(BaseModel):
@@ -488,6 +540,31 @@ class ToolPreferencesRequest(BaseModel):
     )
 
 
+class MCPToolEntryPayload(BaseModel):
+    """Wire-format for an MCPToolEntry on the admin API."""
+
+    name: str
+    needs_approval: bool = Field(default=False, alias="needsApproval")
+    description: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+    def to_model(self) -> MCPToolEntry:
+        return MCPToolEntry(
+            name=self.name,
+            needs_approval=self.needs_approval,
+            description=self.description,
+        )
+
+    @classmethod
+    def from_model(cls, entry: MCPToolEntry) -> "MCPToolEntryPayload":
+        return cls(
+            name=entry.name,
+            needs_approval=entry.needs_approval,
+            description=entry.description,
+        )
+
+
 class MCPServerConfigRequest(BaseModel):
     """Request body for MCP server configuration."""
 
@@ -499,7 +576,7 @@ class MCPServerConfigRequest(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
-    tools: List[str] = Field(default_factory=list)
+    tools: List[MCPToolEntryPayload] = Field(default_factory=list)
     health_check_enabled: bool = Field(default=False, alias="healthCheckEnabled")
     health_check_interval_seconds: int = Field(
         default=300, alias="healthCheckIntervalSeconds"
@@ -516,7 +593,7 @@ class MCPServerConfigRequest(BaseModel):
             aws_region=self.aws_region,
             api_key_header=self.api_key_header,
             secret_arn=self.secret_arn,
-            tools=self.tools,
+            tools=[entry.to_model() for entry in self.tools],
             health_check_enabled=self.health_check_enabled,
             health_check_interval_seconds=self.health_check_interval_seconds,
         )
@@ -645,7 +722,7 @@ class MCPServerConfigResponse(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
-    tools: List[str] = Field(default_factory=list)
+    tools: List[MCPToolEntryPayload] = Field(default_factory=list)
     health_check_enabled: bool = Field(default=False, alias="healthCheckEnabled")
     health_check_interval_seconds: int = Field(
         default=300, alias="healthCheckIntervalSeconds"
@@ -667,7 +744,7 @@ class MCPServerConfigResponse(BaseModel):
             aws_region=config.aws_region,
             api_key_header=config.api_key_header,
             secret_arn=config.secret_arn,
-            tools=config.tools,
+            tools=[MCPToolEntryPayload.from_model(entry) for entry in config.tools],
             health_check_enabled=config.health_check_enabled,
             health_check_interval_seconds=config.health_check_interval_seconds,
         )
@@ -769,5 +846,47 @@ class AdminToolListResponse(BaseModel):
 
     tools: List[AdminToolResponse]
     total: int
+
+
+class MCPDiscoverRequest(BaseModel):
+    """Request body for POST /api/admin/tools/discover.
+
+    Same fields as MCPServerConfigRequest minus the `tools` list — the
+    point of discovery is to populate that list. OAuth-gated and OIDC-
+    forwarded servers can't be discovered admin-side (no end-user token
+    available); the route returns a 400 in those cases."""
+
+    server_url: str = Field(..., alias="serverUrl")
+    transport: MCPTransport = Field(default=MCPTransport.STREAMABLE_HTTP)
+    auth_type: MCPAuthType = Field(default=MCPAuthType.AWS_IAM, alias="authType")
+    aws_region: Optional[str] = Field(None, alias="awsRegion")
+    api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
+    secret_arn: Optional[str] = Field(None, alias="secretArn")
+
+    model_config = {"populate_by_name": True, "use_enum_values": True}
+
+    def to_config(self) -> MCPServerConfig:
+        return MCPServerConfig(
+            server_url=self.server_url,
+            transport=self.transport,
+            auth_type=self.auth_type,
+            aws_region=self.aws_region,
+            api_key_header=self.api_key_header,
+            secret_arn=self.secret_arn,
+            tools=[],
+        )
+
+
+class DiscoveredMCPTool(BaseModel):
+    """A tool discovered from a live MCP server's list_tools call."""
+
+    name: str
+    description: Optional[str] = None
+
+
+class MCPDiscoverResponse(BaseModel):
+    """Response body for POST /api/admin/tools/discover."""
+
+    tools: List[DiscoveredMCPTool]
 
 

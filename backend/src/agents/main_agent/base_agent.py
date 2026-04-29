@@ -15,9 +15,7 @@ from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
     StopHook,
     OAuthConsentHook,
-    EmailApprovalHook,
-    ExternalWriteApprovalHook,
-    DangerousToolApprovalHook,
+    MCPExternalApprovalHook,
 )
 from agents.main_agent.tools import (
     create_default_registry,
@@ -233,12 +231,30 @@ class BaseAgent(ABC):
         # the hook is a no-op for tools that don't have a registered provider.
         hooks.append(self._build_oauth_consent_hook())
 
-        # Approval gates for dangerous operations
-        hooks.append(EmailApprovalHook())
-        hooks.append(ExternalWriteApprovalHook())
-        hooks.append(DangerousToolApprovalHook())
+        # Per-tool approval gate. Sources its gating set from the catalog
+        # (`MCPServerConfig.tools[*].needs_approval`); a no-op for any tool
+        # without a flag.
+        hooks.append(self._build_mcp_external_approval_hook())
 
         return hooks
+
+    def _build_mcp_external_approval_hook(self) -> MCPExternalApprovalHook:
+        """Resolve a Strands `selected_tool` to the per-tool approval set
+        cached by the external MCP integration. Mirrors the provider lookup
+        used by the OAuth consent hook."""
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from strands.tools.mcp import MCPAgentTool
+
+        integration = get_external_mcp_integration()
+
+        def approval_names_lookup(selected_tool: object) -> set[str]:
+            if not isinstance(selected_tool, MCPAgentTool):
+                return set()
+            return integration.approval_names_for_client(selected_tool.mcp_client)
+
+        return MCPExternalApprovalHook(approval_names_lookup=approval_names_lookup)
 
     def _build_oauth_consent_hook(self) -> OAuthConsentHook:
         """Construct the OAuth consent hook with closures over the MCP

@@ -1,5 +1,6 @@
 """Admin API routes for tool catalog management."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -16,6 +17,10 @@ from apis.app_api.tools.models import (
     AdminToolResponse,
     AdminToolListResponse,
     ToolDefinition,
+    MCPDiscoverRequest,
+    MCPDiscoverResponse,
+    DiscoveredMCPTool,
+    MCPAuthType,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,6 +232,78 @@ async def admin_delete_tool(
 
     action = "deleted" if hard else "disabled"
     return {"message": f"Tool '{tool_id}' {action} successfully"}
+
+
+# =============================================================================
+# MCP Server Discovery
+# =============================================================================
+
+
+@router.post("/discover", response_model=MCPDiscoverResponse)
+async def admin_discover_mcp_tools(
+    request: MCPDiscoverRequest,
+    admin: User = Depends(require_admin),
+):
+    """Connect to an MCP server with the given config and return its tool list.
+
+    Used by the admin tool form to populate the per-tool entries instead of
+    asking admins to type each name. OAuth-gated servers are not supported —
+    the admin's session can't supply an end-user token.
+
+    Args:
+        request: MCP server connection details (URL, transport, auth)
+        admin: Authenticated admin user (injected)
+
+    Returns:
+        MCPDiscoverResponse with the discovered tools and their descriptions
+    """
+    from agents.main_agent.integrations.external_mcp_client import (
+        create_external_mcp_client,
+    )
+
+    if request.auth_type in (MCPAuthType.OAUTH2.value, MCPAuthType.OAUTH2):
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth-gated MCP servers can't be discovered server-side; "
+            "list the tool names manually.",
+        )
+
+    client = create_external_mcp_client(config=request.to_config())
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not build an MCP client for the supplied config — "
+            "check the server URL and transport.",
+        )
+
+    def _list_tools():
+        # MCPClient is a sync context manager that opens a session on enter;
+        # `list_tools_sync` performs the MCP `tools/list` call. We push it to
+        # a thread so the async event loop stays responsive during connect.
+        with client:
+            return list(client.list_tools_sync())
+
+    try:
+        tools = await asyncio.to_thread(_list_tools)
+    except Exception as exc:
+        logger.exception("MCP discovery failed for %s", request.server_url)
+        raise HTTPException(
+            status_code=502,
+            detail=f"MCP server did not respond to tools/list: {exc}",
+        )
+
+    discovered: list[DiscoveredMCPTool] = []
+    for tool in tools:
+        # Strands wraps each MCP tool as an MCPAgentTool; spec details live on
+        # `mcp_tool` (mirrors the wire-format `Tool` from the MCP SDK).
+        spec = getattr(tool, "mcp_tool", None)
+        name = getattr(spec, "name", None) or getattr(tool, "tool_name", None)
+        description = getattr(spec, "description", None)
+        if not name:
+            continue
+        discovered.append(DiscoveredMCPTool(name=name, description=description))
+
+    return MCPDiscoverResponse(tools=discovered)
 
 
 # =============================================================================

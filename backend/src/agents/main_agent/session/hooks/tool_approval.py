@@ -1,90 +1,117 @@
+"""Per-tool approval gate for external MCP tools.
+
+Pauses the agent before invoking any MCP tool that the admin flagged with
+`needs_approval=True` in the tool catalog. The pause uses Strands' interrupt
+protocol: the streaming layer surfaces a `tool_approval_required` SSE event
+to the frontend, the user clicks Approve/Deny, and the resume request feeds
+the decision back here via `event.interrupt(...)`'s return value.
+
+Design notes:
+- Approval is scoped to the parent MCP server (the same tool name on a
+  different server can be unflagged); the gating set comes from
+  `ExternalMCPIntegration.approval_names_for_client`.
+- A declined approval becomes a `cancel_tool` so the agent sees a tool error
+  it can apologize/replan against, rather than a silent no-op.
+- The interrupt name is scoped by `toolUseId` so two parallel calls of the
+  same tool in one turn produce distinct interrupts (and distinct SSE events
+  the frontend can correlate per-prompt).
 """
-Tool approval hooks for gating dangerous operations.
 
-These hooks intercept tool calls before execution and can request
-user confirmation for operations that modify external systems.
+from __future__ import annotations
 
-Based on the approval hook pattern from:
-https://github.com/aws-samples/sample-strands-agent-with-agentcore
-"""
-
+import json
 import logging
-from typing import Any, Set
+from typing import Any, Callable, Optional, Set
 
-from strands.hooks import HookProvider, HookRegistry, BeforeToolCallEvent
+from strands.hooks import BeforeToolCallEvent, HookProvider, HookRegistry
 
 logger = logging.getLogger(__name__)
 
 
-class ToolApprovalHook(HookProvider):
-    """
-    Base approval hook that gates specified tool names.
+def _encode_tool_input(value: Any) -> Optional[str]:
+    """JSON-encode tool input for transport + persistence.
 
-    Subclasses define which tool names require approval and what
-    message to show the user. The hook sets the approval_required
-    flag on the event, which the streaming layer can surface to
-    the client for user confirmation.
+    Returns None for empty / missing input so the frontend can skip the
+    "Inspect arguments" affordance. `default=str` keeps the call total —
+    a tool that snuck a non-JSON-serializable value into its args still
+    produces *some* readable string instead of crashing the hook.
     """
+    if value is None:
+        return None
+    if isinstance(value, dict) and not value:
+        return None
+    try:
+        return json.dumps(value, indent=2, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
-    # Subclasses override these
-    tool_names: Set[str] = set()
-    approval_message: str = "This operation requires approval."
+
+# Resolves a Strands `selected_tool` to the set of MCP-server-exposed tool
+# names that the admin flagged needs_approval, scoped to the parent MCP
+# server. Returns an empty set when the tool isn't an external MCP tool, or
+# when no per-tool flags apply. Indirected so the hook stays decoupled from
+# the integration module.
+ApprovalNamesLookup = Callable[[Any], Set[str]]
+
+
+# Default user-facing message; admins can extend this later by wiring a
+# per-tool message field through the catalog if needed.
+_DEFAULT_APPROVAL_MESSAGE = (
+    "This tool is configured to require user approval before it runs. "
+    "Approve to proceed, or decline to cancel the call."
+)
+
+
+class MCPExternalApprovalHook(HookProvider):
+    """Pause the agent for user approval before a flagged MCP tool runs."""
+
+    def __init__(self, approval_names_lookup: ApprovalNamesLookup):
+        self._approval_names_lookup = approval_names_lookup
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        registry.add_callback(BeforeToolCallEvent, self.check_approval)
+        registry.add_callback(BeforeToolCallEvent, self._gate)
 
-    def check_approval(self, event: BeforeToolCallEvent) -> None:
-        """Check if the tool call requires user approval."""
+    def _gate(self, event: BeforeToolCallEvent) -> None:
+        approval_names = self._approval_names_lookup(event.selected_tool)
+        if not approval_names:
+            return
+
         tool_name = event.tool_use.get("name", "")
-        if tool_name in self.tool_names:
-            logger.info(f"Tool approval required: {tool_name}")
-            # The approval_required attribute signals the streaming layer
-            # to elicit user confirmation before proceeding
-            event.tool_use["_approval_required"] = True
-            event.tool_use["_approval_message"] = self.approval_message
+        if tool_name not in approval_names:
+            return
 
+        tool_use_id = event.tool_use.get("toolUseId", "")
+        tool_input = _encode_tool_input(event.tool_use.get("input"))
 
-class EmailApprovalHook(ToolApprovalHook):
-    """Gate bulk email operations (send, delete, forward)."""
+        logger.info(
+            "Pausing for user approval: tool=%s tool_use_id=%s",
+            tool_name,
+            tool_use_id,
+        )
 
-    tool_names = {
-        "send_email",
-        "send_bulk_email",
-        "delete_emails",
-        "forward_email",
-    }
-    approval_message = (
-        "This tool will perform an email operation. "
-        "Please confirm you want to proceed."
-    )
+        # Strands' BeforeToolCallEvent already folds toolUseId into the
+        # interrupt id; we add it to the name too so logs and metadata
+        # entries are unambiguous when multiple parallel calls are paused.
+        response = event.interrupt(
+            name=f"tool_approval:{tool_use_id or tool_name}",
+            reason={
+                "type": "tool_approval_required",
+                "toolUseId": tool_use_id,
+                "toolName": tool_name,
+                "toolInput": tool_input,
+                "message": _DEFAULT_APPROVAL_MESSAGE,
+            },
+        )
 
+        # The frontend POSTs `{"response": "approved"}` or
+        # `{"response": "declined"}`; the routes layer wraps it in
+        # `{"interruptResponse": ...}` so by the time the response lands
+        # here it's the inner string. Anything other than "approved" is
+        # treated as a decline — fail closed.
+        if response == "approved":
+            return
 
-class ExternalWriteApprovalHook(ToolApprovalHook):
-    """Gate operations that write to external systems (GitHub, APIs, etc.)."""
-
-    tool_names = {
-        "create_pull_request",
-        "merge_pull_request",
-        "create_issue",
-        "push_code",
-        "deploy",
-        "delete_repository",
-    }
-    approval_message = (
-        "This tool will modify an external system. "
-        "Please confirm you want to proceed."
-    )
-
-
-class DangerousToolApprovalHook(ToolApprovalHook):
-    """Gate tools with irreversible side effects."""
-
-    tool_names = {
-        "delete_file",
-        "drop_table",
-        "execute_sql",
-    }
-    approval_message = (
-        "This tool performs an irreversible operation. "
-        "Please confirm you want to proceed."
-    )
+        event.cancel_tool = (
+            f"User declined to approve the {tool_name!r} tool call; "
+            "the agent should not invoke it."
+        )

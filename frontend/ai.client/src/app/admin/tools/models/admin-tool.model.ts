@@ -40,6 +40,15 @@ export type A2AAuthType = 'none' | 'aws-iam' | 'agentcore' | 'api-key';
 export type ToolStatus = 'active' | 'deprecated' | 'disabled' | 'coming_soon';
 
 /**
+ * A single tool exposed by an MCP server, with per-tool flags.
+ */
+export interface MCPToolEntry {
+  name: string;
+  needsApproval: boolean;
+  description?: string | null;
+}
+
+/**
  * MCP server configuration for external MCP tools.
  */
 export interface MCPServerConfig {
@@ -49,7 +58,7 @@ export interface MCPServerConfig {
   awsRegion?: string | null;
   apiKeyHeader?: string | null;
   secretArn?: string | null;
-  tools: string[];
+  tools: MCPToolEntry[];
   healthCheckEnabled: boolean;
   healthCheckIntervalSeconds: number;
 }
@@ -159,6 +168,33 @@ export interface ToolUpdateRequest {
  */
 export interface SetToolRolesRequest {
   appRoleIds: string[];
+}
+
+/**
+ * Request body for POST /api/admin/tools/discover.
+ */
+export interface MCPDiscoverRequest {
+  serverUrl: string;
+  transport: MCPTransport;
+  authType: MCPAuthType;
+  awsRegion?: string | null;
+  apiKeyHeader?: string | null;
+  secretArn?: string | null;
+}
+
+/**
+ * A tool returned by MCP server discovery.
+ */
+export interface DiscoveredMCPTool {
+  name: string;
+  description?: string | null;
+}
+
+/**
+ * Response from POST /api/admin/tools/discover.
+ */
+export interface MCPDiscoverResponse {
+  tools: DiscoveredMCPTool[];
 }
 
 /**

@@ -10,6 +10,8 @@ import {
   ToolUpdateRequest,
   ToolRolesResponse,
   ToolRoleAssignment,
+  MCPDiscoverRequest,
+  MCPDiscoverResponse,
 } from '../models/admin-tool.model';
 
 /**
@@ -203,5 +205,14 @@ export class AdminToolService {
    */
   reload(): void {
     this.toolsResource.reload();
+  }
+
+  /**
+   * Connect to an MCP server with the given config and return its tool list.
+   */
+  async discoverMCPTools(request: MCPDiscoverRequest): Promise<MCPDiscoverResponse> {
+    return firstValueFrom(
+      this.http.post<MCPDiscoverResponse>(`${this.baseUrl()}/discover`, request)
+    );
   }
 }
