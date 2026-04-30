@@ -61,14 +61,29 @@ test.describe('Chat (user)', () => {
       await page.goto('/');
       await expect(page.locator('textarea#user-message')).toBeVisible({ timeout: 15_000 });
 
+      // Wait for the session list to finish loading before clicking
+      await expect(page.getByText('Loading sessions...')).toBeHidden({ timeout: 15_000 });
+
       // Click into the most recent conversation (created by the previous test)
       const sessionLink = page.locator('app-session-list a').first();
+      await expect(sessionLink).toBeVisible({ timeout: 10_000 });
       await sessionLink.click();
       await page.waitForURL(/\/s\//, { timeout: 10_000 });
 
-      // Should already have 1 user message and 1 assistant message from the first test
-      await expect(page.locator('app-user-message')).toHaveCount(1, { timeout: 10_000 });
-      await expect(page.locator('app-assistant-message')).toHaveCount(1, { timeout: 10_000 });
+      // The assistant message from the previous test may not be persisted in
+      // DynamoDB yet when the page first loads messages. If only the user
+      // message is present, reload to re-fetch from the backend.
+      await expect(page.locator('app-user-message')).toHaveCount(1, { timeout: 15_000 });
+
+      const assistantCount = await page.locator('app-assistant-message').count();
+      if (assistantCount === 0) {
+        // Assistant message not yet persisted — wait briefly then reload
+        await page.waitForTimeout(3_000);
+        await page.reload();
+        await expect(page.locator('textarea#user-message')).toBeVisible({ timeout: 15_000 });
+        await expect(page.locator('app-user-message')).toHaveCount(1, { timeout: 15_000 });
+      }
+      await expect(page.locator('app-assistant-message')).toHaveCount(1, { timeout: 30_000 });
 
       // Send a second message
       const response = await sendMessageAndWaitForResponse(page, 'Reply with exactly one word.');

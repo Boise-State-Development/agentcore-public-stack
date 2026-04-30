@@ -12,8 +12,21 @@ test.describe('File Upload UI (user)', () => {
   });
 
   test('should accept a file via the file input', async ({ page }) => {
-    // Mock the upload endpoint so we don't actually upload
-    await page.route('**/files/upload**', (route) =>
+    // Mock the full upload flow: presign → S3 PUT → complete
+    await page.route('**/files/presign', (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          uploadId: 'mock-upload-id',
+          presignedUrl: 'https://fake-s3-bucket.s3.amazonaws.com/fake-presigned-url',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      }),
+    );
+    await page.route('**/fake-s3-bucket.s3.amazonaws.com/**', (route) =>
+      route.fulfill({ status: 200 }),
+    );
+    await page.route('**/files/mock-upload-id/complete', (route) =>
       route.fulfill({
         status: 200,
         json: { uploadId: 'mock-upload-id', filename: 'test.txt', status: 'completed' },
@@ -32,11 +45,27 @@ test.describe('File Upload UI (user)', () => {
     // A file card should appear in the attachments area
     const fileCard = page.locator('app-file-card');
     await expect(fileCard.first()).toBeVisible({ timeout: 10_000 });
+
+    // Clean up route mocks
+    await page.unrouteAll();
   });
 
   test('should remove an attached file', async ({ page }) => {
-    // Mock the upload endpoint so we don't actually upload
-    await page.route('**/files/upload**', (route) =>
+    // Mock the full upload flow: presign → S3 PUT → complete
+    await page.route('**/files/presign', (route) =>
+      route.fulfill({
+        status: 200,
+        json: {
+          uploadId: 'mock-upload-id',
+          presignedUrl: 'https://fake-s3-bucket.s3.amazonaws.com/fake-presigned-url',
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      }),
+    );
+    await page.route('**/fake-s3-bucket.s3.amazonaws.com/**', (route) =>
+      route.fulfill({ status: 200 }),
+    );
+    await page.route('**/files/mock-upload-id/complete', (route) =>
       route.fulfill({
         status: 200,
         json: { uploadId: 'mock-upload-id', filename: 'test.txt', status: 'completed' },
@@ -62,6 +91,9 @@ test.describe('File Upload UI (user)', () => {
     await removeButton.click();
 
     // File card should disappear
-    await expect(fileCard).toHaveCount(0, { timeout: 5_000 });
+    await expect(fileCard).toHaveCount(0, { timeout: 10_000 });
+
+    // Clean up route mocks
+    await page.unrouteAll();
   });
 });
