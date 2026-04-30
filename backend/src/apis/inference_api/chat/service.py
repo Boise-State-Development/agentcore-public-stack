@@ -123,7 +123,7 @@ async def get_agent(
     Returns:
         BaseAgent subclass instance (cached or newly created)
     """
-    from apis.app_api.tools.freshness import get_freshness_hash
+    from apis.shared.tools.freshness import get_freshness_hash
 
     freshness_hash = await get_freshness_hash(enabled_tools or [])
 

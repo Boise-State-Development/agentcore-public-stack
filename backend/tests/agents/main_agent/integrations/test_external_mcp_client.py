@@ -208,7 +208,7 @@ class TestLoadExternalToolsVersioning:
         client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
 
         with patch(
-            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            "apis.shared.tools.repository.get_tool_catalog_repository",
             return_value=repo,
         ), patch(
             "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
@@ -232,7 +232,7 @@ class TestLoadExternalToolsVersioning:
         client_new = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
 
         with patch(
-            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            "apis.shared.tools.repository.get_tool_catalog_repository",
             return_value=repo,
         ), patch(
             "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
@@ -264,7 +264,7 @@ class TestLoadExternalToolsPreflight:
         )
 
         with patch(
-            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            "apis.shared.tools.repository.get_tool_catalog_repository",
             return_value=repo,
         ), patch(
             "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
@@ -296,7 +296,7 @@ class TestLoadExternalToolsPreflight:
         good_client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
 
         with patch(
-            "apis.app_api.tools.repository.get_tool_catalog_repository",
+            "apis.shared.tools.repository.get_tool_catalog_repository",
             return_value=repo,
         ), patch(
             "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",

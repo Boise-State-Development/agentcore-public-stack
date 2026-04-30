@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from apis.app_api.tools import freshness
+from apis.shared.tools import freshness
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +34,7 @@ async def test_hash_reflects_updated_at_changes():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         h1 = await freshness.get_freshness_hash(["gmail"])
@@ -46,7 +46,7 @@ async def test_hash_reflects_updated_at_changes():
         return_value=_tool(datetime(2025, 2, 1, tzinfo=timezone.utc))
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         h2 = await freshness.get_freshness_hash(["gmail"])
@@ -63,7 +63,7 @@ async def test_ttl_avoids_repeat_reads_within_window():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         await freshness.get_freshness_hash(["gmail"])
@@ -81,7 +81,7 @@ async def test_invalidate_forces_refetch():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         await freshness.get_tool_updated_at("gmail")
@@ -99,7 +99,7 @@ async def test_invalidate_all_clears_every_entry():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         await freshness.get_tool_updated_at("gmail")
@@ -114,7 +114,7 @@ async def test_missing_tool_is_cached_as_none():
     """A deleted or never-existed tool must not cause a DB hit every turn."""
     repo = SimpleNamespace(get_tool=AsyncMock(return_value=None))
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         result1 = await freshness.get_tool_updated_at("ghost")
@@ -130,7 +130,7 @@ async def test_repository_error_does_not_raise():
     """Freshness is advisory — a DB blip must not fail the chat turn."""
     repo = SimpleNamespace(get_tool=AsyncMock(side_effect=RuntimeError("boom")))
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         result = await freshness.get_tool_updated_at("gmail")
@@ -146,7 +146,7 @@ async def test_repository_error_falls_back_to_last_known_value():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo_ok,
     ):
         await freshness.get_tool_updated_at("gmail")
@@ -155,7 +155,7 @@ async def test_repository_error_falls_back_to_last_known_value():
 
     repo_err = SimpleNamespace(get_tool=AsyncMock(side_effect=RuntimeError("boom")))
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo_err,
     ):
         # With invalidate cleared the cache entry, we should return None on error.
@@ -170,7 +170,7 @@ async def test_hash_is_stable_regardless_of_input_order():
         )
     )
     with patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     ):
         h1 = await freshness.get_freshness_hash(["gmail", "jira"])

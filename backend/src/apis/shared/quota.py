@@ -14,7 +14,7 @@ from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.checker import QuotaChecker
 from agents.main_agent.quota.event_recorder import QuotaEventRecorder
 from agents.main_agent.quota.models import QuotaCheckResult
-from apis.app_api.costs.aggregator import CostAggregator
+from apis.shared.costs.aggregator import CostAggregator
 
 logger = logging.getLogger(__name__)
 

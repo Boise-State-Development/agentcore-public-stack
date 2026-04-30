@@ -13,13 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
 
-from .models import (
+from apis.shared.auth.api_keys.models import (
     CreateApiKeyRequest,
     CreateApiKeyResponse,
     DeleteApiKeyResponse,
     GetApiKeyResponse,
 )
-from .service import get_api_key_service
+from apis.shared.auth.api_keys.service import get_api_key_service
 
 logger = logging.getLogger(__name__)
 

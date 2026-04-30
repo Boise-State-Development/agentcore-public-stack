@@ -8,7 +8,7 @@ import logging
 from typing import List, Optional, Set
 
 from agents.main_agent.config.constants import Prefixes
-from apis.app_api.tools.freshness import get_all_tool_ids
+from apis.shared.tools.freshness import get_all_tool_ids
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 

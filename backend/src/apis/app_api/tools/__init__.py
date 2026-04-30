@@ -1,6 +1,10 @@
-"""Tools API module for listing available tools and user permissions."""
+"""Tools API module for listing available tools and user permissions.
 
-from .models import (
+Models and repository live in apis.shared.tools.
+Service and routes remain here as they are app_api-specific.
+"""
+
+from apis.shared.tools.models import (
     ToolCategory,
     ToolProtocol,
     ToolStatus,
@@ -18,15 +22,13 @@ from .models import (
     AdminToolResponse,
     AdminToolListResponse,
 )
-from .repository import ToolCatalogRepository, get_tool_catalog_repository
+from apis.shared.tools.repository import ToolCatalogRepository, get_tool_catalog_repository
 from .service import ToolCatalogService, get_tool_catalog_service
 
 __all__ = [
-    # Enums
     "ToolCategory",
     "ToolProtocol",
     "ToolStatus",
-    # Models
     "ToolDefinition",
     "UserToolPreference",
     "UserToolAccess",
@@ -40,10 +42,8 @@ __all__ = [
     "AddRemoveRolesRequest",
     "AdminToolResponse",
     "AdminToolListResponse",
-    # Repository
     "ToolCatalogRepository",
     "get_tool_catalog_repository",
-    # Service
     "ToolCatalogService",
     "get_tool_catalog_service",
 ]

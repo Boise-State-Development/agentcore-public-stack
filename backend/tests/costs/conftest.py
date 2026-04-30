@@ -133,7 +133,7 @@ def moto_dynamodb(aws_env):
 @pytest.fixture
 def storage(moto_dynamodb):
     """Provide a DynamoDBStorage instance backed by moto tables."""
-    from apis.app_api.storage.dynamodb_storage import DynamoDBStorage
+    from apis.shared.storage.dynamodb_storage import DynamoDBStorage
     return DynamoDBStorage()
 
 

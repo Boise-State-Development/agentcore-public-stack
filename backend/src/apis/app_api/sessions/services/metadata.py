@@ -300,7 +300,7 @@ async def _update_cost_summary_async(
             date = now.strftime('%Y-%m-%d')
 
         # Use storage abstraction for the atomic update
-        from apis.app_api.storage import get_metadata_storage
+        from apis.shared.storage import get_metadata_storage
         storage = get_metadata_storage()
 
         await storage.update_user_cost_summary(
@@ -380,7 +380,7 @@ async def _update_system_rollups_async(
             logger.debug("System rollup table not configured, skipping rollup updates")
             return
 
-        from apis.app_api.storage.dynamodb_storage import DynamoDBStorage
+        from apis.shared.storage.dynamodb_storage import DynamoDBStorage
         storage = DynamoDBStorage()
 
         # Track active users using conditional writes

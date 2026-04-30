@@ -18,7 +18,7 @@ backend/
 ├── pyproject.toml              # Single source of truth for dependencies
 ├── venv/                       # Python virtual environment (gitignored)
 ├── src/
-│   ├── agents/                 # Agent implementations
+│   ├── agents/                 # Agent implementations (shared — NO app_api or inference_api imports)
 │   │   ├── main_agent/         # Primary conversational agent
 │   │   │   ├── core/           # Agent factory, model config, system prompt
 │   │   │   ├── session/        # Turn-based session management
@@ -34,31 +34,47 @@ backend/
 │   │   ├── builtin_tools/      # Code Interpreter, Browser tools
 │   │   └── local_tools/        # Weather, search, visualization
 │   └── apis/
-│       ├── shared/             # Shared utilities across APIs
-│       │   ├── auth/           # JWT validation, RBAC, dependencies
-│       │   └── rbac/           # Role-based access control
-│       ├── app_api/            # Main application API (port 8000)
+│       ├── shared/             # Shared utilities (lowest layer — NO app_api or inference_api imports)
+│       │   ├── auth/           # JWT validation, RBAC, API keys
+│       │   │   └── api_keys/   # API key models, service, repository
+│       │   ├── rbac/           # Role-based access control
+│       │   ├── costs/          # Cost models, calculator, pricing, aggregator
+│       │   ├── tools/          # Tool models, repository, freshness cache
+│       │   ├── storage/        # DynamoDB storage abstraction
+│       │   ├── sessions/       # Session metadata, messages, models
+│       │   ├── files/          # File models and repository
+│       │   ├── assistants/     # Assistant models, service, RAG
+│       │   ├── models/         # Managed models
+│       │   ├── users/          # User models and repository
+│       │   ├── oauth/          # OAuth identity, providers
+│       │   ├── middleware/     # AgentCore context middleware
+│       │   └── user_settings/  # User settings models and repository
+│       ├── app_api/            # Main application API (port 8000) — may import from shared, NOT inference_api
 │       │   ├── main.py         # FastAPI app entry point
 │       │   ├── auth/           # Authentication routes
 │       │   ├── sessions/       # Session management
 │       │   ├── messages/       # Message handling
 │       │   ├── files/          # File upload/download
-│       │   ├── tools/          # Tool management
+│       │   ├── tools/          # Tool management (service + routes; models/repo in shared)
 │       │   ├── assistants/     # Assistant configuration
 │       │   ├── memory/         # Memory management
-│       │   ├── costs/          # Cost tracking & aggregation
+│       │   ├── costs/          # Cost routes (models/calculator/aggregator in shared)
 │       │   ├── users/          # User management
 │       │   ├── admin/          # Admin endpoints (RBAC, quotas, tools)
-│       │   ├── storage/        # DynamoDB & file storage
 │       │   └── health/         # Health check endpoints
-│       └── inference_api/      # Bedrock inference endpoint (port 8001)
+│       └── inference_api/      # Bedrock inference endpoint (port 8001) — may import from shared, NOT app_api
 │           ├── main.py         # FastAPI app entry point
 │           ├── chat/           # Chat completion routes
 │           └── health/         # Health check endpoints
 └── tests/                      # pytest test suite
     ├── conftest.py             # Test fixtures
+    ├── architecture/           # Import boundary enforcement tests
     └── agents/                 # Agent tests
 ```
+
+### Backend Import Boundaries
+
+`app_api`, `inference_api`, and `agents/` are independent consumers of `apis.shared` and must never import from each other. If something is needed by more than one of them, move it to `apis.shared`. Enforced by `tests/architecture/test_import_boundaries.py`.
 
 ## Frontend Structure
 
@@ -249,14 +265,18 @@ scripts/
 All modules are properly packaged and can be imported directly:
 
 ```python
-# Shared utilities
+# Shared utilities (canonical location for cross-service code)
 from apis.shared.auth import get_current_user, User
 from apis.shared.rbac import RBACService
+from apis.shared.costs.calculator import CostCalculator
+from apis.shared.tools.models import ToolDefinition
+from apis.shared.tools.repository import get_tool_catalog_repository
+from apis.shared.storage import get_metadata_storage
+from apis.shared.auth.api_keys.service import get_api_key_service
 
-# Agent modules
+# Agent modules (import from apis.shared, never from app_api or inference_api)
 from agents.main_agent.main_agent import ChatbotAgent
 from agents.main_agent.session import TurnBasedSessionManager
-from agents.local_tools.weather import get_weather
 ```
 
 ### Frontend Imports

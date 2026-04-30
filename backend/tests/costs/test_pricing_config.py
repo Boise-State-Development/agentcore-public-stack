@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock
 
-from apis.app_api.costs.pricing_config import (
+from apis.shared.costs.pricing_config import (
     get_model_by_model_id,
     get_model_pricing,
     create_pricing_snapshot,
@@ -18,7 +18,7 @@ GEMINI_MODEL_ID = "gemini-2.0-flash"
 @pytest.fixture
 def mock_list_models(sample_managed_models):
     with patch(
-        "apis.app_api.costs.pricing_config.list_managed_models",
+        "apis.shared.costs.pricing_config.list_managed_models",
         new_callable=AsyncMock,
     ) as mock:
         mock.return_value = sample_managed_models

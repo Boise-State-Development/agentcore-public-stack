@@ -305,14 +305,14 @@ class VoiceAgent(BaseAgent):
                 if not pricing_loaded:
                     pricing_loaded = True
                     try:
-                        from apis.app_api.costs.pricing_config import get_model_pricing
+                        from apis.shared.costs.pricing_config import get_model_pricing
                         pricing_dict = await get_model_pricing(self.voice_model_id)
                     except Exception as e:
                         logger.debug(f"Voice pricing unavailable: {e}")
 
                 if pricing_dict and self._accumulated_usage.get("totalTokens", 0) > 0:
                     try:
-                        from apis.app_api.costs.calculator import CostCalculator
+                        from apis.shared.costs.calculator import CostCalculator
                         total_cost, breakdown = CostCalculator.calculate_message_cost(
                             self._accumulated_usage, pricing_dict
                         )

@@ -167,8 +167,8 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
             logger.info(f"No voice usage to record metadata for session {_sanitize_log(session_id)}")
             return
 
-        from apis.app_api.messages.models import Attribution, MessageMetadata, ModelInfo, TokenUsage
-        from apis.app_api.sessions.services.metadata import store_message_metadata
+        from apis.shared.sessions.models import Attribution, MessageMetadata, ModelInfo, TokenUsage
+        from apis.shared.sessions.metadata import store_message_metadata
 
         model_id = getattr(voice_agent, "voice_model_id", "amazon.nova-2-sonic-v1:0")
         model_info = ModelInfo(
@@ -204,8 +204,8 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
         # Get pricing
         pricing = None
         try:
-            from apis.app_api.costs.calculator import CostCalculator
-            from apis.app_api.costs.pricing_config import get_model_pricing
+            from apis.shared.costs.calculator import CostCalculator
+            from apis.shared.costs.pricing_config import get_model_pricing
 
             pricing = await get_model_pricing(model_id)
         except Exception as cost_err:

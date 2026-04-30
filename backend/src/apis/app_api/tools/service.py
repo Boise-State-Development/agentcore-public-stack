@@ -13,14 +13,14 @@ from apis.shared.rbac.models import UserEffectivePermissions
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.rbac.admin_service import AppRoleAdminService, get_app_role_admin_service
 
-from .models import (
+from apis.shared.tools.models import (
     ToolDefinition,
     UserToolAccess,
     UserToolPreference,
     ToolCategory,
     ToolRoleAssignment,
 )
-from .repository import ToolCatalogRepository, get_tool_catalog_repository
+from apis.shared.tools.repository import ToolCatalogRepository, get_tool_catalog_repository
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +209,7 @@ class ToolCatalogService:
             if isinstance(auth_type, str):
                 is_none = auth_type == "none"
             else:
-                from .models import MCPAuthType
+                from apis.shared.tools.models import MCPAuthType
                 is_none = auth_type == MCPAuthType.NONE
             if not is_none:
                 raise ValueError(

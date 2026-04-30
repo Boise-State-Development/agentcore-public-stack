@@ -20,7 +20,7 @@ from agents.main_agent.tools import (
 
 # Import new service and models
 from .service import get_tool_catalog_service
-from .models import (
+from apis.shared.tools.models import (
     UserToolsResponse,
     ToolPreferencesRequest,
 )

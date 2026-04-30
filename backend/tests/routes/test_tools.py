@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.app_api.tools.routes import router
-from apis.app_api.tools.models import UserToolAccess
+from apis.shared.tools.models import UserToolAccess
 from apis.shared.rbac.models import UserEffectivePermissions
 from tests.routes.conftest import mock_auth_user, mock_no_auth
 

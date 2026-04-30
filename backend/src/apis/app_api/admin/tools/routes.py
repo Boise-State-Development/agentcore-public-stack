@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
 from apis.app_api.tools.service import get_tool_catalog_service
-from apis.app_api.tools.models import (
+from apis.shared.tools.models import (
     ToolCreateRequest,
     ToolUpdateRequest,
     ToolRolesResponse,
@@ -139,7 +139,7 @@ async def admin_create_tool(
 
     # Drop the all-tool-ids snapshot so the new tool is recognized by
     # ToolAccessService on the very next chat turn in this process.
-    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
     invalidate_freshness(created.tool_id)
 
     return AdminToolResponse.from_tool_definition(created)
@@ -191,7 +191,7 @@ async def admin_update_tool(
     # process sees the new updated_at immediately (no wait for the TTL
     # to lapse). Other processes pick the change up within one TTL
     # window via their own freshness reads.
-    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
     invalidate_freshness(tool_id)
 
     return AdminToolResponse.from_tool_definition(updated)
@@ -227,7 +227,7 @@ async def admin_delete_tool(
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
 
-    from apis.app_api.tools.freshness import invalidate as invalidate_freshness
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
     invalidate_freshness(tool_id)
 
     action = "deleted" if hard else "disabled"

@@ -8,7 +8,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from apis.shared.users.repository import UserRepository
-from apis.app_api.costs.aggregator import CostAggregator
+from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.repository import QuotaRepository
 from apis.shared.auth.models import User

@@ -1062,8 +1062,8 @@ class StreamCoordinator:
             citations: Optional list of citation dicts from RAG retrieval
         """
         try:
-            from apis.app_api.messages.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
-            from apis.app_api.sessions.services.metadata import store_message_metadata
+            from apis.shared.sessions.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
+            from apis.shared.sessions.metadata import store_message_metadata
 
             # Build TokenUsage if we have usage data
             token_usage = None
@@ -1241,8 +1241,8 @@ class StreamCoordinator:
             PricingSnapshot dict or None if model not found
         """
         try:
-            from apis.app_api.costs.pricing_config import create_pricing_snapshot
-            from apis.app_api.messages.models import PricingSnapshot
+            from apis.shared.costs.pricing_config import create_pricing_snapshot
+            from apis.shared.sessions.models import PricingSnapshot
 
             # Get pricing snapshot from managed models
             snapshot_dict = await create_pricing_snapshot(model_id)
@@ -1273,7 +1273,7 @@ class StreamCoordinator:
             return None
 
         try:
-            from apis.app_api.costs.calculator import CostCalculator
+            from apis.shared.costs.calculator import CostCalculator
 
             # Convert PricingSnapshot model to dict for calculator
             if hasattr(pricing, "model_dump"):

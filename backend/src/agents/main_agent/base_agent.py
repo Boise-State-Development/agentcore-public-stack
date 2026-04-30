@@ -177,7 +177,7 @@ class BaseAgent(ABC):
         try:
             import asyncio
 
-            from apis.app_api.tools.repository import get_tool_catalog_repository
+            from apis.shared.tools.repository import get_tool_catalog_repository
 
             repository = get_tool_catalog_repository()
             external_tool_ids = []

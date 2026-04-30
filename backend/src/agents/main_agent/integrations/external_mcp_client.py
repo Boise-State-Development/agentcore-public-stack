@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional, List
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 
-from apis.app_api.tools.models import (
+from apis.shared.tools.models import (
     MCPServerConfig,
     MCPAuthType,
     MCPTransport,
@@ -270,7 +270,7 @@ class ExternalMCPIntegration:
         Returns:
             List of MCPClient instances to add to the agent's tools
         """
-        from apis.app_api.tools.repository import get_tool_catalog_repository
+        from apis.shared.tools.repository import get_tool_catalog_repository
 
         clients = []
         repository = get_tool_catalog_repository()

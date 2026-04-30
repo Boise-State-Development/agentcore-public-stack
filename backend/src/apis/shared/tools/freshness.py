@@ -52,7 +52,7 @@ def _reset_for_tests() -> None:
 
 
 async def _fetch_updated_at(tool_id: str) -> Optional[str]:
-    from apis.app_api.tools.repository import get_tool_catalog_repository
+    from apis.shared.tools.repository import get_tool_catalog_repository
 
     repo = get_tool_catalog_repository()
     tool = await repo.get_tool(tool_id)
@@ -118,7 +118,7 @@ async def get_all_tool_ids() -> FrozenSet[str]:
     if cached is not None and now - cached[1] < _TTL_SECONDS:
         return cached[0]
 
-    from apis.app_api.tools.repository import get_tool_catalog_repository
+    from apis.shared.tools.repository import get_tool_catalog_repository
 
     try:
         repo = get_tool_catalog_repository()

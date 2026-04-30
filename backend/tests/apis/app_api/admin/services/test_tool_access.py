@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apis.app_api.tools import freshness
+from apis.shared.tools import freshness
 from apis.app_api.admin.services.tool_access import ToolAccessService
 from apis.shared.auth.models import User
 from apis.shared.rbac.models import UserEffectivePermissions
@@ -59,7 +59,7 @@ def _patch_catalog(tool_ids):
         )
     )
     return patch(
-        "apis.app_api.tools.repository.get_tool_catalog_repository",
+        "apis.shared.tools.repository.get_tool_catalog_repository",
         return_value=repo,
     )
 

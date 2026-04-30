@@ -10,8 +10,8 @@ import logging
 
 from apis.shared.auth.dependencies import get_current_user
 from apis.shared.auth.models import User
-from .models import UserCostSummary
-from .aggregator import CostAggregator
+from apis.shared.costs.models import UserCostSummary
+from apis.shared.costs.aggregator import CostAggregator
 
 logger = logging.getLogger(__name__)
 
