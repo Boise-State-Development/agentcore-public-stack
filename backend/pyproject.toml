@@ -33,6 +33,12 @@ dependencies = [
 
     # Security: pin starlette to fix Dependabot alert (transitive via fastapi)
     "starlette==1.0.0",
+
+    # Security: pin transitive deps to fix Dependabot alerts
+    "pillow==12.2.0",
+    "cryptography==47.0.0",
+    "python-multipart==0.0.27",
+    "aiohttp==3.13.5",
 ]
 
 [project.optional-dependencies]
