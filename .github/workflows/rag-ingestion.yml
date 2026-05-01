@@ -7,6 +7,7 @@ on:
       - develop
     paths:
       - 'backend/src/apis/app_api/documents/ingestion/**'
+      - 'backend/src/apis/shared/embeddings/**'
       - 'backend/pyproject.toml'
       - 'backend/Dockerfile.rag-ingestion'
       - 'infrastructure/lib/rag-ingestion-stack.ts'
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - 'backend/src/apis/app_api/documents/ingestion/**'
+      - 'backend/src/apis/shared/embeddings/**'
       - 'backend/pyproject.toml'
       - 'backend/Dockerfile.rag-ingestion'
       - 'infrastructure/lib/rag-ingestion-stack.ts'
