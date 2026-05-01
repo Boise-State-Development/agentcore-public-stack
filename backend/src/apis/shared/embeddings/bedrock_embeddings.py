@@ -107,33 +107,36 @@ async def store_embeddings_in_s3(
     assistant_id: str, document_id: str, chunks: List[str], embeddings: List[List[float]], metadata: Dict[str, Any]
 ) -> str:
     """
-    Store embeddings directly into the S3 Vector Index (NOT just a file in S3)
+    Store embeddings directly into the S3 Vector Index in batches.
     """
     s3vectors = boto3.client("s3vectors", region_name=AWS_REGION)
 
     vector_bucket = _get_vector_store_bucket()
     vector_index = _get_vector_store_index()
-    print(f"Storing {len(chunks)} chunks for {document_id} in {vector_bucket} with index {vector_index}")
+    logger.info(f"Storing {len(chunks)} chunks for {document_id} in {vector_bucket} (index: {vector_index})")
 
-    vectors_payload = []
+    BATCH_SIZE = 50  # Safe batch size to stay under S3 Vectors request body limit
 
-    for i, chunk in enumerate(chunks):
-        vector_key = f"{document_id}#{i}"
-        vector_entry = {
-            "key": vector_key,
-            "data": {
-                "float32": embeddings[i]
-            },
-            "metadata": {
-                "text": chunk,
-                "document_id": document_id,
-                "assistant_id": assistant_id,
-                "source": metadata.get("filename", "unknown"),
-            },
-        }
-        vectors_payload.append(vector_entry)
+    for batch_start in range(0, len(chunks), BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, len(chunks))
+        batch_payload = []
 
-    s3vectors.put_vectors(vectorBucketName=vector_bucket, indexName=vector_index, vectors=vectors_payload)
+        for i in range(batch_start, batch_end):
+            batch_payload.append({
+                "key": f"{document_id}#{i}",
+                "data": {"float32": embeddings[i]},
+                "metadata": {
+                    "text": chunks[i],
+                    "document_id": document_id,
+                    "assistant_id": assistant_id,
+                    "source": metadata.get("filename", "unknown"),
+                },
+            })
+
+        s3vectors.put_vectors(vectorBucketName=vector_bucket, indexName=vector_index, vectors=batch_payload)
+
+        if batch_end % 500 == 0 or batch_end == len(chunks):
+            logger.info(f"Stored {batch_end}/{len(chunks)} vectors")
 
     return f"Indexed {len(chunks)} chunks for {document_id}"
 
