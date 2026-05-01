@@ -124,6 +124,165 @@
         }
       </div>
 
+      <!-- Advanced (Inference Parameters) Section -->
+      @if (hasAdvancedParams()) {
+        <div class="border-b border-gray-200 dark:border-white/10">
+          <button
+            type="button"
+            (click)="toggleAdvanced()"
+            [attr.aria-expanded]="isAdvancedOpen()"
+            aria-controls="advanced-params-body"
+            class="flex w-full items-center justify-between gap-3 px-4 py-4 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:hover:bg-white/5 dark:focus-visible:outline-primary-400">
+            <div class="flex items-center gap-2">
+              <ng-icon
+                [name]="isAdvancedOpen() ? 'heroChevronDown' : 'heroChevronRight'"
+                class="size-4 text-gray-500 dark:text-gray-400"
+                aria-hidden="true" />
+              <h3 class="text-sm/6 font-medium text-gray-900 dark:text-white">Advanced</h3>
+            </div>
+            <span class="text-xs/5 text-gray-500 dark:text-gray-400">
+              @if (overriddenCount() === 0) {
+                Defaults
+              } @else if (overriddenCount() === 1) {
+                1 override
+              } @else {
+                {{ overriddenCount() }} overrides
+              }
+            </span>
+          </button>
+
+          @if (isAdvancedOpen()) {
+            <div id="advanced-params-body" class="space-y-4 px-4 pb-4">
+              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                Per-model inference parameters. Values are clamped to the model's allowed range on the server.
+              </p>
+
+              @for (row of advancedRows(); track row.key) {
+                <div class="space-y-1.5">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <label
+                      [for]="'param-input-' + row.key"
+                      class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      {{ row.meta.label }}
+                      @if (row.locked) {
+                        <span class="ml-1 text-xs/5 font-normal text-gray-500 dark:text-gray-400" aria-label="Locked by admin">
+                          (locked)
+                        </span>
+                      }
+                    </label>
+                    @if (row.isOverridden && !row.locked) {
+                      <button
+                        type="button"
+                        (click)="resetParam(row)"
+                        class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:text-primary-400 dark:focus-visible:outline-primary-400">
+                        Reset
+                      </button>
+                    }
+                  </div>
+                  <p
+                    [id]="'param-desc-' + row.key"
+                    class="text-xs/5 text-gray-500 dark:text-gray-400">
+                    {{ row.meta.description }}
+                  </p>
+
+                  @if (row.disabledByConflict) {
+                    <p class="text-xs/5 italic text-gray-500 dark:text-gray-400">
+                      Disabled while extended thinking is on.
+                    </p>
+                  }
+
+                  @if (row.unsatisfiable) {
+                    <p role="status" class="text-xs/5 italic text-amber-600 dark:text-amber-400">
+                      {{ row.unsatisfiable.reason }}
+                    </p>
+                  }
+
+                  @if (clampNotices()[row.key]) {
+                    <p role="status" aria-live="polite" class="text-xs/5 text-amber-600 dark:text-amber-400">
+                      {{ clampNotices()[row.key] }}
+                    </p>
+                  }
+
+                  @switch (row.meta.kind) {
+                    @case ('toggle') {
+                      <button
+                        type="button"
+                        role="switch"
+                        [id]="'param-input-' + row.key"
+                        [attr.aria-checked]="!!row.value"
+                        [attr.aria-describedby]="'param-desc-' + row.key"
+                        [disabled]="row.locked || row.disabledByConflict"
+                        (click)="onParamToggle(row)"
+                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-400"
+                        [class]="row.value ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                        <span
+                          aria-hidden="true"
+                          class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+                          [class.translate-x-5]="!!row.value"
+                          [class.translate-x-0]="!row.value"></span>
+                      </button>
+                    }
+                    @case ('thinkingBudget') {
+                      <div class="flex items-center gap-3">
+                        <button
+                          type="button"
+                          role="switch"
+                          [attr.aria-checked]="isThinkingEnabled(row.value)"
+                          [attr.aria-describedby]="'param-desc-' + row.key"
+                          [disabled]="row.locked || row.disabledByConflict || (!isThinkingEnabled(row.value) && !!row.unsatisfiable)"
+                          (click)="onThinkingToggle(row)"
+                          class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-400"
+                          [class]="isThinkingEnabled(row.value) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                          <span
+                            aria-hidden="true"
+                            class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+                            [class.translate-x-5]="isThinkingEnabled(row.value)"
+                            [class.translate-x-0]="!isThinkingEnabled(row.value)"></span>
+                        </button>
+                        <input
+                          type="number"
+                          [id]="'param-input-' + row.key"
+                          [attr.aria-describedby]="'param-desc-' + row.key"
+                          [value]="isThinkingEnabled(row.value) ? row.value : ''"
+                          [min]="row.min ?? 1024"
+                          [attr.max]="row.max"
+                          step="1"
+                          placeholder="Budget tokens"
+                          [disabled]="row.locked || row.disabledByConflict || !isThinkingEnabled(row.value)"
+                          (change)="onThinkingBudgetChange(row, $event)"
+                          class="w-32 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0" />
+                      </div>
+                    }
+                    @default {
+                      <input
+                        type="number"
+                        [id]="'param-input-' + row.key"
+                        [attr.aria-describedby]="'param-desc-' + row.key"
+                        [value]="row.value ?? ''"
+                        [attr.min]="row.min"
+                        [attr.max]="row.max"
+                        [step]="row.meta.kind === 'integer' ? 1 : 0.1"
+                        [disabled]="row.locked || row.disabledByConflict"
+                        (change)="onParamNumberChange(row, $event)"
+                        class="w-32 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0" />
+                    }
+                  }
+                </div>
+              }
+
+              @if (overriddenCount() > 0) {
+                <button
+                  type="button"
+                  (click)="resetAllParams()"
+                  class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:text-primary-400 dark:focus-visible:outline-primary-400">
+                  Reset all to defaults
+                </button>
+              }
+            </div>
+          }
+        </div>
+      }
+
       <!-- Tools Section -->
       <div class="p-4">
         <div class="mb-3 flex items-center justify-between">

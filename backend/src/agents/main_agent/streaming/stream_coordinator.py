@@ -601,15 +601,17 @@ class StreamCoordinator:
 
         try:
             now = datetime.now(timezone.utc)
+            inference_params = snapshot_source.get("inference_params") or {}
             snapshot = PausedTurnSnapshot(
                 enabled_tools=snapshot_source.get("enabled_tools"),
                 model_id=snapshot_source.get("model_id"),
                 provider=snapshot_source.get("provider"),
-                temperature=snapshot_source.get("temperature"),
+                temperature=inference_params.get("temperature"),
                 system_prompt=snapshot_source.get("system_prompt"),
                 caching_enabled=snapshot_source.get("caching_enabled"),
-                max_tokens=snapshot_source.get("max_tokens"),
+                max_tokens=inference_params.get("max_tokens"),
                 agent_type=snapshot_source.get("agent_type"),
+                inference_params=dict(inference_params) if inference_params else None,
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),
             )

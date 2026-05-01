@@ -11,7 +11,7 @@ from agents.main_agent.session.preview_session_manager import PreviewSessionMana
 def test_model_config_fixture(model_config):
     assert isinstance(model_config, ModelConfig)
     assert model_config.provider == ModelProvider.BEDROCK
-    assert model_config.temperature == 0.7
+    assert model_config.inference_params == {}
     assert model_config.caching_enabled is True
 
 

@@ -70,7 +70,6 @@ class Defaults:
 
     # --- Model ---
     MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    TEMPERATURE = 0.7
     CACHING_ENABLED = True
 
     # --- AWS ---

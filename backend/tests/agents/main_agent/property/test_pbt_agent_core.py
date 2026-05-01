@@ -35,10 +35,9 @@ class TestModelConfigRoundTrip:
         d = config.to_dict()
         reconstructed = ModelConfig.from_params(
             model_id=d["model_id"],
-            temperature=d["temperature"],
             caching_enabled=d["caching_enabled"],
             provider=d["provider"],
-            max_tokens=d["max_tokens"],
+            inference_params=d["inference_params"],
         )
         assert reconstructed.to_dict() == d
 

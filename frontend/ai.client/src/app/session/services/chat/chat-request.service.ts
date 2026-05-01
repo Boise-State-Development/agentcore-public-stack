@@ -160,6 +160,16 @@ export class ChatRequestService implements OnDestroy {
       provider: isDefaultModel ? null : selectedModel.provider,
     };
 
+    // Per-model inference param overrides set in the Settings → Advanced
+    // panel. Backend layers these on top of admin defaults and clamps to the
+    // model's bounds; locked params drop the override silently.
+    if (!isDefaultModel) {
+      const overrides = this.modelService.getInferenceParamOverrides();
+      if (Object.keys(overrides).length > 0) {
+        requestObject['inference_params'] = overrides;
+      }
+    }
+
     // Add file upload IDs if present
     if (fileUploadIds && fileUploadIds.length > 0) {
       requestObject['file_upload_ids'] = fileUploadIds;

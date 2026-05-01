@@ -107,6 +107,12 @@ class PausedTurnSnapshot(BaseModel):
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     agent_type: Optional[str] = Field(default=None, alias="agentType")
+    inference_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="inferenceParams",
+        description="Canonical inference param dict captured at pause. When present, "
+                    "supersedes the legacy temperature/max_tokens fields on resume."
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 

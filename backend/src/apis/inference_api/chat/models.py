@@ -43,6 +43,11 @@ class InvocationRequest(BaseModel):
     file_upload_ids: Optional[List[str]] = None  # Upload IDs to resolve from S3
     provider: Optional[str] = None  # LLM provider: "bedrock", "openai", or "gemini"
     max_tokens: Optional[int] = None  # Maximum tokens to generate
+    # Per-request canonical inference param overrides (temperature, top_p,
+    # top_k, max_tokens, thinking, reasoning_effort, ...). Layered on top of
+    # the managed model's admin defaults. Unsupported params are dropped
+    # silently by the merge step in routes.py.
+    inference_params: Optional[Dict[str, Any]] = None
     # NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
     # AgentCore Runtime's internal 'assistant_id' field handling.
     # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
@@ -131,7 +136,7 @@ class ConverseRequest(BaseModel):
     model_id: str  # Bedrock model ID (e.g. "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     messages: List[ConverseMessage]
     system_prompt: Optional[str] = None
-    temperature: Optional[float] = 0.7
+    temperature: Optional[float] = None
     max_tokens: Optional[int] = 4096
     stream: bool = False  # Whether to stream the response via SSE
     top_p: Optional[float] = None

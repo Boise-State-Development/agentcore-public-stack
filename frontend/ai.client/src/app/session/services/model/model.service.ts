@@ -21,6 +21,9 @@ export class ModelService {
 
   // Session storage key for persisting model selection
   private readonly SELECTED_MODEL_KEY = 'selectedModelId';
+  // Session storage key for persisting per-model inference param overrides.
+  // Keyed by modelId so switching models doesn't bleed values across.
+  private readonly INFERENCE_OVERRIDES_KEY = 'inferenceParamOverrides';
 
   // Default model used when no models are available (matches backend default)
   private readonly DEFAULT_MODEL: ManagedModel = {
@@ -53,6 +56,14 @@ export class ModelService {
   // Selected model (defaults to first model when available, or system default)
   private readonly _selectedModel = signal<ManagedModel | null>(null);
 
+  // Per-model canonical inference param overrides. Outer key = modelId, inner
+  // key = canonical param name (temperature, top_p, thinking, ...). Sent on
+  // each chat request as `inference_params`; backend layers them on top of
+  // admin defaults and clamps to the model's bounds.
+  private readonly _inferenceOverrides = signal<Record<string, Record<string, unknown>>>(
+    this.loadOverridesFromStorage(),
+  );
+
   // Public read-only signals
   readonly availableModels = this.models.asReadonly();
   readonly selectedModel = computed(() => {
@@ -68,6 +79,13 @@ export class ModelService {
   });
   readonly modelsLoading = this.isLoading.asReadonly();
   readonly modelsError = this.error.asReadonly();
+
+  /** Inference param overrides for the currently selected model. */
+  readonly selectedModelOverrides = computed<Record<string, unknown>>(() => {
+    const model = this.selectedModel();
+    if (!model) return {};
+    return this._inferenceOverrides()[model.modelId] ?? {};
+  });
 
   constructor() {
     // Load models on initialization
@@ -231,6 +249,67 @@ export class ModelService {
       // SessionStorage may be unavailable in some contexts
       console.warn('Could not read model selection from sessionStorage:', e);
       return null;
+    }
+  }
+
+  /**
+   * Set a single inference param override on the currently selected model.
+   * Pass `null` / `undefined` to clear the override and fall back to the
+   * admin default. No-op if no model is selected.
+   */
+  setInferenceParamOverride(paramKey: string, value: unknown): void {
+    const model = this.selectedModel();
+    if (!model) return;
+    const next = { ...this._inferenceOverrides() };
+    const modelOverrides = { ...(next[model.modelId] ?? {}) };
+    if (value === null || value === undefined || value === '') {
+      delete modelOverrides[paramKey];
+    } else {
+      modelOverrides[paramKey] = value;
+    }
+    if (Object.keys(modelOverrides).length === 0) {
+      delete next[model.modelId];
+    } else {
+      next[model.modelId] = modelOverrides;
+    }
+    this._inferenceOverrides.set(next);
+    this.persistOverrides(next);
+  }
+
+  /** Clear all inference param overrides for the currently selected model. */
+  clearInferenceParamOverrides(): void {
+    const model = this.selectedModel();
+    if (!model) return;
+    const next = { ...this._inferenceOverrides() };
+    if (model.modelId in next) {
+      delete next[model.modelId];
+      this._inferenceOverrides.set(next);
+      this.persistOverrides(next);
+    }
+  }
+
+  /** Snapshot getter for non-signal contexts (e.g. request builders). */
+  getInferenceParamOverrides(): Record<string, unknown> {
+    return this.selectedModelOverrides();
+  }
+
+  private loadOverridesFromStorage(): Record<string, Record<string, unknown>> {
+    try {
+      const raw = sessionStorage.getItem(this.INFERENCE_OVERRIDES_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      console.warn('Could not read inference overrides from sessionStorage:', e);
+      return {};
+    }
+  }
+
+  private persistOverrides(value: Record<string, Record<string, unknown>>): void {
+    try {
+      sessionStorage.setItem(this.INFERENCE_OVERRIDES_KEY, JSON.stringify(value));
+    } catch (e) {
+      console.warn('Could not save inference overrides to sessionStorage:', e);
     }
   }
 }

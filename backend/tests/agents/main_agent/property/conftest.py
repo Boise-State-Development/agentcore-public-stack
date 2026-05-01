@@ -47,12 +47,15 @@ def st_model_config(draw):
     caching_enabled = draw(st.booleans())
     max_tokens = draw(st.one_of(st.none(), st.integers(min_value=1, max_value=8192)))
 
+    inference_params: dict = {"temperature": temperature}
+    if max_tokens is not None:
+        inference_params["max_tokens"] = max_tokens
+
     return ModelConfig(
         model_id=model_id,
-        temperature=temperature,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens,
+        inference_params=inference_params,
         retry_config=None,  # retry_config is not part of to_dict round-trip
     )
 

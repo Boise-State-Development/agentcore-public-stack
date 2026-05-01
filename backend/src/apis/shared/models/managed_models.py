@@ -219,6 +219,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         knowledge_cutoff_date=model_data.knowledge_cutoff_date,
         supports_caching=_resolve_supports_caching(model_data.supports_caching, model_data.provider),
         is_default=model_data.is_default,
+        supported_params=model_data.supported_params,
         created_at=now,
         updated_at=now,
     )
@@ -257,6 +258,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['cacheReadPricePerMillionTokens'] = model_data.cache_read_price_per_million_tokens
     if model_data.knowledge_cutoff_date is not None:
         item['knowledgeCutoffDate'] = model_data.knowledge_cutoff_date
+    if model_data.supported_params is not None:
+        item['supportedParams'] = model_data.supported_params.model_dump(by_alias=True, exclude_none=True)
 
     # Convert floats to Decimal for DynamoDB
     item = _python_to_dynamodb(item)

@@ -57,6 +57,7 @@ class BaseAgent(ABC):
         caching_enabled: Optional[bool] = None,
         provider: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        inference_params: Optional[Dict[str, Any]] = None,
         skip_persistence: bool = False,
     ):
         """
@@ -68,11 +69,14 @@ class BaseAgent(ABC):
             auth_token: Raw OIDC token for forwarding to external MCP tools (optional)
             enabled_tools: List of tool IDs to enable. If None, all tools are enabled.
             model_id: Model ID to use (format depends on provider)
-            temperature: Model temperature (0.0 - 1.0)
+            temperature: Legacy. Folded into ``inference_params['temperature']`` if set.
             system_prompt: System prompt text
             caching_enabled: Whether to enable prompt caching (Bedrock only)
             provider: LLM provider ("bedrock", "openai", or "gemini")
-            max_tokens: Maximum tokens to generate (optional)
+            max_tokens: Legacy. Folded into ``inference_params['max_tokens']`` if set.
+            inference_params: Canonical-name -> value map for inference params
+                (temperature, top_p, top_k, max_tokens, thinking, ...). Wins over
+                the legacy ``temperature``/``max_tokens`` kwargs when both are set.
             skip_persistence: If True, don't persist messages (for preview sessions)
         """
         # Basic state
@@ -82,9 +86,20 @@ class BaseAgent(ABC):
         self.enabled_tools = enabled_tools
         self.agent = None
 
-        # Initialize model configuration
+        # Merge legacy temperature/max_tokens into the canonical dict. Explicit
+        # ``inference_params`` values win over the positional kwargs so callers
+        # migrating to the new shape get predictable precedence.
+        resolved_params: Dict[str, Any] = dict(inference_params or {})
+        if temperature is not None:
+            resolved_params.setdefault("temperature", temperature)
+        if max_tokens is not None:
+            resolved_params.setdefault("max_tokens", max_tokens)
+
         self.model_config = ModelConfig.from_params(
-            model_id=model_id, temperature=temperature, caching_enabled=caching_enabled, provider=provider, max_tokens=max_tokens
+            model_id=model_id,
+            caching_enabled=caching_enabled,
+            provider=provider,
+            inference_params=resolved_params,
         )
 
         # Frozen snapshot of agent-construction params, used when the turn
@@ -95,9 +110,8 @@ class BaseAgent(ABC):
             "enabled_tools": enabled_tools,
             "model_id": model_id,
             "provider": provider,
-            "temperature": temperature,
             "caching_enabled": caching_enabled,
-            "max_tokens": max_tokens,
+            "inference_params": dict(resolved_params),
         }
 
         # Load retry configuration from environment variables

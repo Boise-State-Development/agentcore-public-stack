@@ -19,17 +19,15 @@ class TestModelConfigDefaults:
     def test_default_model_id(self, model_config: ModelConfig):
         assert model_config.model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
-    def test_default_temperature(self, model_config: ModelConfig):
-        assert model_config.temperature == 0.7
+    def test_default_inference_params_is_empty(self, model_config: ModelConfig):
+        """No default temperature — newer reasoning models reject any value."""
+        assert model_config.inference_params == {}
 
     def test_default_caching_enabled(self, model_config: ModelConfig):
         assert model_config.caching_enabled is True
 
     def test_default_provider(self, model_config: ModelConfig):
         assert model_config.provider == ModelProvider.BEDROCK
-
-    def test_default_max_tokens(self, model_config: ModelConfig):
-        assert model_config.max_tokens is None
 
     def test_default_retry_config(self, model_config: ModelConfig):
         assert model_config.retry_config is None
@@ -107,7 +105,7 @@ class TestToBedrockConfig:
         result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
-        assert result["temperature"] == cfg.temperature
+        assert "temperature" not in result  # No default temperature emitted
         assert "cache_config" not in result
 
     def test_bedrock_config_without_caching(self):
@@ -116,8 +114,77 @@ class TestToBedrockConfig:
         result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
-        assert result["temperature"] == cfg.temperature
         assert "cache_config" not in result
+
+    def test_bedrock_config_emits_temperature_only_when_set(self):
+        """Inference params only ride along when explicitly configured."""
+        cfg = ModelConfig(inference_params={"temperature": 0.4, "top_p": 0.9})
+        result = cfg.to_bedrock_config()
+
+        assert result["temperature"] == 0.4
+        assert result["top_p"] == 0.9
+
+    def test_bedrock_config_translates_thinking_to_nested_field(self):
+        """Canonical 'thinking' carries an int budget that gets wrapped into the
+        Anthropic ``{type, budget_tokens}`` shape under
+        additional_request_fields on Bedrock — that's the field name Strands'
+        BedrockConfig actually forwards to the Converse API."""
+        cfg = ModelConfig(inference_params={"thinking": 4096})
+        result = cfg.to_bedrock_config()
+
+        assert result["additional_request_fields"]["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": 4096,
+        }
+        assert "thinking" not in result
+        assert "additional_model_request_fields" not in result
+
+    def test_bedrock_config_routes_top_k_through_additional_request_fields(self):
+        """top_k isn't on the Bedrock Converse standard shape — Strands needs it
+        in additional_request_fields or the SDK silently drops it."""
+        cfg = ModelConfig(inference_params={"top_k": 40})
+        result = cfg.to_bedrock_config()
+
+        assert result["additional_request_fields"]["top_k"] == 40
+        assert "top_k" not in result
+
+    def test_bedrock_config_thinking_suppresses_sampling_params(self):
+        """Anthropic rejects temperature/top_p/top_k while extended thinking is on,
+        so the translator drops them before dispatch."""
+        cfg = ModelConfig(
+            inference_params={
+                "thinking": 2048,
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_tokens": 8192,
+            }
+        )
+        result = cfg.to_bedrock_config()
+
+        assert "temperature" not in result
+        assert "top_p" not in result
+        assert "top_k" not in result
+        assert result["max_tokens"] == 8192
+        assert result["additional_request_fields"]["thinking"]["budget_tokens"] == 2048
+
+    def test_bedrock_config_thinking_disabled_passes_sampling_params_through(self):
+        """A 0 / None thinking value is a no-op — sampling params survive."""
+        cfg = ModelConfig(
+            inference_params={"thinking": 0, "temperature": 0.5, "top_p": 0.8}
+        )
+        result = cfg.to_bedrock_config()
+
+        assert "additional_request_fields" not in result
+        assert result["temperature"] == 0.5
+        assert result["top_p"] == 0.8
+
+    def test_bedrock_config_drops_unknown_canonical_param(self):
+        """Provider translation table silently drops keys it doesn't know."""
+        cfg = ModelConfig(inference_params={"reasoning_effort": "high"})
+        result = cfg.to_bedrock_config()
+
+        assert "reasoning_effort" not in result
 
     def test_bedrock_config_with_retry(self, retry_config: RetryConfig):
         """Req 1.7 — RetryConfig present → boto_client_config in output."""
@@ -142,7 +209,7 @@ class TestToOpenAIConfig:
 
     def test_openai_config_basic(self):
         """Req 1.8 — dict with model_id and params.temperature."""
-        cfg = ModelConfig(model_id="gpt-4o", temperature=0.5)
+        cfg = ModelConfig(model_id="gpt-4o", inference_params={"temperature": 0.5})
         result = cfg.to_openai_config()
 
         assert result["model_id"] == "gpt-4o"
@@ -150,23 +217,30 @@ class TestToOpenAIConfig:
 
     def test_openai_config_with_max_tokens(self):
         """Req 1.9 — max_tokens appears in params."""
-        cfg = ModelConfig(model_id="gpt-4o", max_tokens=1024)
+        cfg = ModelConfig(model_id="gpt-4o", inference_params={"max_tokens": 1024})
         result = cfg.to_openai_config()
 
         assert result["params"]["max_tokens"] == 1024
 
-    def test_openai_config_without_max_tokens(self):
-        cfg = ModelConfig(model_id="gpt-4o", max_tokens=None)
+    def test_openai_config_without_inference_params_omits_params_block(self):
+        cfg = ModelConfig(model_id="gpt-4o")
         result = cfg.to_openai_config()
 
-        assert "max_tokens" not in result["params"]
+        assert "params" not in result
+
+    def test_openai_config_drops_top_k(self):
+        """OpenAI doesn't support top_k — translation table drops it silently."""
+        cfg = ModelConfig(model_id="gpt-4o", inference_params={"top_k": 40})
+        result = cfg.to_openai_config()
+
+        assert "params" not in result
 
 
 class TestToGeminiConfig:
     """Validates: Requirement 1.9"""
 
     def test_gemini_config_basic(self):
-        cfg = ModelConfig(model_id="gemini-pro", temperature=0.3)
+        cfg = ModelConfig(model_id="gemini-pro", inference_params={"temperature": 0.3})
         result = cfg.to_gemini_config()
 
         assert result["model_id"] == "gemini-pro"
@@ -174,16 +248,16 @@ class TestToGeminiConfig:
 
     def test_gemini_config_with_max_tokens(self):
         """Req 1.9 — max_tokens → max_output_tokens in params."""
-        cfg = ModelConfig(model_id="gemini-pro", max_tokens=2048)
+        cfg = ModelConfig(model_id="gemini-pro", inference_params={"max_tokens": 2048})
         result = cfg.to_gemini_config()
 
         assert result["params"]["max_output_tokens"] == 2048
 
-    def test_gemini_config_without_max_tokens(self):
-        cfg = ModelConfig(model_id="gemini-pro", max_tokens=None)
+    def test_gemini_config_without_inference_params_omits_params_block(self):
+        cfg = ModelConfig(model_id="gemini-pro")
         result = cfg.to_gemini_config()
 
-        assert "max_output_tokens" not in result["params"]
+        assert "params" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +277,9 @@ class TestToDict:
         d = model_config.to_dict()
         assert set(d.keys()) == {
             "model_id",
-            "temperature",
             "caching_enabled",
             "provider",
-            "max_tokens",
+            "inference_params",
         }
 
 
@@ -222,24 +295,22 @@ class TestFromParams:
         default = ModelConfig()
 
         assert cfg.model_id == default.model_id
-        assert cfg.temperature == default.temperature
+        assert cfg.inference_params == default.inference_params
         assert cfg.caching_enabled == default.caching_enabled
         assert cfg.provider == default.provider
 
     def test_from_params_custom_values(self):
         cfg = ModelConfig.from_params(
             model_id="gpt-4o",
-            temperature=0.2,
             caching_enabled=False,
             provider="openai",
-            max_tokens=512,
+            inference_params={"temperature": 0.2, "max_tokens": 512},
         )
 
         assert cfg.model_id == "gpt-4o"
-        assert cfg.temperature == 0.2
+        assert cfg.inference_params == {"temperature": 0.2, "max_tokens": 512}
         assert cfg.caching_enabled is False
         assert cfg.provider == ModelProvider.OPENAI
-        assert cfg.max_tokens == 512
 
     def test_from_params_invalid_provider_defaults_to_bedrock(self):
         """Req 1.12 — invalid provider string → BEDROCK."""

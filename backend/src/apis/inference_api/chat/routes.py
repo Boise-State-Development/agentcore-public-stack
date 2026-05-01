@@ -63,45 +63,135 @@ def is_preview_session(session_id: str) -> bool:
     return session_id.startswith(PREVIEW_SESSION_PREFIX)
 
 
-async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
-    """
-    Resolve whether caching should be enabled for a request.
-
-    Priority:
-    1. If explicitly set in request, use that value
-    2. If model_id provided, look up the managed model's supports_caching field
-    3. Otherwise return None (let agent use default)
-
-    Args:
-        model_id: The model ID from the request
-        explicit_caching_enabled: Explicit caching setting from request
-
-    Returns:
-        bool or None: Whether caching should be enabled
-    """
-    # If explicitly set in request, use that value
-    if explicit_caching_enabled is not None:
-        return explicit_caching_enabled
-
-    # If no model_id, let agent use default
+async def _find_managed_model(model_id: str | None):
+    """Best-effort lookup of a managed-model record by external model ID."""
     if not model_id:
         return None
-
-    # Look up the managed model to check supports_caching
     try:
         managed_models = await list_managed_models()
         for model in managed_models:
             if model.model_id == model_id:
-                logger.debug("Found managed model, checking supports_caching")
-                return model.supports_caching
+                return model
+    except Exception:
+        logger.warning("Failed to look up managed model %s", model_id)
+    return None
 
-        # Model not found in managed models - use default
-        logger.debug("Model not found in managed models, using default caching behavior")
-        return None
 
-    except Exception as e:
-        logger.warning("Failed to look up managed model for caching")
-        return None
+def _merge_inference_params(
+    managed_model,
+    request_params: dict,
+) -> dict:
+    """Merge admin-configured defaults with request-supplied inference params.
+
+    For each canonical param the managed model declares:
+      * unsupported -> drop the request value (logged) and don't set a default
+      * supported with admin default -> use the default unless the request
+        provides a value within bounds; out-of-bounds values are clamped.
+
+    Request keys for params the managed model says nothing about pass through
+    untouched — the per-provider translation table will drop unknowns.
+    """
+    merged: dict = {}
+    spec_map = {}
+    if managed_model and managed_model.supported_params:
+        spec_map = managed_model.supported_params.params or {}
+
+    seen_keys: set[str] = set()
+    for name, spec in spec_map.items():
+        seen_keys.add(name)
+        if not spec.supported:
+            if name in request_params:
+                logger.info(
+                    "Dropping unsupported inference param '%s' for model %s",
+                    name,
+                    getattr(managed_model, "model_id", "?"),
+                )
+            continue
+
+        # Locked params always use the admin default — user overrides are
+        # dropped without error. Lets admins pin e.g. `temperature` for
+        # reproducibility while leaving `max_tokens` user-tunable.
+        if spec.locked:
+            if spec.default is not None:
+                merged[name] = spec.default
+            continue
+
+        if name in request_params and request_params[name] is not None:
+            value = request_params[name]
+            if isinstance(value, (int, float)):
+                if spec.min is not None and value < spec.min:
+                    value = spec.min
+                if spec.max is not None and value > spec.max:
+                    value = spec.max
+            merged[name] = value
+        elif spec.default is not None:
+            merged[name] = spec.default
+
+    # Pass through request keys the admin spec doesn't mention. The provider
+    # translation table will silently drop ones the SDK doesn't know.
+    for name, value in request_params.items():
+        if name in seen_keys or value is None:
+            continue
+        merged[name] = value
+
+    # Final cross-param safety check. Anthropic rejects requests where
+    # `thinking.budget_tokens >= max_tokens`, and the per-param clamping
+    # above can't catch it (each param is bounded independently). When
+    # both are set and inconsistent, drop `thinking` so the response still
+    # streams instead of erroring out — the user just doesn't get a
+    # reasoning trace this turn. Logged so the gap is visible in metrics.
+    thinking = merged.get("thinking")
+    max_tokens = merged.get("max_tokens")
+    if (
+        isinstance(thinking, int)
+        and not isinstance(thinking, bool)
+        and isinstance(max_tokens, int)
+        and not isinstance(max_tokens, bool)
+        and thinking >= max_tokens
+    ):
+        logger.warning(
+            "Dropping thinking budget %d for model %s — not less than max_tokens %d",
+            thinking,
+            getattr(managed_model, "model_id", "?"),
+            max_tokens,
+        )
+        merged.pop("thinking", None)
+
+    return merged
+
+
+async def _resolve_model_settings(
+    model_id: str | None,
+    explicit_caching_enabled: bool | None,
+    request_inference_params: dict | None,
+) -> tuple[bool | None, dict]:
+    """Resolve runtime model knobs from the managed-model registry.
+
+    Returns ``(caching_enabled, inference_params)``. A single registry lookup
+    drives both, replacing the prior per-concern lookups.
+    """
+    request_params = dict(request_inference_params or {})
+
+    if not model_id:
+        return explicit_caching_enabled, request_params
+
+    managed_model = await _find_managed_model(model_id)
+
+    if explicit_caching_enabled is not None:
+        caching = explicit_caching_enabled
+    elif managed_model is not None:
+        caching = managed_model.supports_caching
+    else:
+        caching = None
+
+    inference_params = _merge_inference_params(managed_model, request_params)
+    return caching, inference_params
+
+
+async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
+    """Backward-compat wrapper around :func:`_resolve_model_settings`."""
+    caching, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
+    return caching
 
 
 # ============================================================
@@ -585,42 +675,60 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 )
 
             caching_enabled = snapshot.caching_enabled
+            # Snapshot wins on resume so an authorized turn finishes against the
+            # exact param shape it was authorized for, even if admin defaults
+            # have since changed. Fall back to the legacy fields for snapshots
+            # written before inference_params was added.
+            resume_inference_params = snapshot.inference_params or {}
+            if not resume_inference_params:
+                if snapshot.temperature is not None:
+                    resume_inference_params["temperature"] = snapshot.temperature
+                if snapshot.max_tokens is not None:
+                    resume_inference_params["max_tokens"] = snapshot.max_tokens
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
                 auth_token=auth_token,
                 enabled_tools=snapshot.enabled_tools,
                 model_id=snapshot.model_id,
-                temperature=snapshot.temperature,
                 system_prompt=snapshot.system_prompt,
                 caching_enabled=snapshot.caching_enabled,
                 provider=snapshot.provider,
-                max_tokens=snapshot.max_tokens,
+                inference_params=resume_inference_params,
                 agent_type=snapshot.agent_type,
             )
         else:
-            # Resolve caching_enabled based on managed model configuration
-            # This allows admins to disable caching for models that don't support it
-            caching_enabled = await _resolve_caching_enabled(model_id=input_data.model_id, explicit_caching_enabled=input_data.caching_enabled)
+            # Build the canonical request inference-params dict. The frontend
+            # sends ``inference_params`` directly; legacy ``temperature`` /
+            # ``max_tokens`` fields are folded in for older clients and
+            # treated as defaults that lose to anything in ``inference_params``.
+            request_inference_params: dict = dict(input_data.inference_params or {})
+            if input_data.temperature is not None:
+                request_inference_params.setdefault("temperature", input_data.temperature)
+            if input_data.max_tokens is not None:
+                request_inference_params.setdefault("max_tokens", input_data.max_tokens)
+
+            # Single registry lookup resolves caching + inference params,
+            # merging admin defaults with request overrides.
+            caching_enabled, inference_params = await _resolve_model_settings(
+                model_id=input_data.model_id,
+                explicit_caching_enabled=input_data.caching_enabled,
+                request_inference_params=request_inference_params,
+            )
 
             if caching_enabled is False:
                 logger.info("Prompt caching disabled for model")
 
-            # Get agent instance with user-specific configuration
-            # AgentCore Memory tracks preferences across sessions per user_id
-            # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
-            # Use augmented message and assistant system prompt if assistant RAG was applied
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
                 auth_token=auth_token,
                 enabled_tools=input_data.enabled_tools,
                 model_id=input_data.model_id,
-                temperature=input_data.temperature,
                 system_prompt=system_prompt,  # Use assistant's instructions if available
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
-                max_tokens=input_data.max_tokens,
+                inference_params=inference_params,
                 agent_type=input_data.agent_type,
             )
 
