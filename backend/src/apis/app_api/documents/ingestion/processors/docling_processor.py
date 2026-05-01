@@ -185,6 +185,20 @@ async def process_with_docling(
         logger.info(f"CSV chunking complete. Total chunks: {len(chunks)}")
         return chunks
 
+    # XLSX-specific path: convert sheets to CSV, then use row-based chunker
+    if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" or (filename and filename.lower().endswith(".xlsx")):
+        logger.info("Detected XLSX file, using XLSX-specific chunker (bypassing Docling)")
+        _ensure_tiktoken_cache()
+        from .xlsx_chunker import chunk_xlsx
+
+        chunks = chunk_xlsx(file_bytes, max_tokens=900)
+
+        if progress_callback:
+            await progress_callback(len(chunks))
+
+        logger.info(f"XLSX chunking complete. Total chunks: {len(chunks)}")
+        return chunks
+
     # Import inside function to avoid heavy load at cold start if not needed immediately
     import torch
 
