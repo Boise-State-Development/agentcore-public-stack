@@ -63,6 +63,15 @@ def is_preview_session(session_id: str) -> bool:
     return session_id.startswith(PREVIEW_SESSION_PREFIX)
 
 
+def _sanitize_log(value: object) -> str:
+    """Strip CR/LF (and replace any other ASCII control char) so untrusted
+    request fields can't forge extra log lines. Mirrors voice_routes._sanitize_log.
+    """
+    if value is None:
+        return "?"
+    return "".join(c if c >= " " or c == "\t" else " " for c in str(value))
+
+
 async def _find_managed_model(model_id: str | None):
     """Best-effort lookup of a managed-model record by external model ID."""
     if not model_id:
@@ -73,7 +82,9 @@ async def _find_managed_model(model_id: str | None):
             if model.model_id == model_id:
                 return model
     except Exception:
-        logger.warning("Failed to look up managed model %s", model_id)
+        # model_id is request-controlled; sanitize before logging to keep
+        # CRLF / control chars from forging extra log lines.
+        logger.warning("Failed to look up managed model %s", _sanitize_log(model_id))
     return None
 
 
@@ -101,10 +112,14 @@ def _merge_inference_params(
         seen_keys.add(name)
         if not spec.supported:
             if name in request_params:
+                # `name` is a registry-defined canonical key; managed_model.model_id
+                # comes from DDB but ultimately traces back to a user-supplied
+                # value on create. Sanitize defensively so CodeQL's log-injection
+                # check is satisfied uniformly across log sites.
                 logger.info(
                     "Dropping unsupported inference param '%s' for model %s",
-                    name,
-                    getattr(managed_model, "model_id", "?"),
+                    _sanitize_log(name),
+                    _sanitize_log(getattr(managed_model, "model_id", "?")),
                 )
             continue
 
@@ -152,7 +167,7 @@ def _merge_inference_params(
         logger.warning(
             "Dropping thinking budget %d for model %s — not less than max_tokens %d",
             thinking,
-            getattr(managed_model, "model_id", "?"),
+            _sanitize_log(getattr(managed_model, "model_id", "?")),
             max_tokens,
         )
         merged.pop("thinking", None)
