@@ -535,24 +535,58 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     # Message Processing Helpers
     # =========================================================================
 
+    # Top-level keys for content blocks Bedrock Converse recognizes.
+    # Mirrors Strands BedrockModel._format_request_message_content
+    # (strands/models/bedrock.py). reasoningContent is critical for
+    # Anthropic extended-thinking + tool-use round-tripping: the block
+    # carries a `signature` field that must be replayed verbatim while a
+    # tool-use cycle is open.
+    _BEDROCK_CONTENT_BLOCK_KEYS = frozenset({
+        "cachePoint",
+        "citationsContent",
+        "document",
+        "guardContent",
+        "image",
+        "reasoningContent",
+        "text",
+        "toolResult",
+        "toolUse",
+        "video",
+    })
+
     @staticmethod
     def _filter_empty_text(message: dict) -> dict:
-        """Filter out empty or invalid content blocks from a message."""
+        """Drop empty text blocks; preserve every other Bedrock-recognized block.
+
+        Empty/whitespace-only ``text`` blocks must be dropped — Bedrock Converse
+        rejects them. Every other recognized content block is passed through
+        unchanged. Blocks whose top-level key is not recognized are dropped and
+        logged so silent stripping (e.g. when Bedrock adds a new block type)
+        is observable.
+        """
         if "content" not in message:
             return message
         content = message.get("content", [])
         if not isinstance(content, list):
             return message
 
-        def is_valid_block(block):
+        filtered = []
+        for block in content:
             if not isinstance(block, dict):
-                return False
+                continue
             if "text" in block:
                 text = block.get("text", "")
-                return isinstance(text, str) and text.strip() != ""
-            return any(key in block for key in ("toolUse", "toolResult", "image", "document"))
-
-        filtered = [block for block in content if is_valid_block(block)]
+                if isinstance(text, str) and text.strip() != "":
+                    filtered.append(block)
+                continue
+            if any(key in block for key in TurnBasedSessionManager._BEDROCK_CONTENT_BLOCK_KEYS):
+                filtered.append(block)
+            else:
+                logger.warning(
+                    "Dropping unrecognized content block (keys=%s) before persistence. "
+                    "If Bedrock has added a new block type, update _BEDROCK_CONTENT_BLOCK_KEYS.",
+                    sorted(block.keys()),
+                )
         return {**message, "content": filtered}
 
     def _has_tool_result(self, message: Dict) -> bool:

@@ -940,6 +940,120 @@ class TestFilterEmptyText:
         msg = {"role": "user", "content": "string"}
         assert mgr._filter_empty_text(msg) == msg
 
+    @pytest.mark.parametrize("block", [
+        {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "sig"}}},
+        {"reasoningContent": {"redactedContent": b"opaque"}},
+        {"image": {"format": "png", "source": {"bytes": b"x"}}},
+        {"document": {"name": "f", "format": "pdf", "source": {"bytes": b"x"}}},
+        {"video": {"format": "mp4", "source": {"bytes": b"x"}}},
+        {"cachePoint": {"type": "default"}},
+        {"guardContent": {"text": {"text": "x", "qualifiers": []}}},
+        {"citationsContent": {"content": [{"text": "x"}]}},
+        {"toolUse": {"toolUseId": "t1", "name": "calc", "input": {}}},
+        {"toolResult": {"toolUseId": "t1", "content": [{"text": "ok"}]}},
+    ])
+    def test_keeps_all_bedrock_recognized_blocks(self, make_session_manager, block):
+        """Every Bedrock-recognized block type must survive persistence."""
+        mgr = make_session_manager()
+        msg = {"role": "assistant", "content": [block]}
+        result = mgr._filter_empty_text(msg)
+        assert len(result["content"]) == 1
+        assert result["content"][0] == block
+
+    def test_drops_unrecognized_block_with_warning(self, make_session_manager, caplog):
+        """Unknown block keys are dropped — and the drop is logged."""
+        import logging
+        mgr = make_session_manager()
+        msg = {"role": "assistant", "content": [{"madeUpFutureBlock": {"x": 1}}]}
+        with caplog.at_level(logging.WARNING, logger="agents.main_agent.session.turn_based_session_manager"):
+            result = mgr._filter_empty_text(msg)
+        assert result["content"] == []
+        assert any("Dropping unrecognized content block" in r.message for r in caplog.records)
+
+
+# ===========================================================================
+# Reasoning content (extended thinking) round-trip
+# ===========================================================================
+
+class TestReasoningContentRoundTrip:
+    """
+    Verify reasoningContent (with signature) survives the full persistence path:
+
+        TurnBasedSessionManager._filter_empty_text
+          → SessionMessage.to_dict
+          → AgentCoreMemoryConverter.message_to_payload (JSON serialize)
+          → AgentCoreMemoryConverter.events_to_messages (JSON deserialize)
+          → SessionMessage.to_message
+
+    Anthropic requires the signature on the prior thinking block to be
+    preserved verbatim in subsequent payloads while a tool-use cycle is
+    open. If our filter or the SDK's serialization drops it, Bedrock
+    returns ``messages.X.content.Y.thinking.signature: Field required``
+    on the next turn. See issue #204 follow-up.
+    """
+
+    SIGNATURE = "abc123-signed-by-anthropic"
+
+    def _thinking_tool_use_message(self) -> dict:
+        return {
+            "role": "assistant",
+            "content": [
+                {
+                    "reasoningContent": {
+                        "reasoningText": {
+                            "text": "I should call the calculator.",
+                            "signature": self.SIGNATURE,
+                        }
+                    }
+                },
+                {"toolUse": {"toolUseId": "t1", "name": "calc", "input": {"x": 1}}},
+            ],
+        }
+
+    def test_signature_survives_agentcore_memory_round_trip(self):
+        """Real SDK round-trip: serialize → JSON → deserialize."""
+        from strands.types.session import SessionMessage
+        from bedrock_agentcore.memory.integrations.strands.bedrock_converter import (
+            AgentCoreMemoryConverter,
+        )
+
+        original = SessionMessage.from_message(self._thinking_tool_use_message(), index=0)
+        payload = AgentCoreMemoryConverter.message_to_payload(original)
+        assert len(payload) == 1
+        text, role = payload[0]
+
+        event = {
+            "payload": [{"conversational": {"content": {"text": text}, "role": role}}]
+        }
+        restored = AgentCoreMemoryConverter.events_to_messages([event])
+
+        assert len(restored) == 1
+        msg = restored[0].to_message()
+        assert msg["role"] == "assistant"
+        rc_block = next(b for b in msg["content"] if "reasoningContent" in b)
+        assert rc_block["reasoningContent"]["reasoningText"]["signature"] == self.SIGNATURE
+        tu_block = next(b for b in msg["content"] if "toolUse" in b)
+        assert tu_block["toolUse"]["toolUseId"] == "t1"
+
+    def test_append_message_forwards_reasoning_to_super(self, make_session_manager):
+        """append_message must hand the reasoningContent block to the SDK
+        super(); the legacy filter silently stripped it."""
+        mgr = make_session_manager()
+        agent = MagicMock()
+        msg = self._thinking_tool_use_message()
+        with patch(
+            "agents.main_agent.session.turn_based_session_manager.AgentCoreMemorySessionManager.append_message"
+        ) as super_append:
+            mgr.append_message(msg, agent)
+        super_append.assert_called_once()
+        forwarded_msg = super_append.call_args.args[0]
+        rc_blocks = [b for b in forwarded_msg["content"] if "reasoningContent" in b]
+        assert len(rc_blocks) == 1, (
+            "reasoningContent block was stripped before persistence — "
+            "this breaks Anthropic extended-thinking + tool-use round-tripping"
+        )
+        assert rc_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == self.SIGNATURE
+
 
 # ===========================================================================
 # Task 10 — End-to-end compaction lifecycle
