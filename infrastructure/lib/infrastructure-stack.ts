@@ -1195,54 +1195,28 @@ export class InfrastructureStack extends cdk.Stack {
       removalPolicy: getRemovalPolicy(config),
     });
 
-    // App Client — SPA, no client secret, authorization code grant with PKCE
-    const callbackUrls = config.domainName
-      ? [`https://${config.domainName}/auth/callback`]
-      : ['http://localhost:4200/auth/callback'];
-    const logoutUrls = config.domainName
-      ? [`https://${config.domainName}`]
-      : ['http://localhost:4200'];
-
-    // Append any additional callback/logout URLs from config
-    if (config.cognito.callbackUrls) {
-      callbackUrls.push(...config.cognito.callbackUrls);
-    }
-    if (config.cognito.logoutUrls) {
-      logoutUrls.push(...config.cognito.logoutUrls);
-    }
-
-    const appClient = userPool.addClient('CognitoAppClient', {
-      userPoolClientName: getResourceName(config, 'app-client'),
-      generateSecret: false,
-      authFlows: { userSrp: true, custom: true },
-      oAuth: {
-        flows: { authorizationCodeGrant: true },
-        scopes: [
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.PROFILE,
-          cognito.OAuthScope.EMAIL,
-        ],
-        callbackUrls,
-        logoutUrls,
-      },
-      preventUserExistenceErrors: true,
-      supportedIdentityProviders: [
-        cognito.UserPoolClientIdentityProvider.COGNITO,
-      ],
-    });
-
     // BFF App Client — confidential client used by app-api for the
     // server-side OAuth token exchange in the Token Handler BFF flow.
-    // The client secret authenticates the /oauth2/token call from app-api,
-    // adding a layer of defense beyond PKCE since the secret never leaves
-    // the server. Existing public PKCE client (above) stays in place
-    // through the migration cutover as a safety net.
+    // The client secret authenticates the /oauth2/token call from app-api;
+    // the secret never leaves the server. The public PKCE SPA client
+    // that previously sat alongside this one was retired in Phase 7
+    // when the SPA cut over fully to cookie auth.
     const bffCallbackUrls = config.domainName
       ? [`https://${config.domainName}/api/auth/callback`]
       : ['http://localhost:8000/auth/callback'];
     const bffLogoutUrls = config.domainName
       ? [`https://${config.domainName}`]
       : ['http://localhost:4200'];
+
+    // Append any additional callback/logout URLs from config — these
+    // used to feed the public SPA client too; with that gone, they
+    // extend the BFF client's allowlists instead.
+    if (config.cognito.callbackUrls) {
+      bffCallbackUrls.push(...config.cognito.callbackUrls);
+    }
+    if (config.cognito.logoutUrls) {
+      bffLogoutUrls.push(...config.cognito.logoutUrls);
+    }
 
     const bffAppClient = userPool.addClient('CognitoBFFAppClient', {
       userPoolClientName: getResourceName(config, 'bff-app-client'),
@@ -1292,13 +1266,6 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/cognito/user-pool-arn`,
       stringValue: userPool.userPoolArn,
       description: 'Cognito User Pool ARN',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    new ssm.StringParameter(this, 'CognitoAppClientIdParameter', {
-      parameterName: `/${config.projectPrefix}/auth/cognito/app-client-id`,
-      stringValue: appClient.userPoolClientId,
-      description: 'Cognito App Client ID',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -1592,19 +1559,6 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/network/alb-url`,
       stringValue: albUrl,
       description: albUrlDescription,
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Construct OAuth callback URL
-    const oauthCallbackUrl = config.domainName
-      ? `https://${config.domainName}/auth/callback`
-      : `${albUrl}/auth/callback`;
-
-    // Export OAuth callback URL for runtime provisioner
-    new ssm.StringParameter(this, 'OAuthCallbackUrlParameter', {
-      parameterName: `/${config.projectPrefix}/oauth/callback-url`,
-      stringValue: oauthCallbackUrl,
-      description: 'OAuth callback URL for authentication provider configuration',
       tier: ssm.ParameterTier.STANDARD,
     });
 

@@ -135,7 +135,7 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'user-file-uploads/table-arn',
     'user-file-uploads/bucket-arn',
     'auth/cognito/user-pool-id',
-    'auth/cognito/app-client-id',
+    'auth/cognito/bff-app-client-id',
   ],
   AppApiStack: [
     'network/vpc-id',
@@ -179,7 +179,7 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'auth/auth-provider-secrets-arn',
     'auth/cognito/user-pool-arn',
     'auth/cognito/user-pool-id',
-    'auth/cognito/app-client-id',
+    'auth/cognito/bff-app-client-id',
     'auth/cognito/issuer-url',
     'auth/cognito/domain-url',
     'rag/documents-bucket-name',

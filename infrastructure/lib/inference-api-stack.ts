@@ -841,8 +841,12 @@ export class InferenceApiStack extends cdk.Stack {
     const cognitoUserPoolId = ssm.StringParameter.valueForStringParameter(
       this, `/${config.projectPrefix}/auth/cognito/user-pool-id`
     );
+    // Phase 7 retired the public PKCE SPA client; the BFF confidential
+    // client is the only one left. The runtime authorizer's allowed-clients
+    // list now points at it so tokens minted via the BFF flow are accepted
+    // when the chat proxy on app-api forwards them to /invocations.
     const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
-      this, `/${config.projectPrefix}/auth/cognito/app-client-id`
+      this, `/${config.projectPrefix}/auth/cognito/bff-app-client-id`
     );
 
     // Construct Cognito OIDC discovery URL
