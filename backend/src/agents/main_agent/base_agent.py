@@ -112,7 +112,7 @@ class BaseAgent(ABC):
             self.prompt_builder = SystemPromptBuilder()
             self.system_prompt = self.prompt_builder.build(include_date=True)
 
-        # Snapshot the *unbuilt* system_prompt — i.e. the same string the
+        # Snapshot the *unbuilt* system_prompt — i.e. the same value the
         # caller passed to ``get_agent`` originally. The cache key hashes
         # this raw value (see ``_create_cache_key``), so storing the built
         # prompt here causes resume to land on a different cache slot than
@@ -120,6 +120,14 @@ class BaseAgent(ABC):
         # in the cache; a later non-resume turn cache-hits to it and
         # Strands raises "must resume from interrupt with list of
         # interruptResponse's" because _interrupt_state is still activated.
+        #
+        # Trade-off: if the cache evicts between pause and resume AND the
+        # original ``system_prompt`` was None, the rebuilt agent re-renders
+        # the date via ``include_date=True`` and may pick up *today's* date
+        # rather than the original turn's. Snapshot TTL is 1h, so this only
+        # matters across a midnight crossing. Resume conversation context is
+        # restored from AgentCore Memory regardless, so the model still sees
+        # prior turns; only the system-prompt date line shifts.
         self._construction_snapshot["system_prompt"] = system_prompt
 
         # Initialize tool registry and filter
