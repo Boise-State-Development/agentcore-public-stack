@@ -13,7 +13,6 @@ export interface VisualDisplayState {
 
 export interface SessionPreferences {
   lastModel?: string;
-  lastTemperature?: number;
   enabledTools?: string[];
   selectedPromptId?: string;
   customPromptText?: string;
@@ -42,7 +41,6 @@ export interface UpdateSessionMetadataRequest {
   starred?: boolean;
   tags?: string[];
   lastModel?: string;
-  lastTemperature?: number;
   enabledTools?: string[];
   selectedPromptId?: string;
   customPromptText?: string;

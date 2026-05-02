@@ -16,6 +16,7 @@ from typing import AsyncGenerator, Union
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
@@ -144,10 +145,21 @@ def _merge_inference_params(
         elif spec.default is not None:
             merged[name] = spec.default
 
-    # Pass through request keys the admin spec doesn't mention. The provider
-    # translation table will silently drop ones the SDK doesn't know.
+    # Pass through request keys the admin spec doesn't mention, but only when
+    # they're in the canonical allow-list. Without this gate, a user could
+    # submit a future canonical key (or one a future provider mapping starts
+    # forwarding) and bypass the admin's per-model bounds entirely. Unknown
+    # keys are dropped here; the provider translation table is the second
+    # line of defense for ones it doesn't understand.
     for name, value in request_params.items():
         if name in seen_keys or value is None:
+            continue
+        if name not in KNOWN_CANONICAL_PARAMS:
+            logger.info(
+                "Dropping unrecognized inference param '%s' for model %s",
+                _sanitize_log(name),
+                _sanitize_log(getattr(managed_model, "model_id", "?")),
+            )
             continue
         merged[name] = value
 

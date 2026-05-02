@@ -249,7 +249,7 @@ class TestUpdateSessionActivity:
         assert before.message_count == 0
 
         applied = await update_session_activity(
-            session_id="s1", user_id="u1", last_model="claude-3", last_temperature=0.7,
+            session_id="s1", user_id="u1", last_model="claude-3",
         )
         assert applied is True
         after = await get_session_metadata("s1", "u1")
@@ -271,7 +271,7 @@ class TestUpdateSessionActivity:
         await ensure_session_metadata_exists("s1", "u1")
         await update_session_title("s1", "u1", "My Generated Title")
         await update_session_activity(
-            session_id="s1", user_id="u1", last_model="claude-3", last_temperature=0.5,
+            session_id="s1", user_id="u1", last_model="claude-3",
         )
         result = await get_session_metadata("s1", "u1")
         assert result.title == "My Generated Title"
@@ -322,12 +322,11 @@ class TestUpdateSessionActivity:
         await store_session_metadata("s1", "u1", seeded)
 
         await update_session_activity(
-            session_id="s1", user_id="u1", last_model="claude-3", last_temperature=0.5,
+            session_id="s1", user_id="u1", last_model="claude-3",
         )
         result = await get_session_metadata("s1", "u1")
         assert result.preferences.assistant_id == "asst-abc"
         assert result.preferences.last_model == "claude-3"
-        assert result.preferences.last_temperature == 0.5
 
     @pytest.mark.asyncio
     async def test_rotates_sk_to_new_timestamp(self, sessions_metadata_table):

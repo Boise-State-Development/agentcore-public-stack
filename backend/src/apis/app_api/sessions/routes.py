@@ -193,7 +193,6 @@ async def update_session_metadata_endpoint(
             preferences = None
             if any([
                 request.last_model,
-                request.last_temperature is not None,
                 request.enabled_tools,
                 request.selected_prompt_id,
                 request.custom_prompt_text,
@@ -201,7 +200,6 @@ async def update_session_metadata_endpoint(
             ]):
                 preferences = SessionPreferences(
                     last_model=request.last_model,
-                    last_temperature=request.last_temperature,
                     enabled_tools=request.enabled_tools,
                     selected_prompt_id=request.selected_prompt_id,
                     custom_prompt_text=request.custom_prompt_text,
@@ -232,7 +230,6 @@ async def update_session_metadata_endpoint(
             preferences = existing_metadata.preferences
             if any([
                 request.last_model,
-                request.last_temperature is not None,
                 request.enabled_tools,
                 request.selected_prompt_id,
                 request.custom_prompt_text,
@@ -243,8 +240,6 @@ async def update_session_metadata_endpoint(
                 new_prefs = {}
                 if request.last_model:
                     new_prefs['last_model'] = request.last_model
-                if request.last_temperature is not None:
-                    new_prefs['last_temperature'] = request.last_temperature
                 if request.enabled_tools:
                     new_prefs['enabled_tools'] = request.enabled_tools
                 if request.selected_prompt_id:

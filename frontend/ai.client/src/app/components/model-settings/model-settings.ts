@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, input, output, signal, computed, effect, ElementRef, HostListener } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, input, output, signal, computed, effect, ElementRef } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroCheck, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
@@ -40,6 +40,9 @@ interface AdvancedParamRow {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
   providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight })],
+  host: {
+    '(document:click)': 'onDocumentClick($event)',
+  },
   templateUrl: './model-settings.html',
   styleUrl: './model-settings.css',
 })
@@ -187,7 +190,6 @@ export class ModelSettings {
     });
   }
 
-  @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
     // Close dropdown if clicking outside
     if (this.isModelDropdownOpen() && !this.elementRef.nativeElement.contains(event.target)) {

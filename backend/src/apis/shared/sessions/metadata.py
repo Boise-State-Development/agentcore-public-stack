@@ -842,7 +842,6 @@ async def update_session_activity(
     user_id: str,
     *,
     last_model: Optional[str] = None,
-    last_temperature: Optional[float] = None,
     enabled_tools: Optional[List[str]] = None,
     system_prompt_hash: Optional[str] = None,
 ) -> bool:
@@ -911,8 +910,6 @@ async def update_session_activity(
         prefs_dict = existing_prefs.model_dump(by_alias=False, exclude_none=True)
         if last_model is not None:
             prefs_dict["last_model"] = last_model
-        if last_temperature is not None:
-            prefs_dict["last_temperature"] = last_temperature
         if enabled_tools is not None:
             prefs_dict["enabled_tools"] = enabled_tools
         if system_prompt_hash is not None:

@@ -1351,12 +1351,10 @@ class StreamCoordinator:
             from apis.shared.sessions.metadata import update_session_activity
 
             last_model = None
-            last_temperature = None
             enabled_tools = None
             system_prompt_hash = None
             if agent and hasattr(agent, "model_config"):
                 last_model = agent.model_config.model_id
-                last_temperature = getattr(agent.model_config, "temperature", None)
                 enabled_tools = getattr(agent, "enabled_tools", None)
                 if hasattr(agent, "system_prompt") and agent.system_prompt:
                     system_prompt_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]
@@ -1367,7 +1365,6 @@ class StreamCoordinator:
                 session_id=session_id,
                 user_id=user_id,
                 last_model=last_model,
-                last_temperature=last_temperature,
                 enabled_tools=enabled_tools,
                 system_prompt_hash=system_prompt_hash,
             )

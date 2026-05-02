@@ -52,6 +52,15 @@ _GEMINI_PARAM_MAP: Dict[str, str] = {
 # them. Suppression happens in `_apply_canonical_params` before dispatch.
 _THINKING_INCOMPATIBLE = {"temperature", "top_p", "top_k"}
 
+# Union of every canonical key we know how to translate. Used by the request
+# merge step to gate user-supplied keys against an allow-list — admins can
+# constrain known params with `supportedParams`, but users shouldn't be able
+# to bypass that by inventing keys the admin hasn't seen yet (or that the
+# provider mapping starts forwarding in a future release).
+KNOWN_CANONICAL_PARAMS: frozenset[str] = frozenset(
+    set(_BEDROCK_PARAM_MAP) | set(_OPENAI_PARAM_MAP) | set(_GEMINI_PARAM_MAP)
+)
+
 
 def _set_nested(target: Dict[str, Any], dotted_path: str, value: Any) -> None:
     """Assign ``value`` into ``target`` at a dot-separated key path."""

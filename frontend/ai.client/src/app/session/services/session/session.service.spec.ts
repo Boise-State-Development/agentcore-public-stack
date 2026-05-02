@@ -207,7 +207,7 @@ describe('SessionService', () => {
   describe('updateSessionPreferences', () => {
     it('should delegate to updateSessionMetadata with preferences', async () => {
       const spy = vi.spyOn(service, 'updateSessionMetadata').mockResolvedValue(mockSession);
-      const prefs = { lastModel: 'claude', lastTemperature: 0.7 };
+      const prefs = { lastModel: 'claude' };
       await service.updateSessionPreferences('test-id', prefs);
       expect(spy).toHaveBeenCalledWith('test-id', prefs);
     });

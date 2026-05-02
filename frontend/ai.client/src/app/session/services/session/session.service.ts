@@ -630,7 +630,6 @@ export class SessionService {
     sessionId: string,
     preferences: {
       lastModel?: string;
-      lastTemperature?: number;
       enabledTools?: string[];
       selectedPromptId?: string;
       customPromptText?: string;
