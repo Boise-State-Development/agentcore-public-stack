@@ -40,6 +40,7 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/token",
     "/auth/refresh",
     "/auth/logout",
+    "/auth/callback",  # BFF Token Handler OAuth callback (Phase 3) — Cognito redirects here with the auth code; no Bearer involved.
     "/oauth/callback",
     "/chat/api-converse",
     "/system/status",
