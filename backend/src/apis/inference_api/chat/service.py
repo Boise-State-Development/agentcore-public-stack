@@ -94,6 +94,18 @@ _agent_cache: dict = {}
 _CACHE_MAX_SIZE = 100
 
 
+def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
+    """Return True if the wrapped Strands agent is mid-interrupt.
+
+    Used by ``get_agent`` to decide whether to evict a stale paused agent
+    from the cache. ``getattr`` chains with defaults can never raise, so
+    no try/except is needed.
+    """
+    inner = getattr(agent, "agent", None)
+    state = getattr(inner, "_interrupt_state", None)
+    return bool(state is not None and getattr(state, "activated", False))
+
+
 async def get_agent(
     session_id: str,
     user_id: Optional[str] = None,
@@ -107,6 +119,7 @@ async def get_agent(
     max_tokens: Optional[int] = None,
     agent_type: Optional[str] = None,
     inference_params: Optional[Dict[str, Any]] = None,
+    is_resume: bool = False,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -161,8 +174,24 @@ async def get_agent(
 
     # Check cache
     if cache_key in _agent_cache:
-        logger.debug("✅ Agent cache hit")
-        return _agent_cache[cache_key]
+        cached = _agent_cache[cache_key]
+        # Defense in depth: a non-resume request should never be served a
+        # paused agent. If we ever desync the cache key between the original
+        # turn and a resume (e.g. snapshot stores a normalized form of one
+        # of the params), the resume rebuilds under a new key while the
+        # paused agent stays in the original slot — and a later non-resume
+        # turn cache-hits to it. Strands then raises "must resume from
+        # interrupt with list of interruptResponse's". Discard and rebuild.
+        if not is_resume and _is_paused_on_interrupt(cached):
+            logger.warning(
+                "Cached agent is paused on an interrupt but request is not a resume; "
+                "evicting and rebuilding (session=%s user=%s)",
+                session_id, user_id,
+            )
+            del _agent_cache[cache_key]
+        else:
+            logger.debug("✅ Agent cache hit")
+            return cached
 
     # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")

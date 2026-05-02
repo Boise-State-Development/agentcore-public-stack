@@ -713,6 +713,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 provider=snapshot.provider,
                 inference_params=resume_inference_params,
                 agent_type=snapshot.agent_type,
+                is_resume=True,
             )
         else:
             # Build the canonical request inference-params dict. The frontend
@@ -747,6 +748,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 provider=input_data.provider,
                 inference_params=inference_params,
                 agent_type=input_data.agent_type,
+                is_resume=False,
             )
 
         # Resume requests must target interrupts that the cached agent
