@@ -172,6 +172,10 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 return None, True
 
             now = int(time.time())
+            # TODO(phase-7): if this write fails, Cognito has rotated the
+            # refresh token but DDB still holds the old one — the session is
+            # silently broken on the next refresh attempt. Add a short retry
+            # loop or a conditional update with a version attribute.
             await self._repository.update_tokens(
                 session_id=session_id,
                 access_token=refreshed.access_token,

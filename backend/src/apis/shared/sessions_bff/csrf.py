@@ -40,7 +40,14 @@ def derive_token(secret: str, session_id: str) -> str:
 
 
 def tokens_match(a: str, b: str) -> bool:
-    """Constant-time equality. Handles None/empty without timing leakage."""
+    """Constant-time equality once both sides are non-empty.
+
+    The empty/None short-circuit is *not* constant-time — it leaks "one
+    input was empty" via timing. That's fine here: an attacker who omits
+    the header or cookie already knows they did, so there's nothing to
+    learn. Once both inputs have content, `hmac.compare_digest` covers
+    the cryptographically meaningful comparison.
+    """
     if not a or not b:
         return False
     return hmac.compare_digest(a, b)

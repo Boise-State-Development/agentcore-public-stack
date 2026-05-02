@@ -180,6 +180,53 @@ def _get_cognito_validator():
     return _cognito_validator
 
 
+# Separate validator for the BFF confidential client. Phase 1 CDK provisions
+# COGNITO_BFF_APP_CLIENT_ID alongside the SPA's COGNITO_APP_CLIENT_ID, and the
+# refresh exchange in `sessions_bff.refresh` issues against the BFF client —
+# so tokens carry `client_id = COGNITO_BFF_APP_CLIENT_ID` and would be rejected
+# by the SPA validator's client_id check.
+_bff_cognito_validator = None
+
+
+def _get_bff_cognito_validator():
+    """Return the validator instance for tokens minted by the BFF flow.
+
+    Reads `COGNITO_USER_POOL_ID`, `COGNITO_BFF_APP_CLIENT_ID`, and
+    `COGNITO_REGION`/`AWS_REGION`. Returns None if any are unset, which
+    matches the dormant-by-default contract: until Phase 1 env vars are
+    deployed there's nothing for this validator to do.
+    """
+    global _bff_cognito_validator
+    if _bff_cognito_validator is not None:
+        return _bff_cognito_validator
+
+    try:
+        from .cognito_jwt_validator import CognitoJWTValidator
+
+        user_pool_id = os.environ.get("COGNITO_USER_POOL_ID")
+        bff_app_client_id = os.environ.get("COGNITO_BFF_APP_CLIENT_ID")
+        region = os.environ.get("COGNITO_REGION") or os.environ.get("AWS_REGION")
+
+        if not user_pool_id or not bff_app_client_id or not region:
+            logger.warning(
+                "BFF Cognito validator not configured. "
+                "Required: COGNITO_USER_POOL_ID, COGNITO_BFF_APP_CLIENT_ID, "
+                "COGNITO_REGION (or AWS_REGION)"
+            )
+            return None
+
+        _bff_cognito_validator = CognitoJWTValidator(
+            user_pool_id=user_pool_id,
+            app_client_id=bff_app_client_id,
+            region=region,
+        )
+        logger.info("BFF CognitoJWTValidator initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize BFF CognitoJWTValidator: {e}", exc_info=True)
+
+    return _bff_cognito_validator
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> User:
@@ -268,7 +315,10 @@ async def get_current_user_from_session(request: Request) -> User:
             detail="No active session.",
         )
 
-    validator = _get_cognito_validator()
+    # BFF tokens are issued by the confidential BFF app client, not the SPA's
+    # public client — they carry `client_id = COGNITO_BFF_APP_CLIENT_ID` and
+    # would fail the SPA validator's client_id check.
+    validator = _get_bff_cognito_validator()
     if validator is None:
         # Same failure mode as the Bearer path: a misconfigured environment
         # is a 500, not a 401, so it's noisy enough to surface.

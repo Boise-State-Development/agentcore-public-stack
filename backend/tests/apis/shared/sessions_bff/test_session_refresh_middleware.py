@@ -29,6 +29,7 @@ from apis.shared.sessions_bff import lock as lock_module
 from apis.shared.sessions_bff.cache import SessionCache
 from apis.shared.sessions_bff.config import (
     BFFConfig,
+    CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
 )
 from apis.shared.sessions_bff.cookie import CookieCodec
@@ -187,9 +188,13 @@ def test_unrecoverable_cookie_is_cleared() -> None:
     )
     assert response.status_code == 200
     assert response.json()["has_session"] is False
-    # Set-Cookie header on the response with Max-Age=0 (delete_cookie semantics)
-    set_cookie = response.headers.get("set-cookie", "")
-    assert SESSION_COOKIE_NAME in set_cookie
+    # Both BFF cookies must be cleared so the browser stops echoing the
+    # bad pair on every subsequent request. `getlist` because Set-Cookie
+    # appears once per cookie cleared.
+    set_cookie_headers = response.headers.get_list("set-cookie")
+    cleared = " ".join(set_cookie_headers)
+    assert SESSION_COOKIE_NAME in cleared
+    assert CSRF_COOKIE_NAME in cleared
 
 
 def test_missing_session_row_clears_cookie() -> None:

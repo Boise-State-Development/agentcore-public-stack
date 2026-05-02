@@ -104,25 +104,41 @@ class CookieCodec:
             separators=(",", ":"),
         ).encode("utf-8")
         nonce = secrets.token_bytes(_NONCE_BYTES)
-        ciphertext = cipher.encrypt(nonce, body, associated_data=None)
-        blob = struct.pack("!B", _COOKIE_VERSION) + nonce + ciphertext
+        # Bind the version byte into the GCM authentication tag — flipping
+        # the leading version on the wire then invalidates the tag rather
+        # than just tripping the version check downstream.
+        version_aad = struct.pack("!B", _COOKIE_VERSION)
+        ciphertext = cipher.encrypt(nonce, body, associated_data=version_aad)
+        blob = version_aad + nonce + ciphertext
         return base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
 
     def unseal(self, value: str) -> CookiePayload:
-        """Reverse `seal`. Any failure raises `CookieDecodeError` with no
-        information about the cause."""
+        """Reverse `seal`.
+
+        Decode-style failures (bad ciphertext, tampered tag, garbage input,
+        unknown version) raise `CookieDecodeError` with no information about
+        the cause — callers treat every decode failure identically.
+
+        Infrastructure failures from `_ensure_cipher` (KMS unavailable, etc.)
+        propagate up so the middleware can return 5xx instead of silently
+        clearing the session cookie and forcing every active user to re-login
+        on a transient KMS hiccup.
+        """
+        # Cipher acquisition is intentionally outside the try/except below —
+        # a botocore error here must not be coerced into CookieDecodeError.
+        cipher = self._ensure_cipher()
         try:
-            cipher = self._ensure_cipher()
             padded = value + "=" * (-len(value) % 4)
             blob = base64.urlsafe_b64decode(padded.encode("ascii"))
             if len(blob) < _VERSION_BYTES + _NONCE_BYTES + 16:
                 raise CookieDecodeError()
-            (version,) = struct.unpack("!B", blob[:_VERSION_BYTES])
+            version_bytes = blob[:_VERSION_BYTES]
+            (version,) = struct.unpack("!B", version_bytes)
             if version != _COOKIE_VERSION:
                 raise CookieDecodeError()
             nonce = blob[_VERSION_BYTES : _VERSION_BYTES + _NONCE_BYTES]
             ciphertext = blob[_VERSION_BYTES + _NONCE_BYTES :]
-            body = cipher.decrypt(nonce, ciphertext, associated_data=None)
+            body = cipher.decrypt(nonce, ciphertext, associated_data=version_bytes)
             data = json.loads(body.decode("utf-8"))
             sid = data.get("sid")
             if not isinstance(sid, str) or not sid:
@@ -134,9 +150,13 @@ class CookieCodec:
             )
         except CookieDecodeError:
             raise
-        except (InvalidTag, ValueError, KeyError, json.JSONDecodeError):
-            raise CookieDecodeError()
-        except Exception:
-            # Belt-and-suspenders: any unexpected error becomes the same
-            # opaque failure to preserve constant-time behavior.
+        except (
+            InvalidTag,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            UnicodeEncodeError,
+            struct.error,
+        ):
             raise CookieDecodeError()

@@ -77,8 +77,8 @@ def test_unseal_rejects_missing_session_id() -> None:
     codec = _codec_with_cipher()
     cipher = codec._cipher
     nonce = secrets.token_bytes(12)
-    # Valid version, but JSON has no `sid` key.
-    ciphertext = cipher.encrypt(nonce, b'{"v":1}', None)
+    # Valid version, AAD matches what unseal expects, but JSON has no `sid`.
+    ciphertext = cipher.encrypt(nonce, b'{"v":1}', bytes([1]))
     blob = bytes([1]) + nonce + ciphertext
     sealed = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
     with pytest.raises(CookieDecodeError):
@@ -99,3 +99,16 @@ def test_seal_preserves_extras() -> None:
     payload = CookiePayload(session_id="s", extras={"hint": "abc"})
     decoded = codec.unseal(codec.seal(payload))
     assert decoded.extras == {"hint": "abc"}
+
+
+def test_unseal_propagates_kms_infrastructure_errors() -> None:
+    """KMS unavailable is not a decode error — it must surface so the caller
+    can return 5xx instead of clearing the cookie and forcing re-login."""
+    from unittest.mock import MagicMock
+
+    fake_kms = MagicMock()
+    fake_kms.generate_data_key.side_effect = RuntimeError("KMS unreachable")
+
+    codec = CookieCodec(kms_key_arn="arn:aws:kms:fake", kms_client=fake_kms)
+    with pytest.raises(RuntimeError, match="KMS unreachable"):
+        codec.unseal("doesnt-matter")

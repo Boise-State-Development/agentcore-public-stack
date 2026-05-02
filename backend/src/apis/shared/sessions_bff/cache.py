@@ -8,6 +8,13 @@ the refresh middleware would *not* refresh anyway.
 This is not a security boundary — it's a hot-path optimization for
 many-tabs-on-one-page bursts where the same session id hits the BFF dozens
 of times per second. The repository remains the source of truth.
+
+Logout caveat (Phase 3): when `/auth/logout` deletes the DDB row, in-process
+caches on other tasks (and on the same task, until the TTL ticks past) will
+keep serving the old record for up to `refresh_leeway_seconds`. Phase 3's
+logout handler must call `cache.invalidate(session_id)` locally and accept
+that other tasks lag by at most one TTL window — full coherence requires the
+Phase 7 multi-task coordination work.
 """
 
 from __future__ import annotations

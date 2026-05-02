@@ -69,7 +69,7 @@ def test_returns_user_when_session_attached() -> None:
         roles=["user"],
     )
     with patch(
-        "apis.shared.auth.dependencies._get_cognito_validator",
+        "apis.shared.auth.dependencies._get_bff_cognito_validator",
         return_value=fake_validator,
     ), patch(
         "apis.shared.auth.dependencies._enrich_user_from_store"
@@ -108,7 +108,7 @@ def test_returns_401_when_token_validation_fails() -> None:
         status_code=status.HTTP_401_UNAUTHORIZED, detail="bad sig"
     )
     with patch(
-        "apis.shared.auth.dependencies._get_cognito_validator",
+        "apis.shared.auth.dependencies._get_bff_cognito_validator",
         return_value=fake_validator,
     ):
         app = _build_app(record=_record())
@@ -118,7 +118,7 @@ def test_returns_401_when_token_validation_fails() -> None:
 
 def test_returns_500_when_validator_unconfigured() -> None:
     with patch(
-        "apis.shared.auth.dependencies._get_cognito_validator",
+        "apis.shared.auth.dependencies._get_bff_cognito_validator",
         return_value=None,
     ):
         app = _build_app(record=_record())
