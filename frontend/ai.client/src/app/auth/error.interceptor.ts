@@ -19,8 +19,11 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   const errorService = inject(ErrorService);
 
   // Skip error handling for SSE streaming endpoints
-  // These are handled by fetchEventSource's onerror callback
-  const streamingEndpoints = ['/invocations', '/chat/stream'];
+  // These are handled by fetchEventSource's onerror callback.
+  // Only `/chat/stream` (the BFF proxy on app-api) is reachable from
+  // the SPA — `/invocations` was removed when the public PKCE client
+  // was retired in Phase 7.
+  const streamingEndpoints = ['/chat/stream'];
   const isStreamingRequest = streamingEndpoints.some(endpoint =>
     req.url.includes(endpoint)
   );

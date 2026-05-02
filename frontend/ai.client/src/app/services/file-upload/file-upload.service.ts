@@ -2,8 +2,6 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
-import { AuthService } from '../../auth/auth.service';
-
 /**
  * File status enum matching backend FileStatus
  */
@@ -206,7 +204,6 @@ export function getFileExtension(filename: string): string {
 })
 export class FileUploadService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
@@ -302,7 +299,6 @@ export class FileUploadService {
     // Validate
     this.validateFile(file);
 
-    await this.authService.ensureAuthenticated();
     this._error.set(null);
 
     // Step 1: Request pre-signed URL
@@ -450,8 +446,6 @@ export class FileUploadService {
    * Mark an upload as complete.
    */
   async completeUpload(uploadId: string): Promise<CompleteUploadResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       return await firstValueFrom(
         this.http.post<CompleteUploadResponse>(`${this.baseUrl()}/${uploadId}/complete`, {})
@@ -465,8 +459,6 @@ export class FileUploadService {
    * Delete a file.
    */
   async deleteFile(uploadId: string): Promise<void> {
-    await this.authService.ensureAuthenticated();
-
     try {
       await firstValueFrom(
         this.http.delete(`${this.baseUrl()}/${uploadId}`)
@@ -487,8 +479,6 @@ export class FileUploadService {
    * List files for a session.
    */
   async listSessionFiles(sessionId: string): Promise<FileMetadata[]> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<FileListResponse>(`${this.baseUrl()}`, {
@@ -513,8 +503,6 @@ export class FileUploadService {
     sortBy?: 'date' | 'size' | 'type';
     sortOrder?: 'asc' | 'desc';
   }): Promise<FileListResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const params: Record<string, string> = {};
 
@@ -566,8 +554,6 @@ export class FileUploadService {
    * Get user's quota status.
    */
   async loadQuota(): Promise<QuotaResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<QuotaResponse>(`${this.baseUrl()}/quota`)

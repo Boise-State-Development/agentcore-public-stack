@@ -24,7 +24,7 @@ describe('ChatHttpService', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         ChatHttpService,
-        { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000'), inferenceApiUrl: signal('http://localhost:8001') } },
+        { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
         // Phase 6c: chat-http now reads CSRF from the BFF SessionService
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.

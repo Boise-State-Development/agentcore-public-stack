@@ -2,7 +2,6 @@ import { Injectable, inject, computed, resource } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ManagedModel, ManagedModelFormData } from '../models/managed-model.model';
 
 /**
@@ -23,7 +22,6 @@ export interface ManagedModelsListResponse {
 })
 export class ManagedModelsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/managed-models`);
 
@@ -35,9 +33,8 @@ export class ManagedModelsService {
    */
   readonly modelsResource = resource({
     loader: async () => {
+      await Promise.resolve();
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       // Fetch models from API
       return this.fetchManagedModels();
     }

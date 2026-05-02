@@ -33,7 +33,5 @@ export const environment = {
     appApiUrl: '',
     version: '',
     cognitoDomainUrl: '',
-    cognitoAppClientId: '',
     cognitoRegion: 'us-east-1',
-    inferenceApiUrl: '',
 };

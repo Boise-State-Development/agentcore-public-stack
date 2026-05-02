@@ -4,8 +4,6 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { signal } from '@angular/core';
 import { AuthProvidersService } from './auth-providers.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
-
 describe('AuthProvidersService', () => {
   let service: AuthProvidersService;
   let httpMock: HttpTestingController;
@@ -16,7 +14,6 @@ describe('AuthProvidersService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         AuthProvidersService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

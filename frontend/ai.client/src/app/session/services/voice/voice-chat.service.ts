@@ -1,7 +1,5 @@
 import { Injectable, signal, computed, inject, OnDestroy } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
-import { AuthService } from '../../../auth/auth.service';
-import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
 import { Message } from '../models/message.model';
@@ -48,8 +46,6 @@ export interface VoiceTranscriptEntry {
  */
 @Injectable({ providedIn: 'root' })
 export class VoiceChatService implements OnDestroy {
-  private readonly authService = inject(AuthService);
-  private readonly configService = inject(ConfigService);
   private readonly recorder = inject(AudioRecorderService);
   private readonly player = inject(AudioPlayerService);
 
@@ -153,35 +149,16 @@ export class VoiceChatService implements OnDestroy {
     this._prevTurnCumulativeCost = null;
 
     try {
-      const token = this.authService.getAccessToken();
-      if (!token) {
-        throw new Error('No authentication token available');
-      }
-
-      // Build WebSocket URL from inference API URL
-      const httpUrl = this.configService.inferenceApiUrl();
-      const wsUrl = httpUrl.replace(/^http/, 'ws');
-      const isAgentCore = httpUrl.includes('/runtimes/');
-
-      let url: string;
-      let protocols: string[] | undefined;
-
-      if (isAgentCore) {
-        // AgentCore: /ws path, auth via Sec-WebSocket-Protocol
-        url = `${wsUrl}/ws`;
-
-        const base64url = btoa(token)
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=/g, '');
-        protocols = [`base64UrlBearerAuthorization.${base64url}`, 'base64UrlBearerAuthorization'];
-      } else {
-        // Local dev: /voice/stream path with query params
-        url = `${wsUrl}/voice/stream?session_id=${encodeURIComponent(this.sessionId!)}&token=${encodeURIComponent(token)}`;
-      }
-
-      await this.openWebSocket(url, token, protocols);
-      await this.recorder.start();
+      // Voice used a direct browser → inference-api WebSocket flow that
+      // depended on a Cognito Bearer token in localStorage and the public
+      // PKCE Cognito client. Phase 7 retired both as part of the BFF
+      // cutover, so the existing transport can no longer authenticate.
+      // A short-lived WebSocket-ticket pattern lands in issue #211 — until
+      // then, voice mode is unavailable.
+      throw new Error(
+        'Voice mode is temporarily unavailable while the BFF migration ' +
+        'completes (tracking issue #211).',
+      );
 
       // Wire audio chunks to WebSocket
       this.recorder.onAudioChunk = (base64, sampleRate) => {

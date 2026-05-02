@@ -4,8 +4,6 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { signal } from '@angular/core';
 import { BedrockModelsService } from './bedrock-models.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
-
 describe('BedrockModelsService', () => {
   let service: BedrockModelsService;
   let httpMock: HttpTestingController;
@@ -16,7 +14,6 @@ describe('BedrockModelsService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         BedrockModelsService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

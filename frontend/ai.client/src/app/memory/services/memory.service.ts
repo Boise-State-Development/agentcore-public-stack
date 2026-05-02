@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
-import { AuthService } from '../../auth/auth.service';
 import {
   MemoryStatus,
   MemoriesResponse,
@@ -23,7 +22,6 @@ import {
 })
 export class MemoryService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/memory`);
 
@@ -32,7 +30,7 @@ export class MemoryService {
    */
   readonly memoryStatus = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchMemoryStatus();
     }
   });
@@ -42,7 +40,7 @@ export class MemoryService {
    */
   readonly allMemories = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchAllMemories();
     }
   });

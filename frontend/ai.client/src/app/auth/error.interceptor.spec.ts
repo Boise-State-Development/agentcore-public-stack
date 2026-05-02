@@ -70,23 +70,6 @@ describe('errorInterceptor', () => {
    * Validates: Requirements 14.9
    * Streaming endpoint skips error handling
    */
-  it('should skip error handling for /invocations streaming endpoint', async () => {
-    const error = new HttpErrorResponse({ status: 500, url: 'http://localhost:8000/invocations' });
-    const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));
-    const req = new HttpRequest('POST', 'http://localhost:8000/invocations', {});
-
-    await new Promise<void>((resolve) => {
-      TestBed.runInInjectionContext(() => {
-        errorInterceptor(req, nextFn).subscribe({
-          error: () => {
-            expect(errorService.handleHttpError).not.toHaveBeenCalled();
-            resolve();
-          },
-        });
-      });
-    });
-  });
-
   it('should skip error handling for /chat/stream streaming endpoint', async () => {
     const error = new HttpErrorResponse({ status: 500, url: 'http://localhost:8000/chat/stream' });
     const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));

@@ -2,7 +2,6 @@ import { Injectable, inject, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
-import { AuthService } from '../../auth/auth.service';
 import {
   CreateDocumentRequest,
   UploadUrlResponse,
@@ -40,7 +39,6 @@ export class DocumentUploadError extends Error {
 })
 export class DocumentService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/assistants`);
 
@@ -53,8 +51,6 @@ export class DocumentService {
    * @throws DocumentUploadError on validation or API failure
    */
   async requestUploadUrl(assistantId: string, file: File): Promise<UploadUrlResponse> {
-    await this.authService.ensureAuthenticated();
-
     const request: CreateDocumentRequest = {
       filename: file.name,
       contentType: file.type || 'application/octet-stream',
@@ -173,8 +169,6 @@ export class DocumentService {
     limit?: number,
     nextToken?: string,
   ): Promise<DocumentsListResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       let url = `${this.baseUrl()}/${assistantId}/documents`;
       const params: string[] = [];
@@ -205,8 +199,6 @@ export class DocumentService {
    * @throws DocumentUploadError on API failure
    */
   async getDocument(assistantId: string, documentId: string): Promise<Document> {
-    await this.authService.ensureAuthenticated();
-
     try {
       return await firstValueFrom(
         this.http.get<Document>(`${this.baseUrl()}/${assistantId}/documents/${documentId}`),
@@ -226,8 +218,6 @@ export class DocumentService {
    * @throws DocumentUploadError on API failure
    */
   async getDownloadUrl(assistantId: string, documentId: string): Promise<DownloadUrlResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       return await firstValueFrom(
         this.http.get<DownloadUrlResponse>(
@@ -248,8 +238,6 @@ export class DocumentService {
    * @throws DocumentUploadError on API failure
    */
   async deleteDocument(assistantId: string, documentId: string): Promise<void> {
-    await this.authService.ensureAuthenticated();
-
     try {
       await firstValueFrom(
         this.http.delete<void>(`${this.baseUrl()}/${assistantId}/documents/${documentId}`),

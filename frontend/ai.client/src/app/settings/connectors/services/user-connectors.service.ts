@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   ConnectorStatusResponse,
   InitiateConsentResponse,
@@ -29,14 +28,13 @@ function toCamelCase<T>(obj: Record<string, unknown>): T {
 @Injectable({ providedIn: 'root' })
 export class UserConnectorsService {
   private readonly http = inject(HttpClient);
-  private readonly auth = inject(AuthService);
   private readonly config = inject(ConfigService);
 
   private readonly appApiUrl = computed(() => `${this.config.appApiUrl()}/connectors`);
 
   readonly connectorsResource = resource<UserConnector[], void>({
     loader: async () => {
-      await this.auth.ensureAuthenticated();
+      await Promise.resolve();
       const response = await firstValueFrom(
         this.http.get<{ connectors: Record<string, unknown>[] }>(`${this.appApiUrl()}/`),
       );
@@ -57,7 +55,6 @@ export class UserConnectorsService {
    * URL to give AgentCore Identity and rejects the request 503.
    */
   async getStatus(providerId: string): Promise<ConnectorStatusResponse> {
-    await this.auth.ensureAuthenticated();
     const callback = new URL('/oauth-complete', window.location.origin);
     return await firstValueFrom(
       this.http.get<ConnectorStatusResponse>(
@@ -72,7 +69,6 @@ export class UserConnectorsService {
   }
 
   async initiateConsent(providerId: string): Promise<InitiateConsentResponse> {
-    await this.auth.ensureAuthenticated();
     // AgentCore's GetResourceOauth2Token requires a callback URL. App-api
     // reads this header via the shared AgentCoreContextMiddleware. The
     // backend's `_resolve_callback_url` re-appends `provider_id` itself,
@@ -100,7 +96,6 @@ export class UserConnectorsService {
    * until it expires or the user revokes our app from their provider account.
    */
   async disconnect(providerId: string): Promise<void> {
-    await this.auth.ensureAuthenticated();
     await firstValueFrom(
       this.http.delete(`${this.appApiUrl()}/${providerId}/connection`),
     );

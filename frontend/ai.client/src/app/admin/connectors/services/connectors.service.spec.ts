@@ -4,8 +4,6 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { signal } from '@angular/core';
 import { ConnectorsService } from './connectors.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
-
 describe('ConnectorsService', () => {
   let service: ConnectorsService;
   let httpMock: HttpTestingController;
@@ -16,7 +14,6 @@ describe('ConnectorsService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         ConnectorsService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });
@@ -25,7 +22,9 @@ describe('ConnectorsService', () => {
   });
 
   afterEach(() => {
-    httpMock.match(() => true);
+    httpMock.match(() => true).forEach(req => {
+      if (!req.cancelled) req.flush({});
+    });
     TestBed.resetTestingModule();
   });
 

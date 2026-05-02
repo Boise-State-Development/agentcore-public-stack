@@ -2,7 +2,6 @@ import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
 
 interface ManagedModelsListResponse {
@@ -15,7 +14,6 @@ interface ManagedModelsListResponse {
 })
 export class ModelService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/models`);
 
@@ -103,8 +101,6 @@ export class ModelService {
 
     try {
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       const response = await firstValueFrom(
         this.http.get<ManagedModelsListResponse>(
           this.baseUrl()

@@ -13,7 +13,7 @@ import {
   heroCheckCircle,
   heroExclamationCircle,
 } from '@ng-icons/heroicons/outline';
-import { AuthService } from '../auth/auth.service';
+import { SessionService } from '../auth/session.service';
 import { ConfigService } from '../services/config.service';
 
 /**
@@ -163,7 +163,7 @@ export interface OAuthCompleteMessage {
 export class OAuthCompletePage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
-  private readonly authService = inject(AuthService);
+  private readonly sessionService = inject(SessionService);
   private readonly config = inject(ConfigService);
 
   private redirectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -270,16 +270,13 @@ export class OAuthCompletePage implements OnInit, OnDestroy {
     if (!baseUrl) {
       throw new Error('appApiUrl not configured');
     }
-    const token = this.authService.getAccessToken();
-    if (!token) {
-      throw new Error('No access token available');
-    }
     const url = `${baseUrl}/connectors/complete-consent`;
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        ...this.sessionService.csrfHeaders(),
       },
       body: JSON.stringify({
         session_uri: sessionUri,

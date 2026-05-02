@@ -3,7 +3,6 @@ import { provideRouter, withComponentInputBinding } from '@angular/router';
 
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
-import { authInterceptor } from './auth/auth.interceptor';
 import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
 import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
@@ -57,11 +56,9 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(
-      // Order matters: csrfInterceptor runs after authInterceptor so the
-      // Bearer fallback (still present for the rollback bundle) is
-      // attached first; CSRF then layers on top for the cookie path.
-      // errorInterceptor stays last so it sees the final response.
-      withInterceptors([authInterceptor, csrfInterceptor, errorInterceptor]),
+      // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
+      // requests; errorInterceptor stays last so it sees the final response.
+      withInterceptors([csrfInterceptor, errorInterceptor]),
     ),
     provideMarkdown({
       markedOptions: {

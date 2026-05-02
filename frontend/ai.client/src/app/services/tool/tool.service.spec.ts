@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { ToolService, Tool, ToolsResponse } from './tool.service';
-import { AuthService } from '../../auth/auth.service';
 import { ConfigService } from '../config.service';
 import { signal } from '@angular/core';
 
@@ -22,7 +21,6 @@ describe('ToolService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         ToolService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

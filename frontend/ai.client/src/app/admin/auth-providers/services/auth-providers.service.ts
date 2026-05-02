@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   AuthProvider,
   AuthProviderListResponse,
@@ -16,14 +15,13 @@ import {
 })
 export class AuthProvidersService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/auth-providers`);
 
   readonly providersResource = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchProviders();
     }
   });

@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { SessionService, SessionsListResponse, MessagesListResponse, BulkDeleteSessionsResponse } from './session.service';
-import { AuthService } from '../../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
 import { SessionMetadata } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
@@ -25,7 +25,7 @@ describe('SessionService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         SessionService,
-        { provide: AuthService, useValue: { isAuthenticated: vi.fn().mockReturnValue(false), ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
+        { provide: BffSessionService, useValue: { isAuthenticated: signal(false) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

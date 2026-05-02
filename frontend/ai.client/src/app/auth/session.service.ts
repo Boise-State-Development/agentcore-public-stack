@@ -6,20 +6,17 @@ import { ConfigService } from '../services/config.service';
 import { BffSessionResponse, BffSessionUser } from './bff-session.model';
 
 /**
- * SessionService — peer to `AuthService`, backs the BFF Token-Handler
- * cookie session. **Dormant in Phase 5.** Nothing in the SPA wires it
- * in yet; Phase 6 swaps it for the existing Bearer/PKCE flow per
- * environment.
+ * SessionService — backs the BFF Token-Handler cookie session.
  *
- * Responsibilities (when activated):
+ * Responsibilities:
  *   - Bootstrap by calling `GET {appApiUrl}/auth/session`. The
  *     `__Host-bff_session` cookie travels automatically because the BFF
  *     is same-origin via CloudFront `/api/*`.
  *   - Expose signals for the current user and the CSRF token.
  *   - On 401, redirect the browser to `{appApiUrl}/auth/login` (the BFF
  *     redirects on to Cognito Hosted UI).
- *   - Provide the `X-CSRF-Token` header value for non-GET requests; a
- *     Phase 6 HTTP interceptor will read it from here and attach it.
+ *   - Provide the `X-CSRF-Token` header value for non-GET requests; the
+ *     `csrfInterceptor` reads it here and attaches it to outgoing requests.
  *
  * Cookies:
  *   - `__Host-bff_session` (httpOnly) — opaque sealed session id.
@@ -88,9 +85,8 @@ export class SessionService {
    * a state cookie and 302s on to Cognito Hosted UI.
    *
    * @param options.returnUrl Optional path to land on after the round-trip.
-   *   The BFF's `/auth/callback` honours its own
-   *   `BFF_POST_LOGIN_REDIRECT_URL` today; the `return_to` query is plumbed
-   *   for a future enhancement and is harmless if the BFF ignores it.
+   *   Same-origin paths only — anything else is dropped server-side and
+   *   the user lands on `BFF_POST_LOGIN_REDIRECT_URL`.
    * @param options.providerId Optional federated IdP name (e.g. the
    *   value the SPA's federated-login button knows about). The BFF
    *   forwards it to Cognito as `identity_provider` so the user skips

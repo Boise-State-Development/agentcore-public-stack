@@ -2,7 +2,6 @@ import { Injectable, inject, signal, resource, computed } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   OpenAIModelsResponse,
   ListOpenAIModelsParams
@@ -19,7 +18,6 @@ import {
 })
 export class OpenAIModelsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/openai/models`);
 
@@ -56,13 +54,9 @@ export class OpenAIModelsService {
    */
   readonly modelsResource = resource({
     loader: async () => {
-      // Read params signal to make resource reactive to filter changes
+      // See bedrock-models.service.ts for the rationale on the microtask yield.
+      await Promise.resolve();
       const params = this.modelsParams();
-
-      // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
-      // Fetch models from API
       return this.getOpenAIModels(params);
     }
   });

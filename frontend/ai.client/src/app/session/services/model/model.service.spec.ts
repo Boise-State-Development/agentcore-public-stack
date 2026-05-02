@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { ModelService } from './model.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ConfigService } from '../../../services/config.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
 import { signal } from '@angular/core';
@@ -32,7 +31,6 @@ describe('ModelService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         ModelService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

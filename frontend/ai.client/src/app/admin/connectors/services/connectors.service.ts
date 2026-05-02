@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   Connector,
   ConnectorListResponse,
@@ -41,14 +40,13 @@ function toCamelCase(obj: Record<string, any>): Record<string, any> {
 })
 export class ConnectorsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/oauth-providers`);
 
   readonly connectorsResource = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchConnectors();
     }
   });

@@ -11,14 +11,14 @@ Runtime configuration validation has been implemented to catch configuration err
 **Purpose**: Validates environment configuration at runtime
 
 **Key Features**:
-- Validates required fields (appApiUrl, inferenceApiUrl)
+- Validates required fields (appApiUrl)
 - Validates URL format
 - Checks for localhost URLs in production mode
 - Returns validation results with detailed error messages
 - Exposes validation errors via Angular signal for reactive UI updates
 
 **Validation Rules**:
-1. **Required Fields**: `appApiUrl` and `inferenceApiUrl` must be present
+1. **Required Fields**: `appApiUrl` must be present
 2. **Valid URLs**: Both URLs must be valid URL format
 3. **Production Mode**: In production, URLs cannot be localhost/127.0.0.1/::1
 4. **Localhost Detection**: Detects localhost, 127.0.0.1, ::1, and *.localhost domains
@@ -88,7 +88,6 @@ export ENABLE_AUTHENTICATION="true"
 
 No configuration needed. Default localhost URLs work automatically:
 - `appApiUrl`: http://localhost:8000
-- `inferenceApiUrl`: http://localhost:8001
 - `production`: false
 
 ## Error Messages

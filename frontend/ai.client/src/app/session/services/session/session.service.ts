@@ -2,7 +2,7 @@ import { inject, Injectable, signal, WritableSignal, resource, computed, effect 
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
 
@@ -121,7 +121,7 @@ export interface BulkDeleteSessionsResponse {
 })
 export class SessionService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
+  private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/sessions`);
 
@@ -238,8 +238,6 @@ export class SessionService {
       const params = this.sessionsParams();
 
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       // Fetch sessions from API (without merging cache here)
       return this.getSessions(params);
     }
@@ -361,8 +359,6 @@ export class SessionService {
       }
 
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       return this.getSessionMetadata(sessionId);
     }
   });
@@ -509,8 +505,6 @@ export class SessionService {
    */
   async getSessionMetadata(sessionId: string): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<SessionMetadata>(
@@ -546,8 +540,6 @@ export class SessionService {
     updates: UpdateSessionMetadataRequest
   ): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.put<SessionMetadata>(
@@ -658,8 +650,6 @@ export class SessionService {
    */
   async deleteSession(sessionId: string): Promise<void> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       await firstValueFrom(
         this.http.delete(`${this.baseUrl()}/${sessionId}`)
@@ -721,8 +711,6 @@ export class SessionService {
    */
   async bulkDeleteSessions(sessionIds: string[]): Promise<BulkDeleteSessionsResponse> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.post<BulkDeleteSessionsResponse>(
@@ -868,25 +856,16 @@ export class SessionService {
   }
 
   constructor() {
-    // Enable sessions loading if user is already authenticated
-    // This prevents the resource from loading before authentication is ready
-    if (this.authService.isAuthenticated()) {
-      this.enableSessionsLoading();
-    }
-
-    // Listen for authentication state changes
-    if (typeof window !== 'undefined') {
-      // Listen for token-stored events (user logged in)
-      window.addEventListener('token-stored', () => {
+    // Track BFF session auth state — toggle the sessions resource on
+    // when the user is authenticated, off (and clear cache) on logout.
+    effect(() => {
+      if (this.bffSession.isAuthenticated()) {
         this.enableSessionsLoading();
-      });
-
-      // Listen for token-cleared events (user logged out)
-      window.addEventListener('token-cleared', () => {
+      } else {
         this.disableSessionsLoading();
         this.clearSessionCache();
-      });
-    }
+      }
+    });
 
     // Effect to trigger resource reload when session ID changes
     effect(() => {

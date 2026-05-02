@@ -197,11 +197,7 @@ export class LoginPage implements OnInit, OnDestroy {
     this.activeProviderId.set(null);
     this.errorMessage.set(null);
 
-    // Persist the return URL for the rollback bundle (legacy AuthService
-    // reads it post-callback). Harmless under the BFF flow — the BFF
-    // server-side redirect goes to BFF_POST_LOGIN_REDIRECT_URL today.
-    this.storeReturnUrl();
-    this.sessionService.redirectToLogin();
+    this.sessionService.redirectToLogin({ returnUrl: this.resolveReturnUrl() });
   }
 
   handleProviderLogin(provider: AuthProviderPublicInfo): void {
@@ -209,8 +205,10 @@ export class LoginPage implements OnInit, OnDestroy {
     this.activeProviderId.set(provider.provider_id);
     this.errorMessage.set(null);
 
-    this.storeReturnUrl();
-    this.sessionService.redirectToLogin({ providerId: provider.provider_id });
+    this.sessionService.redirectToLogin({
+      providerId: provider.provider_id,
+      returnUrl: this.resolveReturnUrl(),
+    });
   }
 
   /**
@@ -224,31 +222,35 @@ export class LoginPage implements OnInit, OnDestroy {
     return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
   }
 
-  private storeReturnUrl(): void {
-    const returnUrl = this.route.snapshot.queryParams['returnUrl'];
-
-    let finalDestination: string | undefined;
-    if (returnUrl) {
-      finalDestination = returnUrl.startsWith('/') ? returnUrl : `/${returnUrl}`;
-    } else {
-      const referrer = document.referrer;
-      if (referrer) {
-        try {
-          const referrerUrl = new URL(referrer);
-          if (referrerUrl.origin === window.location.origin) {
-            const referrerPath = referrerUrl.pathname + referrerUrl.search;
-            if (referrerPath !== '/auth/login' && referrerPath !== '/auth/callback') {
-              finalDestination = referrerPath;
-            }
-          }
-        } catch (e) {
-          // Invalid referrer URL, ignore
-        }
-      }
+  /**
+   * Resolve the deep-link path to forward to the BFF as `?return_to=`.
+   *
+   * Prefers the explicit `?returnUrl=` query param the auth guard set
+   * when bouncing the user here. Falls back to the document referrer
+   * when it's same-origin and not a login page (covers the user
+   * navigating to /auth/login directly).
+   */
+  private resolveReturnUrl(): string | undefined {
+    const fromQuery = this.route.snapshot.queryParams['returnUrl'];
+    if (fromQuery) {
+      return fromQuery.startsWith('/') ? fromQuery : `/${fromQuery}`;
     }
 
-    if (finalDestination) {
-      sessionStorage.setItem('auth_return_url', finalDestination);
+    const referrer = document.referrer;
+    if (!referrer) return undefined;
+
+    try {
+      const referrerUrl = new URL(referrer);
+      if (referrerUrl.origin !== window.location.origin) {
+        return undefined;
+      }
+      const referrerPath = referrerUrl.pathname + referrerUrl.search;
+      if (referrerPath === '/auth/login') {
+        return undefined;
+      }
+      return referrerPath;
+    } catch {
+      return undefined;
     }
   }
 }

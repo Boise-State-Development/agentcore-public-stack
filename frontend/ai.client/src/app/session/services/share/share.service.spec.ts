@@ -5,7 +5,6 @@ import { signal } from '@angular/core';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ShareService, ShareResponse, SharedConversationResponse, ShareListResponse, ExportResponse } from './share.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 
 describe('ShareService', () => {
   let service: ShareService;
@@ -19,7 +18,6 @@ describe('ShareService', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         ShareService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal(baseUrl) } },
       ],
     });
@@ -92,26 +90,6 @@ describe('ShareService', () => {
       expect(result.accessLevel).toBe('specific');
     });
 
-    it('should call ensureAuthenticated before making request', async () => {
-      const authService = TestBed.inject(AuthService);
-      const mockResponse: ShareResponse = {
-        shareId: 'share-001',
-        sessionId: 'sess-001',
-        ownerId: 'user-001',
-        accessLevel: 'public',
-        createdAt: '2025-06-01T00:00:00Z',
-        shareUrl: '/shared/share-001',
-      };
-
-      const promise = service.createShare('sess-001', 'public');
-
-      await vi.waitFor(() => {
-        httpMock.expectOne(`${baseUrl}/conversations/sess-001/share`).flush(mockResponse);
-      });
-
-      await promise;
-      expect(authService.ensureAuthenticated).toHaveBeenCalled();
-    });
   });
 
   // -----------------------------------------------------------------------
@@ -282,21 +260,5 @@ describe('ShareService', () => {
       expect(result.title).toBe('Test Conversation (shared)');
     });
 
-    it('should call ensureAuthenticated before export', async () => {
-      const authService = TestBed.inject(AuthService);
-      const mockResponse: ExportResponse = {
-        sessionId: 'new-sess-001',
-        title: 'Test (shared)',
-      };
-
-      const promise = service.exportSharedConversation('share-001');
-
-      await vi.waitFor(() => {
-        httpMock.expectOne(`${baseUrl}/shares/share-001/export`).flush(mockResponse);
-      });
-
-      await promise;
-      expect(authService.ensureAuthenticated).toHaveBeenCalled();
-    });
   });
 });

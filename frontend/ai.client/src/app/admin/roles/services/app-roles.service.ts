@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   AppRole,
   AppRoleListResponse,
@@ -21,7 +20,6 @@ import {
 })
 export class AppRolesService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/roles`);
@@ -31,7 +29,7 @@ export class AppRolesService {
    */
   readonly rolesResource = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchRoles();
     }
   });

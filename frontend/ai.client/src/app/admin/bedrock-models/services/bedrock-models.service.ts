@@ -2,7 +2,6 @@ import { Injectable, inject, signal, resource } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   BedrockModelsResponse,
   ListBedrockModelsParams
@@ -19,7 +18,6 @@ import {
 })
 export class BedrockModelsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   /**
@@ -59,13 +57,13 @@ export class BedrockModelsService {
    */
   readonly modelsResource = resource({
     loader: async () => {
+      // Yield a microtask before firing the http call so the eager
+      // auto-load doesn't race direct callers (notably in unit tests
+      // where TestBed.inject() and the explicit method call queue
+      // requests on the same microtask).
+      await Promise.resolve();
       // Read params signal to make resource reactive to filter changes
       const params = this.modelsParams();
-
-      // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
-      // Fetch models from API
       return this.getBedrockModels(params);
     }
   });
