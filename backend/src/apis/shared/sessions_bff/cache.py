@@ -19,10 +19,12 @@ Phase 7 multi-task coordination work.
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Optional
 
 from cachetools import TTLCache
 
+from .config import BFFConfig
 from .models import SessionRecord
 
 
@@ -44,3 +46,31 @@ class SessionCache:
 
     def clear(self) -> None:
         self._cache.clear()
+
+
+# Process-wide singleton so the refresh middleware and the logout route share
+# the same cache. The middleware seeds the cache on every successful resolve;
+# logout calls `invalidate` here to drop the entry locally without waiting for
+# the TTL window to age out. Other tasks still lag by ≤ refresh_leeway_seconds
+# until Phase 7 adds cross-task coordination.
+_default_cache: Optional[SessionCache] = None
+_default_cache_lock = Lock()
+
+
+def get_default_cache() -> SessionCache:
+    global _default_cache
+    if _default_cache is not None:
+        return _default_cache
+    with _default_cache_lock:
+        if _default_cache is None:
+            _default_cache = SessionCache(
+                ttl_seconds=BFFConfig.from_env().refresh_leeway_seconds
+            )
+    return _default_cache
+
+
+def _reset_default_cache_for_tests() -> None:
+    """Drop the singleton so tests can rebuild it under their own fixtures."""
+    global _default_cache
+    with _default_cache_lock:
+        _default_cache = None

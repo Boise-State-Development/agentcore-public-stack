@@ -517,6 +517,17 @@ export class AppApiStack extends cdk.Stack {
         BFF_SESSION_REFRESH_LEEWAY_SECONDS: '60',
         COGNITO_BFF_APP_CLIENT_ID: cognitoBFFAppClientId,
         COGNITO_BFF_APP_CLIENT_SECRET_ARN: cognitoBFFAppClientSecretArn,
+        // Phase 3 BFF auth routes need the exact callback URL we registered
+        // with the Cognito BFF client. Mirrors infrastructure-stack.ts where
+        // the same value is pinned into the client's allowed callbackUrls.
+        // CloudFront fronts app-api at /api/* in prod, so the prod value
+        // includes that prefix; local dev hits the BFF directly on :8000.
+        BFF_AUTH_CALLBACK_URL: config.domainName
+          ? `https://${config.domainName}/api/auth/callback`
+          : 'http://localhost:8000/auth/callback',
+        BFF_POST_LOGIN_REDIRECT_URL: config.domainName
+          ? `https://${config.domainName}/`
+          : 'http://localhost:4200/',
         // Inference API runtime endpoint — used by the converse proxy today
         // and the chat SSE proxy added in Phase 4.
         INFERENCE_API_URL: inferenceApiRuntimeEndpointUrl,

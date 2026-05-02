@@ -23,7 +23,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from apis.shared.sessions_bff.cache import SessionCache
+from apis.shared.sessions_bff.cache import SessionCache, get_default_cache
 from apis.shared.sessions_bff.config import (
     BFFConfig,
     CSRF_COOKIE_NAME,
@@ -84,9 +84,9 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 app_client_secret_arn=self._config.cognito_bff_app_client_secret_arn,
             )
         if self._cache is None:
-            self._cache = SessionCache(
-                ttl_seconds=self._config.refresh_leeway_seconds
-            )
+            # Share a process-wide cache by default so the logout route can
+            # invalidate the same in-memory entry the middleware just seeded.
+            self._cache = get_default_cache()
 
     async def dispatch(self, request: Request, call_next) -> Response:
         self._ensure_collaborators()

@@ -31,6 +31,62 @@ import boto3
 logger = logging.getLogger(__name__)
 
 
+# Module-level cache for the BFF client secret. The Phase 3 token-exchange
+# route and `CognitoRefreshClient` both read it; sharing one cache means one
+# Secrets Manager call per process, regardless of which path warms it first.
+_client_secret_cache: Optional[str] = None
+_client_secret_lock = Lock()
+
+
+def resolve_bff_client_secret(
+    *,
+    secret_arn: Optional[str] = None,
+    region: Optional[str] = None,
+    secrets_manager_client: Optional[object] = None,
+) -> str:
+    """Fetch and cache the BFF Cognito app client secret.
+
+    Tolerates both the plain-string format Phase 1 CDK writes today and a
+    `{"clientSecret": "..."}` JSON wrapper in case the CDK shape changes.
+    """
+    global _client_secret_cache
+    if _client_secret_cache is not None:
+        return _client_secret_cache
+    with _client_secret_lock:
+        if _client_secret_cache is not None:
+            return _client_secret_cache
+        arn = secret_arn or os.environ.get("COGNITO_BFF_APP_CLIENT_SECRET_ARN") or ""
+        if not arn:
+            raise CognitoRefreshError("BFF client secret ARN is not configured")
+        sm_region = (
+            region
+            or os.environ.get("COGNITO_REGION")
+            or os.environ.get("AWS_REGION")
+            or "us-west-2"
+        )
+        sm = secrets_manager_client or boto3.client(
+            "secretsmanager", region_name=sm_region
+        )
+        response = sm.get_secret_value(SecretId=arn)
+        value = response.get("SecretString") or ""
+        if value.startswith("{"):
+            try:
+                parsed = json.loads(value)
+                value = parsed.get("clientSecret") or parsed.get("client_secret") or value
+            except json.JSONDecodeError:
+                pass
+        if not value:
+            raise CognitoRefreshError("BFF client secret resolved to empty string")
+        _client_secret_cache = value
+        return value
+
+
+def _reset_secret_cache_for_tests() -> None:
+    global _client_secret_cache
+    with _client_secret_lock:
+        _client_secret_cache = None
+
+
 @dataclass
 class RefreshResult:
     access_token: str
@@ -75,36 +131,17 @@ class CognitoRefreshClient:
         )
         self._cognito_idp = cognito_idp_client
         self._secrets_manager = secrets_manager_client
-        self._client_secret: Optional[str] = None
-        self._secret_lock = Lock()
 
     @property
     def enabled(self) -> bool:
         return bool(self._app_client_id and self._secret_arn)
 
     def _resolve_client_secret(self) -> str:
-        if self._client_secret is not None:
-            return self._client_secret
-        with self._secret_lock:
-            if self._client_secret is not None:
-                return self._client_secret
-            sm = self._secrets_manager or boto3.client(
-                "secretsmanager", region_name=self._region
-            )
-            response = sm.get_secret_value(SecretId=self._secret_arn)
-            value = response.get("SecretString") or ""
-            # Phase 1 stores the secret as a plain string; tolerate a JSON
-            # `{"clientSecret": "..."}` wrapper too in case CDK changes.
-            if value.startswith("{"):
-                try:
-                    parsed = json.loads(value)
-                    value = parsed.get("clientSecret") or parsed.get("client_secret") or value
-                except json.JSONDecodeError:
-                    pass
-            if not value:
-                raise CognitoRefreshError("BFF client secret resolved to empty string")
-            self._client_secret = value
-            return value
+        return resolve_bff_client_secret(
+            secret_arn=self._secret_arn,
+            region=self._region,
+            secrets_manager_client=self._secrets_manager,
+        )
 
     def _secret_hash(self, username: str) -> str:
         secret = self._resolve_client_secret()
