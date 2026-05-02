@@ -348,6 +348,40 @@ export class AppApiStack extends cdk.Stack {
     );
 
     // ============================================================
+    // BFF Resources (imported from Infrastructure Stack)
+    // ============================================================
+    // Token Handler BFF: sessions table, cookie signing key, confidential
+    // Cognito client. See project_bff_migration memory for the rollout plan.
+    const bffSessionsTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/bff-sessions-table-name`
+    );
+    const bffSessionsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/bff-sessions-table-arn`
+    );
+    const bffCookieSigningKeyArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`
+    );
+    const cognitoBFFAppClientId = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/cognito/bff-app-client-id`
+    );
+    const cognitoBFFAppClientSecretArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/cognito/bff-app-client-secret-arn`
+    );
+
+    // Inference API runtime endpoint URL — needed by both the existing
+    // converse proxy (currently broken in cloud due to a missing env var)
+    // and the upcoming chat SSE proxy in Phase 4 of the BFF migration.
+    const inferenceApiRuntimeEndpointUrl = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/inference-api/runtime-endpoint-url`
+    );
+
+    // ============================================================
     // File Upload Storage (imported from Infrastructure Stack)
     // ============================================================
     // These resources were moved to InfrastructureStack to avoid a circular
@@ -476,6 +510,16 @@ export class AppApiStack extends cdk.Stack {
           this,
           `/${config.projectPrefix}/shares/shared-conversations-table-name`
         ),
+        // BFF Token Handler — wired in Phase 1, used starting Phase 2.
+        BFF_SESSIONS_TABLE_NAME: bffSessionsTableName,
+        BFF_COOKIE_SIGNING_KEY_ARN: bffCookieSigningKeyArn,
+        BFF_SESSION_TTL_SECONDS: '28800',
+        BFF_SESSION_REFRESH_LEEWAY_SECONDS: '60',
+        COGNITO_BFF_APP_CLIENT_ID: cognitoBFFAppClientId,
+        COGNITO_BFF_APP_CLIENT_SECRET_ARN: cognitoBFFAppClientSecretArn,
+        // Inference API runtime endpoint — used by the converse proxy today
+        // and the chat SSE proxy added in Phase 4.
+        INFERENCE_API_URL: inferenceApiRuntimeEndpointUrl,
       },
       portMappings: [
         {
@@ -933,6 +977,40 @@ export class AppApiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
         resources: [`${oauthClientSecretsArn}*`], // Wildcard for random suffix
+      })
+    );
+
+    // BFF Token Handler — sessions table, cookie signing key, BFF client secret.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'BFFSessionsTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+        ],
+        resources: [bffSessionsTableArn],
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'BFFCookieSigningKeyAccess',
+        effect: iam.Effect.ALLOW,
+        // GenerateDataKey at startup; Decrypt is reserved for future key rotation.
+        actions: ['kms:GenerateDataKey', 'kms:Decrypt', 'kms:DescribeKey'],
+        resources: [bffCookieSigningKeyArn],
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'CognitoBFFAppClientSecretAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [`${cognitoBFFAppClientSecretArn}*`], // Wildcard for random suffix
       })
     );
 

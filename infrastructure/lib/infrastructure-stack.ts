@@ -372,6 +372,41 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // Sessions Table - BFF token-handler sessions (httpOnly cookie -> Cognito tokens)
+    // Stores per-session Cognito access/refresh/id tokens server-side so the
+    // browser only sees an opaque session id in an httpOnly cookie. TTL on the
+    // table enforces absolute session lifetime (default 8h, configurable on app-api).
+    const bffSessionsTable = new dynamodb.Table(this, "BFFSessionsTable", {
+      tableName: getResourceName(config, "bff-sessions"),
+      partitionKey: {
+        name: "PK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "SK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "BFFSessionsTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-sessions-table-name`,
+      stringValue: bffSessionsTable.tableName,
+      description: "BFF sessions table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "BFFSessionsTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-sessions-table-arn`,
+      stringValue: bffSessionsTable.tableArn,
+      description: "BFF sessions table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // Users Table - User profiles synced from JWT for admin lookup
     const usersTable = new dynamodb.Table(this, "UsersTable", {
       tableName: getResourceName(config, "users"),
@@ -582,6 +617,23 @@ export class InfrastructureStack extends cdk.Stack {
       description: "KMS key for encrypting OAuth user tokens at rest",
       enableKeyRotation: true,
       removalPolicy: getRemovalPolicy(config),
+    });
+
+    // KMS Key for sealing BFF session cookies (AES-GCM via GenerateDataKey).
+    // App-api fetches a data key once at startup and caches the plaintext
+    // in process memory; the cookie value is the AES-GCM-sealed session id.
+    const bffCookieSigningKey = new kms.Key(this, "BFFCookieSigningKey", {
+      alias: getResourceName(config, "bff-cookie-signing-key"),
+      description: "KMS key for sealing BFF session cookies (data-key wrapping)",
+      enableKeyRotation: true,
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "BFFCookieSigningKeyArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`,
+      stringValue: bffCookieSigningKey.keyArn,
+      description: "KMS key ARN for BFF session cookie sealing",
+      tier: ssm.ParameterTier.STANDARD,
     });
 
     // OAuth Providers Table - Admin-configured OAuth provider settings
@@ -1179,6 +1231,48 @@ export class InfrastructureStack extends cdk.Stack {
       ],
     });
 
+    // BFF App Client — confidential client used by app-api for the
+    // server-side OAuth token exchange in the Token Handler BFF flow.
+    // The client secret authenticates the /oauth2/token call from app-api,
+    // adding a layer of defense beyond PKCE since the secret never leaves
+    // the server. Existing public PKCE client (above) stays in place
+    // through the migration cutover as a safety net.
+    const bffCallbackUrls = config.domainName
+      ? [`https://${config.domainName}/api/auth/callback`]
+      : ['http://localhost:8000/auth/callback'];
+    const bffLogoutUrls = config.domainName
+      ? [`https://${config.domainName}`]
+      : ['http://localhost:4200'];
+
+    const bffAppClient = userPool.addClient('CognitoBFFAppClient', {
+      userPoolClientName: getResourceName(config, 'bff-app-client'),
+      generateSecret: true,
+      authFlows: { userSrp: false, custom: false },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.PROFILE,
+          cognito.OAuthScope.EMAIL,
+        ],
+        callbackUrls: bffCallbackUrls,
+        logoutUrls: bffLogoutUrls,
+      },
+      preventUserExistenceErrors: true,
+      supportedIdentityProviders: [
+        cognito.UserPoolClientIdentityProvider.COGNITO,
+      ],
+    });
+
+    // Persist the generated client secret in Secrets Manager so app-api can
+    // read it via secretsmanager:GetSecretValue (auditable, rotatable).
+    const bffAppClientSecret = new secretsmanager.Secret(this, 'CognitoBFFAppClientSecret', {
+      secretName: getResourceName(config, 'cognito-bff-app-client-secret'),
+      description: 'Client secret for the Cognito BFF app client (Token Handler flow)',
+      secretStringValue: bffAppClient.userPoolClientSecret,
+      removalPolicy: getRemovalPolicy(config),
+    });
+
     // Cognito Domain — prefix-based using project prefix or override
     const cognitoDomain = userPool.addDomain('CognitoDomain', {
       cognitoDomain: {
@@ -1219,6 +1313,20 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/cognito/issuer-url`,
       stringValue: `https://cognito-idp.${config.awsRegion}.amazonaws.com/${userPool.userPoolId}`,
       description: 'Cognito OIDC issuer URL',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'CognitoBFFAppClientIdParameter', {
+      parameterName: `/${config.projectPrefix}/auth/cognito/bff-app-client-id`,
+      stringValue: bffAppClient.userPoolClientId,
+      description: 'Cognito BFF (confidential) app client ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'CognitoBFFAppClientSecretArnParameter', {
+      parameterName: `/${config.projectPrefix}/auth/cognito/bff-app-client-secret-arn`,
+      stringValue: bffAppClientSecret.secretArn,
+      description: 'Secrets Manager ARN for the Cognito BFF app client secret',
       tier: ssm.ParameterTier.STANDARD,
     });
 
