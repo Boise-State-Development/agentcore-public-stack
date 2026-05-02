@@ -326,6 +326,40 @@ describe('ConfigService', () => {
       expect(service.appApiUrl()).toBe('http://localhost:8000'); // fallback
     });
 
+    it('should accept same-origin path (e.g. /api) for appApiUrl', async () => {
+      const config = {
+        ...validConfig,
+        appApiUrl: '/api',
+      };
+
+      const loadPromise = service.loadConfig();
+
+      const req = httpMock.expectOne('/config.json');
+      req.flush(config);
+
+      await loadPromise;
+
+      expect(service.error()).toBeNull();
+      expect(service.appApiUrl()).toBe('/api');
+    });
+
+    it('should reject protocol-relative URLs for appApiUrl', async () => {
+      const invalidConfig = {
+        ...validConfig,
+        appApiUrl: '//evil.example.com/api',
+      };
+
+      const loadPromise = service.loadConfig();
+
+      const req = httpMock.expectOne('/config.json');
+      req.flush(invalidConfig);
+
+      await loadPromise;
+
+      expect(service.error()).not.toBeNull();
+      expect(service.appApiUrl()).toBe('http://localhost:8000'); // fallback
+    });
+
     it('should reject empty URLs', async () => {
       const invalidConfig = {
         ...validConfig,

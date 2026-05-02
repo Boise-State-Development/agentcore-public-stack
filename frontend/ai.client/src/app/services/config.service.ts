@@ -205,9 +205,18 @@ export class ConfigService {
   private validateConfig(config: any): asserts config is RuntimeConfig {
     const errors: string[] = [];
     
-    // Validate appApiUrl
+    // Validate appApiUrl: accept either an absolute URL (http://localhost:8000)
+    // or a same-origin path beginning with `/` (e.g. `/api`). The same-origin
+    // form is used when CloudFront fronts the SPA and proxies `/api/*` to the
+    // app-api ALB — required for the BFF Token Handler `__Host-` cookies.
     if (!config.appApiUrl || typeof config.appApiUrl !== 'string') {
       errors.push('appApiUrl is required and must be a string');
+    } else if (config.appApiUrl.startsWith('/')) {
+      // Same-origin path. Reject `//` (protocol-relative) which would let the
+      // browser pick a different origin.
+      if (config.appApiUrl.startsWith('//')) {
+        errors.push(`appApiUrl must not be protocol-relative: "${config.appApiUrl}"`);
+      }
     } else {
       try {
         new URL(config.appApiUrl);
