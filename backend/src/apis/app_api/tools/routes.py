@@ -9,7 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from apis.shared.auth import User, get_current_user_or_session
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.rbac.service import get_app_role_service
 
 # Import legacy service for backward compatibility
@@ -73,7 +73,7 @@ class UserToolPermissionsResponse(BaseModel):
 
 @router.get("/", response_model=UserToolsResponse)
 async def get_user_tools(
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     Get tools available to the current user with preferences merged.
@@ -107,7 +107,7 @@ async def get_user_tools(
 @router.put("/preferences")
 async def update_tool_preferences(
     request: ToolPreferencesRequest,
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     Save user's tool enabled/disabled preferences.
@@ -142,7 +142,7 @@ async def list_all_tools(
     category: Optional[str] = Query(
         None, description="Filter by category (search, data, utilities, code, gateway)"
     ),
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     List all tools available in the system (legacy endpoint).
@@ -188,7 +188,7 @@ async def list_all_tools(
 
 @router.get("/my-permissions", response_model=UserToolPermissionsResponse)
 async def get_my_tool_permissions(
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     Get the current user's tool permissions.
@@ -220,7 +220,7 @@ async def list_available_tools(
     category: Optional[str] = Query(
         None, description="Filter by category (search, data, utilities, code, gateway)"
     ),
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
 ):
     """
     List tools available to the current user (legacy endpoint).

@@ -26,7 +26,7 @@ from .services.memory_service import (
     get_memory_config_info,
     delete_memory,
 )
-from apis.shared.auth.dependencies import get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/memory", tags=["memory"])
 
 @router.get("/status")
 async def get_memory_status(
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Get the current status and configuration of AgentCore Memory.
@@ -60,7 +60,7 @@ async def get_memory_status(
 async def get_preferences_endpoint(
     query: Optional[str] = Query(None, description="Optional search query for semantic matching"),
     top_k: int = Query(10, ge=1, le=50, alias="topK", description="Number of results to return"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve learned user preferences from AgentCore Memory.
@@ -125,7 +125,7 @@ async def get_preferences_endpoint(
 async def get_facts_endpoint(
     query: Optional[str] = Query(None, description="Optional search query for semantic matching"),
     top_k: int = Query(10, ge=1, le=50, alias="topK", description="Number of results to return"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve learned facts about the user from AgentCore Memory.
@@ -191,7 +191,7 @@ async def get_summaries_endpoint(
     session_id: str,
     query: Optional[str] = Query(None, description="Optional search query for semantic matching"),
     top_k: int = Query(10, ge=1, le=50, alias="topK", description="Number of results to return"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve session summaries from AgentCore Memory.
@@ -260,7 +260,7 @@ async def get_summaries_endpoint(
 @router.get("", response_model_exclude_none=True)
 async def get_all_memories_endpoint(
     top_k: int = Query(20, ge=1, le=50, alias="topK", description="Number of results per category"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve all memories for the authenticated user.
@@ -337,7 +337,7 @@ async def get_all_memories_endpoint(
 @router.post("/search", response_model=MemoriesResponse, response_model_exclude_none=True)
 async def search_memories_endpoint(
     request: MemorySearchRequest,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Semantic search across user memories.
@@ -407,7 +407,7 @@ async def search_memories_endpoint(
 
 @router.get("/strategies", response_model=StrategiesResponse, response_model_exclude_none=True)
 async def get_strategies_endpoint(
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Get configured memory strategies.
@@ -460,7 +460,7 @@ async def get_strategies_endpoint(
 @router.delete("/{record_id}", response_model=DeleteMemoryResponse)
 async def delete_memory_endpoint(
     record_id: str,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Delete a specific memory record.

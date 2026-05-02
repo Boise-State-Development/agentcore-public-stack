@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 import logging
 
-from apis.shared.auth.dependencies import get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.user_settings.models import UserSettings, UserSettingsUpdate
 from apis.shared.user_settings.repository import UserSettingsRepository
@@ -20,7 +20,7 @@ def get_user_settings_repository() -> UserSettingsRepository:
 
 @router.get("", response_model=UserSettings)
 async def get_settings(
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     repo: UserSettingsRepository = Depends(get_user_settings_repository),
 ):
     """Get the current user's settings."""
@@ -32,7 +32,7 @@ async def get_settings(
 @router.put("", response_model=UserSettings)
 async def update_settings(
     body: UserSettingsUpdate,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     repo: UserSettingsRepository = Depends(get_user_settings_repository),
 ):
     """Update the current user's settings (partial merge)."""

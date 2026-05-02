@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
-from apis.shared.auth.dependencies import get_current_user, get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
 from apis.shared.auth.models import User
 
 
@@ -96,14 +96,15 @@ def mock_auth_user(app: FastAPI, user: User) -> None:
 
     Requirement 1.1: authenticated TestClient with Auth_Dependency overridden.
 
-    Overrides BOTH `get_current_user` (Bearer-only) and
-    `get_current_user_or_session` (cookie-or-Bearer, Phase 6 dep) so
-    routes that have migrated to the dual-auth dep also see the mocked
-    user. Without the second override they'd hit the real cookie/Bearer
+    Overrides BOTH `get_current_user` (Bearer-only, retained for the
+    `/chat/agent-stream` external-caller route) and
+    `get_current_user_from_session` (cookie auth — the SPA-facing
+    surface) so routes can be exercised regardless of which dep they
+    pull in. Without the cookie override they'd hit the real session
     resolution path and 401.
     """
     app.dependency_overrides[get_current_user] = lambda: user
-    app.dependency_overrides[get_current_user_or_session] = lambda: user
+    app.dependency_overrides[get_current_user_from_session] = lambda: user
 
 
 def mock_no_auth(app: FastAPI) -> None:
@@ -111,8 +112,8 @@ def mock_no_auth(app: FastAPI) -> None:
 
     Requirement 1.2: unauthenticated TestClient behaviour.
 
-    Both Bearer (`get_current_user`) and dual-auth
-    (`get_current_user_or_session`) dependencies are overridden so the
+    Both Bearer (`get_current_user`) and cookie
+    (`get_current_user_from_session`) dependencies are overridden so the
     "no auth provided" assertion holds regardless of which dep the route
     uses.
     """
@@ -124,7 +125,7 @@ def mock_no_auth(app: FastAPI) -> None:
         )
 
     app.dependency_overrides[get_current_user] = _raise_401
-    app.dependency_overrides[get_current_user_or_session] = _raise_401
+    app.dependency_overrides[get_current_user_from_session] = _raise_401
 
 
 # ---------------------------------------------------------------------------

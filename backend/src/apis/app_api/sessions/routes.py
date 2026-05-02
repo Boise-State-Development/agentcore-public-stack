@@ -27,7 +27,7 @@ from apis.shared.sessions.metadata import (
 )
 from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
-from apis.shared.auth.dependencies import get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 async def list_user_sessions_endpoint(
     limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of sessions to return"),
     next_token: Optional[str] = Query(None, description="Pagination token for retrieving the next page of results"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     List sessions for the authenticated user with pagination support.
@@ -96,7 +96,7 @@ async def list_user_sessions_endpoint(
 @router.get("/{session_id}/metadata", response_model=SessionMetadataResponse, response_model_exclude_none=True)
 async def get_session_metadata_endpoint(
     session_id: str,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve session metadata for a specific session.
@@ -152,7 +152,7 @@ async def get_session_metadata_endpoint(
 async def update_session_metadata_endpoint(
     session_id: str,
     request: UpdateSessionMetadataRequest,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Update session metadata for a specific session.
@@ -292,7 +292,7 @@ async def update_session_metadata_endpoint(
 async def delete_session_endpoint(
     session_id: str,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Delete a conversation.
@@ -378,7 +378,7 @@ async def delete_session_endpoint(
 async def bulk_delete_sessions_endpoint(
     request: BulkDeleteSessionsRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Bulk delete multiple conversations.
@@ -487,7 +487,7 @@ async def get_session_messages_endpoint(
     session_id: str,
     limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of messages to return"),
     next_token: Optional[str] = Query(None, description="Pagination token for retrieving the next page of results"),
-    current_user: User = Depends(get_current_user_or_session)
+    current_user: User = Depends(get_current_user_from_session)
 ):
     """
     Retrieve messages for a specific session with pagination support.
@@ -552,7 +552,7 @@ async def get_session_messages_endpoint(
 async def dismiss_pending_interrupt_endpoint(
     session_id: str,
     interrupt_id: str,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Dismiss a pending OAuth consent interrupt for the caller's session.
 

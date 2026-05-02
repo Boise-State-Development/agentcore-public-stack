@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.shared.auth.models import User
-from apis.shared.auth.dependencies import get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.app_api.fine_tuning.routes import router
 from apis.app_api.fine_tuning.repository import get_fine_tuning_access_repository
 
@@ -18,7 +18,7 @@ def _create_app():
 
 
 def _override_auth(app: FastAPI, user: User):
-    app.dependency_overrides[get_current_user_or_session] = lambda: user
+    app.dependency_overrides[get_current_user_from_session] = lambda: user
 
 
 def _override_repo(app: FastAPI, repo: MagicMock):
@@ -75,7 +75,7 @@ class TestCheckAccess:
 
         def _raise_401():
             raise HTTPException(status_code=401, detail="Not authenticated")
-        app.dependency_overrides[get_current_user_or_session] = _raise_401
+        app.dependency_overrides[get_current_user_from_session] = _raise_401
 
         client = TestClient(app)
         resp = client.get("/fine-tuning/access")

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
-from apis.shared.auth.dependencies import get_current_user, get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.auth.rbac import require_admin
 
@@ -164,11 +164,10 @@ class TestNonAdminRoleRejection:
             name="Property 4 User",
             roles=roles,
         )
-        # `require_admin` was migrated to `get_current_user_or_session` in
-        # Phase 6, so the override has to track the new dep — the legacy
-        # Bearer key is kept too for any test that still relies on it.
+        # `require_admin` is cookie-only since Phase 7; the Bearer override
+        # is kept too for any test that still relies on it.
         app.dependency_overrides[get_current_user] = lambda: user
-        app.dependency_overrides[get_current_user_or_session] = lambda: user
+        app.dependency_overrides[get_current_user_from_session] = lambda: user
 
         # Mock AppRoleService to return no admin AppRoles (simulates
         # JWT roles that don't map to system_admin in DynamoDB)

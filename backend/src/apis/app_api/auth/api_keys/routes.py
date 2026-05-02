@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from apis.shared.auth.dependencies import get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 
 from apis.shared.auth.api_keys.models import (
@@ -34,7 +34,7 @@ router = APIRouter(prefix="/auth/api-keys", tags=["api-keys"])
 )
 async def create_api_key(
     request: CreateApiKeyRequest,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
 ) -> CreateApiKeyResponse:
     """Generate a new API key for the authenticated user.
 
@@ -58,7 +58,7 @@ async def create_api_key(
     summary="Get your API key",
 )
 async def get_api_key(
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
 ) -> GetApiKeyResponse:
     """Return metadata for the authenticated user's API key, if one exists."""
     service = get_api_key_service()
@@ -80,7 +80,7 @@ async def get_api_key(
 )
 async def delete_api_key(
     key_id: str,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
 ) -> DeleteApiKeyResponse:
     """Revoke an API key. Only the key owner can delete it."""
     service = get_api_key_service()

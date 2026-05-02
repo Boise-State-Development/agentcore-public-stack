@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
-from apis.shared.auth import User, get_current_user_or_session
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.files.models import (
     PresignRequest,
     PresignResponse,
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/files", tags=["files"])
 @router.post("/presign", response_model=PresignResponse)
 async def request_presigned_url(
     request: PresignRequest,
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -107,7 +107,7 @@ async def request_presigned_url(
 @router.post("/{upload_id}/complete", response_model=CompleteUploadResponse)
 async def complete_upload(
     upload_id: str,
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -167,7 +167,7 @@ async def list_files(
     sort_order: SortOrder = Query(
         SortOrder.DESC, alias="sortOrder", description="Sort order: asc or desc"
     ),
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -192,7 +192,7 @@ async def list_files(
 @router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(
     upload_id: str,
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -222,7 +222,7 @@ async def delete_file(
 
 @router.get("/quota", response_model=QuotaResponse)
 async def get_quota(
-    user: User = Depends(get_current_user_or_session),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """

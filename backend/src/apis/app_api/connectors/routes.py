@@ -32,7 +32,7 @@ import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from apis.shared.auth import User, get_current_user_or_session
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.oauth.agentcore_identity import (
     CallbackUrlUnavailableError,
     WorkloadTokenUnavailableError,
@@ -106,7 +106,7 @@ def _visible_to_user(provider: OAuthProvider, user_role_ids: List[str]) -> bool:
 
 @router.get("/", response_model=UserConnectorListResponse)
 async def list_connectors(
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
 ) -> UserConnectorListResponse:
@@ -203,7 +203,7 @@ async def _resolve_visible_provider(
 )
 async def initiate_consent(
     provider_id: str,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
     disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
@@ -273,7 +273,7 @@ async def initiate_consent(
 )
 async def connector_status(
     provider_id: str,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
     disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
@@ -333,7 +333,7 @@ async def connector_status(
 )
 async def complete_consent(
     body: CompleteConsentRequest,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),
 ) -> CompleteConsentResponse:
     """Finalize an OAuth consent flow after the popup redirects home.
@@ -394,7 +394,7 @@ async def complete_consent(
 )
 async def disconnect_connector(
     provider_id: str,
-    current_user: User = Depends(get_current_user_or_session),
+    current_user: User = Depends(get_current_user_from_session),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
     disconnect_repo: OAuthDisconnectRepository = Depends(get_disconnect_repository),

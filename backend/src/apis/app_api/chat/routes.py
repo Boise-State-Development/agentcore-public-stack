@@ -33,7 +33,7 @@ from apis.shared.sessions.metadata import get_session_metadata, store_session_me
 from apis.inference_api.chat.models import ChatEvent, ChatRequest, FileContent, GenerateTitleRequest, GenerateTitleResponse
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import generate_conversation_title, get_agent
-from apis.shared.auth.dependencies import get_current_user, get_current_user_or_session
+from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.errors import (
     ErrorCode,
@@ -57,7 +57,7 @@ STREAM_TIMEOUT_SECONDS = 600  # 10 minutes
 
 
 @router.post("/generate-title")
-async def generate_title(request: GenerateTitleRequest, current_user: User = Depends(get_current_user_or_session)):
+async def generate_title(request: GenerateTitleRequest, current_user: User = Depends(get_current_user_from_session)):
     """
     Generate a conversation title for a new session.
 
