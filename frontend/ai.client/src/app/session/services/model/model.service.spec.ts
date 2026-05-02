@@ -12,8 +12,8 @@ describe('ModelService', () => {
   let httpMock: HttpTestingController;
 
   const mockModels: ManagedModel[] = [
-    { id: 'm1', modelId: 'claude-haiku', modelName: 'Claude Haiku', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 0.25, outputPricePerMillionTokens: 1.25, isReasoningModel: false, knowledgeCutoffDate: null, supportsCaching: true, isDefault: false },
-    { id: 'm2', modelId: 'claude-sonnet', modelName: 'Claude Sonnet', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 3, outputPricePerMillionTokens: 15, isReasoningModel: false, knowledgeCutoffDate: null, supportsCaching: true, isDefault: true },
+    { id: 'm1', modelId: 'claude-haiku', modelName: 'Claude Haiku', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 0.25, outputPricePerMillionTokens: 1.25, knowledgeCutoffDate: null, supportsCaching: true, isDefault: false },
+    { id: 'm2', modelId: 'claude-sonnet', modelName: 'Claude Sonnet', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 3, outputPricePerMillionTokens: 15, knowledgeCutoffDate: null, supportsCaching: true, isDefault: true },
   ];
 
   const mockResponse = { models: mockModels, totalCount: 2 };

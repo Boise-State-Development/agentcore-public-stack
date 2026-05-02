@@ -80,8 +80,6 @@ export interface ManagedModel {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
-  /** Whether this is a reasoning model (e.g., o1, o3) */
-  isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
@@ -134,8 +132,6 @@ export interface ManagedModelFormData {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
-  /** Whether this is a reasoning model (e.g., o1, o3) */
-  isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */

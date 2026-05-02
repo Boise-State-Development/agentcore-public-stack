@@ -52,7 +52,6 @@ def create_test_model(
         enabled=enabled,
         input_price_per_million_tokens=3.0,
         output_price_per_million_tokens=15.0,
-        is_reasoning_model=False,
         supports_caching=True,
         created_at=now,
         updated_at=now,

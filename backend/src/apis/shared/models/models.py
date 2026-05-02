@@ -127,7 +127,6 @@ class ManagedModelCreate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: bool = Field(False, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -185,7 +184,6 @@ class ManagedModelUpdate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: Optional[bool] = Field(None, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -241,7 +239,6 @@ class ManagedModel(BaseModel):
         alias="cacheReadPricePerMillionTokens",
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: bool = Field(..., alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: bool = Field(
         True,

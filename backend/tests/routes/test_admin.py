@@ -44,7 +44,6 @@ SAMPLE_MODEL = ManagedModel(
     enabled=True,
     inputPricePerMillionTokens=0.25,
     outputPricePerMillionTokens=1.25,
-    isReasoningModel=False,
     supportsCaching=True,
     isDefault=False,
     createdAt=datetime(2024, 1, 1),

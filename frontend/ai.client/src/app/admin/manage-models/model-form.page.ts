@@ -157,7 +157,6 @@ interface ModelFormGroup {
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
   cacheReadPricePerMillionTokens: FormControl<number | null>;
-  isReasoningModel: FormControl<boolean>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
   inferenceParams: FormArray<FormGroup<ParamRowGroup>>;
@@ -215,7 +214,6 @@ export class ModelFormPage implements OnInit {
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
-    isReasoningModel: this.fb.control(false, { nonNullable: true }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     supportsCaching: this.fb.control(false, { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
@@ -610,7 +608,6 @@ export class ModelFormPage implements OnInit {
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
-        isReasoningModel: model.isReasoningModel,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
       });
@@ -638,7 +635,6 @@ export class ModelFormPage implements OnInit {
         outputModalities: params['outputModalities'] ? params['outputModalities'].split(',') : [],
         maxInputTokens: params['maxInputTokens'] ? parseInt(params['maxInputTokens'], 10) : 0,
         maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : 0,
-        isReasoningModel: params['isReasoningModel'] === 'true',
         knowledgeCutoffDate: params['knowledgeCutoffDate'] || null,
       });
     }
@@ -700,7 +696,6 @@ export class ModelFormPage implements OnInit {
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
-        isReasoningModel: v.isReasoningModel,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: v.supportsCaching,
         supportedParams: this.collectSupportedParams(),

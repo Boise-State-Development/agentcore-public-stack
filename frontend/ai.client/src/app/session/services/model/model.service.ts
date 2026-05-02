@@ -41,7 +41,6 @@ export class ModelService {
     enabled: true,
     inputPricePerMillionTokens: 0,
     outputPricePerMillionTokens: 0,
-    isReasoningModel: false,
     knowledgeCutoffDate: null,
     supportsCaching: true,
     isDefault: false,
