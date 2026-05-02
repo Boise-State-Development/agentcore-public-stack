@@ -114,6 +114,71 @@ class TestOAuthConsentHookCacheHit:
         assert kwargs["force_authentication"] is True
 
     @pytest.mark.asyncio
+    async def test_force_authentication_sends_prompt_consent_for_google(self):
+        """Google only re-issues a refresh token on subsequent grants if
+        the user is shown the consent screen — so the explicit re-consent
+        path (force_authentication=True) must propagate prompt=consent
+        through to AgentCore Identity. Without it, a Disconnect/Reconnect
+        cycle leaves the vault with an access token but no refresh token,
+        putting the user back in the hourly-reconsent loop."""
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(authorization_url="https://accounts/consent")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+            provider_type_lookup=lambda _: "google",
+            disconnected_lookup=lambda _pid: True,
+        )
+        event = _make_event(provider_id="google")
+
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            with pytest.raises(InterruptException):
+                await hook._gate(event)
+
+        kwargs = identity.get_token_for_user.call_args.kwargs
+        assert kwargs["force_authentication"] is True
+        assert kwargs["custom_parameters"] == {
+            "access_type": "offline",
+            "prompt": "consent",
+        }
+
+    @pytest.mark.asyncio
+    async def test_silent_refresh_does_not_send_prompt_consent(self):
+        """The refresh path (force_authentication=False) must not send
+        prompt=consent — that would force the consent screen on every
+        silent refresh, which is the exact UX we're trying to avoid."""
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(access_token="refreshed-token")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: "google",
+            scopes_lookup=lambda _: ["openid"],
+            provider_type_lookup=lambda _: "google",
+        )
+        event = _make_event(provider_id="google")
+
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            await hook._gate(event)
+
+        kwargs = identity.get_token_for_user.call_args.kwargs
+        assert kwargs["force_authentication"] is False
+        assert kwargs["custom_parameters"] == {"access_type": "offline"}
+        assert "prompt" not in kwargs["custom_parameters"]
+
+    @pytest.mark.asyncio
     async def test_uses_cached_token_without_calling_identity(self):
         oauth_token_cache.set("alice", "google", "cached-token")
 
@@ -316,8 +381,13 @@ class TestParallelToolCallsSameProvider:
 
 
 class TestOAuthConsentHookAuthFailureRetry:
-    """The AfterToolCallEvent handler turns a 401-style tool error into
-    a retry that forces re-consent at AgentCore Identity."""
+    """The AfterToolCallEvent handler turns a 401-style tool error into a
+    retry that re-fetches the token from AgentCore Identity. The retry
+    deliberately does NOT write the durable disconnect flag — most 401s
+    are just an expired access token, and AgentCore can refresh
+    transparently using the refresh_token in the vault. Forcing a
+    disconnect on every 401 caused users to reconnect hourly even though
+    refresh would have worked."""
 
     def _after_event(
         self,
@@ -341,17 +411,11 @@ class TestOAuthConsentHookAuthFailureRetry:
         return event
 
     @pytest.mark.asyncio
-    async def test_401_records_disconnect_and_retries(self):
-        recorded: list[str] = []
-
-        async def mark_disconnected(pid: str) -> None:
-            recorded.append(pid)
-
+    async def test_401_clears_cache_and_retries(self):
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: [],
-            mark_disconnected=mark_disconnected,
         )
         oauth_token_cache.set("alice", "google", "stale-token")
         event = self._after_event(
@@ -362,12 +426,28 @@ class TestOAuthConsentHookAuthFailureRetry:
         await hook._handle_auth_failure(event)
 
         assert event.retry is True
-        # Durable record of the disconnect intent so other replicas force
-        # fresh consent on the next request, too.
-        assert recorded == ["google"]
         # Local cache cleared so the BeforeToolCallEvent retry doesn't
-        # short-circuit on this replica.
+        # short-circuit on this replica — it'll re-fetch from AgentCore
+        # Identity, which can refresh transparently.
         assert oauth_token_cache.get("alice", "google") is None
+
+    @pytest.mark.asyncio
+    async def test_401_does_not_write_durable_disconnect_flag(self):
+        """Regression guard for the hourly-reconnect bug: writing the
+        disconnect flag here would force `_gate` to call AgentCore with
+        `force_authentication=True`, bypassing the vault and prompting
+        the user to reconsent even though the refresh_token was valid.
+        The flag is reserved for the explicit Disconnect button in the
+        settings page."""
+        # The hook no longer accepts a mark_disconnected hook at all —
+        # the parameter and the `_record_disconnect` method are gone.
+        # If either reappears, the tests for the consent flow itself
+        # should explicitly opt back in.
+        import inspect
+
+        sig = inspect.signature(OAuthConsentHook.__init__)
+        assert "mark_disconnected" not in sig.parameters
+        assert not hasattr(OAuthConsentHook, "_record_disconnect")
 
     @pytest.mark.asyncio
     async def test_non_oauth_tool_is_ignored(self):
@@ -384,24 +464,19 @@ class TestOAuthConsentHookAuthFailureRetry:
 
     @pytest.mark.asyncio
     async def test_non_auth_error_is_ignored(self):
-        recorded: list[str] = []
-
-        async def mark_disconnected(pid: str) -> None:
-            recorded.append(pid)
-
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: [],
-            mark_disconnected=mark_disconnected,
         )
+        oauth_token_cache.set("alice", "google", "good-token")
         event = self._after_event("google", "Network unreachable")
 
         await hook._handle_auth_failure(event)
 
         assert event.retry is False
-        # No disconnect persisted — the failure wasn't auth-related.
-        assert recorded == []
+        # Cache untouched — the failure wasn't auth-related.
+        assert oauth_token_cache.get("alice", "google") == "good-token"
 
     @pytest.mark.asyncio
     async def test_does_not_retry_twice_for_same_tool_use(self):
@@ -427,16 +502,10 @@ class TestOAuthConsentHookAuthFailureRetry:
         on every tool call in a turn. Cap at one retry per provider per
         turn so subsequent 401s for the same provider just surface to the
         model instead of triggering another consent flow."""
-        recorded: list[str] = []
-
-        async def mark_disconnected(pid: str) -> None:
-            recorded.append(pid)
-
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: [],
-            mark_disconnected=mark_disconnected,
         )
 
         # First tool call 401s — retry path fires.
@@ -454,17 +523,12 @@ class TestOAuthConsentHookAuthFailureRetry:
         )
         await hook._handle_auth_failure(event2)
         assert event2.retry is False
-        # Disconnect was already recorded on the first 401 — don't write
-        # again.
-        assert recorded == ["google"]
 
     @pytest.mark.asyncio
     async def test_before_invocation_event_resets_per_turn_budget(self):
         """The agent instance is cached across turns by `get_agent`, so
         the per-provider retry budget on the hook must be reset whenever
         a new agent invocation begins (fresh turn or resume)."""
-        from unittest.mock import MagicMock
-
         hook = OAuthConsentHook(
             user_id="alice",
             provider_lookup=lambda _tool: "google",

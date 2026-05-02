@@ -340,18 +340,6 @@ class BaseAgent(ABC):
                 self.user_id, provider_id
             )
 
-        async def mark_disconnected(provider_id: str) -> None:
-            # Persist a disconnect from the AfterToolCallEvent 401-retry
-            # path so subsequent requests (potentially on other replicas)
-            # also force a fresh consent.
-            from apis.shared.oauth.disconnect_repository import (
-                get_disconnect_repository,
-            )
-
-            await get_disconnect_repository().mark_disconnected(
-                self.user_id, provider_id
-            )
-
         return OAuthConsentHook(
             user_id=self.user_id,
             provider_lookup=provider_lookup,
@@ -359,7 +347,6 @@ class BaseAgent(ABC):
             provider_type_lookup=provider_type_lookup,
             custom_parameters_lookup=custom_parameters_lookup,
             disconnected_lookup=disconnected_lookup,
-            mark_disconnected=mark_disconnected,
         )
 
     def _build_filtered_tools(self) -> List:

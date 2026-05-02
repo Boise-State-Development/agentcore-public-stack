@@ -130,12 +130,6 @@ CustomParametersLookup = Callable[
 # fresh consent URL with `force_authentication=True`.
 DisconnectedLookup = Callable[[str], Union[bool, Awaitable[bool]]]
 
-# Records a disconnect for the caller — invoked from the AfterToolCallEvent
-# path when a tool returns a 401 against the cached vault token. Called
-# instead of mutating per-process state so the intent is durable across
-# replicas.
-MarkDisconnected = Callable[[str], Union[None, Awaitable[None]]]
-
 
 class OAuthConsentHook(HookProvider):
     """Pause the agent if a tool needs OAuth and we don't have a token yet."""
@@ -148,7 +142,6 @@ class OAuthConsentHook(HookProvider):
         provider_type_lookup: Optional[ProviderTypeLookup] = None,
         custom_parameters_lookup: Optional[CustomParametersLookup] = None,
         disconnected_lookup: Optional[DisconnectedLookup] = None,
-        mark_disconnected: Optional[MarkDisconnected] = None,
     ):
         """Initialize.
 
@@ -169,11 +162,6 @@ class OAuthConsentHook(HookProvider):
                 effectively assumes the user has not disconnected. Wire
                 this to the durable disconnect repository in production so
                 a /disconnect on one replica is visible from any other.
-            mark_disconnected: See `MarkDisconnected`. Optional. Invoked
-                from the 401-retry path; without it, a 401 still flips
-                `event.retry = True` but leaves no durable record, so the
-                next BeforeToolCallEvent on a different replica won't know
-                to force a fresh consent.
         """
         self._user_id = user_id
         self._provider_lookup = provider_lookup
@@ -181,7 +169,6 @@ class OAuthConsentHook(HookProvider):
         self._provider_type_lookup = provider_type_lookup
         self._custom_parameters_lookup = custom_parameters_lookup
         self._disconnected_lookup = disconnected_lookup
-        self._mark_disconnected = mark_disconnected
         # Cache scopes per provider for the lifetime of this hook (one agent
         # invocation). Avoids repeated DB hits if the same provider is used
         # across multiple tool calls in a single turn.
@@ -196,10 +183,9 @@ class OAuthConsentHook(HookProvider):
         # Providers that already burned their one 401-retry in the current
         # turn. The agent instance is cached across turns by `get_agent`, so
         # this set must be reset on `BeforeInvocationEvent`. Without the cap,
-        # a misconfigured provider (wrong scope, perma-401) would surface a
-        # consent prompt on every tool call in the turn — `_record_disconnect`
-        # forces fresh consent on the next BeforeToolCallEvent, the user
-        # consents, the tool 401s again, and the loop repeats per tool use.
+        # a misconfigured provider (wrong scope, perma-401) would loop:
+        # the cache is cleared, AgentCore returns the same expired/invalid
+        # token from the vault, the tool 401s again, and so on.
         self._reauth_attempted_providers: set[str] = set()
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -298,7 +284,11 @@ class OAuthConsentHook(HookProvider):
                 scopes=scopes,
                 user_id=self._user_id,
                 force_authentication=force_authentication,
-                custom_parameters=custom_parameters_for(provider_type, admin_extras),
+                custom_parameters=custom_parameters_for(
+                    provider_type,
+                    admin_extras,
+                    force_authentication=force_authentication,
+                ),
             )
         except WorkloadTokenUnavailableError:
             logger.error(
@@ -328,19 +318,28 @@ class OAuthConsentHook(HookProvider):
         }
 
     async def _handle_auth_failure(self, event: AfterToolCallEvent) -> None:
-        """Detect a 401 from an OAuth-gated MCP tool and retry with fresh consent.
+        """Detect a 401 from an OAuth-gated MCP tool and retry.
 
-        AgentCore Identity has no revoke API, so when the user revokes our
-        app at the provider (or the refresh token expires), AgentCore's
-        vault keeps serving the now-stale token. The MCP server rejects it
-        with a 401 — and that's where the staleness first becomes visible.
-
-        We detect the 401 in the tool result, mark the (user, provider)
-        for forced re-consent in the cache, and set `event.retry = True`.
+        We clear the local hot-path cache and set `event.retry = True`.
         Strands' tool executor then re-fires `BeforeToolCallEvent`, our
-        `_gate` callback sees the force-reauth flag, asks AgentCore for a
-        fresh consent URL with `force_authentication=True`, and raises an
-        interrupt — same path as a first-time consent.
+        `_gate` callback misses the cache, and re-asks AgentCore Identity.
+        AgentCore handles refresh transparently:
+          * If the access_token was just expired, it uses the vault's
+            refresh_token to mint a new one and returns it — the user
+            never sees a prompt.
+          * If the refresh_token itself is dead (user revoked our app at
+            the provider, or it lapsed), AgentCore returns an
+            authorization URL instead, which `_gate` surfaces as the
+            standard `oauth_required` interrupt.
+
+        We deliberately do NOT write the durable disconnect flag here. A
+        401 is most commonly an expired access token, and writing the
+        flag would force `_gate` to call AgentCore with
+        `force_authentication=True` — which bypasses the vault entirely,
+        ignores the still-valid refresh_token, and prompts the user to
+        re-consent unnecessarily. The disconnect flag is reserved for
+        explicit user intent (the "Disconnect" button in the settings
+        page).
         """
         provider_id = self._provider_lookup(event.selected_tool)
         if not provider_id:
@@ -370,11 +369,9 @@ class OAuthConsentHook(HookProvider):
             provider_id,
         )
         # Drop the local hot-path token so the BeforeToolCallEvent retry
-        # doesn't short-circuit to it, and record the intent durably so
-        # other replicas (and subsequent requests on this one) also force a
-        # fresh consent.
+        # doesn't short-circuit to it. The retry will re-fetch from
+        # AgentCore Identity, which handles refresh internally.
         oauth_token_cache.clear_user_provider(self._user_id, provider_id)
-        await self._record_disconnect(provider_id)
         event.retry = True
 
     async def _resolve_scopes(self, provider_id: str) -> list[str]:
@@ -434,10 +431,3 @@ class OAuthConsentHook(HookProvider):
             return bool(await result)
         return bool(result)
 
-    async def _record_disconnect(self, provider_id: str) -> None:
-        """Persist a disconnect from the AfterToolCallEvent retry path."""
-        if self._mark_disconnected is None:
-            return
-        result = self._mark_disconnected(provider_id)
-        if inspect.isawaitable(result):
-            await result

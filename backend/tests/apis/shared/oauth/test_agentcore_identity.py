@@ -67,6 +67,38 @@ class TestCustomParametersFor:
         assert custom_parameters_for("microsoft", {}) is None
         assert custom_parameters_for("microsoft", None) is None
 
+    def test_force_authentication_adds_prompt_consent_for_google(self) -> None:
+        # Google only re-issues a refresh token on subsequent grants when
+        # the consent screen is shown — so the explicit re-consent path
+        # must add prompt=consent on top of the baseline.
+        result = custom_parameters_for("google", force_authentication=True)
+        assert result == {"access_type": "offline", "prompt": "consent"}
+
+    def test_force_authentication_does_not_set_prompt_for_other_vendors(
+        self,
+    ) -> None:
+        # Other vendors don't have the same constraint — leaving prompt
+        # unset means we don't accidentally annoy a Microsoft / GitHub
+        # user with an unnecessary consent screen on every reconnect.
+        assert custom_parameters_for("microsoft", force_authentication=True) is None
+        assert custom_parameters_for("github", force_authentication=True) is None
+
+    def test_force_authentication_baseline_still_wins_over_admin(self) -> None:
+        # Even when force_authentication adds prompt=consent, an admin
+        # supplying prompt=login can't override it — the re-consent path
+        # needs the consent screen specifically.
+        result = custom_parameters_for(
+            "google", {"prompt": "login"}, force_authentication=True
+        )
+        assert result == {"access_type": "offline", "prompt": "consent"}
+
+    def test_default_force_authentication_is_false(self) -> None:
+        # Silent refresh path must not get prompt=consent — otherwise
+        # every refresh would force the consent screen.
+        result = custom_parameters_for("google")
+        assert result == {"access_type": "offline"}
+        assert "prompt" not in result
+
 
 class TestTokenResult:
     def test_access_token_only_is_valid(self) -> None:

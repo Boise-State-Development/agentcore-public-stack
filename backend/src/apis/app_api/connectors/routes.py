@@ -229,7 +229,9 @@ async def initiate_consent(
             user_id=current_user.user_id,
             force_authentication=force_auth,
             custom_parameters=custom_parameters_for(
-                provider.provider_type.value, provider.custom_parameters
+                provider.provider_type.value,
+                provider.custom_parameters,
+                force_authentication=force_auth,
             ),
             # No custom_state: AgentCore appears to treat its presence as a
             # signal to start a fresh flow, never short-circuiting to the
