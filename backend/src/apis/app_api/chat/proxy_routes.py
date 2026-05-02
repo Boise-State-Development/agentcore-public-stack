@@ -13,13 +13,9 @@ access token — to inference-api, which already accepts Cognito Bearer
 tokens via `get_current_user_trusted` on `/invocations`. No inference-api
 changes needed (architecture decision #4 in the BFF migration plan).
 
-Two paths are registered against the same handler:
-  - `/chat/stream` is the canonical Phase 6 name. The legacy in-process
-    Bearer agent route that previously owned this path was renamed to
-    `/chat/agent-stream` in the same PR.
-  - `/chat/proxy-stream` is the Phase 4 original. Kept live so a rolling
-    deploy of app-api ECS tasks during the cutover doesn't 404 the SPA
-    when it lands on a not-yet-rotated task. Removed in Phase 7.
+The legacy in-process Bearer agent route that previously owned `/chat/stream`
+was renamed to `/chat/agent-stream` in the Phase 6 cutover. The Phase 4
+`/chat/proxy-stream` rolling-deploy alias was deleted in Phase 7.
 """
 
 from __future__ import annotations
@@ -157,31 +153,16 @@ async def chat_stream(
     )
 
 
-# Register the same handler under both paths. `/chat/stream` is the
-# canonical Phase 6 name; `/chat/proxy-stream` stays live for the
-# rolling-deploy + soak window and is removed in Phase 7. Distinct
-# operation_ids keep the OpenAPI doc unambiguous when both routes exist.
-_route_responses = {
-    401: {"description": "No active BFF session"},
-    403: {"description": "CSRF token missing or invalid"},
-    502: {"description": "Inference API unreachable"},
-    504: {"description": "Inference API request timed out"},
-}
-
 router.add_api_route(
     "/stream",
     chat_stream,
     methods=["POST"],
     summary="Cookie-authenticated SSE proxy to inference-api /invocations",
     operation_id="chat_stream",
-    responses=_route_responses,
-)
-
-router.add_api_route(
-    "/proxy-stream",
-    chat_stream,
-    methods=["POST"],
-    summary="Phase 4 alias of /chat/stream — removed in Phase 7",
-    operation_id="chat_proxy_stream",
-    responses=_route_responses,
+    responses={
+        401: {"description": "No active BFF session"},
+        403: {"description": "CSRF token missing or invalid"},
+        502: {"description": "Inference API unreachable"},
+        504: {"description": "Inference API request timed out"},
+    },
 )

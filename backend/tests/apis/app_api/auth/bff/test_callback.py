@@ -19,7 +19,12 @@ from apis.shared.sessions_bff.config import (
 from .conftest import POST_LOGIN_URL, make_id_token
 
 
-def _seed_state(state: str = "valid-state", *, redirect_uri: str | None = None) -> str:
+def _seed_state(
+    state: str = "valid-state",
+    *,
+    redirect_uri: str | None = None,
+    return_to: str | None = None,
+) -> str:
     """Push a state token through the same store the route reads from."""
     from .conftest import CALLBACK_URL
 
@@ -28,7 +33,11 @@ def _seed_state(state: str = "valid-state", *, redirect_uri: str | None = None) 
 
     store.store_state(
         state,
-        OIDCStateData(redirect_uri=redirect_uri or CALLBACK_URL, provider_id="cognito-bff"),
+        OIDCStateData(
+            redirect_uri=redirect_uri or CALLBACK_URL,
+            provider_id="cognito-bff",
+            return_to=return_to,
+        ),
         ttl_seconds=600,
     )
     return state
@@ -179,3 +188,40 @@ def test_callback_session_id_is_unique_across_logins(app, monkeypatch, repositor
 
     items = repository._table.scan().get("Items", [])
     assert len({item["session_id"] for item in items}) == 2
+
+
+# ─── return_to deep-link round-trip (Phase 7) ─────────────────────────
+
+
+def test_callback_redirects_to_return_to_path_when_set(app, monkeypatch):
+    """Successful callback honours the same-origin path the SPA stashed
+    at /auth/login, instead of falling back to BFF_POST_LOGIN_REDIRECT_URL."""
+    state = _seed_state("with-return-to", return_to="/files/abc?tab=details")
+    _patch_token_exchange(
+        monkeypatch,
+        ExchangeResult(
+            access_token="a", refresh_token="r", id_token=make_id_token(),
+            access_token_exp=int(time.time()) + 3600,
+        ),
+    )
+    client = TestClient(app, follow_redirects=False)
+    response = client.get(f"/auth/callback?code=c&state={state}")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/files/abc?tab=details"
+
+
+def test_callback_falls_back_to_post_login_when_no_return_to(app, monkeypatch):
+    state = _seed_state("no-return-to")  # return_to omitted → None
+    _patch_token_exchange(
+        monkeypatch,
+        ExchangeResult(
+            access_token="a", refresh_token="r", id_token=make_id_token(),
+            access_token_exp=int(time.time()) + 3600,
+        ),
+    )
+    client = TestClient(app, follow_redirects=False)
+    response = client.get(f"/auth/callback?code=c&state={state}")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == POST_LOGIN_URL

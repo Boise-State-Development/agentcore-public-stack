@@ -1,4 +1,4 @@
-"""Streaming-behavior integration test for `POST /chat/proxy-stream`.
+"""Streaming-behavior integration test for `POST /chat/stream`.
 
 The migration plan calls out a buffering risk on SSE events that arrive
 late in the stream — most importantly the `oauth_required` event, which
@@ -143,7 +143,7 @@ async def test_ttfb_under_200ms_with_x_accel_buffering(
         async with httpx.AsyncClient(base_url=server.url, timeout=10.0) as client:
             t0 = time.monotonic()
             async with client.stream(
-                "POST", "/chat/proxy-stream", json={"message": "hi"}
+                "POST", "/chat/stream", json={"message": "hi"}
             ) as response:
                 ttfb = time.monotonic() - t0
                 assert response.status_code == 200

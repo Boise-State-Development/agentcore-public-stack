@@ -1,11 +1,9 @@
 """CSRF integration tests for the BFF chat proxy.
 
-Both `/chat/stream` (Phase 6) and `/chat/proxy-stream` (Phase 4) are
-POSTs that ride the BFF session cookie, so both MUST be guarded by
-CSRFMiddleware. This file confirms (a) neither route is accidentally
-listed in the middleware's exempt set, and (b) a valid double-submit
-token allows the request through. Tests are parametrized over both
-paths so the alias guarantee can't drift.
+`/chat/stream` is a POST that rides the BFF session cookie, so it MUST
+be guarded by CSRFMiddleware. This file confirms (a) the route is not
+accidentally listed in the middleware's exempt set, and (b) a valid
+double-submit token allows the request through.
 """
 
 from __future__ import annotations
@@ -100,9 +98,9 @@ def _patch_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.fixture(params=["/chat/stream", "/chat/proxy-stream"])
-def chat_path(request: pytest.FixtureRequest) -> str:
-    return request.param
+@pytest.fixture
+def chat_path() -> str:
+    return "/chat/stream"
 
 
 def test_proxy_stream_without_csrf_returns_403(
@@ -155,13 +153,11 @@ def test_proxy_stream_csrf_header_mismatch_returns_403(
     assert response.status_code == 403
 
 
-def test_chat_proxy_paths_not_in_csrf_exempt_set() -> None:
-    """Future-proofing: surface a regression if someone adds either chat
+def test_chat_proxy_path_not_in_csrf_exempt_set() -> None:
+    """Future-proofing: surface a regression if someone adds the chat
     proxy path to the CSRF exempt list. The point of this proxy is to be
     guarded — exempting it would defeat the whole BFF-cookie security
-    model. Both paths must be checked because Phase 6 introduces
-    /chat/stream alongside the original /chat/proxy-stream."""
+    model."""
     from apis.shared.middleware.csrf import _EXEMPT_PATHS
 
     assert "/chat/stream" not in _EXEMPT_PATHS
-    assert "/chat/proxy-stream" not in _EXEMPT_PATHS

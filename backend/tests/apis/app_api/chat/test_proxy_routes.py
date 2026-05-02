@@ -1,12 +1,8 @@
-"""Tests for the BFF chat proxy (Phase 4 + Phase 6).
+"""Tests for the BFF chat proxy.
 
 Covers the proxy mechanics in isolation — auth gate, body/header relay,
-SSE streaming, and error mapping. Every test is parametrized over both
-registered paths (`/chat/stream` and `/chat/proxy-stream`) so the
-duplicate route registration in proxy_routes.py stays a true alias and
-can't drift into two divergent handlers. The full
-SessionRefreshMiddleware ↔ CSRFMiddleware stack is exercised separately
-in `test_proxy_routes_csrf.py`.
+SSE streaming, and error mapping. The full SessionRefreshMiddleware ↔
+CSRFMiddleware stack is exercised separately in `test_proxy_routes_csrf.py`.
 """
 
 from __future__ import annotations
@@ -96,11 +92,9 @@ def _patch_upstream(
     )
 
 
-# Both registered paths must behave identically. Phase 6 ships /chat/stream
-# alongside the original /chat/proxy-stream; Phase 7 deletes the latter.
-@pytest.fixture(params=["/chat/stream", "/chat/proxy-stream"])
-def chat_path(request: pytest.FixtureRequest) -> str:
-    return request.param
+@pytest.fixture
+def chat_path() -> str:
+    return "/chat/stream"
 
 
 # ── Auth gate ─────────────────────────────────────────────────────────────

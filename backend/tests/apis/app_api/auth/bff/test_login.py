@@ -147,3 +147,57 @@ def test_login_silently_drops_malformed_provider(app_for_login, bad_provider):
     assert response.status_code == 302
     params = _authorize_params(response)
     assert "identity_provider" not in params
+
+
+# ─── return_to deep-link plumbing (Phase 7) ────────────────────────────
+
+
+def test_login_stores_same_origin_return_to_in_state(app_for_login):
+    """Allowlisted same-origin path makes it onto the OIDCStateData so
+    the callback can redirect there post-cookie-set."""
+    from apis.app_api.auth.bff import routes as bff_routes
+
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get(
+        "/auth/login", params={"return_to": "/files/abc?tab=details"}
+    )
+    state = _authorize_params(response)["state"]
+
+    store = bff_routes._get_state_store()
+    ok, data = store.get_and_delete_state(state)
+    assert ok is True
+    assert data is not None
+    assert data.return_to == "/files/abc?tab=details"
+
+
+@pytest.mark.parametrize(
+    "bad_return_to",
+    [
+        "//evil.com/x",            # protocol-relative — different host
+        "https://evil.com/x",      # absolute URL — different origin
+        "http://evil.com/x",
+        "/\\evil.com/x",           # back-slash bypass past the // check
+        "no-leading-slash",        # not a path
+        "",                        # empty
+        "/x" + "y" * 3000,         # length cap
+        "/multi\nline",            # CRLF injection into Location
+        "/multi\rline",
+    ],
+)
+def test_login_rejects_unsafe_return_to(app_for_login, bad_return_to):
+    """Anything that fails the same-origin allowlist drops silently —
+    the state row's `return_to` stays None and the callback uses the
+    configured post-login URL."""
+    from apis.app_api.auth.bff import routes as bff_routes
+
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get(
+        "/auth/login", params={"return_to": bad_return_to}
+    )
+
+    assert response.status_code == 302
+    state = _authorize_params(response)["state"]
+    ok, data = bff_routes._get_state_store().get_and_delete_state(state)
+    assert ok is True
+    assert data is not None
+    assert data.return_to is None

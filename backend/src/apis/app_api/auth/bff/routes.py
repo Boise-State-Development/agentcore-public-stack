@@ -128,6 +128,11 @@ def _require_ready(config: BFFAuthConfig) -> None:
 # tampering payloads through the BFF.
 _PROVIDER_ID_ALLOWED = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
+# Cap on `return_to` length. Most browsers tolerate longer URLs, but a
+# session-cookie-bearing redirect target should not be a giant query
+# string — anything past this is almost certainly junk.
+_RETURN_TO_MAX_LENGTH = 2048
+
 
 def _sanitized_provider_id(raw: Optional[str]) -> Optional[str]:
     """Return `raw` if it matches the IdP-name allowlist, else None.
@@ -141,8 +146,44 @@ def _sanitized_provider_id(raw: Optional[str]) -> Optional[str]:
     return raw if _PROVIDER_ID_ALLOWED.match(raw) else None
 
 
+def _sanitized_return_to(raw: Optional[str]) -> Optional[str]:
+    """Return a same-origin `return_to` path or None.
+
+    Hard rules — anything that fails drops the deep link silently and
+    falls back to `BFF_POST_LOGIN_REDIRECT_URL`:
+
+      - Must start with `/`. Bare paths only — no scheme, no host.
+      - Must NOT start with `//`. Defeats the protocol-relative URL
+        trick `//evil.com/abc` which a browser would resolve against
+        the BFF's scheme but to a foreign host.
+      - Must NOT start with `/\\`. Some browsers normalise `\\` to `/`
+        in URL parsing, which would re-enable the protocol-relative
+        bypass past the `//` check.
+      - Must contain no CR/LF. Defeats response-splitting via the
+        Location header.
+      - Length capped at `_RETURN_TO_MAX_LENGTH`.
+
+    The result is used as a Location header value, never passed to a
+    template or HTML context, so the SPA's own routing handles it.
+    """
+    if raw is None:
+        return None
+    if len(raw) > _RETURN_TO_MAX_LENGTH:
+        return None
+    if "\r" in raw or "\n" in raw:
+        return None
+    if not raw.startswith("/"):
+        return None
+    if raw.startswith("//") or raw.startswith("/\\"):
+        return None
+    return raw
+
+
 @router.get("/login", summary="Begin the BFF OAuth code flow")
-async def bff_login(provider: Optional[str] = None) -> RedirectResponse:
+async def bff_login(
+    provider: Optional[str] = None,
+    return_to: Optional[str] = None,
+) -> RedirectResponse:
     """302 to the Cognito Hosted UI authorize endpoint with a fresh state.
 
     Uses the existing `state_store` (in-memory locally, DynamoDB in cloud)
@@ -154,6 +195,12 @@ async def bff_login(provider: Optional[str] = None) -> RedirectResponse:
     the Hosted UI chooser and lands on the right IdP directly. Values
     are filtered through `_PROVIDER_ID_ALLOWED` to defeat header/URL
     injection via the query string.
+
+    When `return_to` is supplied, it's stashed in the OIDC state and the
+    callback redirects there on success instead of the configured
+    post-login URL — so a deep link the user followed before logging in
+    survives the round-trip. Values are filtered through
+    `_sanitized_return_to` to keep the redirect same-origin only.
     """
     config = BFFAuthConfig.from_env()
     _require_ready(config)
@@ -164,6 +211,7 @@ async def bff_login(provider: Optional[str] = None) -> RedirectResponse:
         OIDCStateData(
             redirect_uri=config.callback_url,
             provider_id="cognito-bff",
+            return_to=_sanitized_return_to(return_to),
         ),
         ttl_seconds=_STATE_TTL_SECONDS,
     )
@@ -211,7 +259,7 @@ async def bff_callback(
     if not code or not state:
         return _redirect_with_cookies_cleared(config, reason="missing_params")
 
-    state_ok, _state_data = _get_state_store().get_and_delete_state(state)
+    state_ok, state_data = _get_state_store().get_and_delete_state(state)
     if not state_ok:
         # Either the state was forged, replayed, or expired. All three are
         # terminal — the user re-initiates from /auth/login.
@@ -272,8 +320,19 @@ async def bff_callback(
     sealed = codec.seal(CookiePayload(session_id=session_id))
     csrf_token = CSRFHelper.derive_token(csrf_secret, session_id)
 
+    # Honour the `return_to` deep link the SPA stashed at /auth/login.
+    # The path was already allowlist-validated (same-origin only) before
+    # being committed to the OIDC state, so it's safe to use directly as
+    # the Location header value here. Falls back to the configured post-
+    # login URL when no deep link was requested.
+    redirect_target = (
+        state_data.return_to
+        if state_data is not None and state_data.return_to
+        else config.post_login_redirect_url
+    )
+
     response = RedirectResponse(
-        url=config.post_login_redirect_url,
+        url=redirect_target,
         status_code=status.HTTP_302_FOUND,
     )
     set_session_cookies(
