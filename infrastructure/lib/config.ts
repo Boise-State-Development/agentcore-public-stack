@@ -4,6 +4,11 @@ export interface CognitoConfig {
   domainPrefix?: string;       // Custom Cognito domain prefix (defaults to projectPrefix)
   callbackUrls?: string[];     // Additional callback URLs beyond auto-derived
   logoutUrls?: string[];       // Additional logout URLs beyond auto-derived
+  // Extra federated IdPs the BFF client should accept beyond the built-in
+  // Cognito user directory. Names match the `ProviderName` from
+  // `cognito-idp create-identity-provider` (e.g. `ms-entra-id`).
+  // COGNITO is always included; entries here are added on top.
+  supportedIdentityProviders?: string[];
   passwordMinLength?: number;  // Override default 8
 }
 
@@ -186,6 +191,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('cognito')?.callbackUrls,
       logoutUrls: process.env.CDK_COGNITO_LOGOUT_URLS?.split(',')
         || scope.node.tryGetContext('cognito')?.logoutUrls,
+      supportedIdentityProviders: process.env.CDK_COGNITO_SUPPORTED_IDPS?.split(',')
+        .map((s) => s.trim()).filter(Boolean)
+        || scope.node.tryGetContext('cognito')?.supportedIdentityProviders,
       passwordMinLength: parseIntEnv(process.env.CDK_COGNITO_PASSWORD_MIN_LENGTH)
         || scope.node.tryGetContext('cognito')?.passwordMinLength
         || 8,

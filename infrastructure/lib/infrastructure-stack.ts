@@ -1218,6 +1218,16 @@ export class InfrastructureStack extends cdk.Stack {
       bffLogoutUrls.push(...config.cognito.logoutUrls);
     }
 
+    // Federated IdPs (Entra, Google, etc.) are configured on the user pool
+    // out-of-band today and listed here by ProviderName. COGNITO is always
+    // included so username/password sign-in keeps working alongside SSO.
+    const bffSupportedIdentityProviders: cognito.UserPoolClientIdentityProvider[] = [
+      cognito.UserPoolClientIdentityProvider.COGNITO,
+      ...(config.cognito.supportedIdentityProviders ?? [])
+        .filter((name) => name !== 'COGNITO')
+        .map((name) => cognito.UserPoolClientIdentityProvider.custom(name)),
+    ];
+
     const bffAppClient = userPool.addClient('CognitoBFFAppClient', {
       userPoolClientName: getResourceName(config, 'bff-app-client'),
       generateSecret: true,
@@ -1233,9 +1243,7 @@ export class InfrastructureStack extends cdk.Stack {
         logoutUrls: bffLogoutUrls,
       },
       preventUserExistenceErrors: true,
-      supportedIdentityProviders: [
-        cognito.UserPoolClientIdentityProvider.COGNITO,
-      ],
+      supportedIdentityProviders: bffSupportedIdentityProviders,
     });
 
     // Persist the generated client secret in Secrets Manager so app-api can
