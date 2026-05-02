@@ -45,6 +45,13 @@ from .token_exchange import (
 
 logger = logging.getLogger(__name__)
 
+
+def _sanitize_for_log(value: Optional[str]) -> str:
+    """Normalize untrusted input before logging to prevent log forging."""
+    if value is None:
+        return ""
+    return value.replace("\r", "").replace("\n", "")
+
 router = APIRouter(prefix="/auth", tags=["auth-bff"])
 
 # State token TTL. The user has to bounce off Cognito and back, so 10 minutes
@@ -167,7 +174,7 @@ async def bff_callback(
     _require_ready(config)
 
     if error:
-        logger.info("Cognito returned OAuth error: %s", error)
+        logger.info("Cognito returned OAuth error: %s", _sanitize_for_log(error))
         return _redirect_with_cookies_cleared(config, reason="oauth_error")
 
     if not code or not state:
