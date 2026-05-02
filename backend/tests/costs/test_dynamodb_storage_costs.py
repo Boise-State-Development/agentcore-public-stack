@@ -207,6 +207,86 @@ class TestUpdateUserCostSummary:
         assert bd["claude_sonnet"]["requests"] == 1
 
 
+# ── defensive cost_delta coercion ────────────────────────────────────────────
+
+
+class TestUpdateUserCostSummaryDefensiveCoercion:
+    """Regression tests for the Decimal(str(cost_delta)) ConversionSyntax crash.
+
+    Upstream callers occasionally hand the summary writer a dict (the new
+    streaming-cost breakdown), None (uncomputed cost), or a non-finite float
+    (from None pricing fields). All of these used to raise InvalidOperation
+    and abort the rollup write. They must now degrade to a 0 contribution.
+    """
+
+    @pytest.mark.asyncio
+    async def test_none_cost_delta_does_not_raise(self, storage, sample_usage_delta):
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta=None, usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP,
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert result["totalCost"] == pytest.approx(0.0)
+        assert result["totalRequests"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dict_cost_delta_does_not_raise(self, storage, sample_usage_delta):
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta={"total": 0.0, "inputCost": 0.0, "outputCost": 0.0},
+            usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP,
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert result["totalCost"] == pytest.approx(0.0)
+        assert result["totalRequests"] == 1
+
+    @pytest.mark.asyncio
+    async def test_nan_cost_delta_does_not_raise(self, storage, sample_usage_delta):
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta=float("nan"), usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP,
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert result["totalCost"] == pytest.approx(0.0)
+
+    @pytest.mark.asyncio
+    async def test_inf_cost_delta_does_not_raise(self, storage, sample_usage_delta):
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta=float("inf"), usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP,
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert result["totalCost"] == pytest.approx(0.0)
+
+    @pytest.mark.asyncio
+    async def test_none_cache_savings_does_not_raise(self, storage, sample_usage_delta):
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta=1.0, usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP, cache_savings_delta=None,
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert result["totalCost"] == pytest.approx(1.0)
+        assert result["cacheSavings"] == pytest.approx(0.0)
+
+    @pytest.mark.asyncio
+    async def test_dict_cost_delta_with_model_id_does_not_raise(self, storage, sample_usage_delta):
+        """The model-breakdown sub-write also coerces cost_delta safely."""
+        await storage.update_user_cost_summary(
+            user_id="u1", period=PERIOD,
+            cost_delta={"total": 0.0}, usage_delta=sample_usage_delta,
+            timestamp=TIMESTAMP,
+            model_id="gpt-4o", model_name="GPT-4o", provider="openai",
+        )
+        result = await storage.get_user_cost_summary("u1", PERIOD)
+        assert "gpt_4o" in result["modelBreakdown"]
+        assert result["modelBreakdown"]["gpt_4o"]["cost"] == pytest.approx(0.0)
+
+
 # ── _update_model_breakdown ──────────────────────────────────────────────────
 
 class TestUpdateModelBreakdown:
