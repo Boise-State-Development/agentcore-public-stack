@@ -9,6 +9,7 @@ Architecture:
 
 import logging
 import json
+import math
 import os
 import base64
 from typing import Iterable, List, Optional, Tuple, Any, Dict
@@ -53,6 +54,29 @@ def _convert_decimal_to_float(obj: Any) -> Any:
         return [_convert_decimal_to_float(item) for item in obj]
     else:
         return obj
+
+
+def _coerce_cost_total(raw: Any) -> float:
+    """Normalize a ``MessageMetadata.cost`` value to a finite float total.
+
+    ``MessageMetadata.cost`` is ``Optional[Union[float, Dict[str, float]]]`` —
+    the streaming path stores a breakdown dict (``{"total": ..., "inputCost": ...}``)
+    while the legacy path stores a bare float. Downstream summary writers
+    only want the scalar total; passing the dict through caused
+    ``Decimal(str(...))`` to throw ``ConversionSyntax`` at the DynamoDB
+    boundary. NaN/inf and non-numeric values collapse to 0.0.
+    """
+    if isinstance(raw, dict):
+        raw = raw.get("total")
+    if raw is None:
+        return 0.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    return value
 
 
 
@@ -301,8 +325,10 @@ async def _update_cost_summary_async(
         import asyncio
         from datetime import datetime
 
-        # Extract cost and usage from metadata
-        cost = message_metadata.cost or 0.0
+        # Extract cost and usage from metadata. cost may be a breakdown dict
+        # ({"total": ..., "inputCost": ...}) on the streaming path or a bare
+        # float on the legacy path; the summary writer needs the scalar total.
+        cost = _coerce_cost_total(message_metadata.cost)
         token_usage = message_metadata.token_usage
 
         usage_delta = {}
@@ -342,8 +368,11 @@ async def _update_cost_summary_async(
 
                     logger.debug(f"🔍 Pricing dict: {pricing_dict}")
 
-                    input_price = pricing_dict.get("inputPricePerMtok", 0)
-                    cache_read_price = pricing_dict.get("cacheReadPricePerMtok", 0)
+                    # `or 0` (not `.get(..., 0)`) — managed-model rows can
+                    # store an explicit None for cache_read pricing, which
+                    # would otherwise propagate into arithmetic below.
+                    input_price = pricing_dict.get("inputPricePerMtok") or 0
+                    cache_read_price = pricing_dict.get("cacheReadPricePerMtok") or 0
 
                     # Calculate savings: what we would have paid vs what we actually paid
                     standard_cost = (cache_read_tokens / 1_000_000) * input_price

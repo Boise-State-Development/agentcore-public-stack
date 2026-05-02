@@ -29,7 +29,31 @@ Schema:
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+
+
+def _safe_decimal(value: Any) -> Decimal:
+    """Coerce ``value`` to a finite ``Decimal``, falling back to ``Decimal("0")``.
+
+    The cost-summary writers receive ``cost_delta`` / ``cache_savings_delta``
+    from upstream call sites that occasionally hand over a dict, ``None``,
+    or a non-finite float (NaN / inf). ``Decimal(str(...))`` raises
+    ``decimal.InvalidOperation`` for those inputs, and DynamoDB rejects
+    NaN / inf even when conversion succeeds. Treating bad input as zero
+    keeps the rollup write atomic and idempotent rather than crashing the
+    whole non-critical summary update.
+    """
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else Decimal("0")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
+    if not result.is_finite():
+        return Decimal("0")
+    return result
 
 try:
     import boto3
@@ -332,13 +356,13 @@ class DynamoDBStorage(MetadataStorage):
             """
 
             expression_values = {
-                ":cost": Decimal(str(cost_delta)),
+                ":cost": _safe_decimal(cost_delta),
                 ":one": 1,
                 ":input": usage_delta.get("inputTokens", 0),
                 ":output": usage_delta.get("outputTokens", 0),
                 ":cacheRead": usage_delta.get("cacheReadInputTokens", 0),
                 ":cacheWrite": usage_delta.get("cacheWriteInputTokens", 0),
-                ":savings": Decimal(str(cache_savings_delta)),
+                ":savings": _safe_decimal(cache_savings_delta),
                 ":now": timestamp,
                 ":periodStart": f"{period}-01T00:00:00Z",
                 ":periodEnd": f"{period}-31T23:59:59Z",
@@ -467,7 +491,7 @@ class DynamoDBStorage(MetadataStorage):
                     "#cacheWriteTokens": "cacheWriteTokens"
                 },
                 ExpressionAttributeValues={
-                    ":cost": Decimal(str(cost_delta)),
+                    ":cost": _safe_decimal(cost_delta),
                     ":one": 1,
                     ":input": usage_delta.get("inputTokens", 0),
                     ":output": usage_delta.get("outputTokens", 0),
@@ -842,7 +866,7 @@ class DynamoDBStorage(MetadataStorage):
             """
 
             expression_values = {
-                ":cost": Decimal(str(cost_delta)),
+                ":cost": _safe_decimal(cost_delta),
                 ":one": 1,
                 ":input": usage_delta.get("inputTokens", 0),
                 ":output": usage_delta.get("outputTokens", 0),
@@ -916,13 +940,13 @@ class DynamoDBStorage(MetadataStorage):
             """
 
             expression_values = {
-                ":cost": Decimal(str(cost_delta)),
+                ":cost": _safe_decimal(cost_delta),
                 ":one": 1,
                 ":input": usage_delta.get("inputTokens", 0),
                 ":output": usage_delta.get("outputTokens", 0),
                 ":cacheRead": usage_delta.get("cacheReadInputTokens", 0),
                 ":cacheWrite": usage_delta.get("cacheWriteInputTokens", 0),
-                ":savings": Decimal(str(cache_savings_delta)),
+                ":savings": _safe_decimal(cache_savings_delta),
                 ":now": datetime.now(timezone.utc).isoformat(),
                 ":type": "monthly"
             }
@@ -995,7 +1019,7 @@ class DynamoDBStorage(MetadataStorage):
             """
 
             expression_values = {
-                ":cost": Decimal(str(cost_delta)),
+                ":cost": _safe_decimal(cost_delta),
                 ":one": 1,
                 ":input": usage_delta.get("inputTokens", 0),
                 ":output": usage_delta.get("outputTokens", 0),
