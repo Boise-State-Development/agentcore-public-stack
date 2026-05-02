@@ -74,7 +74,9 @@ def resolve_bff_client_secret(
                 parsed = json.loads(value)
                 value = parsed.get("clientSecret") or parsed.get("client_secret") or value
             except json.JSONDecodeError:
-                pass
+                logger.debug(
+                    "BFF client secret looked like JSON but failed to decode; using raw SecretString value"
+                )
         if not value:
             raise CognitoRefreshError("BFF client secret resolved to empty string")
         _client_secret_cache = value
