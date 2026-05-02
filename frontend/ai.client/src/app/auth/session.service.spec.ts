@@ -184,10 +184,34 @@ describe('SessionService', () => {
     });
 
     it('respects an explicit returnUrl', () => {
-      service.redirectToLogin('/somewhere/else');
+      service.redirectToLogin({ returnUrl: '/somewhere/else' });
 
       expect(window.location.href).toBe(
         'http://localhost:8000/auth/login?return_to=%2Fsomewhere%2Felse',
+      );
+    });
+
+    it('forwards providerId as the `provider` query param', () => {
+      window.location.pathname = '/';
+      window.location.search = '';
+
+      service.redirectToLogin({ providerId: 'GoogleSSO' });
+
+      // The BFF reads `provider` and forwards to Cognito as
+      // `identity_provider`, which short-circuits the Hosted UI chooser.
+      expect(window.location.href).toBe(
+        'http://localhost:8000/auth/login?return_to=%2F&provider=GoogleSSO',
+      );
+    });
+
+    it('skips the provider param when providerId is empty', () => {
+      window.location.pathname = '/';
+      window.location.search = '';
+
+      service.redirectToLogin({ providerId: '' });
+
+      expect(window.location.href).toBe(
+        'http://localhost:8000/auth/login?return_to=%2F',
       );
     });
   });

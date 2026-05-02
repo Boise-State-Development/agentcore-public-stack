@@ -87,14 +87,24 @@ export class SessionService {
    * Navigate the browser to `{appApiUrl}/auth/login`. The BFF stashes
    * a state cookie and 302s on to Cognito Hosted UI.
    *
-   * @param returnUrl Optional path to land on after the round-trip. The
-   *   BFF's `/auth/callback` honours its own `BFF_POST_LOGIN_REDIRECT_URL`
-   *   today; the `returnUrl` query is plumbed for a future enhancement
-   *   and is harmless if the BFF ignores it.
+   * @param options.returnUrl Optional path to land on after the round-trip.
+   *   The BFF's `/auth/callback` honours its own
+   *   `BFF_POST_LOGIN_REDIRECT_URL` today; the `return_to` query is plumbed
+   *   for a future enhancement and is harmless if the BFF ignores it.
+   * @param options.providerId Optional federated IdP name (e.g. the
+   *   value the SPA's federated-login button knows about). The BFF
+   *   forwards it to Cognito as `identity_provider` so the user skips
+   *   the Hosted UI chooser and lands on that IdP directly. The BFF
+   *   sanitises the value server-side; an unknown provider falls back
+   *   to the chooser rather than failing.
    */
-  redirectToLogin(returnUrl?: string): void {
-    const target = returnUrl ?? `${window.location.pathname}${window.location.search}`;
-    const params = new URLSearchParams({ return_to: target });
+  redirectToLogin(options?: { returnUrl?: string; providerId?: string }): void {
+    const returnUrl = options?.returnUrl
+      ?? `${window.location.pathname}${window.location.search}`;
+    const params = new URLSearchParams({ return_to: returnUrl });
+    if (options?.providerId) {
+      params.set('provider', options.providerId);
+    }
     window.location.href = `${this.baseUrl()}/auth/login?${params.toString()}`;
   }
 

@@ -190,6 +190,54 @@ def test_forwards_request_body_verbatim(
     assert captured["content_type"] == "application/json"
 
 
+def test_forwards_oauth2_callback_url_header(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
+) -> None:
+    """The SPA sets OAuth2CallbackUrl on /chat/stream so inference-api's
+    AgentCoreContextMiddleware can scope on-tool OAuth consent redirects
+    back to the SPA's origin. The proxy must forward it verbatim — without
+    it, `oauth_required` SSE events can't complete a consent flow."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["oauth_callback"] = request.headers.get("oauth2callbackurl")
+        return httpx.Response(
+            200, content=b"event: done\ndata: {}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(record=_record(), user_override=_user())
+
+    TestClient(app).post(
+        chat_path,
+        json={"message": "hi"},
+        headers={"OAuth2CallbackUrl": "https://app.example.com/oauth-complete"},
+    )
+    assert captured["oauth_callback"] == "https://app.example.com/oauth-complete"
+
+
+def test_omits_oauth2_callback_url_header_when_caller_did_not_send_one(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
+) -> None:
+    """No SPA-supplied header → don't synthesize one. Inference-api falls
+    back to its env-var default (set by CDK) when missing."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["oauth_callback"] = request.headers.get("oauth2callbackurl")
+        return httpx.Response(
+            200, content=b"event: done\ndata: {}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(record=_record(), user_override=_user())
+
+    TestClient(app).post(chat_path, json={"message": "hi"})
+    assert captured["oauth_callback"] is None
+
+
 def test_targets_invocations_path_on_inference_api(
     monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:

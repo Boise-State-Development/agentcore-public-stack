@@ -3,7 +3,7 @@ import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
-import { AuthService } from '../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../auth/session.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
@@ -17,7 +17,7 @@ import { TooltipDirective } from '../tooltip/tooltip.directive';
 export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
-  private authService = inject(AuthService);
+  private bffSession = inject(BffSessionService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -51,7 +51,13 @@ export class Sidenav {
     this.sidenavService.toggleCollapsed();
   }
 
-  handleLogout() {
-    this.authService.logout();
+  async handleLogout(): Promise<void> {
+    // BFF logout: 204 + cleared cookies. The user is then anonymous;
+    // the next page navigation triggers SessionService.bootstrap() in
+    // APP_INITIALIZER, which 401s and redirects to BFF /auth/login.
+    // We push the user to /login explicitly here so the redirect-to-OAuth
+    // happens from a known route rather than wherever the sidenav lived.
+    await this.bffSession.logout();
+    this.router.navigate(['/auth/login']);
   }
 }

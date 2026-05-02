@@ -4,13 +4,13 @@ import { Router } from '@angular/router';
 import { signal } from '@angular/core';
 import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
-import { AuthService } from '../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 
 describe('Sidenav', () => {
   let mockRouter: any;
   let mockSessionService: any;
-  let mockAuthService: any;
+  let mockBffSession: any;
   let mockSidenavService: any;
   let mockUserService: any;
 
@@ -21,7 +21,8 @@ describe('Sidenav', () => {
       currentSession: signal({ sessionId: 'test-session', userId: 'u1', title: 'Test Session', status: 'active' as const, createdAt: '', lastMessageAt: '', messageCount: 0 }),
       hasCurrentSession: signal(true),
     };
-    mockAuthService = { logout: vi.fn() };
+    // Phase 6c: logout is owned by the BFF SessionService now.
+    mockBffSession = { logout: vi.fn().mockResolvedValue(undefined) };
     mockSidenavService = {
       isCollapsed: signal(false),
       close: vi.fn(),
@@ -33,7 +34,7 @@ describe('Sidenav', () => {
       providers: [
         { provide: Router, useValue: mockRouter },
         { provide: SessionService, useValue: mockSessionService },
-        { provide: AuthService, useValue: mockAuthService },
+        { provide: BffSessionService, useValue: mockBffSession },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: UserService, useValue: mockUserService },
       ],
@@ -70,9 +71,10 @@ describe('Sidenav', () => {
     expect(mockSidenavService.toggleCollapsed).toHaveBeenCalled();
   });
 
-  it('should handle logout', async () => {
+  it('should handle logout via the BFF and route the user to /auth/login', async () => {
     const component = await createComponent();
-    component.handleLogout();
-    expect(mockAuthService.logout).toHaveBeenCalled();
+    await component.handleLogout();
+    expect(mockBffSession.logout).toHaveBeenCalledTimes(1);
+    expect(mockRouter.navigate).toHaveBeenCalledWith(['/auth/login']);
   });
 });

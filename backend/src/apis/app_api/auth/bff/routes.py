@@ -16,6 +16,7 @@ production code path consumes the cookies yet.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import time
 import urllib.parse
@@ -119,13 +120,40 @@ def _require_ready(config: BFFAuthConfig) -> None:
 # ─── /auth/login ───────────────────────────────────────────────────────
 
 
+# Cognito's `identity_provider` query parameter accepts the IdP name and
+# tells Cognito to skip the Hosted UI provider chooser and forward the
+# user straight to that IdP. The SPA's federated-login buttons rely on
+# this for one-click SSO; we forward an allowlisted set of characters
+# only so a malicious referrer can't smuggle CRLF or other authorize-URL
+# tampering payloads through the BFF.
+_PROVIDER_ID_ALLOWED = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def _sanitized_provider_id(raw: Optional[str]) -> Optional[str]:
+    """Return `raw` if it matches the IdP-name allowlist, else None.
+
+    Reject silently rather than 4xx so an old SPA bundle that sends a
+    legacy provider ID doesn't break the login flow — Cognito will just
+    show its provider chooser instead.
+    """
+    if raw is None:
+        return None
+    return raw if _PROVIDER_ID_ALLOWED.match(raw) else None
+
+
 @router.get("/login", summary="Begin the BFF OAuth code flow")
-async def bff_login() -> RedirectResponse:
+async def bff_login(provider: Optional[str] = None) -> RedirectResponse:
     """302 to the Cognito Hosted UI authorize endpoint with a fresh state.
 
     Uses the existing `state_store` (in-memory locally, DynamoDB in cloud)
     to bind one-time-use state tokens to a TTL — the callback validates and
     deletes the state in one atomic step.
+
+    When `provider` is supplied (e.g. by the SPA's federated-IdP button),
+    it's forwarded to Cognito as `identity_provider` so the user skips
+    the Hosted UI chooser and lands on the right IdP directly. Values
+    are filtered through `_PROVIDER_ID_ALLOWED` to defeat header/URL
+    injection via the query string.
     """
     config = BFFAuthConfig.from_env()
     _require_ready(config)
@@ -140,15 +168,18 @@ async def bff_login() -> RedirectResponse:
         ttl_seconds=_STATE_TTL_SECONDS,
     )
 
-    params = urllib.parse.urlencode(
-        {
-            "response_type": "code",
-            "client_id": config.bff_config.cognito_bff_app_client_id,
-            "scope": _AUTHORIZE_SCOPES,
-            "redirect_uri": config.callback_url,
-            "state": state,
-        }
-    )
+    authorize_params = {
+        "response_type": "code",
+        "client_id": config.bff_config.cognito_bff_app_client_id,
+        "scope": _AUTHORIZE_SCOPES,
+        "redirect_uri": config.callback_url,
+        "state": state,
+    }
+    sanitized_provider = _sanitized_provider_id(provider)
+    if sanitized_provider:
+        authorize_params["identity_provider"] = sanitized_provider
+
+    params = urllib.parse.urlencode(authorize_params)
     authorize_url = f"{config.cognito_domain_url}/oauth2/authorize?{params}"
     return RedirectResponse(url=authorize_url, status_code=status.HTTP_302_FOUND)
 

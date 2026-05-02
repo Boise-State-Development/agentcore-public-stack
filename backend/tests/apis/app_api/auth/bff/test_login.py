@@ -89,3 +89,61 @@ def test_login_states_are_unique_per_request(app_for_login):
         )
     )["state"]
     assert s1 != s2
+
+
+# ─── identity_provider passthrough (Phase 6c) ──────────────────────────
+
+
+def _authorize_params(response) -> dict[str, str]:
+    return dict(
+        urllib.parse.parse_qsl(
+            urllib.parse.urlparse(response.headers["location"]).query
+        )
+    )
+
+
+def test_login_forwards_provider_to_cognito_as_identity_provider(app_for_login):
+    """Phase 6c: SPA's federated-login buttons pass `?provider=<idp>` so
+    Cognito skips the Hosted UI chooser and lands on the right IdP."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login?provider=GoogleSSO")
+
+    assert response.status_code == 302
+    params = _authorize_params(response)
+    assert params["identity_provider"] == "GoogleSSO"
+    # Other authorize params still present.
+    assert params["response_type"] == "code"
+    assert params["state"]
+
+
+def test_login_omits_identity_provider_when_provider_param_absent(app_for_login):
+    """No `?provider=` → Cognito Hosted UI shows its provider chooser."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get("/auth/login")
+
+    params = _authorize_params(response)
+    assert "identity_provider" not in params
+
+
+@pytest.mark.parametrize(
+    "bad_provider",
+    [
+        "Google\r\nSet-Cookie: x=y",  # CRLF injection — would split the URL
+        "evil%20<script>",            # angle brackets / spaces
+        "google&extra=injected",      # `&` would split out a forged param
+        "x" * 200,                    # over the length cap
+        "",                           # empty — distinct from "absent"
+    ],
+)
+def test_login_silently_drops_malformed_provider(app_for_login, bad_provider):
+    """Reject silently rather than 4xx — an old SPA bundle that sends an
+    invalid provider should still complete login through the chooser
+    instead of dead-ending on a 400."""
+    client = TestClient(app_for_login, follow_redirects=False)
+    response = client.get(
+        "/auth/login", params={"provider": bad_provider}
+    )
+
+    assert response.status_code == 302
+    params = _authorize_params(response)
+    assert "identity_provider" not in params

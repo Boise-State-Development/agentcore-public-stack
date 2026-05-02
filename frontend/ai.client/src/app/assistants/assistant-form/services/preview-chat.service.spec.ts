@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signal } from '@angular/core';
 import { PreviewChatService } from './preview-chat.service';
-import { AuthService } from '../../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
 
 // Mock fetchEventSource
@@ -12,31 +12,32 @@ vi.mock('@microsoft/fetch-event-source', () => ({
 
 describe('PreviewChatService', () => {
   let service: PreviewChatService;
-  let authService: any;
+  let bffSession: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    
-    const authServiceMock = {
-      isTokenExpired: vi.fn().mockReturnValue(false),
-      getAccessToken: vi.fn().mockReturnValue('mock-token'),
-      refreshAccessToken: vi.fn(),
+
+    // Phase 6c: preview chat now goes through the BFF chat proxy with
+    // cookie auth, so the only auth surface the service touches is the
+    // CSRF helper on the BFF SessionService.
+    const bffSessionMock = {
+      csrfHeaders: vi.fn().mockReturnValue({}),
     };
 
     const configServiceMock = {
-      inferenceApiUrl: signal('http://localhost:8001'),
+      appApiUrl: signal('http://localhost:8000'),
     };
 
     TestBed.configureTestingModule({
       providers: [
         PreviewChatService,
-        { provide: AuthService, useValue: authServiceMock },
+        { provide: BffSessionService, useValue: bffSessionMock },
         { provide: ConfigService, useValue: configServiceMock },
       ],
     });
 
     service = TestBed.inject(PreviewChatService);
-    authService = TestBed.inject(AuthService);
+    bffSession = TestBed.inject(BffSessionService);
   });
 
   afterEach(() => {
@@ -104,15 +105,16 @@ describe('PreviewChatService', () => {
     expect(service.sessionId()).toMatch(/^preview-/);
   });
 
-  it('should handle auth token refresh', async () => {
-    authService.isTokenExpired.mockReturnValue(true);
-    authService.refreshAccessToken.mockResolvedValue(undefined);
+  it('attaches the CSRF header from the BFF SessionService when present', async () => {
+    bffSession.csrfHeaders.mockReturnValue({ 'X-CSRF-Token': 'tok-xyz' });
 
     const { fetchEventSource } = await import('@microsoft/fetch-event-source');
     (fetchEventSource as any).mockResolvedValue(undefined);
 
     await service.sendMessage('Hello', 'assistant-1');
 
-    expect(authService.refreshAccessToken).toHaveBeenCalled();
+    const init = (fetchEventSource as any).mock.calls.at(-1)[1];
+    expect(init.headers['X-CSRF-Token']).toBe('tok-xyz');
+    expect(init.credentials).toBe('include');
   });
 });

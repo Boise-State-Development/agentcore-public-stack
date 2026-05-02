@@ -1,6 +1,16 @@
 import { APP_INITIALIZER } from '@angular/core';
 import { ConfigService } from './services/config.service';
+import { SessionService } from './auth/session.service';
 import { appConfig } from './app.config';
+
+/**
+ * Phase 6c chained two services into APP_INITIALIZER: ConfigService loads
+ * runtime config first, then SessionService bootstraps the BFF cookie
+ * session. Tests below exercise both paths.
+ */
+function makeMockSessionService() {
+  return { bootstrap: vi.fn().mockResolvedValue(undefined) } as any;
+}
 
 describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => {
   describe('APP_INITIALIZER Configuration', () => {
@@ -19,13 +29,15 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
       );
     });
 
-    it('should have ConfigService as dependency for APP_INITIALIZER', () => {
+    it('should have ConfigService and SessionService as dependencies for APP_INITIALIZER', () => {
       const providers = appConfig.providers || [];
       const initializerProvider = providers.find(
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      expect(initializerProvider?.deps).toEqual([ConfigService]);
+      // Order matters — `initializeApp(configService, sessionService)`
+      // awaits config before bootstrap reads `appApiUrl`.
+      expect(initializerProvider?.deps).toEqual([ConfigService, SessionService]);
     });
 
     it('should configure APP_INITIALIZER as multi-provider', () => {
@@ -63,7 +75,7 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
       ) as any;
 
       // Execute the factory with the mock service
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
 
       // Verify it returns a function
       expect(typeof initializerFn).toBe('function');
@@ -93,7 +105,7 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
       ) as any;
 
       // Create and execute the initializer
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       const result = initializerFn();
 
       // Should be a Promise
@@ -130,12 +142,12 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      // Verify ConfigService is injected into the factory
-      expect(initializerProvider?.deps).toEqual([ConfigService]);
-      
+      // Verify both services are injected into the factory
+      expect(initializerProvider?.deps).toEqual([ConfigService, SessionService]);
+
       // Verify the factory function signature
       expect(initializerProvider?.useFactory).toBeDefined();
-      expect(initializerProvider?.useFactory.length).toBe(1); // Takes 1 argument (ConfigService)
+      expect(initializerProvider?.useFactory.length).toBe(2);
     });
   });
 
@@ -151,7 +163,7 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       initializerFn();
 
       // Should call loadConfig, not any other method
@@ -170,7 +182,7 @@ describe('APP_INITIALIZER Integration - App Bootstrap with Valid Config', () => 
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       const result = initializerFn();
 
       // The promise should reject (Angular will handle this)
@@ -196,7 +208,7 @@ describe('APP_INITIALIZER Integration - Fallback Scenarios', () => {
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       const result = initializerFn();
 
       // Should resolve successfully (fallback handled internally)
@@ -215,7 +227,7 @@ describe('APP_INITIALIZER Integration - Fallback Scenarios', () => {
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       
       // The initializer will reject, but Angular's error handling
       // should allow the app to continue (with fallback config)
@@ -243,7 +255,7 @@ describe('APP_INITIALIZER Integration - Fallback Scenarios', () => {
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       const result = initializerFn();
 
       await expect(result).resolves.toBeUndefined();
@@ -263,7 +275,7 @@ describe('APP_INITIALIZER Integration - Fallback Scenarios', () => {
         (p: any) => p.provide === APP_INITIALIZER
       ) as any;
 
-      const initializerFn = initializerProvider.useFactory(mockConfigService);
+      const initializerFn = initializerProvider.useFactory(mockConfigService, makeMockSessionService());
       const result = initializerFn();
 
       await expect(result).resolves.toBeUndefined();

@@ -3,8 +3,8 @@ import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-sou
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ConfigService } from '../../../services/config.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { firstValueFrom } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { SessionService } from '../session/session.service';
@@ -40,33 +40,48 @@ export class ChatHttpService {
   private streamParserService = inject(StreamParserService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private http = inject(HttpClient);
   private sessionService = inject(SessionService);
+  private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
 
   async sendChatRequest(requestObject: any): Promise<void> {
     const abortController = this.chatStateService.getAbortController();
 
-    const token = await this.getBearerTokenForStreamingResponse();
+    // Phase 6c: stream goes through the app-api BFF proxy at
+    // `${appApiUrl}/chat/stream` (cookie auth) instead of hitting
+    // inference-api `/invocations` directly with a Bearer token. Same
+    // SSE protocol on the wire — the proxy is transparent. Cookies
+    // travel because the SPA and `/api/*` are same-origin via
+    // CloudFront; for local dev the same origin still works because
+    // the SPA is configured to point at `http://localhost:8000` (the
+    // app-api directly) and the BFF dual-auth dep accepts Bearer too.
+    const appApiUrl = this.config.appApiUrl();
+    if (!appApiUrl) {
+      throw new FatalError('App API URL not configured. Please check your configuration.');
+    }
+    const baseUrl = appApiUrl.endsWith('/') ? appApiUrl.slice(0, -1) : appApiUrl;
 
-        // Single runtime endpoint from configuration
-        const runtimeEndpointUrl = this.config.inferenceApiUrl();
-        if (!runtimeEndpointUrl) {
-          throw new FatalError('Inference API URL not configured. Please check your configuration.');
-        }
+    // `fetchEventSource` is outside the HttpClient pipeline, so the
+    // csrfInterceptor never runs against it — attach the X-CSRF-Token
+    // header manually using the same SessionService helper. Returns
+    // an empty object before bootstrap or in the Bearer rollback path.
+    const csrfHeaders = this.bffSession.csrfHeaders();
 
-    // Normalize: strip trailing /invocations if already present to avoid doubling
-    const baseUrl = runtimeEndpointUrl.replace(/\/invocations\/?$/, '');
-
-    return fetchEventSource(`${baseUrl}/invocations?qualifier=DEFAULT`, {
+    return fetchEventSource(`${baseUrl}/chat/stream`, {
       method: 'POST',
+      // Send the BFF session cookie (`__Host-bff_session`) on cross-origin
+      // dev (localhost:4200 → localhost:8000) and on same-origin prod
+      // (CloudFront). Browsers attach same-origin cookies regardless;
+      // `include` is the explicit form that also works cross-origin
+      // when the backend's CORS allows credentials.
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
         Accept: 'text/event-stream',
         OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
+        ...csrfHeaders,
       },
       body: JSON.stringify(requestObject),
       signal: abortController.signal,
@@ -228,29 +243,6 @@ export class ChatHttpService {
       // Don't show to user as it's a background operation
       throw error;
     }
-  }
-
-  async getBearerTokenForStreamingResponse(): Promise<string> {
-    // Get token from AuthService, refresh if expired
-    let token = this.authService.getAccessToken();
-    if (!token) {
-      throw new FatalError('No authentication token available. Please login again.');
-    }
-
-    // Check if token needs refresh
-    if (this.authService.isTokenExpired()) {
-      try {
-        await this.authService.refreshAccessToken();
-        token = this.authService.getAccessToken();
-        if (!token) {
-          throw new FatalError('Failed to refresh authentication token. Please login again.');
-        }
-      } catch (error) {
-        throw new FatalError('Failed to refresh authentication token. Please login again.');
-      }
-    }
-
-    return token;
   }
 
 }

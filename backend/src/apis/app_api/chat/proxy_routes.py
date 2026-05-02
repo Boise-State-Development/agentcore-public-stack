@@ -75,6 +75,17 @@ async def chat_stream(
         "Authorization": f"Bearer {current_user.raw_token}",
     }
 
+    # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
+    # AgentCoreContextMiddleware reads this header to scope the on-tool
+    # OAuth consent landing URL to the SPA's origin (allowlisted via
+    # CORS_ORIGINS). Without it, MCP-tool consent flows can't redirect
+    # back to the SPA's `/oauth-complete` page and `oauth_required` SSE
+    # events are unusable. Forwarded as-is — the inference-api side
+    # re-validates against its own CORS_ORIGINS allowlist.
+    forwarded_callback = request.headers.get("OAuth2CallbackUrl")
+    if forwarded_callback:
+        headers["OAuth2CallbackUrl"] = forwarded_callback
+
     # The client lifecycle must outlive this handler — closing it via
     # `async with` while a stream is in flight makes httpx drain the upstream
     # response during `__aexit__`, buffering the entire SSE stream before

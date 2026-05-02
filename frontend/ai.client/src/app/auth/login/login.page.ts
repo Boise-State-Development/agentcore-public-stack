@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { AuthService } from '../auth.service';
+import { SessionService } from '../session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
@@ -141,7 +141,7 @@ interface AuthProviderPublicListResponse {
   `
 })
 export class LoginPage implements OnInit, OnDestroy {
-  private authService = inject(AuthService);
+  private sessionService = inject(SessionService);
   private sidenavService = inject(SidenavService);
   private config = inject(ConfigService);
   private http = inject(HttpClient);
@@ -192,35 +192,25 @@ export class LoginPage implements OnInit, OnDestroy {
     }
   }
 
-  async handleCognitoLogin(): Promise<void> {
+  handleCognitoLogin(): void {
     this.isLoading.set(true);
     this.activeProviderId.set(null);
     this.errorMessage.set(null);
 
-    try {
-      this.storeReturnUrl();
-      await this.authService.login();
-    } catch (error) {
-      this.isLoading.set(false);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
-    }
+    // Persist the return URL for the rollback bundle (legacy AuthService
+    // reads it post-callback). Harmless under the BFF flow — the BFF
+    // server-side redirect goes to BFF_POST_LOGIN_REDIRECT_URL today.
+    this.storeReturnUrl();
+    this.sessionService.redirectToLogin();
   }
 
-  async handleProviderLogin(provider: AuthProviderPublicInfo): Promise<void> {
+  handleProviderLogin(provider: AuthProviderPublicInfo): void {
     this.isLoading.set(true);
     this.activeProviderId.set(provider.provider_id);
     this.errorMessage.set(null);
 
-    try {
-      this.storeReturnUrl();
-      await this.authService.login(provider.provider_id);
-    } catch (error) {
-      this.isLoading.set(false);
-      this.activeProviderId.set(null);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
-    }
+    this.storeReturnUrl();
+    this.sessionService.redirectToLogin({ providerId: provider.provider_id });
   }
 
   /**
