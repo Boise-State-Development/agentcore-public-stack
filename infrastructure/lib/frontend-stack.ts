@@ -111,8 +111,14 @@ export class FrontendStack extends cdk.Stack {
     // accessed through the App API backend, not directly from the frontend.
     // ============================================================================
 
+    // Phase 6a (BFF cutover): SPA always talks to app-api via the same-origin
+    // CloudFront `/api/*` behavior added below. Keeping `appApiUrl` relative
+    // (a) eliminates CORS preflights on every request and (b) lets the SPA
+    // attach `__Host-` cookies without crossing origins. The absolute ALB URL
+    // imported from SSM still feeds the new HttpOrigin — it just isn't
+    // exposed to the browser anymore.
     const runtimeConfig = {
-      appApiUrl: appApiUrl,
+      appApiUrl: '/api',
       environment: config.production ? 'production' : 'development',
       version: config.appVersion,
       cognitoDomainUrl: cognitoDomainUrl,
@@ -123,6 +129,7 @@ export class FrontendStack extends cdk.Stack {
 
     console.log('🔧 Generated runtime configuration:');
     console.log(`   Environment: ${runtimeConfig.environment}`);
+    console.log(`   App API URL (browser): ${runtimeConfig.appApiUrl} (CloudFront /api/* → ALB ${appApiUrl})`);
 
     // Generate bucket name with account ID to ensure global uniqueness
     const bucketName = config.frontend.bucketName || 
@@ -205,6 +212,82 @@ export class FrontendStack extends cdk.Stack {
       }
     );
 
+    // ============================================================================
+    // BFF /api/* behavior — same-origin proxy to the app-api ALB
+    // ============================================================================
+    // Phase 6a of the BFF Token Handler migration. The SPA hits `/api/*` on the
+    // CloudFront origin; CloudFront forwards to the app-api ALB. This makes
+    // app-api same-origin with the SPA so `__Host-` session cookies work and
+    // there is no CORS preflight on the chat hot path.
+    //
+    // - HttpOrigin hostname is parsed out of the absolute SSM ALB URL using
+    //   Fn.split/Fn.select because the value is a CDK token at synth time.
+    // - Path-strip CloudFront Function removes `/api` so app-api stays
+    //   prefix-unaware (local dev still hits `localhost:8000` directly).
+    // - CACHING_DISABLED + ALL_VIEWER_EXCEPT_HOST_HEADER: every /api/* response
+    //   is dynamic and must forward cookies + CSRF + auth headers untouched.
+    // - No response-headers-policy: SSE responses must keep the origin's
+    //   Content-Type/Cache-Control/X-Accel-Buffering headers verbatim.
+    // - compress: false because gzip on text/event-stream re-introduces the
+    //   buffering bug we fixed in Phase 4.
+    // ============================================================================
+
+    // Strip leading "/api" from the request URI before forwarding to the ALB.
+    // CloudFront Functions run at viewer-request, ~1ms, no Lambda cold start.
+    const apiPathStripFunction = new cloudfront.Function(this, 'ApiPathStripFunction', {
+      functionName: getResourceName(config, 'api-path-strip'),
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      comment: 'Strip /api prefix before forwarding requests to the app-api ALB origin',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var req = event.request;
+  if (req.uri === '/api') {
+    req.uri = '/';
+  } else if (req.uri.indexOf('/api/') === 0) {
+    req.uri = req.uri.substring(4);
+  }
+  return req;
+}
+`),
+    });
+
+    // Extract the bare hostname from the absolute ALB URL (e.g.
+    // "https://api.example.com" -> "api.example.com"). The value is a CDK
+    // token resolved at deploy time, so use Fn.split/Fn.select rather than
+    // JS string ops.
+    const appApiOriginHostname = cdk.Fn.select(2, cdk.Fn.split('/', appApiUrl));
+
+    // HTTPS to the origin when an ALB cert is configured; HTTP fallback for
+    // dev environments without `certificateArn`. CloudFront → ALB always
+    // crosses public internet, so HTTPS is preferred whenever possible.
+    const appApiOrigin = new origins.HttpOrigin(appApiOriginHostname, {
+      protocolPolicy: config.certificateArn
+        ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
+        : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+      // Long-running SSE streams need a generous read timeout. 180s is the
+      // CloudFront default max without a service-quota increase; if any SSE
+      // stream goes >180s without sending data, the proxy needs to emit a
+      // heartbeat (verified during the Phase 6 soak window).
+      readTimeout: cdk.Duration.seconds(180),
+      keepaliveTimeout: cdk.Duration.seconds(60),
+    });
+
+    const apiBehavior: cloudfront.BehaviorOptions = {
+      origin: appApiOrigin,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      compress: false,
+      functionAssociations: [
+        {
+          function: apiPathStripFunction,
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+        },
+      ],
+    };
+
     // CloudFront distribution configuration
     let distributionProps: cloudfront.DistributionProps = {
       comment: `${config.projectPrefix} Frontend Distribution`,
@@ -215,6 +298,9 @@ export class FrontendStack extends cdk.Stack {
         responseHeadersPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+      },
+      additionalBehaviors: {
+        '/api/*': apiBehavior,
       },
       defaultRootObject: 'index.html',
       // Custom error responses for SPA routing
@@ -309,6 +395,11 @@ export class FrontendStack extends cdk.Stack {
         s3deploy.CacheControl.mustRevalidate(), // Force revalidation after TTL
       ],
       prune: false, // Don't delete other files (static assets deployed separately)
+      // Invalidate the cached config.json on every deploy so a Phase 6
+      // cutover (appApiUrl flip) takes effect immediately at the edge
+      // instead of waiting out the 5-minute TTL.
+      distribution: this.distribution,
+      distributionPaths: ['/config.json'],
     });
 
     console.log('📦 Runtime config deployment configured:');
