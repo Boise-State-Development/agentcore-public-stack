@@ -77,6 +77,24 @@ from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
 app.add_middleware(AgentCoreContextMiddleware)
 logger.info("Added AgentCore context middleware")
 
+# BFF Token Handler middlewares (Phase 2 — dormant).
+#
+# These two are added unconditionally so a deploy of the Phase 1 CDK env vars
+# can flip the system on without a code redeploy. When the env vars are
+# absent (local dev, environments before Phase 1 lands), `BFFConfig.is_enabled()`
+# returns False and `SessionRefreshMiddleware` short-circuits before doing any
+# AWS calls; `CSRFMiddleware` only acts when a session has been resolved
+# upstream, so it's effectively a no-op in the dormant state too.
+#
+# Starlette executes outer-added-last, so on the request side the order is:
+#   CORS → AgentCoreContext → SessionRefresh → CSRF → router
+from apis.shared.middleware.csrf import CSRFMiddleware
+from apis.shared.middleware.session_refresh import SessionRefreshMiddleware
+
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(SessionRefreshMiddleware)
+logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie present)")
+
 
 # Import routers
 from apis.app_api.health import router as health_router
