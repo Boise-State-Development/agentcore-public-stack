@@ -67,12 +67,19 @@ def is_preview_session(session_id: str) -> bool:
 def _sanitize_log(value: object) -> str:
     """Return a log-safe representation of untrusted values.
 
-    We JSON-escape to ensure CR/LF and other control characters are emitted
-    as literals (e.g. ``\\n``) rather than raw bytes that could forge log lines.
+    Remove line breaks and replace other ASCII control characters so user
+    input cannot forge additional log entries or inject terminal controls.
     """
     if value is None:
         return "?"
-    return json.dumps(str(value), ensure_ascii=True)[1:-1]
+    text = str(value).replace("\r", "").replace("\n", "")
+    control_map = {
+        i: "?"
+        for i in range(32)
+        if i not in (9,)  # keep horizontal tab for readability
+    }
+    control_map[127] = "?"
+    return text.translate(control_map)
 
 
 async def _find_managed_model(model_id: str | None):
