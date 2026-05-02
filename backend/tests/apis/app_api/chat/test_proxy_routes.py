@@ -1,9 +1,12 @@
-"""Tests for `POST /chat/proxy-stream` (Phase 4 BFF chat proxy).
+"""Tests for the BFF chat proxy (Phase 4 + Phase 6).
 
 Covers the proxy mechanics in isolation — auth gate, body/header relay,
-SSE streaming, and error mapping. The full SessionRefreshMiddleware ↔
-CSRFMiddleware stack is exercised separately in
-`test_proxy_routes_csrf.py`.
+SSE streaming, and error mapping. Every test is parametrized over both
+registered paths (`/chat/stream` and `/chat/proxy-stream`) so the
+duplicate route registration in proxy_routes.py stays a true alias and
+can't drift into two divergent handlers. The full
+SessionRefreshMiddleware ↔ CSRFMiddleware stack is exercised separately
+in `test_proxy_routes_csrf.py`.
 """
 
 from __future__ import annotations
@@ -93,19 +96,28 @@ def _patch_upstream(
     )
 
 
+# Both registered paths must behave identically. Phase 6 ships /chat/stream
+# alongside the original /chat/proxy-stream; Phase 7 deletes the latter.
+@pytest.fixture(params=["/chat/stream", "/chat/proxy-stream"])
+def chat_path(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 # ── Auth gate ─────────────────────────────────────────────────────────────
 
 
-def test_returns_401_when_no_session_attached() -> None:
+def test_returns_401_when_no_session_attached(chat_path: str) -> None:
     app = _build_app(record=None)
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 401
 
 
 # ── Happy path: SSE relay ─────────────────────────────────────────────────
 
 
-def test_relays_sse_response_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_relays_sse_response_verbatim(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     sse_body = (
         b'event: message_start\ndata: {"role": "assistant"}\n\n'
         b'event: content_block_delta\ndata: {"text": "hello"}\n\n'
@@ -124,7 +136,7 @@ def test_relays_sse_response_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -133,7 +145,9 @@ def test_relays_sse_response_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.content == sse_body
 
 
-def test_forwards_authorization_bearer_from_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forwards_authorization_bearer_from_session(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -146,11 +160,13 @@ def test_forwards_authorization_bearer_from_session(monkeypatch: pytest.MonkeyPa
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user(raw_token="the-stored-token"))
 
-    TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    TestClient(app).post(chat_path, json={"message": "hi"})
     assert captured["authorization"] == "Bearer the-stored-token"
 
 
-def test_forwards_request_body_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forwards_request_body_verbatim(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -166,7 +182,7 @@ def test_forwards_request_body_verbatim(monkeypatch: pytest.MonkeyPatch) -> None
 
     payload = b'{"session_id":"s1","message":"hello there","enabled_tools":["foo"]}'
     TestClient(app).post(
-        "/chat/proxy-stream",
+        chat_path,
         content=payload,
         headers={"Content-Type": "application/json"},
     )
@@ -175,7 +191,7 @@ def test_forwards_request_body_verbatim(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_targets_invocations_path_on_inference_api(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:
     monkeypatch.setattr(proxy_routes, "_INFERENCE_API_URL", "http://upstream:9999")
     captured: dict = {}
@@ -190,7 +206,7 @@ def test_targets_invocations_path_on_inference_api(
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    TestClient(app).post(chat_path, json={"message": "hi"})
     assert captured["url"] == "http://upstream:9999/invocations"
 
 
@@ -198,7 +214,7 @@ def test_targets_invocations_path_on_inference_api(
 
 
 def test_relays_non_sse_response_with_status_and_content_type(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         # Simulate inference-api returning a non-streaming success — a small
@@ -212,7 +228,7 @@ def test_relays_non_sse_response_with_status_and_content_type(
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert response.content == b'{"ok": true}'
@@ -221,54 +237,58 @@ def test_relays_non_sse_response_with_status_and_content_type(
 # ── Upstream error propagation ────────────────────────────────────────────
 
 
-def test_propagates_upstream_4xx(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_propagates_upstream_4xx(monkeypatch: pytest.MonkeyPatch, chat_path: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, content=b"token rejected by inference-api")
 
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 401
     assert "token rejected" in response.text
 
 
-def test_propagates_upstream_5xx(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_propagates_upstream_5xx(monkeypatch: pytest.MonkeyPatch, chat_path: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, content=b"upstream overloaded")
 
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 503
 
 
-def test_returns_502_when_upstream_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_returns_502_when_upstream_unreachable(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")
 
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 502
     assert response.json()["detail"] == "Inference API is unreachable"
 
 
-def test_returns_504_on_upstream_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_returns_504_on_upstream_timeout(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("Read timed out")
 
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 504
 
 
 def test_returns_502_on_unexpected_upstream_error(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise RuntimeError("something is on fire")
@@ -276,5 +296,5 @@ def test_returns_502_on_unexpected_upstream_error(
     _patch_upstream(monkeypatch, handler)
     app = _build_app(record=_record(), user_override=_user())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 502

@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from apis.app_api.documents.services.document_service import list_assistant_documents
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import get_agent
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_or_session
 from apis.shared.auth.models import User
 from apis.shared.errors import ErrorCode, build_conversational_error_event
 from apis.shared.assistants.models import (
@@ -51,7 +51,7 @@ router = APIRouter(prefix="/assistants", tags=["assistants"])
 
 
 @router.post("/draft", response_model=AssistantResponse, response_model_exclude_none=True)
-async def create_assistant_draft_endpoint(request: CreateAssistantDraftRequest, current_user: User = Depends(get_current_user)):
+async def create_assistant_draft_endpoint(request: CreateAssistantDraftRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Create a draft assistant with auto-generated ID.
 
@@ -92,7 +92,7 @@ async def create_assistant_draft_endpoint(request: CreateAssistantDraftRequest, 
 
 
 @router.post("", response_model=AssistantResponse, response_model_exclude_none=True)
-async def create_assistant_endpoint(request: CreateAssistantRequest, current_user: User = Depends(get_current_user)):
+async def create_assistant_endpoint(request: CreateAssistantRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Create a complete assistant with all required fields.
 
@@ -148,7 +148,7 @@ async def list_assistants_endpoint(
     next_token: Optional[str] = Query(None, description="Pagination token for retrieving the next page"),
     include_drafts: bool = Query(False, description="Include draft assistants"),
     include_public: bool = Query(False, description="Include public assistants (in addition to user's own)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_session),
 ):
     """
     List assistants for the authenticated user with pagination support.
@@ -233,7 +233,7 @@ async def list_assistants_endpoint(
 
 
 @router.get("/{assistant_id}", response_model=AssistantResponse, response_model_exclude_none=True)
-async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user)):
+async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_or_session)):
     """
     Retrieve a specific assistant by ID with visibility-based access control.
 
@@ -285,7 +285,7 @@ async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends
 
 
 @router.put("/{assistant_id}", response_model=AssistantResponse, response_model_exclude_none=True)
-async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantRequest, current_user: User = Depends(get_current_user)):
+async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Update an assistant (deep merge).
 
@@ -346,7 +346,7 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
 
 @router.delete("/{assistant_id}", status_code=204)
-async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user)):
+async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_or_session)):
     """Delete an assistant and all associated documents using soft-delete + background cleanup."""
     user_id = current_user.user_id
     logger.info("DELETE /assistants/{assistant_id}")
@@ -387,7 +387,7 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
 
 
 @router.post("/{assistant_id}/test-chat")
-async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatRequest, current_user: User = Depends(get_current_user)):
+async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Test chat endpoint for assistants with RAG functionality.
 
@@ -523,7 +523,7 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
 
 
 @router.post("/{assistant_id}/shares", response_model=AssistantSharesResponse)
-async def share_assistant_endpoint(assistant_id: str, request: ShareAssistantRequest, current_user: User = Depends(get_current_user)):
+async def share_assistant_endpoint(assistant_id: str, request: ShareAssistantRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Share an assistant with specified email addresses.
 
@@ -568,7 +568,7 @@ async def share_assistant_endpoint(assistant_id: str, request: ShareAssistantReq
 
 
 @router.delete("/{assistant_id}/shares", response_model=AssistantSharesResponse)
-async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistantRequest, current_user: User = Depends(get_current_user)):
+async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistantRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Remove shares from an assistant for specified email addresses.
 
@@ -612,7 +612,7 @@ async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistan
 
 
 @router.get("/{assistant_id}/shares", response_model=AssistantSharesResponse)
-async def get_assistant_shares_endpoint(assistant_id: str, current_user: User = Depends(get_current_user)):
+async def get_assistant_shares_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_or_session)):
     """
     Get list of email addresses an assistant is shared with.
 

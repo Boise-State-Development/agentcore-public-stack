@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.shared.auth import User
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_or_session
 from .models import FineTuningAccessResponse
 from .repository import (
     FineTuningAccessRepository,
@@ -50,7 +50,7 @@ router = APIRouter(prefix="/fine-tuning", tags=["fine-tuning"])
 
 @router.get("/access", response_model=FineTuningAccessResponse)
 async def check_access(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     repo: FineTuningAccessRepository = Depends(get_fine_tuning_access_repository),
 ):
     """Check if the current user has fine-tuning access and return quota info.
@@ -196,7 +196,7 @@ async def search_huggingface_models(
 @router.post("/presign", response_model=PresignResponse)
 async def presign_upload(
     request: PresignRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
@@ -228,7 +228,7 @@ async def presign_upload(
 @router.post("/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 async def create_job(
     request: CreateJobRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
@@ -346,7 +346,7 @@ async def create_job(
 
 @router.get("/jobs", response_model=JobListResponse)
 async def list_jobs(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
 ):
@@ -361,7 +361,7 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
@@ -384,7 +384,7 @@ async def get_job(
 @router.get("/jobs/{job_id}/logs")
 async def get_job_logs(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
@@ -404,7 +404,7 @@ async def get_job_logs(
 @router.get("/jobs/{job_id}/download")
 async def download_artifact(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
@@ -433,7 +433,7 @@ async def download_artifact(
 @router.delete("/jobs/{job_id}")
 async def stop_job(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
@@ -621,7 +621,7 @@ def _sync_inference_status(
 
 @router.get("/trained-models")
 async def list_trained_models(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
@@ -656,7 +656,7 @@ async def list_trained_models(
 @router.post("/inference/presign", response_model=PresignResponse)
 async def inference_presign_upload(
     request: PresignRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
 ):
@@ -684,7 +684,7 @@ async def inference_presign_upload(
 @router.post("/inference", response_model=InferenceJobResponse, status_code=status.HTTP_201_CREATED)
 async def create_inference_job(
     request: CreateInferenceJobRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     jobs_repo: FineTuningJobsRepository = Depends(get_fine_tuning_jobs_repository),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
@@ -768,7 +768,7 @@ async def create_inference_job(
 
 @router.get("/inference", response_model=InferenceJobListResponse)
 async def list_inference_jobs(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
 ):
@@ -783,7 +783,7 @@ async def list_inference_jobs(
 @router.get("/inference/{job_id}", response_model=InferenceJobResponse)
 async def get_inference_job(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
@@ -804,7 +804,7 @@ async def get_inference_job(
 @router.get("/inference/{job_id}/logs")
 async def get_inference_logs(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),
@@ -824,7 +824,7 @@ async def get_inference_logs(
 @router.get("/inference/{job_id}/download")
 async def download_inference_result(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
     s3_service: FineTuningS3Service = Depends(get_fine_tuning_s3_service),
@@ -859,7 +859,7 @@ async def download_inference_result(
 @router.delete("/inference/{job_id}")
 async def stop_inference_job(
     job_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_or_session),
     grant: dict = Depends(require_fine_tuning_access),
     inf_repo: InferenceRepository = Depends(get_inference_repository),
     sagemaker: SageMakerService = Depends(get_sagemaker_service),

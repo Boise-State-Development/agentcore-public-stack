@@ -356,21 +356,63 @@ async def get_current_user_from_session(request: Request) -> User:
     return user
 
 
+async def get_current_user_or_session(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> User:
+    """Resolve the current user from either a BFF session cookie OR a Bearer token.
+
+    Phase 6 transition dependency. Routes that the SPA hits during normal
+    use are migrated from `Depends(get_current_user)` (Bearer-only) to this
+    so that:
+
+      - A SPA that has cut over to cookie auth (Phase 6c) authenticates
+        via the BFF session resolved by `SessionRefreshMiddleware`.
+      - Any caller still presenting a valid Bearer token (the SPA's
+        rollback bundle, scripted clients, third-party API consumers)
+        keeps working without code changes.
+
+    Resolution order: cookie first, Bearer second. If neither is present
+    or both fail, raises 401. The cookie path uses the BFF Cognito client
+    validator; the Bearer path uses the SPA Cognito client validator —
+    same as the standalone `get_current_user_from_session` and
+    `get_current_user` dependencies, just composed.
+
+    Phase 7 deletes this and the per-route swaps land back on the
+    cookie-only `get_current_user_from_session` once the Bearer code
+    path is removed from the SPA.
+    """
+    record = getattr(request.state, "bff_session", None)
+    if record is not None:
+        # Cookie-bearing request — defer to the cookie validator. Mirrors
+        # `get_current_user_from_session` so behaviour matches the
+        # cookie-only routes byte-for-byte.
+        return await get_current_user_from_session(request)
+
+    if credentials is not None:
+        # Bearer fallback — defer to the Bearer validator with the same
+        # enrichment / sync side-effects as the standalone dependency.
+        return await get_current_user(credentials)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Provide a BFF session cookie or a Bearer token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 async def get_current_user_id(
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user_or_session)
 ) -> str:
     """
     FastAPI dependency to get the current user's ID as a string.
 
-    This is a convenience wrapper around get_current_user that extracts
-    just the user_id field. Useful when you only need the user ID and not
-    the full User object.
-
-    Args:
-        user: User object from get_current_user dependency
-
-    Returns:
-        User ID string
+    Convenience wrapper around `get_current_user_or_session` that returns
+    just the user_id field. Phase 6 changed the underlying dep from
+    Bearer-only `get_current_user` to the dual-auth
+    `get_current_user_or_session` so routes that only need the user ID
+    accept the same auth shapes (cookie OR Bearer) as the rest of the
+    SPA-facing surface.
     """
     return user.user_id
 

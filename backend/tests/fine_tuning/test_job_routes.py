@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.shared.auth.models import User
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_or_session
 from apis.app_api.fine_tuning.routes import router, _estimate_training_progress
 from apis.app_api.fine_tuning.dependencies import require_fine_tuning_access
 from apis.app_api.fine_tuning.job_repository import get_fine_tuning_jobs_repository
@@ -25,7 +25,7 @@ def _create_app():
 
 
 def _setup_deps(app, user, grant, jobs_repo=None, s3_service=None, sagemaker=None, access_repo=None, script_service=None):
-    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_current_user_or_session] = lambda: user
     app.dependency_overrides[require_fine_tuning_access] = lambda: grant
     if jobs_repo:
         app.dependency_overrides[get_fine_tuning_jobs_repository] = lambda: jobs_repo
@@ -471,7 +471,7 @@ class TestRequiresAccess:
         app.dependency_overrides[require_fine_tuning_access] = _raise_403
 
         user = make_user(email="denied@example.com")
-        app.dependency_overrides[get_current_user] = lambda: user
+        app.dependency_overrides[get_current_user_or_session] = lambda: user
 
         client = TestClient(app)
 

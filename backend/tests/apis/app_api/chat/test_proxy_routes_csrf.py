@@ -1,9 +1,11 @@
-"""CSRF integration tests for `POST /chat/proxy-stream`.
+"""CSRF integration tests for the BFF chat proxy.
 
-`/chat/proxy-stream` is a POST that rides the BFF session cookie, so it
-MUST be guarded by CSRFMiddleware. This file confirms (a) the route is
-not accidentally listed in the middleware's exempt set, and (b) a valid
-double-submit token allows the request through.
+Both `/chat/stream` (Phase 6) and `/chat/proxy-stream` (Phase 4) are
+POSTs that ride the BFF session cookie, so both MUST be guarded by
+CSRFMiddleware. This file confirms (a) neither route is accidentally
+listed in the middleware's exempt set, and (b) a valid double-submit
+token allows the request through. Tests are parametrized over both
+paths so the alias guarantee can't drift.
 """
 
 from __future__ import annotations
@@ -98,17 +100,26 @@ def _patch_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_proxy_stream_without_csrf_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture(params=["/chat/stream", "/chat/proxy-stream"])
+def chat_path(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+def test_proxy_stream_without_csrf_returns_403(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     """Session attached but no CSRF cookie/header → CSRF middleware rejects."""
     _patch_upstream(monkeypatch)
     app = _build_app(record=_record())
 
-    response = TestClient(app).post("/chat/proxy-stream", json={"message": "hi"})
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
     assert response.status_code == 403
     assert "CSRF" in response.json()["detail"]
 
 
-def test_proxy_stream_with_valid_csrf_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_proxy_stream_with_valid_csrf_passes(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
     record = _record()
     csrf_token = CSRFHelper.derive_token(record.csrf_secret, record.session_id)
 
@@ -116,7 +127,7 @@ def test_proxy_stream_with_valid_csrf_passes(monkeypatch: pytest.MonkeyPatch) ->
     app = _build_app(record=record)
 
     response = TestClient(app).post(
-        "/chat/proxy-stream",
+        chat_path,
         json={"message": "hi"},
         cookies={CSRF_COOKIE_NAME: csrf_token},
         headers={CSRF_HEADER_NAME: csrf_token},
@@ -126,7 +137,7 @@ def test_proxy_stream_with_valid_csrf_passes(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_proxy_stream_csrf_header_mismatch_returns_403(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:
     """Cookie present but header value differs — classic forged-form scenario."""
     record = _record()
@@ -136,7 +147,7 @@ def test_proxy_stream_csrf_header_mismatch_returns_403(
     app = _build_app(record=record)
 
     response = TestClient(app).post(
-        "/chat/proxy-stream",
+        chat_path,
         json={"message": "hi"},
         cookies={CSRF_COOKIE_NAME: csrf_token},
         headers={CSRF_HEADER_NAME: "different-token"},
@@ -144,10 +155,13 @@ def test_proxy_stream_csrf_header_mismatch_returns_403(
     assert response.status_code == 403
 
 
-def test_proxy_stream_path_not_in_csrf_exempt_set() -> None:
-    """Future-proofing: surface a regression if someone adds /chat/proxy-stream
-    to the CSRF exempt list. The point of this proxy is to be guarded —
-    exempting it would defeat the whole BFF-cookie security model."""
+def test_chat_proxy_paths_not_in_csrf_exempt_set() -> None:
+    """Future-proofing: surface a regression if someone adds either chat
+    proxy path to the CSRF exempt list. The point of this proxy is to be
+    guarded — exempting it would defeat the whole BFF-cookie security
+    model. Both paths must be checked because Phase 6 introduces
+    /chat/stream alongside the original /chat/proxy-stream."""
     from apis.shared.middleware.csrf import _EXEMPT_PATHS
 
+    assert "/chat/stream" not in _EXEMPT_PATHS
     assert "/chat/proxy-stream" not in _EXEMPT_PATHS

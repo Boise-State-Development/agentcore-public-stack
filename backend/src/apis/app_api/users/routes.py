@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 import logging
 
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_or_session
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.users.repository import UserRepository
@@ -22,7 +22,7 @@ def get_user_repository() -> UserRepository:
 
 @router.get("/me/permissions", response_model=UserPermissionsResponse)
 async def get_my_permissions(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_session),
 ):
     """
     Get the current user's effective permissions resolved from AppRoles.
@@ -52,7 +52,7 @@ async def get_my_permissions(
 @router.post("/me/sync", status_code=204)
 async def sync_my_profile(
     body: UserProfileSyncRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_session),
     user_repo: UserRepository = Depends(get_user_repository),
 ):
     """
@@ -102,7 +102,7 @@ async def sync_my_profile(
 async def search_users(
     q: str = Query(..., description="Search query (email or name, partial match)"),
     limit: int = Query(20, ge=1, le=50, description="Maximum number of results"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_session),
     user_repo: UserRepository = Depends(get_user_repository)
 ):
     """

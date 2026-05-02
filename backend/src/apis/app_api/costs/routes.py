@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import logging
 
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_or_session
 from apis.shared.auth.models import User
 from apis.shared.costs.models import UserCostSummary
 from apis.shared.costs.aggregator import CostAggregator
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/costs", tags=["costs"])
 @router.get("/summary", response_model=UserCostSummary)
 async def get_cost_summary(
     period: Optional[str] = Query(None, description="Period (YYYY-MM), defaults to current month"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_or_session)
 ):
     """
     Get cost summary for the authenticated user (fast path)
@@ -75,7 +75,7 @@ async def get_cost_summary(
 async def get_detailed_report(
     start_date: str = Query(..., description="ISO 8601 start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="ISO 8601 end date (YYYY-MM-DD)"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_or_session)
 ):
     """
     Get detailed cost report for custom date range

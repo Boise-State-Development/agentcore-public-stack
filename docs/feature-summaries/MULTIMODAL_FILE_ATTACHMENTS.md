@@ -42,7 +42,7 @@ Users can attach files to chat messages. Files are uploaded to S3 via pre-signed
 │  Frontend                      Backend                         AWS          │
 │  ────────                      ───────                         ───          │
 │                                                                             │
-│  1. POST /chat/stream          2. FileResolver.resolve_files()              │
+│  1. POST /chat/agent-stream    2. FileResolver.resolve_files()              │
 │     {message, file_upload_ids}    ─────────────────────────────► S3        │
 │     ─────────────────────────►    - Fetch each file from S3                │
 │                                   - Base64 encode content                   │

@@ -52,14 +52,16 @@ def _make_user(user_id: str) -> User:
 @pytest.fixture
 def app_for_user():
     """Build a minimal FastAPI app with the connectors router mounted and
-    the `get_current_user` dependency stubbed to a specific user.
+    the dual-auth `get_current_user_or_session` dependency stubbed to a
+    specific user. Phase 6 swapped these routes from Bearer-only auth to
+    cookie-or-Bearer; the override key has to track that.
     Returns a factory so each test picks the caller's identity.
     """
 
     def _build(user_id: str) -> FastAPI:
         app = FastAPI()
         app.include_router(routes.router)
-        app.dependency_overrides[routes.get_current_user] = lambda: _make_user(user_id)
+        app.dependency_overrides[routes.get_current_user_or_session] = lambda: _make_user(user_id)
         return app
 
     return _build

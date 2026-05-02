@@ -347,8 +347,8 @@ from agents.main_agent import MainAgent
 
 app = FastAPI()
 
-@app.post("/chat/stream")
-async def chat_stream(session_id: str, message: str, enabled_tools: list[str]):
+@app.post("/chat/agent-stream")
+async def chat_agent_stream(session_id: str, message: str, enabled_tools: list[str]):
     agent = MainAgent(
         session_id=session_id,
         enabled_tools=enabled_tools

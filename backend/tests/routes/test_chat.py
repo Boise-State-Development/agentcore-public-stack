@@ -3,7 +3,7 @@
 Endpoints under test:
 - POST /chat/generate-title  → 200 with generated title
 - POST /chat/generate-title  → 401 for unauthenticated request
-- POST /chat/stream           → streaming response with text/event-stream
+- POST /chat/agent-stream           → streaming response with text/event-stream
 - POST /chat/multimodal       → streaming response
 
 Requirements: 5.1, 5.2, 5.3, 5.4
@@ -95,12 +95,12 @@ class TestGenerateTitle:
 
 
 # ---------------------------------------------------------------------------
-# Requirement 5.3: POST /chat/stream returns streaming response
+# Requirement 5.3: POST /chat/agent-stream returns streaming response
 # ---------------------------------------------------------------------------
 
 
 class TestChatStream:
-    """POST /chat/stream returns a streaming response."""
+    """POST /chat/agent-stream returns a streaming response."""
 
     def test_returns_streaming_response(self, app, make_user, authenticated_client):
         """Req 5.3: Should return streaming response with text/event-stream."""
@@ -138,7 +138,7 @@ class TestChatStream:
             mock_tool_svc.return_value = mock_tool_access
 
             resp = client.post(
-                "/chat/stream",
+                "/chat/agent-stream",
                 json={
                     "session_id": "sess-001",
                     "message": "Hello, how are you?",
@@ -152,7 +152,7 @@ class TestChatStream:
         """Req 5.3: Should return 401 when no auth is provided."""
         client = unauthenticated_client(app)
         resp = client.post(
-            "/chat/stream",
+            "/chat/agent-stream",
             json={"session_id": "sess-001", "message": "Hello"},
         )
         assert resp.status_code == 401

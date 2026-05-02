@@ -3,8 +3,13 @@
 Application-specific chat endpoints moved from inference_api to keep
 AgentCore Runtime API clean. These endpoints handle:
 - Conversation title generation
-- Legacy chat streaming
+- In-process agent streaming (`POST /chat/agent-stream`, Bearer auth)
 - Multimodal chat input
+
+`/chat/agent-stream` was named `/chat/stream` until the Phase 6 BFF
+cutover, which reclaimed that path for the cookie-authenticated proxy
+to inference-api. Bearer-authenticated callers (API-key tooling, scripts)
+must update to the new path.
 """
 
 import asyncio
@@ -28,7 +33,7 @@ from apis.shared.sessions.metadata import get_session_metadata, store_session_me
 from apis.inference_api.chat.models import ChatEvent, ChatRequest, FileContent, GenerateTitleRequest, GenerateTitleResponse
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import generate_conversation_title, get_agent
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user, get_current_user_or_session
 from apis.shared.auth.models import User
 from apis.shared.errors import (
     ErrorCode,
@@ -52,7 +57,7 @@ STREAM_TIMEOUT_SECONDS = 600  # 10 minutes
 
 
 @router.post("/generate-title")
-async def generate_title(request: GenerateTitleRequest, current_user: User = Depends(get_current_user)):
+async def generate_title(request: GenerateTitleRequest, current_user: User = Depends(get_current_user_or_session)):
     """
     Generate a conversation title for a new session.
 
@@ -90,11 +95,19 @@ async def generate_title(request: GenerateTitleRequest, current_user: User = Dep
         return GenerateTitleResponse(title="New Conversation", session_id=request.session_id)
 
 
-@router.post("/stream")
-async def chat_stream(request: ChatRequest, current_user: User = Depends(get_current_user)):
+@router.post("/agent-stream")
+async def chat_agent_stream(request: ChatRequest, current_user: User = Depends(get_current_user)):
     """
-    Legacy chat stream endpoint (for backward compatibility)
-    Uses default tools (all available) if enabled_tools not specified
+    Bearer-authenticated in-process agent stream.
+
+    Runs the agent loop inside this app-api process and streams the SSE
+    response back. Distinct from `/chat/stream` (Phase 6 BFF cookie proxy
+    to inference-api) and `/chat/api-converse` (X-API-Key proxy). This
+    endpoint was previously registered at `/chat/stream`; it was moved to
+    `/chat/agent-stream` in the Phase 6 BFF cutover so the shorter path
+    could be reclaimed for the browser-facing cookie route.
+
+    Uses default tools (all available) if enabled_tools not specified.
     Uses the authenticated user's ID from the JWT token.
 
     Tool authorization:
