@@ -64,12 +64,14 @@ def is_preview_session(session_id: str) -> bool:
 
 
 def _sanitize_log(value: object) -> str:
-    """Strip CR/LF (and replace any other ASCII control char) so untrusted
-    request fields can't forge extra log lines. Mirrors voice_routes._sanitize_log.
+    """Return a log-safe representation of untrusted values.
+
+    We JSON-escape to ensure CR/LF and other control characters are emitted
+    as literals (e.g. ``\\n``) rather than raw bytes that could forge log lines.
     """
     if value is None:
         return "?"
-    return "".join(c if c >= " " or c == "\t" else " " for c in str(value))
+    return json.dumps(str(value), ensure_ascii=True)[1:-1]
 
 
 async def _find_managed_model(model_id: str | None):
