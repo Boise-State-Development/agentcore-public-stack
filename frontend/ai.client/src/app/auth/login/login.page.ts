@@ -156,6 +156,13 @@ export class LoginPage implements OnInit, OnDestroy {
   activeProviderId = signal<string | null>(null);
 
   ngOnInit(): void {
+    // If the BFF round-tripped an already-authenticated user back to /auth/login
+    // (e.g. return_to defaulted to this path), bounce to the deep-link target
+    // instead of letting them sit here clicking Sign In with valid cookies.
+    if (this.sessionService.isAuthenticated()) {
+      this.router.navigateByUrl(this.resolveReturnUrl() ?? '/');
+      return;
+    }
     this.sidenavService.hide();
     this.checkFirstBootStatus();
     this.loadProviders();
