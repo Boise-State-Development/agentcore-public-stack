@@ -93,13 +93,14 @@ describe('SessionService', () => {
       expect(user as any).not.toHaveProperty('csrf_token');
     });
 
-    it('redirects to /auth/login on 401 and clears state', async () => {
+    it('redirects to the SPA /auth/login page on 401 and clears state', async () => {
       window.location.pathname = '/admin/users';
       window.location.search = '?tab=roles';
 
-      // bootstrap() intentionally never resolves on 401 — it hangs to keep
-      // APP_INITIALIZER blocking until the queued window.location.href fires.
-      // We don't await the promise; we flush microtasks and inspect state.
+      // bootstrap() intentionally never resolves on 401 (when navigation is
+      // queued) — it hangs to keep APP_INITIALIZER blocking until the queued
+      // window.location.href fires. We don't await the promise; we flush
+      // microtasks and inspect state.
       void service.bootstrap();
 
       const req = httpMock.expectOne('http://localhost:8000/auth/session');
@@ -114,8 +115,25 @@ describe('SessionService', () => {
 
       const expectedReturn = encodeURIComponent('/admin/users?tab=roles');
       expect(window.location.href).toBe(
-        `http://localhost:8000/auth/login?return_to=${expectedReturn}`,
+        `/auth/login?returnUrl=${expectedReturn}`,
       );
+    });
+
+    it('does not redirect when the 401 lands on /auth/login itself', async () => {
+      window.location.pathname = '/auth/login';
+      window.location.search = '';
+
+      const promise = service.bootstrap();
+
+      const req = httpMock.expectOne('http://localhost:8000/auth/session');
+      req.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+
+      await promise;
+
+      expect(service.bootstrapped()).toBe(true);
+      expect(service.user()).toBeNull();
+      expect(service.csrfToken()).toBeNull();
+      expect(window.location.href).toBe('');
     });
 
     it('does not redirect on a non-401 transport error', async () => {

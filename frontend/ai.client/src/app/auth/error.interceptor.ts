@@ -43,7 +43,12 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
           req.url.includes(endpoint)
         );
 
-        if (!isSilentEndpoint) {
+        // 401s mean the BFF session is missing or expired. SessionService
+        // handles that by routing the user to /auth/login — a toast on top
+        // is just noise and tends to flash before the redirect lands.
+        const isUnauthorized = error.status === 401;
+
+        if (!isSilentEndpoint && !isUnauthorized) {
           // Use ErrorService to display the error
           errorService.handleHttpError(error);
         }

@@ -52,11 +52,9 @@ export class Sidenav {
   }
 
   async handleLogout(): Promise<void> {
-    // BFF logout: 204 + cleared cookies. The user is then anonymous;
-    // the next page navigation triggers SessionService.bootstrap() in
-    // APP_INITIALIZER, which 401s and redirects to BFF /auth/login.
-    // We push the user to /login explicitly here so the redirect-to-OAuth
-    // happens from a known route rather than wherever the sidenav lived.
+    // BFF logout clears cookies and bounces through the Cognito Hosted UI
+    // logout URL (handled inside bffSession.logout). We also push the user
+    // to /auth/login defensively in case the navigation is short-circuited.
     await this.bffSession.logout();
     this.router.navigate(['/auth/login']);
   }

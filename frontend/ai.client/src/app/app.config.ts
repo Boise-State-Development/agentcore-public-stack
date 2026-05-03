@@ -40,10 +40,12 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes, withComponentInputBinding()),
 
     // Bootstrap the BFF cookie session before the first component renders.
-    // GET ${appApiUrl}/auth/session — on 401, SessionService redirects to the
-    // BFF's /auth/login (Cognito Hosted UI) and hangs the promise so no SPA
-    // route renders before the page tears down. Transport errors leave the
-    // SPA in a clean unauthenticated state without redirecting.
+    // GET ${appApiUrl}/auth/session — on 401, SessionService sends the browser
+    // to the SPA's /auth/login page (with a returnUrl) and hangs the promise
+    // so no protected route renders before the page tears down. If we're
+    // already on /auth/login the bootstrap resolves and the page renders so
+    // the user can pick a provider. Transport errors leave the SPA in a clean
+    // unauthenticated state without redirecting.
     provideAppInitializer(() => inject(SessionService).bootstrap()),
   ]
 };

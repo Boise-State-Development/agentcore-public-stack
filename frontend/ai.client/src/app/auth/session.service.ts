@@ -13,8 +13,8 @@ import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-ses
  *     `__Host-bff_session` cookie travels automatically because the BFF
  *     is same-origin via CloudFront `/api/*`.
  *   - Expose signals for the current user and the CSRF token.
- *   - On 401, redirect the browser to `{appApiUrl}/auth/login` (the BFF
- *     redirects on to Cognito Hosted UI).
+ *   - On 401, redirect the browser to the SPA's `/auth/login` page so the
+ *     user picks a provider before we hand off to Cognito Hosted UI.
  *   - Provide the `X-CSRF-Token` header value for non-GET requests; the
  *     `csrfInterceptor` reads it here and attaches it to outgoing requests.
  *
@@ -51,10 +51,9 @@ export class SessionService {
   readonly isAuthenticated = computed(() => this._user() !== null);
 
   /**
-   * Fetch the current session from the BFF. On 401 the browser is
-   * redirected to `/auth/login`; the returned promise still resolves
-   * (the navigation will tear the page down anyway, but resolving
-   * keeps the contract predictable for callers in tests).
+   * Fetch the current session from the BFF. On 401 the browser is sent
+   * to the SPA's `/auth/login` page (unless we're already there) so the
+   * user can pick a provider before we hand off to Cognito Hosted UI.
    *
    * Network errors leave the service in a clean unauthenticated state
    * without redirecting — a transient failure shouldn't kick the user
@@ -73,7 +72,14 @@ export class SessionService {
       this._user.set(null);
       this._csrfToken.set(null);
       if (error instanceof HttpErrorResponse && error.status === 401) {
-        this.redirectToLogin();
+        if (window.location.pathname === '/auth/login') {
+          // Already on the SPA login page — let it render so the user
+          // can pick a provider.
+          return;
+        }
+        const returnUrl = `${window.location.pathname}${window.location.search}`;
+        const params = new URLSearchParams({ returnUrl });
+        window.location.href = `/auth/login?${params.toString()}`;
         // window.location.href only queues the navigation. Hang the promise
         // so APP_INITIALIZER blocks the SPA from rendering a route before
         // the browser tears the page down.
