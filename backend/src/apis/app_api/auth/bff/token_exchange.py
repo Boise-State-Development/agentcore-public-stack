@@ -16,10 +16,11 @@ every request through the dependency.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 import httpx
 import jwt
@@ -55,6 +56,37 @@ class IdTokenClaims:
     email: Optional[str]
     name: Optional[str]
     picture: Optional[str]
+    # IdP-mapped roles parsed from `custom:roles` (preferred) or
+    # `cognito:groups` (fallback). The access token also carries these,
+    # but the BFF cookie path syncs the Users table off the ID-token
+    # decode at /auth/callback — so we extract them here once instead of
+    # threading another decode through the call site.
+    roles: List[str] = field(default_factory=list)
+
+
+def _extract_roles_from_id_token(claims: dict) -> List[str]:
+    """Mirror of `CognitoJWTValidator._extract_roles` for the ID-token decode.
+
+    Preference order:
+      1. ``custom:roles`` — IdP roles mapped via Cognito attribute mapping.
+         Value is a string that may be a JSON array (e.g. Entra sends
+         ``'["Admin","Staff"]'``) or a comma-separated list.
+      2. ``cognito:groups`` — fallback when the IdP didn't map roles.
+    """
+    custom_roles = claims.get("custom:roles", "")
+    if custom_roles:
+        try:
+            parsed = json.loads(custom_roles)
+            if isinstance(parsed, list):
+                return [str(r).strip() for r in parsed if str(r).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return [r.strip() for r in str(custom_roles).split(",") if r.strip()]
+
+    groups = claims.get("cognito:groups")
+    if isinstance(groups, list):
+        return [str(g) for g in groups]
+    return []
 
 
 async def exchange_code_for_tokens(
@@ -144,4 +176,5 @@ def decode_id_token_claims(id_token: str) -> IdTokenClaims:
             or None
         ),
         picture=claims.get("picture"),
+        roles=_extract_roles_from_id_token(claims),
     )

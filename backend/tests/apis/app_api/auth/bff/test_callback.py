@@ -231,3 +231,110 @@ def test_callback_falls_back_to_post_login_when_no_return_to(app, monkeypatch):
 
     assert response.status_code == 302
     assert response.headers["location"] == POST_LOGIN_URL
+
+
+# ─── Users-table upsert from ID-token claims (Phase 7 follow-up) ──────
+
+
+def _patch_user_sync(monkeypatch) -> AsyncMock:
+    """Replace the lazy `_get_user_sync_service` with a stub that captures
+    the kwargs the callback passes to `sync_from_user`.
+
+    The real service skips when the Users table env var isn't configured;
+    we stub it so the test can assert the BFF callback actually calls
+    sync with the email/name/roles parsed from the ID token — that's the
+    fix for the "first-login user gets email=None and Cognito provider
+    group instead of IdP roles" regression."""
+    sync_mock = MagicMock()
+    sync_mock.enabled = True
+    sync_mock.sync_from_user = AsyncMock(return_value=(None, True))
+    monkeypatch.setattr(bff_routes, "_get_user_sync_service", lambda: sync_mock)
+    return sync_mock.sync_from_user
+
+
+def test_callback_upserts_user_with_id_token_claims(app, monkeypatch):
+    """The Users row must be seeded from the *ID token* — the access token
+    has no email/name/picture and only carries Cognito's internal provider
+    group in `cognito:groups`, never the IdP-mapped role list."""
+    state = _seed_state("sync-claims")
+    id_token = make_id_token(
+        sub="user-sub-001",
+        username="alice",
+        email="Alice@Example.com",
+        name="Alice Example",
+        picture="https://example.com/a.png",
+        custom_roles='["Admin","Editor"]',
+    )
+    _patch_token_exchange(
+        monkeypatch,
+        ExchangeResult(
+            access_token="a", refresh_token="r", id_token=id_token,
+            access_token_exp=int(time.time()) + 3600,
+        ),
+    )
+    sync_call = _patch_user_sync(monkeypatch)
+
+    client = TestClient(app, follow_redirects=False)
+    response = client.get(f"/auth/callback?code=c&state={state}")
+
+    assert response.status_code == 302
+    sync_call.assert_awaited_once()
+    kwargs = sync_call.await_args.kwargs
+    assert kwargs["user_id"] == "user-sub-001"
+    # email is normalized to lowercase by `decode_id_token_claims`
+    assert kwargs["email"] == "alice@example.com"
+    assert kwargs["name"] == "Alice Example"
+    assert kwargs["picture"] == "https://example.com/a.png"
+    # `custom:roles` is preferred over `cognito:groups`; JSON-array form
+    # parses out cleanly.
+    assert kwargs["roles"] == ["Admin", "Editor"]
+
+
+def test_callback_falls_back_to_cognito_groups_when_custom_roles_absent(
+    app, monkeypatch
+):
+    """No `custom:roles` claim → use `cognito:groups`. This matches the
+    access-token validator's behavior so RBAC is consistent between the
+    Bearer (legacy) and cookie (BFF) paths."""
+    state = _seed_state("sync-groups")
+    id_token = make_id_token(
+        custom_roles=None,
+        cognito_groups=["Admin", "Beta"],
+    )
+    _patch_token_exchange(
+        monkeypatch,
+        ExchangeResult(
+            access_token="a", refresh_token="r", id_token=id_token,
+            access_token_exp=int(time.time()) + 3600,
+        ),
+    )
+    sync_call = _patch_user_sync(monkeypatch)
+
+    client = TestClient(app, follow_redirects=False)
+    response = client.get(f"/auth/callback?code=c&state={state}")
+
+    assert response.status_code == 302
+    assert sync_call.await_args.kwargs["roles"] == ["Admin", "Beta"]
+
+
+def test_callback_user_sync_failure_does_not_break_login(app, monkeypatch):
+    """A DDB hiccup on the Users-table upsert must not prevent the user
+    from logging in — they get a valid session, the Users row just lags."""
+    state = _seed_state("sync-failure")
+    _patch_token_exchange(
+        monkeypatch,
+        ExchangeResult(
+            access_token="a", refresh_token="r", id_token=make_id_token(),
+            access_token_exp=int(time.time()) + 3600,
+        ),
+    )
+    failing_sync = MagicMock()
+    failing_sync.enabled = True
+    failing_sync.sync_from_user = AsyncMock(side_effect=RuntimeError("ddb down"))
+    monkeypatch.setattr(bff_routes, "_get_user_sync_service", lambda: failing_sync)
+
+    client = TestClient(app, follow_redirects=False)
+    response = client.get(f"/auth/callback?code=c&state={state}")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == POST_LOGIN_URL

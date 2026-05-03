@@ -28,6 +28,8 @@ from starlette.responses import RedirectResponse
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.auth.state_store import OIDCStateData, create_state_store
+from apis.shared.users.repository import UserRepository
+from apis.shared.users.sync import UserSyncService
 from apis.shared.sessions_bff.cache import get_default_cache
 from apis.shared.sessions_bff.config import SESSION_COOKIE_NAME
 from apis.shared.sessions_bff.cookie import (
@@ -44,6 +46,7 @@ from apis.shared.sessions_bff.repository import SessionRepository
 from .config import BFFAuthConfig
 from .cookies import clear_session_cookies, set_session_cookies
 from .token_exchange import (
+    IdTokenClaims,
     TokenExchangeError,
     decode_id_token_claims,
     exchange_code_for_tokens,
@@ -74,6 +77,7 @@ _AUTHORIZE_SCOPES = "openid email profile"
 
 _state_store = None
 _repository: Optional[SessionRepository] = None
+_user_sync_service: Optional[UserSyncService] = None
 
 
 def _get_state_store():
@@ -92,6 +96,24 @@ def _get_repository(config: BFFAuthConfig) -> SessionRepository:
     return _repository
 
 
+def _get_user_sync_service() -> Optional[UserSyncService]:
+    """Lazy-init the Users-table sync service.
+
+    Returns None if the table isn't configured (the underlying repository
+    flips its `enabled` flag off and refuses to write). Failure here is
+    non-fatal — the user still gets a valid session, the Users row just
+    isn't populated until something else writes it.
+    """
+    global _user_sync_service
+    if _user_sync_service is None:
+        try:
+            _user_sync_service = UserSyncService(repository=UserRepository())
+        except Exception as exc:
+            logger.warning("BFF user-sync service init failed: %s", exc)
+            return None
+    return _user_sync_service
+
+
 def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
     # Delegates to the process-wide singleton in `sessions_bff.cookie` so the
     # codec used here to seal a fresh cookie is the same instance the
@@ -104,9 +126,10 @@ def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
 
 def _reset_for_tests() -> None:
     """Drop the lazy singletons — only used by the test suite."""
-    global _state_store, _repository
+    global _state_store, _repository, _user_sync_service
     _state_store = None
     _repository = None
+    _user_sync_service = None
     _reset_default_codec_for_tests()
 
 
@@ -164,8 +187,13 @@ def _sanitized_return_to(raw: Optional[str]) -> Optional[str]:
       - Must NOT start with `/\\`. Some browsers normalise `\\` to `/`
         in URL parsing, which would re-enable the protocol-relative
         bypass past the `//` check.
-      - Must contain no CR/LF. Defeats response-splitting via the
-        Location header.
+      - Must contain no C0 control bytes (U+0000 .. U+001F). Per the
+        WHATWG URL spec, browsers strip TAB/CR/LF from URL inputs
+        before parsing, so a value like ``/\t/evil.com`` would parse
+        as the protocol-relative ``//evil.com`` and bypass the `//`
+        check above when the configured post-login URL is a relative
+        path. Rejecting the whole C0 range is cheap defense in depth
+        against future browser-quirk discoveries.
       - Length capped at `_RETURN_TO_MAX_LENGTH`.
 
     The result is used as a Location header value, never passed to a
@@ -175,7 +203,7 @@ def _sanitized_return_to(raw: Optional[str]) -> Optional[str]:
         return None
     if len(raw) > _RETURN_TO_MAX_LENGTH:
         return None
-    if "\r" in raw or "\n" in raw:
+    if any(ord(ch) < 0x20 for ch in raw):
         return None
     if not raw.startswith("/"):
         return None
@@ -339,6 +367,16 @@ async def bff_callback(
         logger.error("Failed to persist BFF session row: %s", exc)
         return _redirect_with_cookies_cleared(config, reason="persist_failed")
 
+    # Upsert the Users table from the ID-token claims. The per-request sync
+    # in `get_current_user_from_session` runs off the access token, which
+    # carries no email/name/picture and only a Cognito-internal group name
+    # in `cognito:groups` — so without this seed the Users row would be
+    # created with email=None and the wrong roles, breaking sharing,
+    # fine-tuning, and RBAC for first-time users. Failure is non-fatal:
+    # the user still has a valid session, sync just retries on the next
+    # login.
+    await _sync_user_from_id_token(claims)
+
     codec = _get_cookie_codec(config)
     sealed = codec.seal(CookiePayload(session_id=session_id))
     csrf_token = CSRFHelper.derive_token(csrf_secret, session_id)
@@ -368,6 +406,32 @@ async def bff_callback(
         max_age_seconds=config.bff_config.session_ttl_seconds,
     )
     return response
+
+
+async def _sync_user_from_id_token(claims: IdTokenClaims) -> None:
+    """Best-effort upsert of the Users row from fresh ID-token claims.
+
+    Called inline (not fire-and-forget) so the row exists by the time the
+    SPA's first authenticated request hits the API. The sync service
+    itself is fast (single DDB upsert) and bounded — happy to wait for it
+    rather than introduce a "row visible eventually" race for the first
+    page load. Any failure (table unconfigured, DDB down, missing email
+    claim) is logged and swallowed: a partially-synced user is better
+    than a failed login.
+    """
+    sync_service = _get_user_sync_service()
+    if not sync_service or not sync_service.enabled:
+        return
+    try:
+        await sync_service.sync_from_user(
+            user_id=claims.sub,
+            email=claims.email or "",
+            name=claims.name or "",
+            roles=claims.roles,
+            picture=claims.picture,
+        )
+    except Exception as exc:
+        logger.warning("BFF callback user-sync skipped: %s", exc)
 
 
 def _redirect_with_cookies_cleared(

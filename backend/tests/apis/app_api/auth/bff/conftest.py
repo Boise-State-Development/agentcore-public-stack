@@ -148,6 +148,8 @@ def make_id_token(
     email: Optional[str] = "alice@example.com",
     name: Optional[str] = "Alice Example",
     picture: Optional[str] = None,
+    custom_roles: Optional[str] = None,
+    cognito_groups: Optional[list] = None,
 ) -> str:
     """Unsigned JWT good enough for `decode_id_token_claims`."""
     import json
@@ -165,5 +167,9 @@ def make_id_token(
         claims["name"] = name
     if picture:
         claims["picture"] = picture
+    if custom_roles is not None:
+        claims["custom:roles"] = custom_roles
+    if cognito_groups is not None:
+        claims["cognito:groups"] = cognito_groups
     body = _b64(claims)
     return f"{header}.{body}."

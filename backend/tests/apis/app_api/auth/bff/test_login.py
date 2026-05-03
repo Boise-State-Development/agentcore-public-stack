@@ -182,6 +182,14 @@ def test_login_stores_same_origin_return_to_in_state(app_for_login):
         "/x" + "y" * 3000,         # length cap
         "/multi\nline",            # CRLF injection into Location
         "/multi\rline",
+        # WHATWG URL parsers strip TAB/CR/LF from URL inputs *before*
+        # parsing — `/\t/evil.com` would resolve as `//evil.com` and
+        # bypass the protocol-relative check when the post-login URL
+        # is a relative path. Rejecting all C0 controls slams the door
+        # on the same trick via any other quirky control byte.
+        "/\t/evil.com",
+        "/\x00/evil.com",
+        "/\x0b/evil.com",
     ],
 )
 def test_login_rejects_unsafe_return_to(app_for_login, bad_return_to):
