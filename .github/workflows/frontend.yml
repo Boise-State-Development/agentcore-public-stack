@@ -49,7 +49,11 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Build and Deploy Configuration (non-sensitive, repository-level)
-  BUILD_CONFIG: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+  # All cloud builds use the Angular `production` configuration so fileReplacements
+  # swaps `environment.ts` → `environment.production.ts` (appApiUrl `/api`). The
+  # `environment` input below still selects which AWS env we deploy *to*; it does
+  # not need to map to an Angular build configuration.
+  BUILD_CONFIG: production
   CDK_REQUIRE_APPROVAL: never
   WAIT_FOR_INVALIDATION: false
   # Suppress repeated config dumps from load-env.sh in CI logs
