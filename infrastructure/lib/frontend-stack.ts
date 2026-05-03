@@ -245,6 +245,40 @@ function handler(event) {
       ],
     };
 
+    // ============================================================================
+    // SPA routing — rewrite non-asset paths to /index.html at viewer-request
+    // ============================================================================
+    // Distribution-wide `errorResponses` (the previous approach) caught 403/404
+    // from EVERY behavior, including `/api/*`, which silently rewrote real API
+    // errors into `200 + index.html` and broke JSON parsing on the SPA. Doing
+    // the rewrite at viewer-request on the default behavior keeps SPA fallback
+    // scoped to S3-bound traffic and lets API 4xx responses pass through with
+    // their original status and JSON body.
+    //
+    // Anything with a file extension (`.js`, `.css`, `.png`, etc.) is treated
+    // as a static asset and forwarded to S3 unchanged. Everything else (SPA
+    // routes like `/auth/login`, `/chat/123`) is rewritten to `/index.html`
+    // so Angular's router can take over.
+    const spaRoutingFunction = new cloudfront.Function(this, 'SpaRoutingFunction', {
+      functionName: getResourceName(config, 'spa-routing'),
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      comment: 'Rewrite SPA routes to /index.html so Angular can handle client-side routing',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var req = event.request;
+  var uri = req.uri;
+  // Static asset (has a file extension in the last path segment) → leave as-is.
+  var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
+  if (lastSegment.indexOf('.') !== -1) {
+    return req;
+  }
+  // SPA route → serve index.html so the Angular router can resolve it.
+  req.uri = '/index.html';
+  return req;
+}
+`),
+    });
+
     // CloudFront distribution configuration
     let distributionProps: cloudfront.DistributionProps = {
       comment: `${config.projectPrefix} Frontend Distribution`,
@@ -255,26 +289,17 @@ function handler(event) {
         responseHeadersPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        functionAssociations: [
+          {
+            function: spaRoutingFunction,
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
       },
       additionalBehaviors: {
         '/api/*': apiBehavior,
       },
       defaultRootObject: 'index.html',
-      // Custom error responses for SPA routing
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-      ],
       priceClass: cloudfront.PriceClass[config.frontend.cloudFrontPriceClass as keyof typeof cloudfront.PriceClass],
       enabled: true,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
