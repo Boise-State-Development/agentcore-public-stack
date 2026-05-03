@@ -221,11 +221,11 @@ function handler(event) {
       protocolPolicy: config.certificateArn
         ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
         : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-      // Long-running SSE streams need a generous read timeout. 180s is the
+      // Long-running SSE streams need a generous read timeout. 60s is the
       // CloudFront default max without a service-quota increase; if any SSE
-      // stream goes >180s without sending data, the proxy needs to emit a
+      // stream goes >60s without sending data, the proxy needs to emit a
       // heartbeat (verified during the Phase 6 soak window).
-      readTimeout: cdk.Duration.seconds(180),
+      readTimeout: cdk.Duration.seconds(60),
       keepaliveTimeout: cdk.Duration.seconds(60),
     });
 
