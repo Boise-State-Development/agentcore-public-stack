@@ -80,7 +80,9 @@ def _extract_roles_from_id_token(claims: dict) -> List[str]:
             if isinstance(parsed, list):
                 return [str(r).strip() for r in parsed if str(r).strip()]
         except (json.JSONDecodeError, TypeError):
-            pass
+            logger.debug(
+                "custom:roles claim is not a JSON list; falling back to comma-separated parsing"
+            )
         return [r.strip() for r in str(custom_roles).split(",") if r.strip()]
 
     groups = claims.get("cognito:groups")
