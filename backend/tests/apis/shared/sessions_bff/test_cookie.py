@@ -14,7 +14,13 @@ import secrets
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from apis.shared.sessions_bff.cookie import CookieCodec, CookieDecodeError
+from apis.shared.sessions_bff.cookie import (
+    CookieCodec,
+    CookieDecodeError,
+    _reset_default_codec_for_tests,
+    _set_default_codec_for_tests,
+    get_default_codec,
+)
 from apis.shared.sessions_bff.models import CookiePayload
 
 
@@ -99,6 +105,41 @@ def test_seal_preserves_extras() -> None:
     payload = CookiePayload(session_id="s", extras={"hint": "abc"})
     decoded = codec.unseal(codec.seal(payload))
     assert decoded.extras == {"hint": "abc"}
+
+
+def test_default_codec_is_a_singleton() -> None:
+    """The auth/callback route seals with this codec and the
+    `SessionRefreshMiddleware` unseals with it on the next request — they
+    must be the *same* instance, since each `CookieCodec` derives its own
+    random AES key. A second instance would fail every unseal as 'bad seal'.
+    """
+    _reset_default_codec_for_tests()
+    try:
+        os.environ["BFF_COOKIE_SIGNING_KEY_ARN"] = "arn:aws:kms:fake"
+        first = get_default_codec()
+        second = get_default_codec()
+        assert first is second
+    finally:
+        os.environ.pop("BFF_COOKIE_SIGNING_KEY_ARN", None)
+        _reset_default_codec_for_tests()
+
+
+def test_default_codec_round_trip_seals_and_unseals() -> None:
+    """The bug we're guarding against: seal in one call site, unseal in
+    another, both via the singleton — must succeed."""
+    _reset_default_codec_for_tests()
+    try:
+        injected = _codec_with_cipher()
+        _set_default_codec_for_tests(injected)
+
+        sealing_codec = get_default_codec()
+        unsealing_codec = get_default_codec()
+
+        sealed = sealing_codec.seal(CookiePayload(session_id="sess-singleton"))
+        decoded = unsealing_codec.unseal(sealed)
+        assert decoded.session_id == "sess-singleton"
+    finally:
+        _reset_default_codec_for_tests()
 
 
 def test_unseal_propagates_kms_infrastructure_errors() -> None:

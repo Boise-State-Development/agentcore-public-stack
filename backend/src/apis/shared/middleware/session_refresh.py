@@ -29,7 +29,11 @@ from apis.shared.sessions_bff.config import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
 )
-from apis.shared.sessions_bff.cookie import CookieCodec, CookieDecodeError
+from apis.shared.sessions_bff.cookie import (
+    CookieCodec,
+    CookieDecodeError,
+    get_default_codec,
+)
 from apis.shared.sessions_bff.csrf import CSRFHelper
 from apis.shared.sessions_bff.lock import get_session_lock
 from apis.shared.sessions_bff.models import SessionRecord
@@ -75,9 +79,10 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 table_name=self._config.sessions_table_name
             )
         if self._cookie_codec is None:
-            self._cookie_codec = CookieCodec(
-                kms_key_arn=self._config.cookie_signing_key_arn
-            )
+            # Process-wide singleton — must be the same instance the auth
+            # callback used to seal the cookie, otherwise the AES key
+            # diverges and every freshly-minted cookie unseals as "bad seal".
+            self._cookie_codec = get_default_codec()
         if self._refresh_client is None:
             self._refresh_client = CognitoRefreshClient(
                 app_client_id=self._config.cognito_bff_app_client_id,

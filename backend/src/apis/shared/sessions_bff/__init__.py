@@ -13,7 +13,7 @@ Bearer-token path untouched until Phase 6 cutover.
 """
 
 from .config import BFFConfig
-from .cookie import CookieCodec, CookieDecodeError
+from .cookie import CookieCodec, CookieDecodeError, get_default_codec
 from .csrf import CSRFHelper
 from .lock import get_session_lock
 from .models import CookiePayload, SessionRecord
@@ -27,5 +27,6 @@ __all__ = [
     "CSRFHelper",
     "SessionRecord",
     "SessionRepository",
+    "get_default_codec",
     "get_session_lock",
 ]

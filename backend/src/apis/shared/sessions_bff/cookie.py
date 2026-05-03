@@ -160,3 +160,37 @@ class CookieCodec:
             struct.error,
         ):
             raise CookieDecodeError()
+
+
+# Process-wide singleton. Every codec instance pulls a fresh random data key
+# from KMS, so two codecs in one process can never decrypt each other's
+# output — the seal happens in the auth/callback route, the unseal happens
+# in `SessionRefreshMiddleware`, and they MUST share a cipher. Treat this as
+# the only construction path in production code.
+_default_codec: Optional[CookieCodec] = None
+_default_codec_lock = Lock()
+
+
+def get_default_codec() -> CookieCodec:
+    global _default_codec
+    if _default_codec is not None:
+        return _default_codec
+    with _default_codec_lock:
+        if _default_codec is None:
+            _default_codec = CookieCodec()
+    return _default_codec
+
+
+def _reset_default_codec_for_tests() -> None:
+    """Drop the singleton so tests can rebuild it under their own fixtures."""
+    global _default_codec
+    with _default_codec_lock:
+        _default_codec = None
+
+
+def _set_default_codec_for_tests(codec: CookieCodec) -> None:
+    """Install a pre-built codec (typically with `_cipher` pre-injected so
+    no KMS call is made) as the process-wide singleton."""
+    global _default_codec
+    with _default_codec_lock:
+        _default_codec = codec

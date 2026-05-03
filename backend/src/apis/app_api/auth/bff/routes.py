@@ -30,7 +30,12 @@ from apis.shared.auth.models import User
 from apis.shared.auth.state_store import OIDCStateData, create_state_store
 from apis.shared.sessions_bff.cache import get_default_cache
 from apis.shared.sessions_bff.config import SESSION_COOKIE_NAME
-from apis.shared.sessions_bff.cookie import CookieCodec, CookieDecodeError
+from apis.shared.sessions_bff.cookie import (
+    CookieCodec,
+    CookieDecodeError,
+    _reset_default_codec_for_tests,
+    get_default_codec,
+)
 from apis.shared.sessions_bff.csrf import CSRFHelper
 from apis.shared.sessions_bff.models import CookiePayload, SessionRecord
 from apis.shared.sessions_bff.refresh import resolve_bff_client_secret
@@ -69,7 +74,6 @@ _AUTHORIZE_SCOPES = "openid email profile"
 
 _state_store = None
 _repository: Optional[SessionRepository] = None
-_cookie_codec: Optional[CookieCodec] = None
 
 
 def _get_state_store():
@@ -89,20 +93,21 @@ def _get_repository(config: BFFAuthConfig) -> SessionRepository:
 
 
 def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
-    global _cookie_codec
-    if _cookie_codec is None:
-        _cookie_codec = CookieCodec(
-            kms_key_arn=config.bff_config.cookie_signing_key_arn
-        )
-    return _cookie_codec
+    # Delegates to the process-wide singleton in `sessions_bff.cookie` so the
+    # codec used here to seal a fresh cookie is the same instance the
+    # SessionRefreshMiddleware uses to unseal it on the next request.
+    # `config` is unused but kept in the signature for parity with the other
+    # collaborator getters above.
+    del config
+    return get_default_codec()
 
 
 def _reset_for_tests() -> None:
     """Drop the lazy singletons — only used by the test suite."""
-    global _state_store, _repository, _cookie_codec
+    global _state_store, _repository
     _state_store = None
     _repository = None
-    _cookie_codec = None
+    _reset_default_codec_for_tests()
 
 
 def _require_ready(config: BFFAuthConfig) -> None:

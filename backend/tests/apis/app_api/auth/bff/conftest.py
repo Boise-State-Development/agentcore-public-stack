@@ -20,7 +20,10 @@ from moto import mock_aws
 from apis.app_api.auth.bff import routes as bff_routes
 from apis.app_api.auth.bff.routes import router as bff_router
 from apis.shared.sessions_bff.cache import _reset_default_cache_for_tests
-from apis.shared.sessions_bff.cookie import CookieCodec
+from apis.shared.sessions_bff.cookie import (
+    CookieCodec,
+    _set_default_codec_for_tests,
+)
 from apis.shared.sessions_bff.refresh import _reset_secret_cache_for_tests
 from apis.shared.sessions_bff.repository import SessionRepository
 
@@ -116,7 +119,7 @@ def app(monkeypatch, moto_aws, codec, repository) -> FastAPI:
     """A minimal FastAPI app with the BFF router mounted and singletons
     pre-injected so requests don't try to talk to real AWS."""
     bff_routes._repository = repository
-    bff_routes._cookie_codec = codec
+    _set_default_codec_for_tests(codec)
     # Default secret resolver short-circuit so we don't need a Secrets
     # Manager mock per test that doesn't care about it.
     monkeypatch.setattr(
