@@ -184,6 +184,24 @@ def _sanitized_return_to(raw: Optional[str]) -> Optional[str]:
     return raw
 
 
+def _absolutize_return_to(*, return_to: str, base_url: str) -> str:
+    """Combine a path-only `return_to` with the SPA origin from `base_url`.
+
+    `return_to` has already been allowlist-validated to a same-origin path
+    (no scheme, no host). When `base_url` is absolute (e.g. the typical
+    `BFF_POST_LOGIN_REDIRECT_URL=http://localhost:4200/`) we splice its
+    scheme + netloc onto the path so the 302 lands on the SPA, not on
+    whatever host issued the callback. When `base_url` is itself a relative
+    path (e.g. the env-var fallback `/`), we hand back the path unchanged
+    and let the browser resolve it relative to the issuing host — that's
+    what same-origin production deployments want.
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return return_to
+    return f"{parsed.scheme}://{parsed.netloc}{return_to}"
+
+
 @router.get("/login", summary="Begin the BFF OAuth code flow")
 async def bff_login(
     provider: Optional[str] = None,
@@ -327,14 +345,17 @@ async def bff_callback(
 
     # Honour the `return_to` deep link the SPA stashed at /auth/login.
     # The path was already allowlist-validated (same-origin only) before
-    # being committed to the OIDC state, so it's safe to use directly as
-    # the Location header value here. Falls back to the configured post-
-    # login URL when no deep link was requested.
-    redirect_target = (
-        state_data.return_to
-        if state_data is not None and state_data.return_to
-        else config.post_login_redirect_url
-    )
+    # being committed to the OIDC state. We graft it onto the configured
+    # post-login origin so the browser lands on the SPA host, not whatever
+    # host issued the callback — in dev the BFF (:8000) and SPA (:4200) are
+    # cross-origin, and a path-only Location would resolve against the BFF.
+    if state_data is not None and state_data.return_to:
+        redirect_target = _absolutize_return_to(
+            return_to=state_data.return_to,
+            base_url=config.post_login_redirect_url,
+        )
+    else:
+        redirect_target = config.post_login_redirect_url
 
     response = RedirectResponse(
         url=redirect_target,

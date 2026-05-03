@@ -195,7 +195,9 @@ def test_callback_session_id_is_unique_across_logins(app, monkeypatch, repositor
 
 def test_callback_redirects_to_return_to_path_when_set(app, monkeypatch):
     """Successful callback honours the same-origin path the SPA stashed
-    at /auth/login, instead of falling back to BFF_POST_LOGIN_REDIRECT_URL."""
+    at /auth/login, grafted onto the SPA origin from
+    BFF_POST_LOGIN_REDIRECT_URL so cross-origin dev (BFF on :8000, SPA on
+    :4200) lands on the SPA host instead of the BFF host."""
     state = _seed_state("with-return-to", return_to="/files/abc?tab=details")
     _patch_token_exchange(
         monkeypatch,
@@ -208,7 +210,11 @@ def test_callback_redirects_to_return_to_path_when_set(app, monkeypatch):
     response = client.get(f"/auth/callback?code=c&state={state}")
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/files/abc?tab=details"
+    # POST_LOGIN_URL = "http://localhost:4200/" — origin spliced onto path.
+    assert (
+        response.headers["location"]
+        == "http://localhost:4200/files/abc?tab=details"
+    )
 
 
 def test_callback_falls_back_to_post_login_when_no_return_to(app, monkeypatch):
