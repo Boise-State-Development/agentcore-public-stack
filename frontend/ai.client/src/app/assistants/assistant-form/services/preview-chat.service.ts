@@ -1,6 +1,7 @@
-import { Injectable, inject, signal, computed } from '@angular/core';
+import { Injectable, InjectionToken, inject, signal, computed } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
-import { fetchEventSource, EventSourceMessage } from '@microsoft/fetch-event-source';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
+import type { EventSourceMessage, FetchEventSourceInit } from '@microsoft/fetch-event-source';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
 import { Message } from '../../../session/services/models/message.model';
@@ -10,6 +11,23 @@ import {
   type StreamParserCallbacks,
   type ContentBlockDeltaEvent,
 } from '../../../shared/utils/stream-parser';
+
+/**
+ * Injection token for the SSE client. Lets specs swap in a mock without
+ * relying on `vi.mock('@microsoft/fetch-event-source')` — that approach
+ * raced with sibling specs that transitively import this module in the
+ * Angular vitest builder's shared worker pool, surfacing as the well-known
+ * `expected vi.fn() called 1, got 0` flake on `preview-chat.service.spec.ts`.
+ */
+export type FetchEventSource = (
+  input: RequestInfo,
+  init: FetchEventSourceInit,
+) => Promise<void>;
+
+export const FETCH_EVENT_SOURCE = new InjectionToken<FetchEventSource>('FETCH_EVENT_SOURCE', {
+  providedIn: 'root',
+  factory: () => fetchEventSource,
+});
 
 /**
  * Component-scoped service for managing preview chat state.
@@ -28,6 +46,7 @@ import {
 export class PreviewChatService {
   private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
+  private fetchEventSource = inject(FETCH_EVENT_SOURCE);
 
   // Local state signals (isolated from global ChatStateService)
   private readonly messagesSignal = signal<Message[]>([]);
@@ -193,7 +212,7 @@ export class PreviewChatService {
       // csrfInterceptor doesn't run here. Attach X-CSRF-Token by hand.
       const csrfHeaders = this.bffSession.csrfHeaders();
 
-      await fetchEventSource(url, {
+      await this.fetchEventSource(url, {
         method: 'POST',
         credentials: 'include',
         headers: {

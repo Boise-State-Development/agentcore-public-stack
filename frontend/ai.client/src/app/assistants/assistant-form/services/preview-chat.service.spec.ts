@@ -1,21 +1,25 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signal } from '@angular/core';
-import { PreviewChatService } from './preview-chat.service';
+import { FETCH_EVENT_SOURCE, PreviewChatService } from './preview-chat.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
-
-// Mock fetchEventSource
-vi.mock('@microsoft/fetch-event-source', () => ({
-  fetchEventSource: vi.fn(),
-}));
 
 describe('PreviewChatService', () => {
   let service: PreviewChatService;
   let bffSession: any;
+  let mockFetch: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
+
+    // Inject the SSE client through Angular DI rather than mocking the
+    // `@microsoft/fetch-event-source` module via vi.mock. The vi.mock
+    // approach raced with sibling specs that transitively import this
+    // service in the Angular vitest builder's shared worker pool, causing
+    // the production code to call a different vi.fn() instance than the
+    // one this spec captured.
+    mockFetch = vi.fn().mockResolvedValue(undefined);
 
     // Phase 6c: preview chat now goes through the BFF chat proxy with
     // cookie auth, so the only auth surface the service touches is the
@@ -31,6 +35,7 @@ describe('PreviewChatService', () => {
     TestBed.configureTestingModule({
       providers: [
         PreviewChatService,
+        { provide: FETCH_EVENT_SOURCE, useValue: mockFetch },
         { provide: BffSessionService, useValue: bffSessionMock },
         { provide: ConfigService, useValue: configServiceMock },
       ],
@@ -56,11 +61,9 @@ describe('PreviewChatService', () => {
   });
 
   it('should send message', async () => {
-    const { fetchEventSource } = await import('@microsoft/fetch-event-source');
-    (fetchEventSource as any).mockResolvedValue(undefined);
-
     await service.sendMessage('Hello', 'assistant-1', 'Test instructions');
 
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(service.messages()).toHaveLength(2);
     expect(service.messages()[0].role).toBe('user');
     expect(service.messages()[1].role).toBe('assistant');
@@ -97,7 +100,7 @@ describe('PreviewChatService', () => {
 
   it('should reset with new session ID', () => {
     const oldSessionId = service.sessionId();
-    
+
     service.reset();
 
     expect(service.messages()).toEqual([]);
@@ -107,12 +110,6 @@ describe('PreviewChatService', () => {
 
   it('attaches the CSRF header from the BFF SessionService when present', async () => {
     bffSession.csrfHeaders.mockReturnValue({ 'X-CSRF-Token': 'tok-xyz' });
-
-    const { fetchEventSource } = await import('@microsoft/fetch-event-source');
-    const mockFetch = vi.mocked(fetchEventSource);
-    // Clear so .at(-1) is unambiguous regardless of prior-test ordering.
-    mockFetch.mockClear();
-    mockFetch.mockResolvedValue(undefined);
 
     await service.sendMessage('Hello', 'assistant-1');
 
