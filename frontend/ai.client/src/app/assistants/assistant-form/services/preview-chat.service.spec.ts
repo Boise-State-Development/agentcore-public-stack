@@ -109,12 +109,16 @@ describe('PreviewChatService', () => {
     bffSession.csrfHeaders.mockReturnValue({ 'X-CSRF-Token': 'tok-xyz' });
 
     const { fetchEventSource } = await import('@microsoft/fetch-event-source');
-    (fetchEventSource as any).mockResolvedValue(undefined);
+    const mockFetch = vi.mocked(fetchEventSource);
+    // Clear so .at(-1) is unambiguous regardless of prior-test ordering.
+    mockFetch.mockClear();
+    mockFetch.mockResolvedValue(undefined);
 
     await service.sendMessage('Hello', 'assistant-1');
 
-    const init = (fetchEventSource as any).mock.calls.at(-1)[1];
-    expect(init.headers['X-CSRF-Token']).toBe('tok-xyz');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const init = mockFetch.mock.calls[0][1]!;
+    expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('tok-xyz');
     expect(init.credentials).toBe('include');
   });
 });
