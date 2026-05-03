@@ -5,6 +5,7 @@ import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
+import { withCredentialsInterceptor } from './auth/with-credentials.interceptor';
 import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
 import { ConfigService } from './services/config.service';
 import { SessionService } from './auth/session.service';
@@ -56,9 +57,11 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(
+      // withCredentialsInterceptor flips the cookie-attaching flag on app-api
+      // requests (cross-origin in local dev; no-op same-origin in prod).
       // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
       // requests; errorInterceptor stays last so it sees the final response.
-      withInterceptors([csrfInterceptor, errorInterceptor]),
+      withInterceptors([withCredentialsInterceptor, csrfInterceptor, errorInterceptor]),
     ),
     provideMarkdown({
       markedOptions: {
