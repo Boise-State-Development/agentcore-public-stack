@@ -60,15 +60,19 @@ app = FastAPI(
 )
 
 # Add CORS middleware - origins from CDK-provided CORS_ORIGINS env var
-# NOTE: `allow_credentials=False` is correct for the Bearer flow. Phase 6 BFF
-# cutover serves the SPA same-origin via CloudFront `/api/*` so cookies don't
-# need CORS — but if any cross-origin cookie path is added, this must flip to
-# `True` (and `allow_origins` must list explicit origins, not "*").
+# NOTE: `allow_credentials=True` is required for the BFF cookie flow when the
+# SPA and BFF are cross-origin (e.g. local dev: SPA on :4200, BFF on :8000).
+# Without it the browser sends the cookie but blocks JS from reading the
+# response, leaving the SPA unable to confirm the session and bouncing the
+# user back to /auth/login. In production the SPA is served same-origin via
+# CloudFront `/api/*`, so CORS doesn't fire and the flag is moot. With
+# credentials enabled the spec forbids `allow_origins=["*"]`, which the CSV
+# already satisfies — every origin is listed explicitly.
 _cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_origins if o.strip()],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
