@@ -236,13 +236,14 @@ jobs:
       CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS: ${{ vars.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS }}
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
       CDK_FRONTEND_BUCKET_NAME: ${{ vars.CDK_FRONTEND_BUCKET_NAME }}
       CDK_APP_VERSION: ${{ needs.build-cdk.outputs.app-version }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -365,13 +366,14 @@ jobs:
       CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS: ${{ vars.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS }}
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
       CDK_FRONTEND_BUCKET_NAME: ${{ vars.CDK_FRONTEND_BUCKET_NAME }}
       CDK_APP_VERSION: ${{ needs.build-cdk.outputs.app-version }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
