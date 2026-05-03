@@ -235,7 +235,7 @@ def test_omits_oauth2_callback_url_header_when_caller_did_not_send_one(
 def test_targets_invocations_path_on_inference_api(
     monkeypatch: pytest.MonkeyPatch, chat_path: str,
 ) -> None:
-    monkeypatch.setattr(proxy_routes, "_INFERENCE_API_URL", "http://upstream:9999")
+    monkeypatch.setenv("INFERENCE_API_URL", "http://upstream:9999")
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -250,6 +250,40 @@ def test_targets_invocations_path_on_inference_api(
 
     TestClient(app).post(chat_path, json={"message": "hi"})
     assert captured["url"] == "http://upstream:9999/invocations"
+
+
+def test_agentcore_runtime_url_encodes_arn_and_appends_qualifier(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str,
+) -> None:
+    """AgentCore Runtime data plane requires a URL-encoded ARN segment and
+    a `qualifier` query string. SSM stores the ARN unencoded, so the proxy
+    has to re-encode the path and append `qualifier=DEFAULT`. Without this,
+    AWS returns 404 because the unencoded `/` in the ARN splits the path
+    into too many segments.
+    """
+    monkeypatch.setenv(
+        "INFERENCE_API_URL",
+        "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+        "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/foo-AbCdEf",
+    )
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200, content=b"event: done\ndata: {}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    app = _build_app(record=_record(), user_override=_user())
+
+    TestClient(app).post(chat_path, json={"message": "hi"})
+    assert captured["url"] == (
+        "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+        "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A123456789012%3Aruntime"
+        "%2Ffoo-AbCdEf/invocations?qualifier=DEFAULT"
+    )
 
 
 # ── Non-SSE relay (e.g. inference-api returns JSON validation error pre-stream) ──
