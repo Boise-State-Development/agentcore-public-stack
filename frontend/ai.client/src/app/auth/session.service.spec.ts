@@ -97,14 +97,17 @@ describe('SessionService', () => {
       window.location.pathname = '/admin/users';
       window.location.search = '?tab=roles';
 
-      const promise = service.bootstrap();
+      // bootstrap() intentionally never resolves on 401 — it hangs to keep
+      // APP_INITIALIZER blocking until the queued window.location.href fires.
+      // We don't await the promise; we flush microtasks and inspect state.
+      void service.bootstrap();
 
       const req = httpMock.expectOne('http://localhost:8000/auth/session');
       req.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
-      await promise;
+      await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(service.bootstrapped()).toBe(true);
+      expect(service.bootstrapped()).toBe(false);
       expect(service.user()).toBeNull();
       expect(service.csrfToken()).toBeNull();
       expect(service.isAuthenticated()).toBe(false);

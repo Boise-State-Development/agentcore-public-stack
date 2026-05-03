@@ -74,6 +74,10 @@ export class SessionService {
       this._csrfToken.set(null);
       if (error instanceof HttpErrorResponse && error.status === 401) {
         this.redirectToLogin();
+        // window.location.href only queues the navigation. Hang the promise
+        // so APP_INITIALIZER blocks the SPA from rendering a route before
+        // the browser tears the page down.
+        await new Promise<never>(() => {});
       }
     } finally {
       this._bootstrapped.set(true);
