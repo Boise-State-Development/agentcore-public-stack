@@ -856,8 +856,17 @@ export class SessionService {
   }
 
   constructor() {
+    // Eager fetch when this service is instantiated post-bootstrap with an
+    // already-authenticated session — the most common case, since
+    // APP_INITIALIZER awaits BffSessionService.bootstrap() before any
+    // component (including the sidenav that injects us) renders. The effect
+    // below handles the rarer login/logout transitions that happen later.
+    if (this.bffSession.isAuthenticated()) {
+      this.enableSessionsLoading();
+    }
+
     // Track BFF session auth state — toggle the sessions resource on
-    // when the user is authenticated, off (and clear cache) on logout.
+    // when the user logs in mid-session, off (and clear cache) on logout.
     effect(() => {
       if (this.bffSession.isAuthenticated()) {
         this.enableSessionsLoading();
