@@ -21,7 +21,6 @@ import {
   heroInformationCircle,
 } from '@ng-icons/heroicons/outline';
 import { AuthProvidersService } from '../services/auth-providers.service';
-import { ConfigService } from '../../../services/config.service';
 import {
   AuthProviderCreateRequest,
   AuthProviderUpdateRequest,
@@ -677,7 +676,6 @@ export class AuthProviderFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private authProvidersService = inject(AuthProvidersService);
-  private config = inject(ConfigService);
 
   readonly isEditMode = signal(false);
   readonly providerId = signal<string | null>(null);
@@ -688,11 +686,8 @@ export class AuthProviderFormPage implements OnInit {
   readonly discoveryError = signal<string | null>(null);
   readonly copiedRedirectUri = signal(false);
 
-  /** The Cognito redirect URI that must be registered in the external IdP */
-  readonly cognitoRedirectUri = computed(() => {
-    const domain = this.config.cognitoDomainUrl();
-    return domain ? `${domain}/oauth2/idpresponse` : '';
-  });
+  /** The Cognito redirect URI that must be registered in the external IdP. Fetched in ngOnInit; empty until then or if app-api lacks COGNITO_DOMAIN_URL. */
+  readonly cognitoRedirectUri = signal('');
 
   readonly providerForm: FormGroup<ProviderFormGroup> = this.fb.group({
     providerId: this.fb.control('', {
@@ -748,6 +743,8 @@ export class AuthProviderFormPage implements OnInit {
   );
 
   ngOnInit(): void {
+    this.loadCognitoRedirectUri();
+
     const id = this.route.snapshot.paramMap.get('providerId');
     if (id && id !== 'new') {
       this.isEditMode.set(true);
@@ -760,6 +757,16 @@ export class AuthProviderFormPage implements OnInit {
       // Client secret required in create mode
       this.providerForm.controls.clientSecret.setValidators([Validators.required]);
       this.providerForm.controls.clientSecret.updateValueAndValidity();
+    }
+  }
+
+  private async loadCognitoRedirectUri(): Promise<void> {
+    try {
+      const uri = await this.authProvidersService.getCognitoRedirectUri();
+      this.cognitoRedirectUri.set(uri);
+    } catch {
+      // Leaves the signal empty; the template hides the redirect-URI section
+      // via @if. Happens when app-api has no COGNITO_DOMAIN_URL (e.g. local dev).
     }
   }
 

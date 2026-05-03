@@ -87,6 +87,13 @@ export class AuthProvidersService {
     );
   }
 
+  async getCognitoRedirectUri(): Promise<string> {
+    const response = await firstValueFrom(
+      this.http.get<{ redirect_uri: string }>(`${this.baseUrl()}/cognito-redirect-uri`)
+    );
+    return response.redirect_uri;
+  }
+
   async triggerRuntimeUpdate(providerId: string): Promise<{ message: string }> {
     return firstValueFrom(
       this.http.post<{ message: string }>(`${this.baseUrl()}/${providerId}/update-runtime`, {})
