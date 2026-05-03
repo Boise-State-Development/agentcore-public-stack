@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -73,47 +72,21 @@ export class FrontendStack extends cdk.Stack {
     }
 
     // ============================================================================
-    // SSM Parameter Imports - Cognito Configuration
+    // Runtime configuration is no longer fetched from S3.
     // ============================================================================
-    // These parameters are exported by InfrastructureStack (Cognito User Pool)
-    // and InferenceApiStack (Runtime endpoint URL).
-    // ============================================================================
-
-    const cognitoDomainUrl = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/${config.projectPrefix}/auth/cognito/domain-url`
-    );
-
-    // Log imported values for debugging (values will be tokens at synth time)
+    // Pre-Phase-7 the SPA fetched `/config.json` at startup. After the Phase 7
+    // cleanup the only field worth keeping was `appApiUrl`, which is now
+    // hardcoded into the bundle via Angular `fileReplacements` (`/api` for
+    // production, `http://localhost:8000` for local dev). `version` is baked
+    // in by the frontend's `prebuild` script reading the root VERSION file,
+    // and `cognitoDomainUrl` moved server-side behind
+    // `GET /admin/auth-providers/cognito-redirect-uri` on app-api.
+    //
+    // The `appApiUrl` SSM token is still resolved below: it feeds the
+    // CloudFront `/api/*` HttpOrigin that fronts the same-origin browser
+    // path, just no longer the deprecated runtime-config blob.
     console.log('📥 Imported backend URLs from SSM:');
     console.log(`   App API URL: ${appApiUrl}`);
-    console.log(`   Cognito Domain URL: ${cognitoDomainUrl}`);
-
-    // ============================================================================
-    // Runtime Configuration Generation
-    // ============================================================================
-    // Generate config.json content with backend URLs and environment settings.
-    // This configuration will be deployed to S3 and fetched by the Angular app
-    // at startup via APP_INITIALIZER, enabling environment-agnostic builds.
-    //
-    // Note: The frontend only needs the App API URL. The inference API is
-    // accessed through the App API backend, not directly from the frontend.
-    // ============================================================================
-
-    // Phase 6a (BFF cutover): SPA always talks to app-api via the same-origin
-    // CloudFront `/api/*` behavior added below. Keeping `appApiUrl` relative
-    // (a) eliminates CORS preflights on every request and (b) lets the SPA
-    // attach `__Host-` cookies without crossing origins. The absolute ALB URL
-    // imported from SSM still feeds the new HttpOrigin — it just isn't
-    // exposed to the browser anymore.
-    const runtimeConfig = {
-      appApiUrl: '/api',
-      version: config.appVersion,
-      cognitoDomainUrl: cognitoDomainUrl,
-    };
-
-    console.log('🔧 Generated runtime configuration:');
-    console.log(`   App API URL (browser): ${runtimeConfig.appApiUrl} (CloudFront /api/* → ALB ${appApiUrl})`);
 
     // Generate bucket name with account ID to ensure global uniqueness
     const bucketName = config.frontend.bucketName || 
@@ -358,39 +331,6 @@ function handler(event) {
         ),
       });
     }
-
-    // ============================================================================
-    // Deploy Runtime Configuration to S3
-    // ============================================================================
-    // Deploy config.json to the S3 bucket root with appropriate cache headers.
-    // Cache strategy:
-    // - TTL: 5 minutes (balance between freshness and performance)
-    // - Must revalidate: Ensures clients check for updates after TTL expires
-    // - Prune: false (don't delete other files in the bucket)
-    // ============================================================================
-
-    new s3deploy.BucketDeployment(this, 'RuntimeConfigDeployment', {
-      sources: [
-        s3deploy.Source.jsonData('config.json', runtimeConfig),
-      ],
-      destinationBucket: this.bucket,
-      cacheControl: [
-        s3deploy.CacheControl.maxAge(cdk.Duration.minutes(5)), // Short TTL for config updates
-        s3deploy.CacheControl.mustRevalidate(), // Force revalidation after TTL
-      ],
-      prune: false, // Don't delete other files (static assets deployed separately)
-      // Invalidate the cached config.json on every deploy so a Phase 6
-      // cutover (appApiUrl flip) takes effect immediately at the edge
-      // instead of waiting out the 5-minute TTL.
-      distribution: this.distribution,
-      distributionPaths: ['/config.json'],
-    });
-
-    console.log('📦 Runtime config deployment configured:');
-    console.log('   File: config.json');
-    console.log('   Cache TTL: 5 minutes');
-    console.log('   Must revalidate: true');
-    console.log('   Prune: false');
 
     // Store parameters in SSM Parameter Store for cross-stack references
     new ssm.StringParameter(this, 'DistributionIdParameter', {
