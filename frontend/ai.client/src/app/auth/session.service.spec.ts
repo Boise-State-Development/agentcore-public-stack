@@ -217,7 +217,7 @@ describe('SessionService', () => {
   });
 
   describe('logout', () => {
-    it('POSTs /auth/logout with the CSRF header and clears local state', async () => {
+    it('POSTs /auth/logout, clears local state, and navigates to the Cognito logout URL', async () => {
       const bootPromise = service.bootstrap();
       httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
       await bootPromise;
@@ -227,13 +227,34 @@ describe('SessionService', () => {
       expect(req.request.method).toBe('POST');
       expect(req.request.withCredentials).toBe(true);
       expect(req.request.headers.get('X-CSRF-Token')).toBe('csrf-secret-abc');
-      req.flush(null, { status: 204, statusText: 'No Content' });
+      req.flush({
+        post_logout_url:
+          'https://example.auth.us-east-1.amazoncognito.com/logout?client_id=cid&logout_uri=http%3A%2F%2Flocalhost%3A4200',
+      });
 
       await logoutPromise;
 
       expect(service.user()).toBeNull();
       expect(service.csrfToken()).toBeNull();
       expect(service.isAuthenticated()).toBe(false);
+      expect(window.location.href).toBe(
+        'https://example.auth.us-east-1.amazoncognito.com/logout?client_id=cid&logout_uri=http%3A%2F%2Flocalhost%3A4200',
+      );
+    });
+
+    it('does not navigate when post_logout_url is null', async () => {
+      const bootPromise = service.bootstrap();
+      httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
+      await bootPromise;
+
+      const logoutPromise = service.logout();
+      const req = httpMock.expectOne('http://localhost:8000/auth/logout');
+      req.flush({ post_logout_url: null });
+
+      await logoutPromise;
+
+      expect(service.user()).toBeNull();
+      expect(window.location.href).toBe('');
     });
 
     it('clears local state even when /auth/logout fails', async () => {
@@ -249,6 +270,7 @@ describe('SessionService', () => {
 
       expect(service.user()).toBeNull();
       expect(service.csrfToken()).toBeNull();
+      expect(window.location.href).toBe('');
     });
   });
 });

@@ -6,7 +6,9 @@
                          writes sealed cookies, redirects to the SPA.
 `GET  /auth/session`   — returns the current user + CSRF token. Read by
                          the SPA on bootstrap to confirm "am I logged in?"
-`POST /auth/logout`    — drops the session row, clears both cookies.
+`POST /auth/logout`    — drops the session row, clears both cookies, and
+                         returns the Cognito Hosted UI logout URL so the
+                         SPA can finish the round-trip.
 
 These routes are dormant until Phase 5 wires the SPA — a /auth/login hit
 today will work end-to-end as long as Phase 1 env vars are set, but no
@@ -23,6 +25,7 @@ import urllib.parse
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from starlette.responses import RedirectResponse
 
 from apis.shared.auth.dependencies import get_current_user_from_session
@@ -495,17 +498,49 @@ async def bff_session(
 # ─── /auth/logout ──────────────────────────────────────────────────────
 
 
+def _cognito_logout_url(config: BFFAuthConfig) -> Optional[str]:
+    """Build the Cognito Hosted UI logout URL, or None if not configured.
+
+    Cognito's `/logout` endpoint clears the Hosted UI session cookie that
+    sits independent of our BFF cookies; without this hop the user "logs
+    out" of our session but Cognito silently re-issues a code on the next
+    /authorize, so they're back in without a credential prompt.
+
+    The `logout_uri` must exactly match a value registered on the BFF app
+    client's `logoutUrls` (CDK strips the trailing slash there, so we
+    strip it here too).
+    """
+    if not (
+        config.cognito_domain_url
+        and config.bff_config.cognito_bff_app_client_id
+        and config.post_login_redirect_url
+    ):
+        return None
+    params = urllib.parse.urlencode(
+        {
+            "client_id": config.bff_config.cognito_bff_app_client_id,
+            "logout_uri": config.post_login_redirect_url.rstrip("/"),
+        }
+    )
+    return f"{config.cognito_domain_url}/logout?{params}"
+
+
 @router.post("/logout", summary="Drop the BFF session and clear cookies")
 async def bff_logout(request: Request) -> Response:
     """Best-effort logout.
 
     Reads the session cookie directly rather than going through the dep so
     we can clear cookies for already-stale sessions too — the user clicked
-    "log out", they get logged out, full stop. Returns 204 plus cleared
-    cookies; the SPA owns the post-logout UX.
+    "log out", they get logged out, full stop. Returns the Cognito Hosted
+    UI logout URL so the SPA can finish the round-trip and clear the
+    upstream session cookie too; otherwise Cognito's own session keeps
+    silently re-authenticating the user on the next /authorize.
     """
     config = BFFAuthConfig.from_env()
-    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    response = JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"post_logout_url": _cognito_logout_url(config)},
+    )
     clear_session_cookies(response)
 
     cookie_value = request.cookies.get(SESSION_COOKIE_NAME)

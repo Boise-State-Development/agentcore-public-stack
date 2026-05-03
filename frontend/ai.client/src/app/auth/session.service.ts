@@ -3,7 +3,7 @@ import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http
 import { firstValueFrom } from 'rxjs';
 
 import { ConfigService } from '../services/config.service';
-import { BffSessionResponse, BffSessionUser } from './bff-session.model';
+import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-session.model';
 
 /**
  * SessionService — backs the BFF Token-Handler cookie session.
@@ -122,23 +122,32 @@ export class SessionService {
   }
 
   /**
-   * POST `{appApiUrl}/auth/logout`. The BFF returns 204 plus cleared
-   * cookies; we mirror that by clearing local signals. The endpoint is
+   * POST `{appApiUrl}/auth/logout`. The BFF clears its own cookies and
+   * returns the Cognito Hosted UI logout URL so we can end the upstream
+   * session — without that hop Cognito silently re-issues a code on the
+   * next /authorize and the user lands back in without re-auth. We
+   * mirror the cookie clear locally and navigate the browser to that
+   * URL; the SPA tears down on its own from there. The endpoint is
    * CSRF-exempt server-side, but we send the header anyway so a future
    * tightening doesn't silently break us.
    */
   async logout(): Promise<void> {
     const url = `${this.baseUrl()}/auth/logout`;
+    let postLogoutUrl: string | null = null;
     try {
-      await firstValueFrom(
-        this.http.post(url, null, {
+      const response = await firstValueFrom(
+        this.http.post<BffLogoutResponse>(url, null, {
           withCredentials: true,
           headers: this.csrfHttpHeaders(),
         }),
       );
+      postLogoutUrl = response?.post_logout_url ?? null;
     } finally {
       this._user.set(null);
       this._csrfToken.set(null);
+    }
+    if (postLogoutUrl) {
+      window.location.href = postLogoutUrl;
     }
   }
 

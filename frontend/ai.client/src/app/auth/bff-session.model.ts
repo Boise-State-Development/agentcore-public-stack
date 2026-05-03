@@ -21,3 +21,16 @@ export interface BffSessionUser {
 export interface BffSessionResponse extends BffSessionUser {
   csrf_token: string;
 }
+
+/**
+ * `POST /auth/logout` response. The BFF clears its own cookies inline
+ * but Cognito's Hosted UI session cookie sits on the Cognito domain —
+ * if we don't bounce the browser through `${cognitoDomain}/logout`,
+ * Cognito silently re-issues a code on the next /authorize and the
+ * user is back in without a credential prompt. The SPA navigates to
+ * `post_logout_url` to end that upstream session. Null when Cognito
+ * isn't configured (local dev with the BFF in degraded mode).
+ */
+export interface BffLogoutResponse {
+  post_logout_url: string | null;
+}
