@@ -188,8 +188,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('cognito')?.domainPrefix
         || projectPrefix,
       callbackUrls: process.env.CDK_COGNITO_CALLBACK_URLS?.split(',')
+        .map((s) => s.trim()).filter(Boolean)
         || scope.node.tryGetContext('cognito')?.callbackUrls,
       logoutUrls: process.env.CDK_COGNITO_LOGOUT_URLS?.split(',')
+        .map((s) => s.trim()).filter(Boolean)
         || scope.node.tryGetContext('cognito')?.logoutUrls,
       supportedIdentityProviders: process.env.CDK_COGNITO_SUPPORTED_IDPS?.split(',')
         .map((s) => s.trim()).filter(Boolean)
