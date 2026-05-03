@@ -8,10 +8,8 @@ describe('ConfigService', () => {
 
   const validConfig: RuntimeConfig = {
     appApiUrl: 'https://api.example.com',
-    environment: 'production',
     version: '1.0.0-beta.1',
     cognitoDomainUrl: 'https://myprefix.auth.us-east-1.amazoncognito.com',
-    cognitoRegion: 'us-east-1',
   };
 
   beforeEach(() => {
@@ -43,13 +41,11 @@ describe('ConfigService', () => {
       expect(service.loaded()).toBe(true);
       expect(service.error()).toBeNull();
       expect(service.appApiUrl()).toBe(validConfig.appApiUrl);
-      expect(service.environment()).toBe(validConfig.environment);
     });
 
     it('should validate configuration before storing', async () => {
       const invalidConfig = {
         appApiUrl: 'not-a-url',
-        environment: 'production'
       };
       
       const loadPromise = service.loadConfig();
@@ -92,34 +88,15 @@ describe('ConfigService', () => {
     });
 
     it('should handle missing appApiUrl', async () => {
-      const invalidConfig = {
-        environment: 'production'
-      };
-      
-      const loadPromise = service.loadConfig();
-      
-      const req = httpMock.expectOne('/config.json');
-      req.flush(invalidConfig);
-      
-      await loadPromise;
-      
-      // Should fall back due to validation error
-      expect(service.loaded()).toBe(true);
-      expect(service.error()).not.toBeNull();
-    });
+      const invalidConfig = {};
 
-    it('should handle missing environment field', async () => {
-      const invalidConfig = {
-        appApiUrl: 'https://valid.com'
-      };
-      
       const loadPromise = service.loadConfig();
-      
+
       const req = httpMock.expectOne('/config.json');
       req.flush(invalidConfig);
-      
+
       await loadPromise;
-      
+
       // Should fall back due to validation error
       expect(service.loaded()).toBe(true);
       expect(service.error()).not.toBeNull();
@@ -144,25 +121,21 @@ describe('ConfigService', () => {
       expect(service.appApiUrl()).toBe('');
     });
 
-    it('should return "development" for environment when not loaded', () => {
-      expect(service.environment()).toBe('development');
-    });
-
     it('should return "unknown" for version when not loaded', () => {
       expect(service.version()).toBe('unknown');
     });
 
     it('should return correct values after loading', async () => {
       const loadPromise = service.loadConfig();
-      
+
       const req = httpMock.expectOne('/config.json');
       req.flush(validConfig);
-      
+
       await loadPromise;
-      
+
       expect(service.appApiUrl()).toBe(validConfig.appApiUrl);
-      expect(service.environment()).toBe(validConfig.environment);
       expect(service.version()).toBe(validConfig.version);
+      expect(service.cognitoDomainUrl()).toBe(validConfig.cognitoDomainUrl);
     });
   });
 
@@ -175,14 +148,14 @@ describe('ConfigService', () => {
 
     it('should return correct value for valid key', async () => {
       const loadPromise = service.loadConfig();
-      
+
       const req = httpMock.expectOne('/config.json');
       req.flush(validConfig);
-      
+
       await loadPromise;
-      
+
       expect(service.get('appApiUrl')).toBe(validConfig.appApiUrl);
-      expect(service.get('environment')).toBe(validConfig.environment);
+      expect(service.get('version')).toBe(validConfig.version);
     });
   });
 

@@ -14,17 +14,11 @@ export interface RuntimeConfig {
   /** App API backend URL (from ALB) */
   appApiUrl: string;
 
-  /** Environment identifier (dev/staging/production/local) */
-  environment: string;
-
   /** Application version from VERSION file (injected via config.json or environment fallback) */
   version: string;
 
   /** Cognito User Pool domain URL (e.g., https://myprefix.auth.us-east-1.amazoncognito.com) */
   cognitoDomainUrl: string;
-
-  /** AWS region for Cognito (e.g., us-east-1) */
-  cognitoRegion: string;
 }
 
 /**
@@ -46,8 +40,7 @@ export interface RuntimeConfig {
  * 
  * // Access configuration values
  * const apiUrl = this.config.appApiUrl();
- * const isProduction = this.config.environment() === 'production';
- * 
+ *
  * // Use in computed signals
  * readonly baseUrl = computed(() => this.config.appApiUrl());
  * ```
@@ -70,13 +63,7 @@ export class ConfigService {
    * Returns empty string if config not loaded
    */
   readonly appApiUrl = computed(() => this.config()?.appApiUrl ?? '');
-  
-  /**
-   * Computed signal for environment identifier
-   * Returns 'development' if config not loaded
-   */
-  readonly environment = computed(() => this.config()?.environment ?? 'development');
-  
+
   /**
    * Computed signal for application version
    * Returns 'unknown' if config not loaded or version not set
@@ -88,12 +75,6 @@ export class ConfigService {
    * Returns empty string if config not loaded
    */
   readonly cognitoDomainUrl = computed(() => this.config()?.cognitoDomainUrl ?? '');
-
-  /**
-   * Computed signal for Cognito region
-   * Returns 'us-east-1' if config not loaded
-   */
-  readonly cognitoRegion = computed(() => this.config()?.cognitoRegion ?? 'us-east-1');
 
   /**
    * Read-only signal indicating if configuration has been loaded
@@ -136,21 +117,19 @@ export class ConfigService {
       this.isLoaded.set(true);
       this.loadError.set(null);
       
-      console.log('✅ Runtime configuration loaded:', config.environment);
+      console.log('✅ Runtime configuration loaded');
       console.log('   App API URL:', config.appApiUrl);
-      
+
     } catch (error) {
       // Log warning but don't fail - use fallback
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.warn('⚠️ Failed to load runtime config, using fallback:', errorMessage);
-      
+
       // Fallback to environment.ts for local development
       const fallbackConfig: RuntimeConfig = {
         appApiUrl: environment.appApiUrl || 'http://localhost:8000',
-        environment: environment.production ? 'production' : 'development',
         version: (environment as any).version || 'unknown',
         cognitoDomainUrl: (environment as any).cognitoDomainUrl || '',
-        cognitoRegion: (environment as any).cognitoRegion || 'us-east-1',
       };
       
       console.log('📋 Using fallback configuration from environment.ts');
@@ -190,12 +169,7 @@ export class ConfigService {
         errors.push(`appApiUrl is not a valid URL: "${config.appApiUrl}"`);
       }
     }
-    
-    // Validate environment
-    if (!config.environment || typeof config.environment !== 'string') {
-      errors.push('environment is required and must be a string');
-    }
-    
+
     // Throw error if validation failed
     if (errors.length > 0) {
       throw new Error(`Invalid configuration:\n${errors.map(e => `  - ${e}`).join('\n')}`);

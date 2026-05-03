@@ -108,14 +108,11 @@ export class FrontendStack extends cdk.Stack {
     // exposed to the browser anymore.
     const runtimeConfig = {
       appApiUrl: '/api',
-      environment: config.production ? 'production' : 'development',
       version: config.appVersion,
       cognitoDomainUrl: cognitoDomainUrl,
-      cognitoRegion: config.awsRegion,
     };
 
     console.log('🔧 Generated runtime configuration:');
-    console.log(`   Environment: ${runtimeConfig.environment}`);
     console.log(`   App API URL (browser): ${runtimeConfig.appApiUrl} (CloudFront /api/* → ALB ${appApiUrl})`);
 
     // Generate bucket name with account ID to ensure global uniqueness
