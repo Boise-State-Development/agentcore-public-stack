@@ -171,6 +171,20 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
+    // Seed the session cost + context aggregates from session metadata so
+    // the badge shows totals immediately on revisit. Cleared first on route
+    // change (below) to avoid briefly showing stale numbers from a previous
+    // session.
+    effect(() => {
+      const session = this.sessionConversation();
+      if (!session) return;
+      this.chatStateService.seedSessionAggregates({
+        totalCost: session.totalCost,
+        lastContextTokens: session.lastContextTokens,
+        contextWindow: session.contextWindow,
+      });
+    });
+
     // Priority-based assistant loading: URL query param first, then session preferences
     effect(() => {
       const queryAssistantId = this.assistantIdFromQuery();
@@ -212,6 +226,12 @@ export class ConversationPage implements OnDestroy {
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
       this.sessionId.set(id);
+
+      // Clear stale cost/context badge state BEFORE the new session's
+      // metadata loads — otherwise the previous session's totals briefly
+      // flash on the badge while the new metadata is in flight.
+      this.chatStateService.seedSessionAggregates({});
+
       if (id) {
         // Update the messages signal reference (this triggers reactivity)
         this.messagesSignal.set(this.messageMapService.getMessagesForSession(id));

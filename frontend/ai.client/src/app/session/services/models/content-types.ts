@@ -250,6 +250,10 @@ export interface MetadataEvent {
   usage?: Usage;
   /** Cost for this message — either a total number (legacy) or a breakdown object */
   cost?: number | CostBreakdown;
+  /** Model context window (max input tokens) at the time of the turn. Sent by
+   *  the streaming coordinator alongside cost so the cost badge can compute
+   *  "% of context used" without an extra round-trip. */
+  contextWindow?: number;
 }
 
 export interface ExceptionEvent {

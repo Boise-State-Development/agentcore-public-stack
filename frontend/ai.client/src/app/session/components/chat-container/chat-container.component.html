@@ -344,6 +344,9 @@
               (shareClicked)="onAssistantShare()" />
           </div>
         }
+        <div class="flex justify-end pb-1">
+          <app-session-cost-badge />
+        </div>
         <app-chat-input
           [sessionId]="sessionId()"
           [isChatLoading]="isChatLoading()"

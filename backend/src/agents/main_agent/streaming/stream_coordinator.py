@@ -267,6 +267,19 @@ class StreamCoordinator:
                             except Exception as cost_error:
                                 logger.warning(f"Failed to calculate streaming cost: {cost_error}")
 
+                            # Surface the model's context window so the
+                            # frontend session-cost badge can show "% of
+                            # context used" without an extra round-trip.
+                            try:
+                                from apis.shared.costs.pricing_config import get_model_by_model_id
+                                model_record = await get_model_by_model_id(model_id)
+                                if model_record is not None:
+                                    max_input_tokens = getattr(model_record, "max_input_tokens", None)
+                                    if max_input_tokens:
+                                        final_metadata["contextWindow"] = int(max_input_tokens)
+                            except Exception as ctx_err:
+                                logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
+
                         # Log cache metrics for performance monitoring
                         self._log_cache_metrics(usage=final_metadata.get("usage", {}), session_id=session_id)
 
@@ -1132,12 +1145,27 @@ class StreamCoordinator:
             model_info = None
             pricing_snapshot = None
             cost = None
+            context_window: Optional[int] = None
 
             if agent and hasattr(agent, "model_config"):
                 model_id = agent.model_config.model_id
 
                 # Get pricing snapshot from managed models database
                 pricing_snapshot = await self._get_pricing_snapshot(model_id)
+
+                # Look up the model's max_input_tokens once so the bump of
+                # session-level aggregates (for the chat cost badge) has a
+                # context window value to persist alongside the latest
+                # turn's input token count.
+                try:
+                    from apis.shared.costs.pricing_config import get_model_by_model_id
+                    model_record = await get_model_by_model_id(model_id)
+                    if model_record is not None:
+                        max_input_tokens = getattr(model_record, "max_input_tokens", None)
+                        if max_input_tokens:
+                            context_window = int(max_input_tokens)
+                except Exception as ctx_err:
+                    logger.debug(f"Skipping contextWindow capture for storage: {ctx_err}")
 
                 # Extract provider from model config
                 provider = None
@@ -1169,14 +1197,20 @@ class StreamCoordinator:
 
             # Create MessageMetadata
             if token_usage or latency_metrics or model_info or citations:
-                message_metadata = MessageMetadata(
+                # contextWindow is passed as an extra field (MessageMetadata
+                # has extra="allow"); _bump_session_aggregates picks it up
+                # via model_extra to denormalize onto the session row.
+                metadata_kwargs: Dict[str, Any] = dict(
                     latency=latency_metrics,
                     token_usage=token_usage,
                     model_info=model_info,
                     attribution=attribution,
                     cost=cost,
-                    citations=citations,  # Include citations from RAG retrieval
+                    citations=citations,
                 )
+                if context_window is not None:
+                    metadata_kwargs["contextWindow"] = context_window
+                message_metadata = MessageMetadata(**metadata_kwargs)
 
                 # Store metadata
                 await store_message_metadata(session_id=session_id, user_id=user_id, message_id=message_id, message_metadata=message_metadata)

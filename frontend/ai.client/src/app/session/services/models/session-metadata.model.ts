@@ -32,6 +32,14 @@ export interface SessionMetadata {
   starred?: boolean;
   tags?: string[];
   preferences?: SessionPreferences;
+  /** Running USD cost across all turns in this session. Denormalized on the
+   *  session row by the backend's _bump_session_aggregates; legacy sessions
+   *  are lazily backfilled on first read. */
+  totalCost?: number;
+  /** Input tokens consumed by the most recent turn (includes system prompt + tools). */
+  lastContextTokens?: number;
+  /** Model context window (max input tokens) at the time of the most recent turn. */
+  contextWindow?: number;
 }
 
 // Request model for updating session metadata

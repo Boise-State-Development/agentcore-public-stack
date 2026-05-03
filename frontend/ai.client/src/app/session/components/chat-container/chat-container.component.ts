@@ -19,6 +19,7 @@ import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import { Assistant } from '../../../assistants/models/assistant.model';
 import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
 import { AssistantIndicatorComponent } from '../assistant-indicator/assistant-indicator.component';
+import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 
@@ -60,6 +61,7 @@ export interface ChatContainerConfig {
     NgIcon,
     AssistantCardComponent,
     AssistantIndicatorComponent,
+    SessionCostBadgeComponent,
     VoiceOverlayComponent,
   ],
   providers: [provideIcons({ heroXMark })],

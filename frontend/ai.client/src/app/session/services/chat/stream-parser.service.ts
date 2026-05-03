@@ -664,6 +664,19 @@ export class StreamParserService {
 
     this.metadataSignal.set(data);
     this.updateLastCompletedMessageWithMetadata();
+
+    // Drive the session cost + context badge above the composer.
+    // Cost on the wire may be either a number (legacy) or a CostBreakdown
+    // object — extract the total either way (matches backend's Union shape).
+    const turnCost = typeof data.cost === 'number' ? data.cost : data.cost?.total ?? 0;
+    if (turnCost > 0) {
+      this.chatStateService.addTurnCost(turnCost);
+    }
+
+    const inputTokens = data.usage?.inputTokens;
+    if (typeof inputTokens === 'number') {
+      this.chatStateService.setContext(inputTokens, data.contextWindow);
+    }
   }
 
   private handleReasoning(data: { reasoningText?: string }): void {

@@ -186,6 +186,25 @@ class SessionMetadata(BaseModel):
         description="Agent-construction snapshot for a turn paused on OAuth consent; cleared on successful resume or when a new turn supersedes it",
     )
 
+    # Denormalized cost + context aggregates for the session-cost badge.
+    # Maintained by _bump_session_aggregates after each turn (write-time
+    # aggregation), and lazily backfilled on read for legacy sessions.
+    total_cost: Optional[float] = Field(
+        default=None,
+        alias="totalCost",
+        description="Running USD cost summed across all message metadata records in this session",
+    )
+    last_context_tokens: Optional[int] = Field(
+        default=None,
+        alias="lastContextTokens",
+        description="Input tokens consumed by the most recent turn (includes system prompt + tools)",
+    )
+    context_window: Optional[int] = Field(
+        default=None,
+        alias="contextWindow",
+        description="Model max input tokens at the time of the most recent turn",
+    )
+
 
 class UpdateSessionMetadataRequest(BaseModel):
     """Request body for updating session metadata"""
@@ -218,6 +237,21 @@ class SessionMetadataResponse(BaseModel):
     preferences: Optional[SessionPreferences] = Field(None, description="Session preferences")
     deleted: Optional[bool] = Field(False, description="Whether session is soft-deleted")
     deleted_at: Optional[str] = Field(None, alias="deletedAt", description="ISO 8601 timestamp of deletion")
+    total_cost: Optional[float] = Field(
+        None,
+        alias="totalCost",
+        description="Running USD cost summed across all message metadata records in this session",
+    )
+    last_context_tokens: Optional[int] = Field(
+        None,
+        alias="lastContextTokens",
+        description="Input tokens consumed by the most recent turn",
+    )
+    context_window: Optional[int] = Field(
+        None,
+        alias="contextWindow",
+        description="Model max input tokens at the time of the most recent turn",
+    )
 
 
 class SessionsListResponse(BaseModel):
