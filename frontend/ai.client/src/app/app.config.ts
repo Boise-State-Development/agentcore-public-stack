@@ -1,4 +1,4 @@
-import { ApplicationConfig, provideBrowserGlobalErrorListeners, APP_INITIALIZER } from '@angular/core';
+import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 
 import { routes } from './app.routes';
@@ -21,18 +21,6 @@ function markedOptionsFactory(): MarkedOptions {
   return { renderer };
 }
 
-/**
- * Bootstrap the BFF cookie session before the first component renders.
- *
- * `SessionService.bootstrap()` calls `GET ${appApiUrl}/auth/session`. On 401
- * it redirects to the BFF's `/auth/login`, which routes to Cognito Hosted UI.
- * Transport errors leave the SPA in a clean unauthenticated state without
- * redirecting, so a transient outage doesn't kick everyone out.
- */
-function initializeApp(sessionService: SessionService) {
-  return () => sessionService.bootstrap();
-}
-
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
@@ -51,11 +39,11 @@ export const appConfig: ApplicationConfig = {
     }),
     provideRouter(routes, withComponentInputBinding()),
 
-    {
-      provide: APP_INITIALIZER,
-      useFactory: initializeApp,
-      deps: [SessionService],
-      multi: true
-    }
+    // Bootstrap the BFF cookie session before the first component renders.
+    // GET ${appApiUrl}/auth/session — on 401, SessionService redirects to the
+    // BFF's /auth/login (Cognito Hosted UI) and hangs the promise so no SPA
+    // route renders before the page tears down. Transport errors leave the
+    // SPA in a clean unauthenticated state without redirecting.
+    provideAppInitializer(() => inject(SessionService).bootstrap()),
   ]
 };
