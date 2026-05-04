@@ -26,7 +26,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
 from pydantic import BaseModel, Field
 
 from apis.shared.auth.dependencies import get_current_user_from_session
