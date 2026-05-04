@@ -263,5 +263,5 @@ async def _safe_send_error(client_ws: WebSocket, message: str) -> None:
         return
     try:
         await client_ws.send_json({"type": "bidi_error", "message": message})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to send bidi_error frame to client: %s", exc)
