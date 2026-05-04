@@ -26,6 +26,11 @@
   right: 0;
   animation: fade-in 0.3s ease-out forwards;
   transition: left 300ms;
+  background-color: var(--color-gray-50);
+}
+
+:host-context(html.dark) .chat-input-footer.full-page {
+  background-color: var(--color-gray-900);
 }
 
 /* Empty state container for full-page mode */
