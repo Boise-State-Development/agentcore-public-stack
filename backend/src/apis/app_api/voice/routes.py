@@ -102,6 +102,12 @@ def _allowed_origins() -> set[str]:
     return {o.strip() for o in raw.split(",") if o.strip()}
 
 
+def _sanitize_for_log(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.replace("\r", "").replace("\n", "")
+
+
 def _is_origin_allowed(origin: Optional[str]) -> bool:
     """Browser-WS CSRF defense: the Origin header is set by the browser and
     cannot be forged by JS. Allowlist must be non-empty in production — an
@@ -134,7 +140,7 @@ async def voice_stream(websocket: WebSocket, ticket: Optional[str] = None) -> No
     # Browser-WS CSRF defense — Origin is set by the browser, not JS.
     origin = websocket.headers.get("origin")
     if not _is_origin_allowed(origin):
-        logger.warning("Voice WS rejected: origin %r not in CORS_ORIGINS", origin)
+        logger.warning("Voice WS rejected: origin %r not in CORS_ORIGINS", _sanitize_for_log(origin))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="origin not allowed")
         return
 
