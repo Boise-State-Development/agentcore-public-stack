@@ -407,6 +407,62 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // Voice Ticket Replay Table - single-use jti tracking for the WS-upgrade
+    // ticket exchanged between SPA and app-api before proxying voice traffic
+    // upstream to the AgentCore Runtime. The ticket lives entirely within
+    // app-api (issuer == verifier), so this table is owned by app-api alone.
+    // jti is the partition key; TTL on `ttl` reaps consumed rows ~1 minute
+    // after expiry. Conditional puts on the jti enforce single-use.
+    const voiceTicketReplayTable = new dynamodb.Table(this, "VoiceTicketReplayTable", {
+      tableName: getResourceName(config, "voice-ticket-replay"),
+      partitionKey: {
+        name: "jti",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketReplayTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-replay-table-name`,
+      stringValue: voiceTicketReplayTable.tableName,
+      description: "Voice ticket replay table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketReplayTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-replay-table-arn`,
+      stringValue: voiceTicketReplayTable.tableArn,
+      description: "Voice ticket replay table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Voice Ticket Signing Secret - HMAC-SHA256 key used by app-api to sign
+    // and verify short-lived (~60s) WebSocket-upgrade tickets. Sourced once
+    // at startup and cached in process memory. Mirrors the AuthenticationSecret
+    // pattern; rotated by replacing the secret value.
+    const voiceTicketSigningSecret = new secretsmanager.Secret(this, "VoiceTicketSigningSecret", {
+      secretName: getResourceName(config, "voice-ticket-signing-key"),
+      description: "HMAC signing key for voice WebSocket-upgrade tickets",
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ description: "Voice ticket signing key" }),
+        generateStringKey: "secret",
+        excludePunctuation: true,
+        includeSpace: false,
+        passwordLength: 64,
+      },
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketSigningSecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-signing-secret-arn`,
+      stringValue: voiceTicketSigningSecret.secretArn,
+      description: "Voice ticket signing secret ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // Users Table - User profiles synced from JWT for admin lookup
     const usersTable = new dynamodb.Table(this, "UsersTable", {
       tableName: getResourceName(config, "users"),

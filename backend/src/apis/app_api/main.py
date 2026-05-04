@@ -131,6 +131,7 @@ from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
+from apis.app_api.voice import router as voice_router
 
 # Include routers
 app.include_router(health_router)
@@ -156,6 +157,7 @@ app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)
 app.include_router(shared_view_router)  # Shared conversation read-only view
+app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
 
 # Conditionally register fine-tuning routes
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

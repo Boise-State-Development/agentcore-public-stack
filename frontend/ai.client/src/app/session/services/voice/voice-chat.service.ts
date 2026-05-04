@@ -1,7 +1,9 @@
 import { Injectable, signal, computed, inject, OnDestroy } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
+import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from './audio-recorder.service';
 import { AudioPlayerService } from './audio-player.service';
+import { VoiceTicketService } from './voice-ticket.service';
 import { Message } from '../models/message.model';
 import {
   IDLE_TIMEOUT_MS,
@@ -48,6 +50,8 @@ export interface VoiceTranscriptEntry {
 export class VoiceChatService implements OnDestroy {
   private readonly recorder = inject(AudioRecorderService);
   private readonly player = inject(AudioPlayerService);
+  private readonly ticketService = inject(VoiceTicketService);
+  private readonly config = inject(ConfigService);
 
   // --- State signals ---
   private readonly _status = signal<VoiceStatus>('idle');
@@ -149,16 +153,22 @@ export class VoiceChatService implements OnDestroy {
     this._prevTurnCumulativeCost = null;
 
     try {
-      // Voice used a direct browser → inference-api WebSocket flow that
-      // depended on a Cognito Bearer token in localStorage and the public
-      // PKCE Cognito client. Phase 7 retired both as part of the BFF
-      // cutover, so the existing transport can no longer authenticate.
-      // A short-lived WebSocket-ticket pattern lands in issue #211 — until
-      // then, voice mode is unavailable.
-      throw new Error(
-        'Voice mode is temporarily unavailable while the BFF migration ' +
-        'completes (tracking issue #211).',
-      );
+      // Issue #211: voice now flows through a BFF WebSocket proxy.
+      // 1. Mint a short-lived ticket via the cookie-authenticated REST endpoint.
+      //    The CSRF interceptor attaches X-CSRF-Token automatically.
+      // 2. Open WS to /api/voice/stream?ticket=... — same-origin via CloudFront,
+      //    cookie auto-sent. App-api validates the ticket on upgrade and
+      //    opens the upstream WS to AgentCore using the BFF-stored Cognito token.
+      const { ticket } = await this.ticketService.issue(this.sessionId!);
+
+      const httpUrl = this.config.appApiUrl();
+      const wsBase = httpUrl.startsWith('http')
+        ? httpUrl.replace(/^http/, 'ws')
+        : `${window.location.origin.replace(/^http/, 'ws')}${httpUrl}`;
+      const url = `${wsBase}/voice/stream?ticket=${encodeURIComponent(ticket)}`;
+
+      await this.openWebSocket(url, this.sessionId!);
+      await this.recorder.start();
 
       // Wire audio chunks to WebSocket
       this.recorder.onAudioChunk = (base64, sampleRate) => {
@@ -275,9 +285,9 @@ export class VoiceChatService implements OnDestroy {
 
   // --- WebSocket ---
 
-  private openWebSocket(url: string, token: string, protocols?: string[]): Promise<void> {
+  private openWebSocket(url: string, sessionId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
+      this.ws = new WebSocket(url);
 
       const timeout = setTimeout(() => {
         reject(new Error('WebSocket connection timeout'));
@@ -286,11 +296,12 @@ export class VoiceChatService implements OnDestroy {
 
       this.ws.onopen = () => {
         clearTimeout(timeout);
-        // Send config message as first frame
+        // Send config message as first frame. The BFF voice proxy injects
+        // the auth_token + user_id into this frame before forwarding upstream
+        // to inference-api — the SPA no longer holds a Cognito token.
         this.sendMessage({
           type: 'config',
-          session_id: this.sessionId,
-          auth_token: token,
+          session_id: sessionId,
         });
         resolve();
       };

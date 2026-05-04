@@ -380,6 +380,23 @@ export class AppApiStack extends cdk.Stack {
       `/${config.projectPrefix}/auth/cognito/bff-app-client-secret-arn`
     );
 
+    // Voice WebSocket-ticket replay table + signing secret. Used by app-api
+    // to issue/verify single-use tickets on the SPA→app-api WS upgrade
+    // before relaying to the AgentCore Runtime upstream. App-api is the
+    // sole consumer of both resources.
+    const voiceTicketReplayTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/voice/ticket-replay-table-name`
+    );
+    const voiceTicketReplayTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/voice/ticket-replay-table-arn`
+    );
+    const voiceTicketSigningSecretArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/voice/ticket-signing-secret-arn`
+    );
+
     // Inference API runtime endpoint URL — needed by both the existing
     // converse proxy (currently broken in cloud due to a missing env var)
     // and the upcoming chat SSE proxy in Phase 4 of the BFF migration.
@@ -538,6 +555,11 @@ export class AppApiStack extends cdk.Stack {
         // Inference API runtime endpoint — used by the converse proxy today
         // and the chat SSE proxy added in Phase 4.
         INFERENCE_API_URL: inferenceApiRuntimeEndpointUrl,
+        // Voice WS-upgrade ticket — see apis/shared/voice_ticket. Replay
+        // table is single-use jti tracking; signing secret is the HMAC key
+        // app-api fetches once at startup.
+        VOICE_TICKET_REPLAY_TABLE_NAME: voiceTicketReplayTableName,
+        VOICE_TICKET_SIGNING_SECRET_ARN: voiceTicketSigningSecretArn,
       },
       portMappings: [
         {
@@ -1029,6 +1051,26 @@ export class AppApiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
         resources: [`${cognitoBFFAppClientSecretArn}*`], // Wildcard for random suffix
+      })
+    );
+
+    // Voice WebSocket-ticket — replay table (conditional puts for single-use
+    // jti) and signing secret (HMAC key fetched once at startup).
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'VoiceTicketReplayTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:PutItem', 'dynamodb:GetItem'],
+        resources: [voiceTicketReplayTableArn],
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'VoiceTicketSigningSecretAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [`${voiceTicketSigningSecretArn}*`], // Wildcard for random suffix
       })
     );
 
