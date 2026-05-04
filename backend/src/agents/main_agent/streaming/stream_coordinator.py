@@ -252,20 +252,55 @@ class StreamCoordinator:
                         # Add end-to-end latency to metrics for consistency
                         final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
 
-                        # Calculate and add cost to metadata if we have usage and agent info
+                        # Cost: sum the FINAL usage of each assistant message in
+                        # this turn and price it. We deliberately price each
+                        # message independently and sum, instead of pricing
+                        # the cumulative usage once, because Strands emits
+                        # multiple metadata events per message (intermediate
+                        # + cumulative) and the cumulative usage on the last
+                        # event already includes prior messages' input
+                        # tokens. Per-message pricing matches what gets
+                        # persisted (one C# record per assistant message).
                         if main_agent_wrapper and hasattr(main_agent_wrapper, "model_config"):
                             model_id = main_agent_wrapper.model_config.model_id
-                            usage_for_cost = accumulated_metadata.get("usage", {})
-                            logger.info(f"💰 Cost calculation: model_id={model_id}, usage={usage_for_cost}")
                             try:
-                                cost_result = await self._calculate_streaming_cost(model_id=model_id, usage=usage_for_cost)
-                                if cost_result is not None:
-                                    final_metadata["cost"] = cost_result
+                                turn_total = 0.0
+                                turn_input_cost = 0.0
+                                turn_output_cost = 0.0
+                                turn_cache_read_cost = 0.0
+                                turn_cache_write_cost = 0.0
+                                for msg_idx, msg_meta in enumerate(per_message_metadata):
+                                    msg_usage = msg_meta.get("usage") or {}
+                                    if not msg_usage:
+                                        continue
+                                    msg_cost = await self._calculate_streaming_cost(
+                                        model_id=model_id,
+                                        usage=msg_usage,
+                                    )
+                                    if msg_cost is None:
+                                        continue
+                                    turn_total += msg_cost.get("total", 0.0)
+                                    turn_input_cost += msg_cost.get("inputCost", 0.0)
+                                    turn_output_cost += msg_cost.get("outputCost", 0.0)
+                                    turn_cache_read_cost += msg_cost.get("cacheReadCost", 0.0)
+                                    turn_cache_write_cost += msg_cost.get("cacheWriteCost", 0.0)
                                     logger.info(
-                                        f"💰 Calculated streaming cost: ${cost_result['total']:.6f} (input=${cost_result['inputCost']:.6f}, output=${cost_result['outputCost']:.6f}) for {usage_for_cost.get('inputTokens', 0)} input, {usage_for_cost.get('outputTokens', 0)} output tokens"
+                                        f"💰 Per-message cost (msg_idx={msg_idx}): ${msg_cost['total']:.6f} "
+                                        f"for {msg_usage.get('inputTokens', 0)} input, {msg_usage.get('outputTokens', 0)} output tokens"
+                                    )
+                                if turn_total > 0:
+                                    final_metadata["cost"] = {
+                                        "total": turn_total,
+                                        "inputCost": turn_input_cost,
+                                        "outputCost": turn_output_cost,
+                                        "cacheReadCost": turn_cache_read_cost,
+                                        "cacheWriteCost": turn_cache_write_cost,
+                                    }
+                                    logger.info(
+                                        f"💰 Turn total cost: ${turn_total:.6f} across {len(per_message_metadata)} message(s)"
                                     )
                             except Exception as cost_error:
-                                logger.warning(f"Failed to calculate streaming cost: {cost_error}")
+                                logger.warning(f"Failed to calculate turn cost: {cost_error}")
 
                             # Surface the model's context window so the
                             # frontend session-cost badge can show "% of
