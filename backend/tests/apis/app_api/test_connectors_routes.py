@@ -418,7 +418,14 @@ class TestForceReauthLifecycle:
             "access_type": "offline",
         }
 
-    def test_initiate_consent_forwards_google_access_type_offline(self, app_with_deps):
+    def test_initiate_consent_forwards_google_access_type_offline_and_prompt_consent(
+        self, app_with_deps
+    ):
+        # initiate_consent is a "walk me through consent" path, so for Google
+        # we always send `prompt=consent` (in addition to `access_type=offline`).
+        # Without it, Google sees a previously-consented user, skips the consent
+        # screen, and re-issues an access_token without a refresh_token —
+        # putting the user back in the hourly-reconsent loop.
         app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),
@@ -429,6 +436,7 @@ class TestForceReauthLifecycle:
         identity.get_token_for_user.assert_called_once()
         assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
             "access_type": "offline",
+            "prompt": "consent",
         }
 
     def test_admin_custom_parameters_merge_with_google_baseline(self, app_with_deps):

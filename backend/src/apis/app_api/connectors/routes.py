@@ -228,10 +228,19 @@ async def initiate_consent(
             scopes=provider.scopes,
             user_id=current_user.user_id,
             force_authentication=force_auth,
+            # initiate_consent is by definition a "walk me through consent"
+            # path — the user clicked Connect/Reconnect after seeing they
+            # were not connected. For Google this means we must send
+            # `prompt=consent`, otherwise Google sees a previously-consented
+            # user, skips the consent screen, and re-issues an access_token
+            # WITHOUT a refresh_token. Vault then expires after ~1h and the
+            # user is back here. Decoupled from `force_auth` (which only
+            # toggles the SDK's vault-bypass) so the silent-refresh fast
+            # path elsewhere is unaffected.
             custom_parameters=custom_parameters_for(
                 provider.provider_type.value,
                 provider.custom_parameters,
-                force_authentication=force_auth,
+                force_authentication=True,
             ),
             # No custom_state: AgentCore appears to treat its presence as a
             # signal to start a fresh flow, never short-circuiting to the
