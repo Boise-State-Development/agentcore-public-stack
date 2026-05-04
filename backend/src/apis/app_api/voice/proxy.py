@@ -175,13 +175,14 @@ async def _pump_client_to_upstream(
 ) -> None:
     """Forward every frame from the SPA to the AgentCore upstream.
 
-    The first text frame is treated as the config handshake. Inference-api
-    reads ``auth_token`` from that frame to identify the user — the SPA can't
-    populate it (the BFF holds the token), so we inject it here. We also
-    inject ``user_id`` defensively in case the SPA didn't send one. After
-    that first frame, the relay is verbatim.
+    Every text frame is screened for a JSON config payload and, if matched,
+    has its ``auth_token`` and ``user_id`` overwritten with the BFF-pinned
+    values before being forwarded. The SPA must not be able to influence
+    either field — both pin the identity inference-api attributes the
+    session to. Non-config frames (audio chunks, control messages, anything
+    that isn't a JSON object with ``type == "config"``) pass through
+    unchanged.
     """
-    config_injected = False
     try:
         while True:
             message = await client_ws.receive()
@@ -193,13 +194,11 @@ async def _pump_client_to_upstream(
             byte_frame = message.get("bytes")
 
             if text_frame is not None:
-                if not config_injected:
-                    text_frame = _inject_config_auth(
-                        text_frame,
-                        access_token=cognito_access_token,
-                        user_id=user_id,
-                    )
-                    config_injected = True
+                text_frame = _inject_config_auth(
+                    text_frame,
+                    access_token=cognito_access_token,
+                    user_id=user_id,
+                )
                 await upstream_ws.send_str(text_frame)
             elif byte_frame is not None:
                 # Voice payloads are JSON-with-base64, not binary frames, but
@@ -214,13 +213,13 @@ async def _pump_client_to_upstream(
 
 
 def _inject_config_auth(text_frame: str, *, access_token: str, user_id: str) -> str:
-    """Add ``auth_token`` and ``user_id`` to a JSON config frame.
+    """Overwrite ``auth_token`` and ``user_id`` on a JSON config frame.
 
-    Returns the frame unchanged if it isn't a JSON object — better to forward
-    something the SPA chose than to drop it. Inference-api will reject the
-    upgrade if its config never arrives or carries no auth_token, so a
-    malformed first frame surfaces as an upstream error rather than a silent
-    auth bypass.
+    The SPA must not be able to influence either field — they pin the user
+    identity that inference-api attributes the session to, so any client-
+    supplied value is replaced with the BFF-authenticated one. Anything
+    other than a JSON object with ``type == "config"`` is forwarded
+    untouched (binary audio frames, control messages, malformed payloads).
     """
     try:
         parsed = json.loads(text_frame)
@@ -231,7 +230,7 @@ def _inject_config_auth(text_frame: str, *, access_token: str, user_id: str) -> 
     if parsed.get("type") != "config":
         return text_frame
     parsed["auth_token"] = access_token
-    parsed.setdefault("user_id", user_id)
+    parsed["user_id"] = user_id
     return json.dumps(parsed, separators=(",", ":"))
 
 
