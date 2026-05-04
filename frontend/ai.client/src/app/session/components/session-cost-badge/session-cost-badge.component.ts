@@ -1,9 +1,11 @@
 import {
+  afterNextRender,
   ChangeDetectionStrategy,
   Component,
   computed,
   effect,
   inject,
+  Injector,
   signal,
 } from '@angular/core';
 import { ChatStateService } from '../../services/chat/chat-state.service';
@@ -11,9 +13,39 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
 const RING_RADIUS = 7;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+// Staggered entrance, offset from the chat-container footer's own
+// 300ms `animate-fade-in` so the badge reads as a separate event
+// rather than animating in alongside the input footer.
+//   0   – 300ms  : (chat input footer fades in — not us)
+//   350 – 600ms  : cost label fades + slides up
+//   500 – 750ms  : separator + ring container fade in (overlaps cost tail)
+//   750 – 1250ms : ring dash-offset fills from empty → target
+const BADGE_ENTRANCE_DELAY_MS = 350;
+const COST_ENTRANCE_MS = 250;
+const RING_ENTRANCE_DELAY_MS = BADGE_ENTRANCE_DELAY_MS + 150;
+const RING_FILL_DELAY_MS = 750;
+
 @Component({
   selector: 'app-session-cost-badge',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  styles: `
+    @keyframes badgeFadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .badge-cost-enter {
+      animation: badgeFadeInUp ${COST_ENTRANCE_MS}ms ease-out ${BADGE_ENTRANCE_DELAY_MS}ms backwards;
+    }
+    .badge-ring-enter {
+      animation: badgeFadeInUp ${COST_ENTRANCE_MS}ms ease-out ${RING_ENTRANCE_DELAY_MS}ms backwards;
+    }
+  `,
   template: `
     @if (visible()) {
       <div
@@ -21,13 +53,19 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
         role="status"
         aria-live="polite"
       >
-        <span [attr.aria-label]="'Session cost: ' + costLabel()">{{ costLabel() }}</span>
+        <span
+          class="badge-cost-enter"
+          [attr.aria-label]="'Session cost: ' + costLabel()"
+        >{{ costLabel() }}</span>
 
         @if (showContext()) {
-          <span class="text-gray-300 dark:text-gray-600" aria-hidden="true">·</span>
+          <span
+            class="badge-ring-enter text-gray-300 dark:text-gray-600"
+            aria-hidden="true"
+          >·</span>
 
           <span
-            class="group relative inline-flex items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+            class="badge-ring-enter group relative inline-flex items-center gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
             tabindex="0"
             [attr.aria-label]="contextAriaLabel()"
           >
@@ -92,6 +130,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 })
 export class SessionCostBadgeComponent {
   private chatStateService = inject(ChatStateService);
+  private injector = inject(Injector);
 
   protected readonly cost = this.chatStateService.costDollars;
   protected readonly contextTokens = this.chatStateService.contextTokens;
@@ -151,12 +190,22 @@ export class SessionCostBadgeComponent {
       const target = this.ringOffset();
       if (!this.firstAnimateScheduled) {
         this.firstAnimateScheduled = true;
-        // Yield the main thread for one paint cycle so the SVG commits
-        // its empty state to the screen, *then* update the offset so
-        // the CSS transition animates from empty → target. RAF alone
-        // is unreliable here because Angular's signal-driven CD can
-        // coalesce both DOM mutations into a single paint frame.
-        setTimeout(() => this.displayedOffsetSignal.set(target), 80);
+        // Staggered entrance: the cost label and ring container have
+        // CSS fade-in-up animations that finish around RING_FILL_DELAY_MS.
+        // Wait for Angular to commit the SVG (afterNextRender), then
+        // delay the dash-offset update until the entrance animations
+        // have settled before kicking off the ring fill.
+        afterNextRender(
+          () => {
+            requestAnimationFrame(() => {
+              setTimeout(
+                () => this.displayedOffsetSignal.set(target),
+                RING_FILL_DELAY_MS,
+              );
+            });
+          },
+          { injector: this.injector },
+        );
       } else {
         this.displayedOffsetSignal.set(target);
       }
