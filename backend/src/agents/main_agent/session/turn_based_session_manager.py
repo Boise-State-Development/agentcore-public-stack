@@ -87,6 +87,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # Compaction state (loaded during initialize)
         self.compaction_state: Optional[CompactionState] = None
 
+        # Whether compaction_state was loaded from DynamoDB. The
+        # AgentCoreMemory path leaves `agent.messages` empty during
+        # `initialize()`, so `_apply_compaction()` (and its load) is skipped
+        # for subsequent turns of an existing session. `update_after_turn`
+        # checks this flag and lazy-loads to avoid clobbering the persisted
+        # `checkpoint` / `total_summarized_turns` with default zeros.
+        self._compaction_state_loaded: bool = False
+
         # Cached data for checkpoint calculation
         self._valid_cutoff_indices: List[int] = []
         self._all_messages_for_summary: List[Dict] = []
@@ -199,6 +207,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         # Load compaction state from DynamoDB
         self.compaction_state = self._load_compaction_state()
+        self._compaction_state_loaded = True
 
         # Cache valid cutoff indices (user text messages, not tool results)
         self._valid_cutoff_indices = self._find_valid_cutoff_indices(all_messages)
@@ -495,6 +504,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         if self.compaction_state is None:
             self.compaction_state = CompactionState()
+
+        # Lazy-load persisted state if `initialize()` skipped the load. This
+        # happens on the AgentCoreMemory path for existing sessions, where
+        # `agent.messages` is empty at init time (messages arrive via hooks
+        # after init). Without this, the first `_save_compaction_state` below
+        # would overwrite the persisted `checkpoint` and
+        # `total_summarized_turns` with default zeros.
+        if not self._compaction_state_loaded:
+            self.compaction_state = self._load_compaction_state()
+            self._compaction_state_loaded = True
 
         self.compaction_state.last_input_tokens = input_tokens
 

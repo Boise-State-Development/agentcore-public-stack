@@ -726,6 +726,7 @@ class TestUpdateAfterTurn:
     async def test_below_threshold_saves_token_count(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True  # opt out of lazy-load
         mgr._save_compaction_state = MagicMock()
         await mgr.update_after_turn(500)  # below 1000 threshold
         assert mgr.compaction_state.last_input_tokens == 500
@@ -735,6 +736,7 @@ class TestUpdateAfterTurn:
     async def test_above_threshold_creates_checkpoint(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -753,6 +755,7 @@ class TestUpdateAfterTurn:
     async def test_not_enough_turns_keeps_all(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         # Only 3 turns = protected_turns, so no compaction possible
@@ -765,6 +768,7 @@ class TestUpdateAfterTurn:
     async def test_empty_cutoff_indices_skips_checkpoint(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         mgr._valid_cutoff_indices = []  # no valid cutoffs (e.g., new session)
@@ -777,6 +781,7 @@ class TestUpdateAfterTurn:
     async def test_checkpoint_unchanged_no_update(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=4)
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         # 5 turns — checkpoint would be at index 4 again, same as current
@@ -791,6 +796,7 @@ class TestUpdateAfterTurn:
         """New turns should advance the checkpoint."""
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState(checkpoint=4)
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=["Updated summary"])
 
@@ -805,6 +811,7 @@ class TestUpdateAfterTurn:
     async def test_uses_ltm_summaries_when_available(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=["LTM summary 1", "LTM summary 2"])
 
@@ -819,6 +826,7 @@ class TestUpdateAfterTurn:
     async def test_falls_back_to_generated_summary(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
         mgr._retrieve_session_summaries = MagicMock(return_value=[])
 
@@ -833,11 +841,178 @@ class TestUpdateAfterTurn:
     async def test_initializes_compaction_state_if_none(self, make_session_manager, compaction_config):
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr.compaction_state = None
+        mgr._compaction_state_loaded = True
         mgr._save_compaction_state = MagicMock()
 
         await mgr.update_after_turn(500)
         assert mgr.compaction_state is not None
         assert mgr.compaction_state.last_input_tokens == 500
+
+    # -----------------------------------------------------------------------
+    # Cumulative `total_summarized_turns` across multiple compaction events
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_total_summarized_turns_returned_in_result(
+        self, make_session_manager, compaction_config
+    ):
+        """First compaction returns a CompactionResult with the delta count."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
+        mgr._save_compaction_state = MagicMock()
+        mgr._retrieve_session_summaries = MagicMock(return_value=[])
+
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]  # 5 turns
+        mgr._all_messages_for_summary = make_conversation(5)
+
+        result = await mgr.update_after_turn(2000)
+
+        # checkpoint advances 0 -> 4. summarized_turns counts cutoffs in (0, 4]: {2, 4} = 2.
+        assert result is not None
+        assert result.previous_checkpoint == 0
+        assert result.new_checkpoint == 4
+        assert result.summarized_turns == 2
+        assert result.input_tokens == 2000
+        assert mgr.compaction_state.total_summarized_turns == 2
+
+    @pytest.mark.asyncio
+    async def test_total_summarized_turns_accumulates_across_events(
+        self, make_session_manager, compaction_config
+    ):
+        """
+        Two threshold-crossing turns in the same session should both add their
+        delta to total_summarized_turns. Regression guard: earlier drafts
+        clobbered the running total when the agent reset between turns.
+        """
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState()
+        mgr._compaction_state_loaded = True
+        mgr._save_compaction_state = MagicMock()
+        mgr._retrieve_session_summaries = MagicMock(return_value=[])
+
+        # First compaction: 5 turns, checkpoint advances 0 -> 4 (2 turns rolled up)
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
+        mgr._all_messages_for_summary = make_conversation(5)
+        first = await mgr.update_after_turn(2000)
+        assert first is not None
+        assert first.summarized_turns == 2
+        assert mgr.compaction_state.total_summarized_turns == 2
+
+        # Second compaction: session grew to 7 turns, checkpoint advances 4 -> 8 (2 more turns)
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8, 10, 12]
+        mgr._all_messages_for_summary = make_conversation(7)
+        second = await mgr.update_after_turn(2500)
+        assert second is not None
+        assert second.previous_checkpoint == 4
+        assert second.new_checkpoint == 8
+        assert second.summarized_turns == 2
+        # Cumulative total is the SUM of deltas, not the latest delta.
+        assert mgr.compaction_state.total_summarized_turns == 4
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_does_not_change_total_summarized_turns(
+        self, make_session_manager, compaction_config
+    ):
+        """A sub-threshold turn must not reset or increment the running total."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(checkpoint=4, total_summarized_turns=7)
+        mgr._compaction_state_loaded = True
+        mgr._save_compaction_state = MagicMock()
+
+        result = await mgr.update_after_turn(500)  # below 1000 threshold
+
+        assert result is None
+        assert mgr.compaction_state.total_summarized_turns == 7
+
+    # -----------------------------------------------------------------------
+    # Lazy-load: AgentCoreMemory empty-messages init path
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_lazy_loads_persisted_state_when_init_skipped(
+        self, make_session_manager, compaction_config
+    ):
+        """
+        On the AgentCoreMemory existing-session path, `initialize()` runs with
+        `agent.messages` empty and skips `_load_compaction_state`. The first
+        sub-threshold `update_after_turn` must lazy-load so the persisted
+        `total_summarized_turns` and `checkpoint` are not overwritten with
+        defaults when state is saved.
+        """
+        mgr = make_session_manager(compaction_config=compaction_config)
+        # Simulate post-init state on the empty-messages path: defaults, no load.
+        mgr.compaction_state = CompactionState()
+        assert mgr._compaction_state_loaded is False
+
+        persisted = CompactionState(
+            checkpoint=8,
+            summary="prior summary",
+            last_input_tokens=12000,
+            total_summarized_turns=5,
+        )
+        mgr._load_compaction_state = MagicMock(return_value=persisted)
+        mgr._save_compaction_state = MagicMock()
+
+        await mgr.update_after_turn(500)  # below threshold — early-save path
+
+        mgr._load_compaction_state.assert_called_once()
+        assert mgr._compaction_state_loaded is True
+        # Persisted fields preserved through the save (and last_input_tokens updated).
+        assert mgr.compaction_state.checkpoint == 8
+        assert mgr.compaction_state.summary == "prior summary"
+        assert mgr.compaction_state.total_summarized_turns == 5
+        assert mgr.compaction_state.last_input_tokens == 500
+        # The save would have written the persisted total back, not 0.
+        saved_state = mgr._save_compaction_state.call_args.args[0]
+        assert saved_state.total_summarized_turns == 5
+
+    @pytest.mark.asyncio
+    async def test_lazy_load_skipped_when_already_loaded(
+        self, make_session_manager, compaction_config
+    ):
+        """When init loaded the state, `update_after_turn` must not re-load."""
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState(checkpoint=2, total_summarized_turns=1)
+        mgr._compaction_state_loaded = True
+        mgr._load_compaction_state = MagicMock()
+        mgr._save_compaction_state = MagicMock()
+
+        await mgr.update_after_turn(500)
+
+        mgr._load_compaction_state.assert_not_called()
+        assert mgr.compaction_state.total_summarized_turns == 1
+
+    @pytest.mark.asyncio
+    async def test_lazy_load_preserves_total_across_threshold_crossing(
+        self, make_session_manager, compaction_config
+    ):
+        """
+        After lazy-load, a threshold-crossing turn should ADD to the persisted
+        total, not start from 0. This is the user-visible scenario the
+        end-of-conversation indicator depends on.
+        """
+        mgr = make_session_manager(compaction_config=compaction_config)
+        mgr.compaction_state = CompactionState()
+        assert mgr._compaction_state_loaded is False
+
+        persisted = CompactionState(checkpoint=4, total_summarized_turns=2)
+        mgr._load_compaction_state = MagicMock(return_value=persisted)
+        mgr._save_compaction_state = MagicMock()
+        mgr._retrieve_session_summaries = MagicMock(return_value=[])
+
+        # 7 turns now — checkpoint advances from persisted 4 to 8 (2 more turns)
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8, 10, 12]
+        mgr._all_messages_for_summary = make_conversation(7)
+
+        result = await mgr.update_after_turn(2500)
+
+        assert result is not None
+        assert result.previous_checkpoint == 4
+        assert result.new_checkpoint == 8
+        assert result.summarized_turns == 2
+        # 2 (persisted) + 2 (this event) — NOT 0 + 2.
+        assert mgr.compaction_state.total_summarized_turns == 4
 
 
 # ===========================================================================

@@ -122,14 +122,18 @@ export interface ToolApprovalRequiredEvent {
 /**
  * Compaction event — emitted after the final `metadata` event (so the badge
  * updates first) and before `done` when the backend rolls older turns into
- * a summary on this turn. The frontend uses it to drop an inline divider in
- * the conversation marking where the checkpoint advanced.
+ * a summary on this turn. The frontend feeds it to `CompactionSummaryService`,
+ * which increments a running total and renders a single end-of-conversation
+ * "Earlier messages summarized" indicator. (An earlier draft of this work
+ * placed inline dividers anchored at `newCheckpoint`; that variant was
+ * dropped because the mid-conversation drop-in caused jarring layout shifts.)
  *
- * `newCheckpoint` is the message index the checkpoint moved to, and acts as
- * the divider's anchor — the divider renders above the message at that
- * index. `summarizedTurns` is the *delta* count of turns rolled up at this
- * compaction event, not the cumulative total across prior compactions, so
- * each divider stands on its own.
+ * `summarizedTurns` is the *delta* count of turns rolled up at this
+ * compaction event, not the cumulative total across prior compactions —
+ * the service sums these deltas to keep its own running total, which is
+ * also persisted on the backend as `totalSummarizedTurns` for refresh
+ * survival. `previousCheckpoint` / `newCheckpoint` are kept on the wire
+ * for diagnostics and possible future per-event UI.
  */
 export interface CompactionEvent {
   type: 'compaction';
