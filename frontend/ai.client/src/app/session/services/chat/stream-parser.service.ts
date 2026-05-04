@@ -673,9 +673,25 @@ export class StreamParserService {
       this.chatStateService.addTurnCost(turnCost);
     }
 
-    const inputTokens = data.usage?.inputTokens;
-    if (typeof inputTokens === 'number') {
-      this.chatStateService.setContext(inputTokens, data.contextWindow);
+    // Only update the context badge from the *final* metadata event —
+    // the synthesized one the stream coordinator emits right before
+    // `done`. Strands fires a `metadata` event per LLM call within a
+    // turn; intermediate events carry per-call usage (sometimes with
+    // missing or zero cache fields) that would make the badge collapse
+    // mid-turn. The final event is the only one that carries
+    // `contextWindow`, so we use that as the gate.
+    //
+    // Sum all three usage buckets: `inputTokens` is uncached input
+    // only, `cacheReadInputTokens` is the cached prefix, and
+    // `cacheWriteInputTokens` is freshly-cached content. Together they
+    // represent true context-window occupancy.
+    const usage = data.usage;
+    if (data.contextWindow && usage && typeof usage.inputTokens === 'number') {
+      const totalContext =
+        usage.inputTokens +
+        (usage.cacheReadInputTokens ?? 0) +
+        (usage.cacheWriteInputTokens ?? 0);
+      this.chatStateService.setContext(totalContext, data.contextWindow);
     }
   }
 

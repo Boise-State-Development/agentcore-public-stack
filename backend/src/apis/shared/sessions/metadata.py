@@ -1036,7 +1036,18 @@ async def _bump_session_aggregates(
     try:
         cost_value = _coerce_cost_total(message_metadata.cost)
         token_usage = message_metadata.token_usage
-        input_tokens = (token_usage.input_tokens or 0) if token_usage else 0
+        # `input_tokens` from Bedrock is the *uncached* portion only — the
+        # cached prefix lives in `cache_read_input_tokens` and newly-cached
+        # tokens in `cache_write_input_tokens`. Sum all three so the badge
+        # reflects true context-window occupancy.
+        if token_usage:
+            input_tokens = (
+                (token_usage.input_tokens or 0)
+                + (token_usage.cache_read_input_tokens or 0)
+                + (token_usage.cache_write_input_tokens or 0)
+            )
+        else:
+            input_tokens = 0
         context_window = getattr(message_metadata, "context_window", None)
         # context_window may be tucked under model_extra (since
         # MessageMetadata uses extra="allow") or absent entirely.
@@ -1124,12 +1135,18 @@ async def _backfill_session_aggregates(
                 cost_raw = rec_float.get("cost")
                 total_cost += _coerce_cost_total(cost_raw)
 
-                # Pick up the most recent turn's input tokens.
+                # Pick up the most recent turn's context tokens. `inputTokens`
+                # alone is the uncached delta; sum with cache reads/writes to
+                # match true context-window occupancy.
                 token_usage = rec_float.get("tokenUsage") or {}
                 ts = rec_float.get("timestamp")
                 if ts and (last_timestamp is None or ts > last_timestamp):
                     last_timestamp = ts
-                    last_context_tokens = int(token_usage.get("inputTokens") or 0)
+                    last_context_tokens = int(
+                        (token_usage.get("inputTokens") or 0)
+                        + (token_usage.get("cacheReadInputTokens") or 0)
+                        + (token_usage.get("cacheWriteInputTokens") or 0)
+                    )
 
             last_evaluated_key = response.get("LastEvaluatedKey")
             if not last_evaluated_key:
