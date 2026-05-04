@@ -158,8 +158,8 @@ async def relay_voice_stream(
         if upstream_ws is not None and not upstream_ws.closed:
             try:
                 await upstream_ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Ignoring error while closing upstream voice WS: %s", exc, exc_info=True)
         try:
             await session.close()
         except Exception:
