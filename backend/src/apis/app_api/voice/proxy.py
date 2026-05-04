@@ -162,8 +162,8 @@ async def relay_voice_stream(
                 logger.debug("Ignoring error while closing upstream voice WS: %s", exc, exc_info=True)
         try:
             await session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to close upstream aiohttp session cleanly: %s", exc, exc_info=True)
 
 
 async def _pump_client_to_upstream(
