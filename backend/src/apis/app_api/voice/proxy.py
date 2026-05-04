@@ -145,8 +145,11 @@ async def relay_voice_stream(
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Expected after explicit cancellation.
                 pass
+            except Exception as exc:
+                logger.debug("Ignored exception while cancelling relay task: %s", exc, exc_info=True)
         for task in done:
             exc = task.exception()
             if exc and not isinstance(exc, (asyncio.CancelledError, WebSocketDisconnect)):
