@@ -15,6 +15,7 @@ parallel tab refreshes can tumble each other's refresh tokens.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -184,6 +185,61 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             self._cache.set(record)
         return new_max_age
 
+    async def _persist_refresh(
+        self,
+        *,
+        session_id: str,
+        refreshed,
+        last_seen_at: int,
+        ttl: int,
+        rotated: bool,
+    ) -> bool:
+        """Write refreshed tokens to DDB. Retry when rotation makes it critical.
+
+        Returns True on success or on a benign (non-rotation) failure. Returns
+        False only when rotation happened *and* every retry failed — caller
+        should treat that as session-unrecoverable.
+        """
+        # Three attempts on rotation (≈350ms total worst-case), single shot
+        # otherwise. boto3 already retries below us for transient API errors;
+        # this layer handles longer blips and validation/throttling errors
+        # that boto3 lets through.
+        attempts = 3 if rotated else 1
+        for attempt in range(attempts):
+            try:
+                await self._repository.update_tokens(
+                    session_id=session_id,
+                    access_token=refreshed.access_token,
+                    refresh_token=refreshed.refresh_token,
+                    id_token=refreshed.id_token,
+                    access_token_exp=refreshed.access_token_exp,
+                    last_seen_at=last_seen_at,
+                    ttl=ttl,
+                )
+                return True
+            except Exception as exc:
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(0.05 * (2**attempt))  # 50ms, 100ms
+
+        if rotated:
+            logger.error(
+                "BFF refresh-token rotation persist failed for %s after %d attempts: %s — "
+                "invalidating session to force re-auth.",
+                session_id,
+                attempts,
+                last_exc,
+            )
+            return False
+
+        # No rotation — old refresh token still works, next request will retry.
+        logger.warning(
+            "BFF token persist failed for %s (no rotation, session still serviceable): %s",
+            session_id,
+            last_exc,
+        )
+        return True
+
     async def _resolve_session(
         self, cookie_value: str
     ) -> tuple[Optional[SessionRecord], bool]:
@@ -251,18 +307,26 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 now + self._config.session_ttl_seconds,
                 absolute_cap,
             )
-            # TODO: if this write fails after Cognito rotated the refresh
-            # token, DDB still holds the dead one — next request silently
-            # 401s. Hardened in a follow-up commit.
-            await self._repository.update_tokens(
+            # Detect refresh-token rotation. When Cognito rotates, the OLD
+            # refresh token is dead the moment the new one is issued — so a
+            # DDB write failure here means the session is unrecoverable on
+            # the *next* request even though *this* one succeeded. Retry
+            # aggressively, then fail-closed (clear cookie now) so the user
+            # re-auths immediately rather than getting silently 401'd later.
+            # Without rotation, the previous refresh token is still valid,
+            # so a DDB write failure is benign: the next request will just
+            # re-trigger refresh with the same (still good) refresh token.
+            rotated = refreshed.refresh_token != current.cognito_refresh_token
+            persist_ok = await self._persist_refresh(
                 session_id=session_id,
-                access_token=refreshed.access_token,
-                refresh_token=refreshed.refresh_token,
-                id_token=refreshed.id_token,
-                access_token_exp=refreshed.access_token_exp,
+                refreshed=refreshed,
                 last_seen_at=now,
                 ttl=new_ttl,
+                rotated=rotated,
             )
+            if not persist_ok:
+                self._cache.invalidate(session_id)
+                return None, True
             updated = SessionRecord(
                 session_id=current.session_id,
                 user_id=current.user_id,

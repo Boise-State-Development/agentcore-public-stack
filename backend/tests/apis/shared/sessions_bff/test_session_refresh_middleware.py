@@ -502,3 +502,75 @@ def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
     assert kwargs["ttl"] - now > 28000  # bumped by ~session_ttl_seconds
 
 
+# ─── Refresh-token rotation hardening ───────────────────────────────────
+
+
+def test_rotation_persist_failure_invalidates_session() -> None:
+    """When Cognito rotates the refresh token (returns a new one) AND every
+    DDB write retry fails, the session must be invalidated immediately:
+    the old refresh token is dead at Cognito, so leaving the row stale
+    guarantees a silent 401 on the next request. Better to force re-auth
+    now while the user is in the loop."""
+    record = _make_record(access_token_exp=int(time.time()) + 5)
+    repo = AsyncMock()
+    repo.get.return_value = record
+    repo.update_tokens.side_effect = RuntimeError("DDB throttled")
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh.return_value = RefreshResult(
+        access_token="access.fresh",
+        refresh_token="refresh.ROTATED",  # rotation kicked in
+        id_token="id.fresh",
+        access_token_exp=int(time.time()) + 3600,
+    )
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    assert response.json()["has_session"] is False
+    # Three retry attempts on rotation.
+    assert repo.update_tokens.await_count == 3
+    # Cookie must be cleared so the browser stops carrying a now-zombie session.
+    cleared = " ".join(response.headers.get_list("set-cookie"))
+    assert SESSION_COOKIE_NAME in cleared
+
+
+def test_non_rotation_persist_failure_does_not_invalidate() -> None:
+    """If Cognito did NOT rotate (returned the same refresh token) and the
+    DDB write fails, the session is still serviceable — the existing
+    refresh token is still valid for the next attempt. Don't punish the
+    user with a re-auth for a transient DDB blip."""
+    record = _make_record(access_token_exp=int(time.time()) + 5)
+    repo = AsyncMock()
+    repo.get.return_value = record
+    repo.update_tokens.side_effect = RuntimeError("DDB throttled")
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh.return_value = RefreshResult(
+        access_token="access.fresh",
+        refresh_token="refresh.original",  # SAME — no rotation
+        id_token="id.fresh",
+        access_token_exp=int(time.time()) + 3600,
+    )
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_session"] is True
+    assert body["access_token"] == "access.fresh"  # in-memory record updated
+    # Single attempt only when no rotation.
+    assert repo.update_tokens.await_count == 1
+    # Cookie must NOT be cleared.
+    cleared = " ".join(response.headers.get_list("set-cookie"))
+    assert "Max-Age=0" not in cleared
+
+
