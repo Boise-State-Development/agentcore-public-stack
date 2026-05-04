@@ -49,6 +49,7 @@ npx cdk deploy --all
 | `tool_use` / `tool_result` | Tool invocation and result |
 | `stream_error` | Conversational error |
 | `oauth_required` | External MCP tool needs user consent — payload `{providerId, authorizationUrl}`, one event per provider emitted after `message_stop` |
+| `compaction` | Backend rolled older turns into a summary on this turn — payload `{previousCheckpoint, newCheckpoint, summarizedTurns, inputTokens}`, emitted after the final `metadata` event so the badge updates first, before `done` |
 | `done` | Stream complete |
 
 ## Multi-Protocol Tool Architecture

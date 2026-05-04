@@ -120,6 +120,26 @@ export interface ToolApprovalRequiredEvent {
 }
 
 /**
+ * Compaction event — emitted after the final `metadata` event (so the badge
+ * updates first) and before `done` when the backend rolls older turns into
+ * a summary on this turn. The frontend uses it to drop an inline divider in
+ * the conversation marking where the checkpoint advanced.
+ *
+ * `newCheckpoint` is the message index the checkpoint moved to, and acts as
+ * the divider's anchor — the divider renders above the message at that
+ * index. `summarizedTurns` is the *delta* count of turns rolled up at this
+ * compaction event, not the cumulative total across prior compactions, so
+ * each divider stands on its own.
+ */
+export interface CompactionEvent {
+  type: 'compaction';
+  previousCheckpoint: number;
+  newCheckpoint: number;
+  summarizedTurns: number;
+  inputTokens: number;
+}
+
+/**
  * Tool result event data structure
  */
 export interface ToolResultEventData {
@@ -157,7 +177,8 @@ export type StreamEventType =
   | 'quota_exceeded'
   | 'stream_error'
   | 'citation'
-  | 'oauth_required';
+  | 'oauth_required'
+  | 'compaction';
 
 /**
  * Union type of all possible event data types
@@ -178,6 +199,7 @@ export type StreamEventData =
   | ConversationalStreamErrorEvent
   | Citation
   | OAuthRequiredEvent
+  | CompactionEvent
   | null
   | undefined;
 

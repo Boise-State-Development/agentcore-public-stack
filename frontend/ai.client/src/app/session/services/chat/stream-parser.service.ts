@@ -16,9 +16,11 @@ import {
 } from '../../../services/quota/quota-warning.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { CompactionSummaryService } from './compaction-summary.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
+  CompactionEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -56,6 +58,7 @@ export class StreamParserService {
   private quotaWarningService = inject(QuotaWarningService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
+  private compactionSummary = inject(CompactionSummaryService);
 
   // =========================================================================
   // State Signals
@@ -321,6 +324,8 @@ export class StreamParserService {
           this.sessionId ?? undefined,
         );
       },
+
+      onCompaction: (data: CompactionEvent) => this.compactionSummary.recordLive(data),
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
         const messages = this.allMessages();

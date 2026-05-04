@@ -322,6 +322,38 @@ class StreamCoordinator:
                         final_metadata_event = {"type": "metadata", "data": final_metadata}
                         yield self._format_sse_event(final_metadata_event)
 
+                    # Update compaction state after the final metadata event so
+                    # the badge updates first, then the divider drops in. If the
+                    # checkpoint advanced on this turn, emit a `compaction` SSE
+                    # so the frontend can place an inline "earlier messages
+                    # summarized" divider. Fires after metadata, before done.
+                    if hasattr(session_manager, "update_after_turn"):
+                        usage = accumulated_metadata.get("usage", {})
+                        total_input_tokens = (
+                            usage.get("inputTokens", 0)
+                            + usage.get("cacheReadInputTokens", 0)
+                            + usage.get("cacheWriteInputTokens", 0)
+                        )
+                        if total_input_tokens > 0:
+                            try:
+                                current_messages = getattr(agent, "messages", None)
+                                compaction_result = await session_manager.update_after_turn(
+                                    total_input_tokens,
+                                    current_messages=current_messages,
+                                )
+                                logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
+                                if compaction_result is not None:
+                                    compaction_payload = {
+                                        "type": "compaction",
+                                        "previousCheckpoint": compaction_result.previous_checkpoint,
+                                        "newCheckpoint": compaction_result.new_checkpoint,
+                                        "summarizedTurns": compaction_result.summarized_turns,
+                                        "inputTokens": compaction_result.input_tokens,
+                                    }
+                                    yield f"event: compaction\ndata: {json.dumps(compaction_payload)}\n\n"
+                            except Exception as e:
+                                logger.warning(f"Failed to update compaction state: {e}")
+
                 # Intercept legacy "error" events from stream_processor and convert to conversational format
                 # This ensures errors appear as assistant messages in the chat UI
                 if event.get("type") == "error":
@@ -540,22 +572,6 @@ class StreamCoordinator:
                     logger.info(f"💾 Stored displayText for user message {user_message_index}")
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
-
-            # Update compaction state if session manager supports it
-            # This tracks input token usage and triggers compaction when threshold exceeded
-            if hasattr(session_manager, "update_after_turn"):
-                input_tokens = accumulated_metadata.get("usage", {}).get("inputTokens", 0)
-                # Also include cache tokens for accurate context size tracking
-                cache_read_tokens = accumulated_metadata.get("usage", {}).get("cacheReadInputTokens", 0)
-                cache_write_tokens = accumulated_metadata.get("usage", {}).get("cacheWriteInputTokens", 0)
-                total_input_tokens = input_tokens + cache_read_tokens + cache_write_tokens
-
-                if total_input_tokens > 0:
-                    try:
-                        await session_manager.update_after_turn(total_input_tokens)
-                        logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
-                    except Exception as e:
-                        logger.warning(f"Failed to update compaction state: {e}")
 
         except Exception as e:
             # Handle errors with emergency flush

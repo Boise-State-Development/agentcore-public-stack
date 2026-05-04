@@ -40,6 +40,10 @@ export interface SessionMetadata {
   lastContextTokens?: number;
   /** Model context window (max input tokens) at the time of the most recent turn. */
   contextWindow?: number;
+  /** Cumulative count of turns the backend has rolled into a compaction
+   *  summary in this session. Drives the end-of-conversation summary
+   *  indicator after a refresh. */
+  totalSummarizedTurns?: number;
 }
 
 // Request model for updating session metadata

@@ -1380,6 +1380,16 @@ async def _get_session_metadata_cloud(
         if "pendingInterrupts" in item:
             item["pendingInterrupts"] = _dedupe_interrupt_dicts(item["pendingInterrupts"])
 
+        # Lift the running compaction-summary turn count out of the nested
+        # `compaction` map so it shows up as a top-level field on the
+        # response model. Older sessions without compaction state simply
+        # leave the field unset.
+        compaction_data = item.get("compaction")
+        if isinstance(compaction_data, dict):
+            total = compaction_data.get("totalSummarizedTurns")
+            if total is not None:
+                item["totalSummarizedTurns"] = int(total)
+
         return SessionMetadata.model_validate(item)
 
     except Exception as e:

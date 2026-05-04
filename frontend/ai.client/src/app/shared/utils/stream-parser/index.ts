@@ -57,6 +57,7 @@ export {
   validateCitation,
   validateOAuthRequiredEvent,
   validateToolApprovalRequiredEvent,
+  validateCompactionEvent,
 } from './stream-parser-core';
 
 // Types
@@ -78,6 +79,7 @@ export type {
   ConversationalStreamErrorEvent,
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
+  CompactionEvent,
   StreamEventType,
   StreamEventData,
   ParsedStreamEvent,

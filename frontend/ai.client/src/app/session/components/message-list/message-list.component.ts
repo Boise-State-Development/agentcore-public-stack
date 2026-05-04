@@ -9,6 +9,7 @@ import { CitationDisplayComponent } from '../citation-display/citation-display.c
 import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.component';
 import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/oauth-consent-prompt.component';
 import { ToolApprovalPromptComponent } from './components/tool-approval-prompt/tool-approval-prompt.component';
+import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
@@ -17,6 +18,7 @@ import {
   ToolApprovalRequest,
   ToolApprovalService,
 } from '../../../services/tool-approval/tool-approval.service';
+import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 
 @Component({
   selector: 'app-message-list',
@@ -29,6 +31,7 @@ import {
     PulsatingLoaderComponent,
     OAuthConsentPromptComponent,
     ToolApprovalPromptComponent,
+    CompactionSummaryComponent,
   ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
@@ -49,6 +52,17 @@ export class MessageListComponent implements OnDestroy {
 
   private consentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
+  private compactionSummary = inject(CompactionSummaryService);
+
+  /** Single end-of-conversation compaction summary inputs. Sourced from
+   *  live SSE events plus session-metadata hydration on load. The fade-in
+   *  animation only fires on live events; reload-hydrated totals appear
+   *  in place. */
+  protected hasCompaction = this.compactionSummary.hasCompaction;
+  protected totalSummarizedTurns = this.compactionSummary.totalSummarizedTurns;
+  protected animateCompaction = computed(
+    () => this.compactionSummary.hasCompaction() && !this.compactionSummary.wasHydrated(),
+  );
 
   /** Pending consent prompts whose anchor message id isn't in the loaded
    *  message list — typically the case when an interrupt fires on a turn

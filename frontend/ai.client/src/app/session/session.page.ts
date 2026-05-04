@@ -14,6 +14,7 @@ import { ModelSettings } from '../components/model-settings/model-settings';
 import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
+import { CompactionSummaryService } from './services/chat/compaction-summary.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
@@ -42,6 +43,7 @@ export class ConversationPage implements OnDestroy {
   private userService = inject(UserService);
   private chatHttpService = inject(ChatHttpService);
   private streamParserService = inject(StreamParserService);
+  private compactionSummary = inject(CompactionSummaryService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
   private dialog = inject(Dialog);
@@ -185,6 +187,21 @@ export class ConversationPage implements OnDestroy {
       });
     });
 
+    // Hydrate the compaction summary indicator from persisted session
+    // metadata. `seedFromHydration` is idempotent and won't clobber live
+    // increments, so re-runs of this effect (e.g. when other fields on
+    // currentSession update) are harmless. The route subscription resets
+    // the service before triggering the metadata fetch, so cross-session
+    // bleed is impossible.
+    effect(() => {
+      const session = this.sessionConversation();
+      if (!session?.sessionId || session.sessionId !== this.sessionId()) return;
+      const total = session.totalSummarizedTurns ?? 0;
+      if (total > 0) {
+        this.compactionSummary.seedFromHydration(total);
+      }
+    });
+
     // Priority-based assistant loading: URL query param first, then session preferences
     effect(() => {
       const queryAssistantId = this.assistantIdFromQuery();
@@ -231,6 +248,12 @@ export class ConversationPage implements OnDestroy {
       // metadata loads — otherwise the previous session's totals briefly
       // flash on the badge while the new metadata is in flight.
       this.chatStateService.seedSessionAggregates({});
+
+      // Compaction summary is session-scoped — clear before loading the
+      // next session's metadata so the previous session's totals don't
+      // bleed in. The hydration effect above will reseed from
+      // currentSession.totalSummarizedTurns once the metadata fetch lands.
+      this.compactionSummary.reset();
 
       if (id) {
         // Update the messages signal reference (this triggers reactivity)

@@ -205,6 +205,16 @@ class SessionMetadata(BaseModel):
         description="Model max input tokens at the time of the most recent turn",
     )
 
+    # Cumulative count of turns rolled into a compaction summary across this
+    # session's lifetime. Lifted out of the nested `compaction` map at GET
+    # time so the frontend can rehydrate the end-of-conversation indicator
+    # without knowing the internal compaction-state shape.
+    total_summarized_turns: Optional[int] = Field(
+        default=None,
+        alias="totalSummarizedTurns",
+        description="Cumulative count of turns rolled into a compaction summary in this session",
+    )
+
 
 class UpdateSessionMetadataRequest(BaseModel):
     """Request body for updating session metadata"""
@@ -251,6 +261,11 @@ class SessionMetadataResponse(BaseModel):
         None,
         alias="contextWindow",
         description="Model max input tokens at the time of the most recent turn",
+    )
+    total_summarized_turns: Optional[int] = Field(
+        default=None,
+        alias="totalSummarizedTurns",
+        description="Cumulative count of turns rolled into a compaction summary in this session",
     )
 
 

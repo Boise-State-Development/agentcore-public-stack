@@ -31,6 +31,18 @@
             </div>
         </div>
     }
+
+  }
+
+  <!-- Single subtle compaction summary at the end of the conversation,
+       shown when the backend has rolled older turns into a summary. The
+       inline-divider variant of this was dropped because it caused
+       layout shifts mid-conversation; this lives in one fixed spot. -->
+  @if (hasCompaction()) {
+    <app-compaction-summary
+      [summarizedTurns]="totalSummarizedTurns()"
+      [animate]="animateCompaction()"
+    />
   }
 
   <!-- OAuth consent prompts not anchored to a loaded message — usually

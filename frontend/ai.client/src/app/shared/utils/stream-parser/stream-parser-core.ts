@@ -38,6 +38,7 @@ import type {
   ConversationalStreamErrorEvent,
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
+  CompactionEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -82,6 +83,9 @@ export interface StreamParserCallbacks {
 
   // Tool approval required (catalog flagged this MCP tool needs_approval)
   onToolApprovalRequired?: (data: ToolApprovalRequiredEvent) => void;
+
+  // Compaction (backend rolled older turns into a summary on this turn)
+  onCompaction?: (data: CompactionEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -369,6 +373,27 @@ export function validateToolApprovalRequiredEvent(
 }
 
 /**
+ * Validate CompactionEvent structure
+ */
+export function validateCompactionEvent(data: unknown): data is CompactionEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<CompactionEvent>;
+
+  return (
+    event.type === 'compaction' &&
+    typeof event.previousCheckpoint === 'number' &&
+    typeof event.newCheckpoint === 'number' &&
+    typeof event.summarizedTurns === 'number' &&
+    event.summarizedTurns >= 0 &&
+    typeof event.inputTokens === 'number' &&
+    event.newCheckpoint > event.previousCheckpoint
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -546,6 +571,14 @@ export function processStreamEvent(
           callbacks.onToolApprovalRequired?.(data);
         } else {
           callbacks.onParseError?.('tool_approval_required: invalid data structure');
+        }
+        break;
+
+      case 'compaction':
+        if (validateCompactionEvent(data)) {
+          callbacks.onCompaction?.(data);
+        } else {
+          callbacks.onParseError?.('compaction: invalid data structure');
         }
         break;
 

@@ -25,6 +25,10 @@ class CompactionState:
     summary: Optional[str] = None  # Pre-computed summary for skipped messages
     last_input_tokens: int = 0  # Input tokens from last turn
     updated_at: Optional[str] = None  # ISO timestamp of last update
+    # Cumulative count of turns rolled into a summary across every
+    # compaction event in this session. Surfaced on session-metadata GET so
+    # the frontend's end-of-conversation indicator survives a refresh.
+    total_summarized_turns: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for DynamoDB storage."""
@@ -32,7 +36,8 @@ class CompactionState:
             "checkpoint": self.checkpoint,
             "summary": self.summary,
             "lastInputTokens": self.last_input_tokens,
-            "updatedAt": self.updated_at
+            "updatedAt": self.updated_at,
+            "totalSummarizedTurns": self.total_summarized_turns,
         }
 
     @classmethod
@@ -44,8 +49,27 @@ class CompactionState:
             checkpoint=int(data.get("checkpoint", 0)),
             summary=data.get("summary"),
             last_input_tokens=int(data.get("lastInputTokens", 0)),
-            updated_at=data.get("updatedAt")
+            updated_at=data.get("updatedAt"),
+            total_summarized_turns=int(data.get("totalSummarizedTurns", 0)),
         )
+
+
+@dataclass
+class CompactionResult:
+    """
+    Returned by ``TurnBasedSessionManager.update_after_turn`` when a turn
+    crosses the token threshold and the checkpoint advances. Carries the
+    information the frontend needs to render an inline "earlier messages
+    summarized" divider in the conversation.
+
+    ``summarized_turns`` is the *delta* count of turns rolled into the
+    summary at this compaction event (not the cumulative total across
+    prior compactions), so each divider stands on its own.
+    """
+    previous_checkpoint: int
+    new_checkpoint: int
+    summarized_turns: int
+    input_tokens: int
 
 
 @dataclass
