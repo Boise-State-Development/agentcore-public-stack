@@ -71,15 +71,22 @@ def _make_record(
     )
 
 
-def _enabled_config() -> BFFConfig:
+def _enabled_config(
+    *,
+    sliding_renewal_throttle_seconds: int = 60,
+    absolute_lifetime_seconds: int = 30 * 24 * 3600,
+    session_ttl_seconds: int = 28800,
+) -> BFFConfig:
     return BFFConfig(
         sessions_table_name="tbl",
         cookie_signing_key_arn="arn:aws:kms:fake",
-        session_ttl_seconds=28800,
+        session_ttl_seconds=session_ttl_seconds,
         refresh_leeway_seconds=60,
         cognito_bff_app_client_id="client-id",
         cognito_bff_app_client_secret_arn="arn:secret",
         inference_api_url=None,
+        absolute_lifetime_seconds=absolute_lifetime_seconds,
+        sliding_renewal_throttle_seconds=sliding_renewal_throttle_seconds,
     )
 
 
@@ -325,3 +332,173 @@ async def test_storm_coalesces_to_single_refresh() -> None:
         assert r.status_code == 200
     # Critical assertion: only one refresh call across all 5 concurrent reqs.
     assert call_count["n"] == 1
+
+
+# ─── Sliding-session tests ─────────────────────────────────────────────
+
+
+def _slide_set_cookie_max_age(set_cookie_headers: list[str]) -> Optional[int]:
+    """Pull the session-cookie Max-Age out of the response's Set-Cookie list.
+
+    Returns None when no session cookie was emitted. Used to assert that
+    a slide was reflected to the browser, not just to DDB.
+    """
+    for header in set_cookie_headers:
+        if not header.startswith(f"{SESSION_COOKIE_NAME}="):
+            continue
+        for part in header.split(";"):
+            part = part.strip()
+            if part.lower().startswith("max-age="):
+                return int(part.split("=", 1)[1])
+    return None
+
+
+def test_slide_within_throttle_window_does_not_write_or_reemit() -> None:
+    """A request arriving within `sliding_renewal_throttle_seconds` of the
+    last touch must not generate a DDB write or re-set the cookie. Without
+    the throttle, every request would cost a write."""
+    record = _make_record()
+    # Pretend the row was touched 5s ago — well inside the 60s throttle.
+    record.last_seen_at = int(time.time()) - 5
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    repo.touch_last_seen.assert_not_called()
+    repo.update_tokens.assert_not_called()
+    # No Set-Cookie for the session cookie — we left the existing one alone.
+    assert _slide_set_cookie_max_age(response.headers.get_list("set-cookie")) is None
+
+
+def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
+    """Once `last_seen_at` is older than the throttle window, the slide
+    fires: one DDB touch with a fresh ttl, plus a Set-Cookie carrying a
+    fresh Max-Age = session_ttl_seconds."""
+    record = _make_record()
+    record.last_seen_at = int(time.time()) - 120  # past the 60s throttle
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    # Exactly one slide-write, and it carries a ttl bumped by ~session_ttl_seconds.
+    repo.touch_last_seen.assert_awaited_once()
+    args, kwargs = repo.touch_last_seen.await_args
+    # session_id passed positionally; last_seen_at/ttl by keyword.
+    assert (args[0] if args else kwargs.get("session_id")) == record.session_id
+    now = int(time.time())
+    assert abs(kwargs["last_seen_at"] - now) < 5
+    # ttl must be roughly now + session_ttl_seconds (28800), not the original
+    # ttl on the record. Wide window because TestClient adds latency.
+    assert kwargs["ttl"] - now > 28000
+    repo.update_tokens.assert_not_called()  # slide path, not refresh path
+
+    max_age = _slide_set_cookie_max_age(response.headers.get_list("set-cookie"))
+    assert max_age is not None
+    assert max_age == 28800
+
+
+def test_slide_past_absolute_cap_does_not_extend() -> None:
+    """When `created_at + absolute_lifetime` has already passed, the slide
+    must be a no-op — we don't roll a session beyond its hard cap. The
+    user keeps the rest of whatever validity their cookie still has."""
+    record = _make_record()
+    # absolute_lifetime = 100s; created 200s ago → past the cap.
+    record.created_at = int(time.time()) - 200
+    record.last_seen_at = int(time.time()) - 120  # past throttle
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    app = _build_app(
+        config=_enabled_config(absolute_lifetime_seconds=100),
+        repository=repo,
+        codec=codec,
+        refresh_client=refresh,
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    repo.touch_last_seen.assert_not_called()
+    assert _slide_set_cookie_max_age(response.headers.get_list("set-cookie")) is None
+
+
+def test_slide_max_age_capped_by_remaining_absolute_lifetime() -> None:
+    """When session_ttl_seconds would exceed remaining absolute lifetime,
+    the slide caps Max-Age at the remaining window so the cookie can't
+    outlive the absolute cap."""
+    record = _make_record()
+    # absolute_lifetime = 1000s; created 600s ago → 400s remaining.
+    record.created_at = int(time.time()) - 600
+    record.last_seen_at = int(time.time()) - 120
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    app = _build_app(
+        config=_enabled_config(
+            absolute_lifetime_seconds=1000,
+            session_ttl_seconds=28800,  # would normally be Max-Age
+        ),
+        repository=repo,
+        codec=codec,
+        refresh_client=refresh,
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    max_age = _slide_set_cookie_max_age(response.headers.get_list("set-cookie"))
+    # Capped near 400s, not 28800s. Wide tolerance for TestClient latency.
+    assert max_age is not None
+    assert 350 <= max_age <= 400
+
+
+def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
+    """The token-rotation write must also slide the row's ttl forward —
+    otherwise a session that just refreshed could still expire moments
+    later because the original ttl was set at login."""
+    record = _make_record(access_token_exp=int(time.time()) + 5)  # within leeway
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh.return_value = RefreshResult(
+        access_token="access.fresh",
+        refresh_token="refresh.original",  # no rotation
+        id_token="id.fresh",
+        access_token_exp=int(time.time()) + 3600,
+    )
+    app = _build_app(
+        config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    repo.update_tokens.assert_awaited_once()
+    kwargs = repo.update_tokens.await_args.kwargs
+    assert "ttl" in kwargs
+    now = int(time.time())
+    assert kwargs["ttl"] - now > 28000  # bumped by ~session_ttl_seconds
+
+

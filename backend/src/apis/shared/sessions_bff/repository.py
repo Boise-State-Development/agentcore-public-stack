@@ -128,12 +128,16 @@ class SessionRepository:
         id_token: Optional[str],
         access_token_exp: int,
         last_seen_at: int,
+        ttl: Optional[int] = None,
     ) -> None:
         """Atomically replace the Cognito tokens after a refresh.
 
         The refresh middleware calls this once it has a fresh access token.
         Note that Cognito's refresh-token rotation may issue a new refresh
-        token too, hence the explicit `refresh_token` parameter.
+        token too, hence the explicit `refresh_token` parameter. When `ttl`
+        is supplied, the row's DynamoDB TTL slides forward in the same write
+        — a refresh proves the user is active, so the session row's expiry
+        should slide alongside it.
         """
         if not self._enabled:
             return
@@ -152,21 +156,47 @@ class SessionRepository:
         if id_token is not None:
             update_expr += ", id_token = :id"
             expr_values[":id"] = id_token
-        self._table.update_item(
-            Key=self._key(session_id),
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_values,
-        )
+        if ttl is not None:
+            update_expr += ", #ttl = :ttl"
+            expr_values[":ttl"] = ttl
+        kwargs = {
+            "Key": self._key(session_id),
+            "UpdateExpression": update_expr,
+            "ExpressionAttributeValues": expr_values,
+        }
+        if ttl is not None:
+            # `ttl` is a reserved word in DynamoDB expressions.
+            kwargs["ExpressionAttributeNames"] = {"#ttl": "ttl"}
+        self._table.update_item(**kwargs)
 
-    async def touch_last_seen(self, session_id: str, last_seen_at: int) -> None:
+    async def touch_last_seen(
+        self,
+        session_id: str,
+        last_seen_at: int,
+        ttl: Optional[int] = None,
+    ) -> None:
+        """Slide `last_seen_at` (and optionally `ttl`) without touching tokens.
+
+        Used by the sliding-session path in `SessionRefreshMiddleware`: an
+        active user that doesn't yet need a token refresh still needs the
+        DDB TTL pushed forward so the row doesn't reap out from under them.
+        """
         if not self._enabled:
             return
+        update_expr = "SET last_seen_at = :seen"
+        expr_values: dict = {":seen": last_seen_at}
+        kwargs: dict = {
+            "Key": self._key(session_id),
+            "UpdateExpression": update_expr,
+            "ExpressionAttributeValues": expr_values,
+        }
+        if ttl is not None:
+            update_expr += ", #ttl = :ttl"
+            expr_values[":ttl"] = ttl
+            kwargs["UpdateExpression"] = update_expr
+            kwargs["ExpressionAttributeNames"] = {"#ttl": "ttl"}
         try:
-            self._table.update_item(
-                Key=self._key(session_id),
-                UpdateExpression="SET last_seen_at = :seen",
-                ExpressionAttributeValues={":seen": last_seen_at},
-            )
+            self._table.update_item(**kwargs)
         except ClientError as exc:
             # Touch failures are non-critical — log and move on rather than
             # surfacing as a request error.

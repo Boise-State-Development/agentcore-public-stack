@@ -107,18 +107,82 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         record, clear_cookie = await self._resolve_session(cookie_value)
+        renewal_max_age: Optional[int] = None
         if record is not None:
             request.state.bff_session = record
             request.state.bff_csrf_token = CSRFHelper.derive_token(
                 record.csrf_secret, record.session_id
             )
+            # Decide whether this request should slide the session forward.
+            # `_maybe_slide` writes DDB if past the throttle window and returns
+            # the cookie Max-Age to re-emit (or None to leave the existing
+            # cookie alone).
+            renewal_max_age = await self._maybe_slide(record)
 
         response = await call_next(request)
 
         if clear_cookie:
             self._clear_cookies(response)
+        elif renewal_max_age is not None and record is not None:
+            self._reemit_cookies(
+                response,
+                sealed_session_value=cookie_value,
+                csrf_token=request.state.bff_csrf_token,
+                max_age_seconds=renewal_max_age,
+            )
 
         return response
+
+    async def _maybe_slide(self, record: SessionRecord) -> Optional[int]:
+        """Slide the session's DDB TTL + return a fresh cookie Max-Age.
+
+        Returns None when no slide is warranted (within throttle window, or
+        past the absolute lifetime cap). Otherwise returns the Max-Age the
+        caller should write into the response's Set-Cookie headers.
+
+        The absolute cap is enforced as `created_at + absolute_lifetime`. Once
+        past it, the cookie is allowed to expire on its own original Max-Age
+        — we don't extend, but we also don't proactively clear (the user
+        might still complete the in-flight request).
+        """
+        assert self._config is not None
+        now = int(time.time())
+        absolute_cap = record.created_at + self._config.absolute_lifetime_seconds
+        remaining_to_cap = absolute_cap - now
+        if remaining_to_cap <= 0:
+            return None
+
+        new_max_age = min(self._config.session_ttl_seconds, remaining_to_cap)
+
+        # Throttle: only write to DDB if it's been long enough since the last
+        # touch. The cookie re-emit is coupled to the write so the browser
+        # and DDB stay in sync about when the session should expire.
+        if (
+            now - record.last_seen_at
+            < self._config.sliding_renewal_throttle_seconds
+        ):
+            return None
+
+        new_ttl = now + new_max_age
+        try:
+            await self._repository.touch_last_seen(
+                record.session_id, last_seen_at=now, ttl=new_ttl
+            )
+        except Exception as exc:
+            # Don't fail the request if the slide-write fails — the user
+            # still has a valid session for the rest of its current TTL.
+            logger.warning(
+                "BFF session slide failed for %s: %s", record.session_id, exc
+            )
+            return None
+
+        # Reflect the slide locally so subsequent same-request reads (and the
+        # cache) don't think the row still needs a slide.
+        record.last_seen_at = now
+        record.ttl = new_ttl
+        if self._cache is not None:
+            self._cache.set(record)
+        return new_max_age
 
     async def _resolve_session(
         self, cookie_value: str
@@ -177,10 +241,19 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 return None, True
 
             now = int(time.time())
-            # TODO(phase-7): if this write fails, Cognito has rotated the
-            # refresh token but DDB still holds the old one — the session is
-            # silently broken on the next refresh attempt. Add a short retry
-            # loop or a conditional update with a version attribute.
+            # Slide the row's DDB TTL alongside the token rotation: the user
+            # is provably active. Capped at `created_at + absolute_lifetime`
+            # so a long-lived browser tab can't roll the session forever.
+            absolute_cap = (
+                current.created_at + self._config.absolute_lifetime_seconds
+            )
+            new_ttl = min(
+                now + self._config.session_ttl_seconds,
+                absolute_cap,
+            )
+            # TODO: if this write fails after Cognito rotated the refresh
+            # token, DDB still holds the dead one — next request silently
+            # 401s. Hardened in a follow-up commit.
             await self._repository.update_tokens(
                 session_id=session_id,
                 access_token=refreshed.access_token,
@@ -188,6 +261,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 id_token=refreshed.id_token,
                 access_token_exp=refreshed.access_token_exp,
                 last_seen_at=now,
+                ttl=new_ttl,
             )
             updated = SessionRecord(
                 session_id=current.session_id,
@@ -200,10 +274,45 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 csrf_secret=current.csrf_secret,
                 created_at=current.created_at,
                 last_seen_at=now,
-                ttl=current.ttl,
+                ttl=new_ttl,
             )
             self._cache.set(updated)
             return updated, False
+
+    @staticmethod
+    def _reemit_cookies(
+        response: Response,
+        *,
+        sealed_session_value: str,
+        csrf_token: str,
+        max_age_seconds: int,
+    ) -> None:
+        """Re-emit both BFF cookies with a fresh `Max-Age`.
+
+        The sealed value is the *same* one the browser already holds (cookie
+        seals are stable for a given session_id) — only the Max-Age slides
+        forward. Attribute set must mirror `auth/bff/cookies.py:set_session_cookies`
+        exactly so the browser updates the existing cookie rather than
+        creating a phantom twin.
+        """
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=sealed_session_value,
+            max_age=max_age_seconds,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+        response.set_cookie(
+            key=CSRF_COOKIE_NAME,
+            value=csrf_token,
+            max_age=max_age_seconds,
+            path="/",
+            secure=True,
+            httponly=False,
+            samesite="lax",
+        )
 
     @staticmethod
     def _clear_cookies(response: Response) -> None:

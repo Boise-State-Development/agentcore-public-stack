@@ -24,6 +24,14 @@ CSRF_HEADER_NAME = "X-CSRF-Token"
 # Defaults for the optional env vars. Match the Phase 1 CDK defaults.
 _DEFAULT_TTL_SECONDS = 28800  # 8 hours
 _DEFAULT_REFRESH_LEEWAY_SECONDS = 60
+# Hard cap on a single login's lifetime regardless of activity. 30d matches
+# the Cognito refresh-token default — past that, the upstream refresh would
+# fail anyway, so there's no value in carrying the cookie further.
+_DEFAULT_ABSOLUTE_LIFETIME_SECONDS = 30 * 24 * 3600
+# Don't write to DDB / re-emit cookies on every request; coalesce to once per
+# minute. Tabs that hit the BFF more often than this just ride the existing
+# row.
+_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,11 @@ class BFFConfig:
     cognito_bff_app_client_id: Optional[str]
     cognito_bff_app_client_secret_arn: Optional[str]
     inference_api_url: Optional[str]
+    # Defaults provided so test fixtures and any direct constructor call sites
+    # don't have to learn about these fields. `from_env()` is what production
+    # uses and it always supplies values.
+    absolute_lifetime_seconds: int = _DEFAULT_ABSOLUTE_LIFETIME_SECONDS
+    sliding_renewal_throttle_seconds: int = _DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS
 
     @classmethod
     def from_env(cls) -> "BFFConfig":
@@ -53,6 +66,14 @@ class BFFConfig:
             refresh_leeway_seconds=int(
                 os.environ.get("BFF_SESSION_REFRESH_LEEWAY_SECONDS")
                 or _DEFAULT_REFRESH_LEEWAY_SECONDS
+            ),
+            absolute_lifetime_seconds=int(
+                os.environ.get("BFF_SESSION_ABSOLUTE_LIFETIME_SECONDS")
+                or _DEFAULT_ABSOLUTE_LIFETIME_SECONDS
+            ),
+            sliding_renewal_throttle_seconds=int(
+                os.environ.get("BFF_SESSION_SLIDING_RENEWAL_THROTTLE_SECONDS")
+                or _DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS
             ),
             cognito_bff_app_client_id=os.environ.get("COGNITO_BFF_APP_CLIENT_ID") or None,
             cognito_bff_app_client_secret_arn=os.environ.get(
