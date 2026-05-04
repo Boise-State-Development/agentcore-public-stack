@@ -53,7 +53,7 @@
   },
   "devDependencies": {
     "@analogjs/vite-plugin-angular": "3.0.0-alpha.53",
-    "@analogjs/vitest-angular": "3.0.0-alpha.30",
+    "@analogjs/vitest-angular": "3.0.0-alpha.53",
     "@angular/build": "21.2.9",
     "@angular/cli": "21.2.9",
     "@angular/compiler-cli": "21.2.11",
