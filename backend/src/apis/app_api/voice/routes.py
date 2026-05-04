@@ -225,8 +225,8 @@ async def voice_stream(websocket: WebSocket, ticket: Optional[str] = None) -> No
     finally:
         try:
             await websocket.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Voice WS close failed during cleanup: %s", exc, exc_info=True)
 
 
 def _reset_for_tests() -> None:
