@@ -687,10 +687,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             snapshot = await get_paused_turn(input_data.session_id, user_id)
             if not snapshot:
-                logger.warning(
-                    "Resume rejected: no paused_turn snapshot for session %s",
-                    input_data.session_id,
-                )
+                logger.warning("Resume rejected: no paused_turn snapshot found")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No paused turn for this session; restart the turn.",
@@ -700,10 +697,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             except ValueError:
                 expires_at = None
             if expires_at and datetime.now(timezone.utc) > expires_at:
-                logger.warning(
-                    "Resume rejected: paused_turn snapshot expired for session %s",
-                    input_data.session_id,
-                )
+                logger.warning("Resume rejected: paused_turn snapshot expired")
                 await clear_paused_turn(input_data.session_id, user_id)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

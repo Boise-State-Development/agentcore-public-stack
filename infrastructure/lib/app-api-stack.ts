@@ -7,11 +7,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
-import * as sns from "aws-cdk-lib/aws-sns";
-import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
+
 import { Construct } from "constructs";
 import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy, buildCorsOrigins } from "./config";
 

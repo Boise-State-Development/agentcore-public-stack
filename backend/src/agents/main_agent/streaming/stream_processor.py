@@ -1233,9 +1233,6 @@ async def process_agent_stream(
     current_block_index: Dict[str, int] = {"index": 0}
 
     try:
-        # Track if we've seen result to know when it's safe to break on complete
-        result_seen = False
-
         # Iterate through each raw event from the agent stream
         # The agent stream is an async generator that yields events as they occur
         async for event in agent_stream:

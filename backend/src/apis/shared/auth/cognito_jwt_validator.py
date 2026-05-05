@@ -122,7 +122,7 @@ class CognitoJWTValidator:
                 if isinstance(parsed, list):
                     return [str(r).strip() for r in parsed if str(r).strip()]
             except (json.JSONDecodeError, TypeError):
-                pass
+                pass  # Fall through to comma-separated parsing below
             # Fall back to comma-separated
             return [r.strip() for r in custom_roles.split(",") if r.strip()]
 

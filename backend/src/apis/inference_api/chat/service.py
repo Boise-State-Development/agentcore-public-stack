@@ -327,7 +327,7 @@ async def generate_conversation_title(
             }
         }
 
-        logger.info(f"🎯 Generating title for session {session_id} (input length: {len(truncated_input)} chars)")
+        logger.info("🎯 Generating title (input length: %d chars)", len(truncated_input))
 
         # Call Bedrock Nova Micro
         response = bedrock_client.converse(
@@ -343,9 +343,9 @@ async def generate_conversation_title(
         # Enforce 50 character limit (just in case model exceeds)
         if len(title) > 50:
             title = title[:47] + "..."
-            logger.warning(f"Title exceeded 50 chars, truncated to: {title}")
+            logger.warning("Title exceeded 50 chars, truncated")
 
-        logger.info(f"✅ Generated title: '{title}' for session {session_id}")
+        logger.info("✅ Generated title successfully")
 
         # Targeted update — only writes the title attribute. The post-stream
         # update_session_activity write is also targeted and disjoint, so the
@@ -358,6 +358,6 @@ async def generate_conversation_title(
         # Title generation is nice-to-have. Leave the existing "New Conversation"
         # placeholder in place rather than writing a fallback; the row already
         # exists from the pre-create.
-        logger.error(f"Failed to generate title for session {session_id}: {e}", exc_info=True)
+        logger.error("Failed to generate title: %s", e, exc_info=True)
         return "New Conversation"
 
