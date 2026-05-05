@@ -1,6 +1,147 @@
-/* Login page specific styles if needed */
-
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ---------- Background canvas ---------- */
+.login-shell {
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--color-primary-50) 70%, white) 0%, transparent 60%),
+    radial-gradient(120% 80% at 100% 100%, color-mix(in oklab, var(--color-primary-100) 60%, white) 0%, transparent 55%),
+    var(--color-gray-50);
+}
+
+html.dark .login-shell {
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--color-primary-900) 50%, black) 0%, transparent 60%),
+    radial-gradient(120% 80% at 100% 100%, color-mix(in oklab, var(--color-primary-800) 35%, black) 0%, transparent 55%),
+    var(--color-gray-900);
+}
+
+.login-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.login-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.55;
+  will-change: transform;
+}
+
+.login-blob--a {
+  width: 60vw;
+  height: 60vw;
+  max-width: 720px;
+  max-height: 720px;
+  top: -15vw;
+  left: -10vw;
+  background: radial-gradient(circle at 30% 30%, var(--color-primary-400), var(--color-primary-600) 60%, transparent 75%);
+  animation: login-drift-a 18s ease-in-out infinite alternate;
+}
+
+.login-blob--b {
+  width: 55vw;
+  height: 55vw;
+  max-width: 640px;
+  max-height: 640px;
+  bottom: -18vw;
+  right: -12vw;
+  background: radial-gradient(circle at 70% 70%, var(--color-primary-500), var(--color-primary-800) 65%, transparent 80%);
+  opacity: 0.45;
+  animation: login-drift-b 22s ease-in-out infinite alternate;
+}
+
+.login-blob--c {
+  width: 38vw;
+  height: 38vw;
+  max-width: 480px;
+  max-height: 480px;
+  top: 35%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, color-mix(in oklab, var(--color-primary-300) 70%, white), transparent 70%);
+  opacity: 0.35;
+  animation: login-drift-c 26s ease-in-out infinite alternate;
+}
+
+html.dark .login-blob--a { opacity: 0.45; }
+html.dark .login-blob--b { opacity: 0.4; }
+html.dark .login-blob--c { opacity: 0.25; }
+
+.login-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--color-primary-500) 8%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-500) 8%, transparent) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 75%);
+  opacity: 0.6;
+}
+
+html.dark .login-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px);
+  opacity: 0.5;
+}
+
+@keyframes login-drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(4vw, 3vw, 0) scale(1.08); }
+}
+@keyframes login-drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-3vw, -4vw, 0) scale(1.1); }
+}
+@keyframes login-drift-c {
+  from { transform: translate(-50%, -50%) scale(1); }
+  to   { transform: translate(-48%, -52%) scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-blob,
+  .login-blob--a,
+  .login-blob--b,
+  .login-blob--c {
+    animation: none;
+  }
+}
+
+/* ---------- Frosted glass card ---------- */
+.login-card {
+  background: color-mix(in oklab, white 65%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid color-mix(in oklab, white 70%, transparent);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.6) inset,
+    0 20px 50px -20px color-mix(in oklab, var(--color-primary-900) 35%, transparent),
+    0 8px 24px -12px rgba(0, 0, 0, 0.15);
+}
+
+html.dark .login-card {
+  background: color-mix(in oklab, var(--color-gray-900) 55%, transparent);
+  border-color: color-mix(in oklab, white 12%, transparent);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.06) inset,
+    0 20px 50px -20px rgba(0, 0, 0, 0.6),
+    0 8px 24px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Divider label sits on top of the frosted card — match its translucency */
+.login-divider-text {
+  background: color-mix(in oklab, white 70%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 9999px;
+}
+
+html.dark .login-divider-text {
+  background: color-mix(in oklab, var(--color-gray-900) 70%, transparent);
+}

@@ -25,8 +25,16 @@ interface AuthProviderPublicListResponse {
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="fixed inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-900 overflow-y-auto">
-      <div class="w-full max-w-md px-4 py-12">
+    <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
+      <!-- Decorative background: large primary-color blobs with soft blur -->
+      <div class="login-bg" aria-hidden="true">
+        <div class="login-blob login-blob--a"></div>
+        <div class="login-blob login-blob--b"></div>
+        <div class="login-blob login-blob--c"></div>
+        <div class="login-grid"></div>
+      </div>
+
+      <div class="relative w-full max-w-md px-4 py-12">
         <!-- Logo -->
         <div class="mb-8 flex justify-center">
           <img
@@ -39,13 +47,13 @@ interface AuthProviderPublicListResponse {
             class="hidden size-16 dark:block">
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-8">
+        <div class="login-card rounded-2xl p-8">
           <div class="flex flex-col items-center gap-6">
             <div class="flex flex-col items-center gap-2">
-              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-50">
                 Sign In
               </h1>
-              <p class="text-base/7 text-gray-600 dark:text-gray-400 text-center">
+              <p class="text-base/7 text-gray-700 dark:text-gray-300 text-center">
                 Sign in to continue
               </p>
             </div>
@@ -70,7 +78,7 @@ interface AuthProviderPublicListResponse {
                 type="button"
                 (click)="handleCognitoLogin()"
                 [disabled]="isLoading()"
-                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
+                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-primary-500 hover:bg-primary-600 shadow-lg shadow-primary-500/20 disabled:opacity-60"
               >
                 @if (isLoading() && !activeProviderId()) {
                   <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -88,10 +96,10 @@ interface AuthProviderPublicListResponse {
                 <!-- Divider -->
                 <div class="relative my-2">
                   <div class="absolute inset-0 flex items-center">
-                    <div class="w-full border-t border-gray-200 dark:border-gray-700"></div>
+                    <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
                   </div>
                   <div class="relative flex justify-center text-xs">
-                    <span class="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">or continue with</span>
+                    <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
                   </div>
                 </div>
 
@@ -131,7 +139,7 @@ interface AuthProviderPublicListResponse {
               }
             </div>
 
-            <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
+            <p class="text-xs text-gray-600 dark:text-gray-400 text-center">
               You will be redirected to complete authentication
             </p>
           </div>
