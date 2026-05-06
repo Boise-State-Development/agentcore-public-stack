@@ -5,7 +5,7 @@ permissions:
 
 on:
   push:
-    branches: [ "develop" ]
+    branches: [ "main" ]
     paths:
       - 'backend/src/**'
       - 'backend/lambda-functions/**'
@@ -15,7 +15,7 @@ on:
       - '.github/workflows/**'
       - '.github/codeql/**'
   pull_request:
-    branches: [ "develop" ]
+    branches: [ "main" ]
     paths:
       - 'backend/src/**'
       - 'backend/lambda-functions/**'

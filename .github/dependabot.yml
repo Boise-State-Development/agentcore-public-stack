@@ -3,7 +3,7 @@ updates:
   # ── Python backend ──
   - package-ecosystem: "pip"
     directory: "/backend"
-    target-branch: "develop"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -27,7 +27,7 @@ updates:
   # ── Frontend npm ──
   - package-ecosystem: "npm"
     directory: "/frontend/ai.client"
-    target-branch: "develop"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -52,7 +52,7 @@ updates:
   # ── Infrastructure CDK ──
   - package-ecosystem: "npm"
     directory: "/infrastructure"
-    target-branch: "develop"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -77,7 +77,7 @@ updates:
   # ── GitHub Actions ──
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "develop"
+    target-branch: "main"
     schedule:
       interval: "weekly"
       day: "monday"
