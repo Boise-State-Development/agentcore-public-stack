@@ -1,6 +1,6 @@
 {
   "name": "ai.client",
-  "version": "1.0.0-beta.23",
+  "version": "1.0.0-beta.24",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
