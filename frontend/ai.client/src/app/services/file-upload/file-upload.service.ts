@@ -78,6 +78,27 @@ export interface CompleteUploadResponse {
 }
 
 /**
+ * Response from GET /files/{uploadId}/preview-url
+ */
+export interface PreviewUrlResponse {
+  uploadId: string;
+  url: string;
+  expiresAt: string;
+  mimeType: string;
+  filename: string;
+}
+
+/**
+ * Response from GET /files/{uploadId}/text-snippet
+ */
+export interface TextSnippetResponse {
+  uploadId: string;
+  snippet: string;
+  truncated: boolean;
+  mimeType: string;
+}
+
+/**
  * File metadata from list/get operations
  */
 export interface FileMetadata {
@@ -548,6 +569,38 @@ export class FileUploadService {
     }
 
     return results;
+  }
+
+  /**
+   * Fetch a short-lived presigned GET URL for a file.
+   *
+   * Used by the UI to render inline image previews and the lightbox.
+   * The URL expires after a few minutes; refetch on expiry.
+   */
+  async getPreviewUrl(uploadId: string): Promise<PreviewUrlResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<PreviewUrlResponse>(`${this.baseUrl()}/${uploadId}/preview-url`)
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to get preview URL');
+    }
+  }
+
+  /**
+   * Fetch a UTF-8 text snippet from the start of a file.
+   *
+   * Returns an empty snippet for non-text MIME types so the UI can fall
+   * back to a skeleton mockup.
+   */
+  async getTextSnippet(uploadId: string): Promise<TextSnippetResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<TextSnippetResponse>(`${this.baseUrl()}/${uploadId}/text-snippet`)
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to get text snippet');
+    }
   }
 
   /**

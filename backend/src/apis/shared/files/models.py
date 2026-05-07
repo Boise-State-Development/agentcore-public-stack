@@ -250,6 +250,29 @@ class CompleteUploadResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class PreviewUrlResponse(BaseModel):
+    """Response for GET /api/files/{uploadId}/preview-url."""
+
+    upload_id: str = Field(..., alias="uploadId")
+    url: str = Field(..., description="Short-lived presigned GET URL")
+    expires_at: str = Field(..., alias="expiresAt", description="ISO8601 expiration time")
+    mime_type: str = Field(..., alias="mimeType")
+    filename: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TextSnippetResponse(BaseModel):
+    """Response for GET /api/files/{uploadId}/text-snippet."""
+
+    upload_id: str = Field(..., alias="uploadId")
+    snippet: str = Field(..., description="UTF-8 decoded text from the start of the file")
+    truncated: bool = Field(..., description="True if the file was longer than the snippet limit")
+    mime_type: str = Field(..., alias="mimeType")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class FileResponse(BaseModel):
     """Single file in list response."""
 

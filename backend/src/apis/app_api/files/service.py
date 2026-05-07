@@ -20,12 +20,26 @@ from apis.shared.files.models import (
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
+    PreviewUrlResponse,
+    TextSnippetResponse,
     FileResponse,
     FileListResponse,
     QuotaResponse,
     is_allowed_mime_type,
     ALLOWED_MIME_TYPES,
 )
+
+
+# MIME types that are safe to decode as UTF-8 text for inline previews.
+TEXT_PREVIEW_MIME_TYPES = frozenset(
+    {
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "text/html",
+    }
+)
+TEXT_SNIPPET_MAX_BYTES = 2048
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
 
 logger = logging.getLogger(__name__)
@@ -133,6 +147,7 @@ class FileUploadService:
 
         # Pre-signed URL expiration
         self.presign_expiration = 15 * 60  # 15 minutes
+        self.preview_url_expiration = 10 * 60  # 10 minutes for GET previews
 
     # =========================================================================
     # Pre-signed URL Flow
@@ -299,6 +314,135 @@ class FileUploadService:
             s3_uri=file_meta.s3_uri,
             filename=file_meta.filename,
             size_bytes=file_meta.size_bytes,
+        )
+
+    # =========================================================================
+    # Preview URL
+    # =========================================================================
+
+    async def get_preview_url(
+        self, user_id: str, upload_id: str
+    ) -> PreviewUrlResponse:
+        """
+        Generate a short-lived presigned GET URL for displaying a file.
+
+        Used by the UI to render image thumbnails inline and to power the
+        full-size lightbox. Only owners can generate preview URLs for their
+        own files. Files must be in READY state.
+
+        Args:
+            user_id: The owner's user ID
+            upload_id: The upload identifier
+
+        Returns:
+            PreviewUrlResponse with a presigned GET URL
+
+        Raises:
+            FileNotFoundError: If file not found, not owned by user, or not ready
+        """
+        file_meta = await self.repository.get_file(user_id, upload_id)
+        if not file_meta:
+            raise FileNotFoundError(f"File {upload_id} not found")
+
+        if file_meta.status != FileStatus.READY:
+            raise FileNotFoundError(
+                f"File {upload_id} is not ready (status: {file_meta.status})"
+            )
+
+        try:
+            url = self._s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": file_meta.s3_key,
+                    "ResponseContentType": file_meta.mime_type,
+                    "ResponseContentDisposition": f'inline; filename="{file_meta.filename}"',
+                },
+                ExpiresIn=self.preview_url_expiration,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to generate preview URL: {e}")
+            raise
+
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=self.preview_url_expiration)
+        ).isoformat() + "Z"
+
+        return PreviewUrlResponse(
+            upload_id=upload_id,
+            url=url,
+            expires_at=expires_at,
+            mime_type=file_meta.mime_type,
+            filename=file_meta.filename,
+        )
+
+    async def get_text_snippet(
+        self, user_id: str, upload_id: str
+    ) -> TextSnippetResponse:
+        """
+        Return a short UTF-8 text excerpt from the start of a file.
+
+        Used by the UI to render a content peek inside the document-style
+        attachment card. Only text-based MIME types are supported; other
+        types return an empty snippet so the UI can fall back to a skeleton.
+
+        Args:
+            user_id: The owner's user ID
+            upload_id: The upload identifier
+
+        Returns:
+            TextSnippetResponse with the decoded snippet (possibly empty)
+
+        Raises:
+            FileNotFoundError: If file not found, not owned, or not ready
+        """
+        file_meta = await self.repository.get_file(user_id, upload_id)
+        if not file_meta:
+            raise FileNotFoundError(f"File {upload_id} not found")
+
+        if file_meta.status != FileStatus.READY:
+            raise FileNotFoundError(
+                f"File {upload_id} is not ready (status: {file_meta.status})"
+            )
+
+        if file_meta.mime_type not in TEXT_PREVIEW_MIME_TYPES:
+            return TextSnippetResponse(
+                upload_id=upload_id,
+                snippet="",
+                truncated=False,
+                mime_type=file_meta.mime_type,
+            )
+
+        # Read up to TEXT_SNIPPET_MAX_BYTES + 1 bytes so we can detect truncation.
+        try:
+            response = self._s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=file_meta.s3_key,
+                Range=f"bytes=0-{TEXT_SNIPPET_MAX_BYTES}",
+            )
+            body = response["Body"].read()
+        except ClientError as e:
+            logger.warning(f"Failed to read snippet for {upload_id}: {e}")
+            return TextSnippetResponse(
+                upload_id=upload_id,
+                snippet="",
+                truncated=False,
+                mime_type=file_meta.mime_type,
+            )
+
+        truncated = file_meta.size_bytes > TEXT_SNIPPET_MAX_BYTES
+        excerpt = body[:TEXT_SNIPPET_MAX_BYTES]
+        try:
+            text = excerpt.decode("utf-8")
+        except UnicodeDecodeError:
+            # Trim trailing partial multi-byte sequence and retry; fall back to replace.
+            text = excerpt.decode("utf-8", errors="replace")
+
+        return TextSnippetResponse(
+            upload_id=upload_id,
+            snippet=text,
+            truncated=truncated,
+            mime_type=file_meta.mime_type,
         )
 
     # =========================================================================

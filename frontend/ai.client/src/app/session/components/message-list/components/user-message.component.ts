@@ -10,15 +10,19 @@ import {
   inject,
 } from '@angular/core';
 import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
-import { FileAttachmentBadgeComponent } from './file-attachment';
+import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
+
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
 
 const MAX_HEIGHT_PX = 200;
 
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent],
+  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent],
   template: `
     @if (hasTextContent() || hasFileAttachments()) {
       <div class="flex w-full flex-col items-end gap-2">
@@ -61,10 +65,17 @@ const MAX_HEIGHT_PX = 200;
           </div>
         }
 
-        <!-- File attachments (below message bubble) -->
-        @if (hasFileAttachments()) {
+        <!-- Image attachments (iMessage-style mosaic) -->
+        @if (imageAttachments().length > 0) {
+          <div class="flex max-w-[80%] justify-end">
+            <app-image-attachment-group [attachments]="imageAttachments()" />
+          </div>
+        }
+
+        <!-- Non-image file attachments (below message bubble) -->
+        @if (nonImageAttachments().length > 0) {
           <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
-            @for (attachment of fileAttachments(); track attachment.uploadId) {
+            @for (attachment of nonImageAttachments(); track attachment.uploadId) {
               <app-file-attachment-badge [attachment]="attachment" />
             }
           </div>
@@ -118,6 +129,14 @@ export class UserMessageComponent implements AfterViewInit {
       .filter((block: ContentBlock) => block.type === 'fileAttachment' && block.fileAttachment)
       .map((block: ContentBlock) => block.fileAttachment as FileAttachmentData);
   });
+
+  imageAttachments = computed((): FileAttachmentData[] =>
+    this.fileAttachments().filter((a) => isImageMimeType(a.mimeType)),
+  );
+
+  nonImageAttachments = computed((): FileAttachmentData[] =>
+    this.fileAttachments().filter((a) => !isImageMimeType(a.mimeType)),
+  );
 
   ngAfterViewInit(): void {
     this.checkOverflow();

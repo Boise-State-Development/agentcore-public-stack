@@ -16,6 +16,8 @@ from apis.shared.files.models import (
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
+    PreviewUrlResponse,
+    TextSnippetResponse,
     FileListResponse,
     QuotaResponse,
     QuotaExceededError as QuotaExceededModel,
@@ -133,6 +135,51 @@ async def complete_upload(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
+        )
+
+
+@router.get("/{upload_id}/preview-url", response_model=PreviewUrlResponse)
+async def get_preview_url(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Generate a short-lived presigned GET URL for an uploaded file.
+
+    Used by the UI to render image previews inline and to open files in a
+    lightbox. The URL is scoped to the file owner and expires after a few
+    minutes.
+    """
+    try:
+        return await service.get_preview_url(user.user_id, upload_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+
+
+@router.get("/{upload_id}/text-snippet", response_model=TextSnippetResponse)
+async def get_text_snippet(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Return a short UTF-8 text excerpt from the start of a file.
+
+    Used by the UI to render a content peek inside the document-style
+    attachment card for text-based files (txt, md, csv, html). Returns an
+    empty snippet for non-text MIME types so the UI can fall back to a
+    skeleton mockup.
+    """
+    try:
+        return await service.get_text_snippet(user.user_id, upload_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
         )
 
 
