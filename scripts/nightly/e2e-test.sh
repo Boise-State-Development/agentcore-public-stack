@@ -443,13 +443,44 @@ print(json.dumps(register_input))
             status_code=$(curl -s -o /dev/null -w "%{http_code}" "${alb_url}/health" --max-time 10 || echo "000")
             if [ "${status_code}" = "200" ]; then
                 log_success "  App API healthy after CORS patch (HTTP 200)"
+                # Verify the new task is actually serving by checking the
+                # redirect_uri in /auth/login. The health check can pass on
+                # the new task while the old task is still draining — we need
+                # to confirm the BFF env var patch is active.
+                local verify_redirect
+                verify_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
+                    "${alb_url}/auth/login" --max-time 10 || true)
+                local verify_uri=""
+                if [ -n "${verify_redirect}" ] && echo "${verify_redirect}" | grep -qF "redirect_uri="; then
+                    verify_uri=$(echo "${verify_redirect}" | python3 -c "
+import sys, urllib.parse
+url = sys.stdin.read().strip()
+parsed = urllib.parse.urlparse(url)
+params = urllib.parse.parse_qs(parsed.query)
+print(params.get('redirect_uri', [''])[0])
+" 2>/dev/null || true)
+                fi
+
+                if [ -n "${verify_uri}" ] && [ "${verify_uri}" = "${new_callback_url}" ]; then
+                    log_success "  BFF redirect_uri confirmed: ${verify_uri}"
+                else
+                    log_warn "  Health OK but redirect_uri not yet updated: ${verify_uri:-<empty>}"
+                    log_warn "  Expected: ${new_callback_url}"
+                    log_warn "  Old task may still be in the target group — waiting..."
+                    retries=$((retries + 1))
+                    if [ ${retries} -lt ${max_retries} ]; then
+                        sleep 15
+                        continue
+                    fi
+                fi
+
                 # Wait for the ALB deregistration delay (30s configured in CDK)
                 # to ensure the old task is fully drained and no longer serving
                 # requests. Without this, the old task (with a different cookie
                 # encryption key) may handle the OAuth callback, producing a
                 # cookie that the new task cannot unseal.
-                log_info "  Waiting 35s for old task deregistration to complete..."
-                sleep 35
+                log_info "  Waiting 45s for old task deregistration to complete..."
+                sleep 45
                 log_info "  Deregistration wait complete — only new task should be serving"
                 return 0
             fi
@@ -562,10 +593,15 @@ main() {
 
     # --- Verify BFF auth configuration ---
     # Smoke-test the BFF login redirect to confirm the patched env vars are
-    # active. The BFF's /auth/login should 302 to Cognito with a redirect_uri
-    # pointing at the CloudFront-fronted callback URL.
+    # active. We verify BOTH through the ALB directly AND through CloudFront.
+    # The CloudFront verification is critical: the Playwright tests go through
+    # CloudFront, so we must confirm the patched task is actually serving
+    # requests that arrive via CloudFront's /api/* behavior.
     if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
-        log_info "Verifying BFF auth login redirect..."
+        local expected_callback="${base_url}/api/auth/callback"
+
+        # --- Verify via ALB (direct) ---
+        log_info "Verifying BFF auth login redirect (via ALB)..."
         local login_redirect
         login_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
             "${alb_url}/auth/login" --max-time 10 || true)
@@ -582,15 +618,63 @@ params = urllib.parse.parse_qs(parsed.query)
 print(params.get('redirect_uri', [''])[0])
 ")
                 log_info "  redirect_uri in authorize request: ${actual_redirect_uri}"
-                local expected_callback="${base_url}/api/auth/callback"
                 if [ "${actual_redirect_uri}" != "${expected_callback}" ]; then
                     log_error "  MISMATCH! Expected: ${expected_callback}"
                     log_error "  BFF_AUTH_CALLBACK_URL patch may not have taken effect."
-                    log_error "  This will cause token exchange failures after Cognito login."
+                    log_error "  This will cause cookies to be set on the wrong domain."
                 fi
             fi
         else
             log_warn "  Could not verify BFF login redirect (no redirect URL captured)"
+        fi
+
+        # --- Verify via CloudFront (the path Playwright actually takes) ---
+        # This is the critical check. The browser goes through CloudFront, so
+        # we must confirm that CloudFront is routing to the NEW task (with the
+        # patched BFF_AUTH_CALLBACK_URL). If the old task is still draining or
+        # CloudFront has a stale connection, this will catch it.
+        log_info "Verifying BFF auth login redirect (via CloudFront)..."
+        local cf_retries=0
+        local cf_max_retries=12
+        local cf_verified=false
+        while [ ${cf_retries} -lt ${cf_max_retries} ]; do
+            local cf_login_redirect
+            cf_login_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
+                "${base_url}/api/auth/login" --max-time 15 || true)
+
+            if [ -n "${cf_login_redirect}" ] && echo "${cf_login_redirect}" | grep -qF "redirect_uri="; then
+                local cf_actual_redirect_uri
+                cf_actual_redirect_uri=$(echo "${cf_login_redirect}" | python3 -c "
+import sys, urllib.parse
+url = sys.stdin.read().strip()
+parsed = urllib.parse.urlparse(url)
+params = urllib.parse.parse_qs(parsed.query)
+print(params.get('redirect_uri', [''])[0])
+")
+                if [ "${cf_actual_redirect_uri}" = "${expected_callback}" ]; then
+                    log_success "  CloudFront redirect_uri verified: ${cf_actual_redirect_uri}"
+                    cf_verified=true
+                    break
+                else
+                    log_warn "  CloudFront redirect_uri mismatch (attempt $((cf_retries + 1))/${cf_max_retries}): got ${cf_actual_redirect_uri}"
+                    log_warn "  Expected: ${expected_callback}"
+                    log_warn "  Old task may still be draining — retrying in 10s..."
+                fi
+            else
+                log_warn "  CloudFront /api/auth/login did not return a redirect (attempt $((cf_retries + 1))/${cf_max_retries}) — retrying in 10s..."
+            fi
+
+            cf_retries=$((cf_retries + 1))
+            if [ ${cf_retries} -lt ${cf_max_retries} ]; then
+                sleep 10
+            fi
+        done
+
+        if [ "${cf_verified}" = "false" ]; then
+            log_error "  CRITICAL: CloudFront is still routing to the old task after ${cf_max_retries} attempts."
+            log_error "  The OAuth callback will land on the wrong domain and cookies will not work."
+            log_error "  This is the root cause of the 'cookies on wrong domain' E2E failure."
+            # Don't exit — let the tests run so we get diagnostic output from Playwright
         fi
 
         # Verify /auth/session returns 401 (not 500/503) when no cookie is sent.
