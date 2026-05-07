@@ -37,16 +37,31 @@ async function cognitoLogin(
   // After Cognito submit, the redirect chain is:
   //   Cognito → /api/auth/callback → BFF token exchange → 302 to /
   // If the BFF callback fails, it redirects to /?auth_error=... or /auth/login
+
+  // Intercept the /auth/session request to see what's happening
+  let sessionResponseStatus = 0;
+  let sessionResponseBody = '';
+  let sessionRequestCookies = '';
+  page.on('response', async (response) => {
+    if (response.url().includes('/api/auth/session')) {
+      sessionResponseStatus = response.status();
+      sessionRequestCookies = response.request().headers()['cookie'] || 'NO COOKIE HEADER';
+      try { sessionResponseBody = await response.text(); } catch { sessionResponseBody = '<unreadable>'; }
+    }
+  });
+
   try {
     await page.waitForURL('**/', { timeout: 45_000 });
   } catch {
     const finalUrl = page.url();
     const cookies = await page.context().cookies();
     const bffCookies = cookies.filter(c => c.name.startsWith('__Host-bff'));
+    const cookieDetails = bffCookies.map(c => `${c.name}(domain=${c.domain},path=${c.path},secure=${c.secure})`).join('; ');
     throw new Error(
       `OAuth redirect chain failed. Final URL: ${finalUrl} | ` +
-      `BFF cookies: ${bffCookies.map(c => c.name).join(', ') || 'NONE'} | ` +
-      `All cookies: ${cookies.map(c => c.name).join(', ') || 'NONE'}`,
+      `Session response: ${sessionResponseStatus} ${sessionResponseBody.substring(0, 100)} | ` +
+      `Cookie header sent: ${sessionRequestCookies.substring(0, 150)} | ` +
+      `BFF cookies in jar: ${cookieDetails || 'NONE'}`,
     );
   }
 
