@@ -26,11 +26,15 @@ interface AuthProviderPublicListResponse {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
-      <!-- Decorative background: large primary-color blobs with soft blur -->
+      <!-- Decorative background: lava-lamp blobs with organic morph + rise/fall -->
       <div class="login-bg" aria-hidden="true">
-        <div class="login-blob login-blob--a"></div>
-        <div class="login-blob login-blob--b"></div>
-        <div class="login-blob login-blob--c"></div>
+        <div class="login-lava">
+          <div class="login-blob login-blob--a"></div>
+          <div class="login-blob login-blob--b"></div>
+          <div class="login-blob login-blob--c"></div>
+          <div class="login-blob login-blob--d"></div>
+          <div class="login-blob login-blob--e"></div>
+        </div>
         <div class="login-grid"></div>
       </div>
 

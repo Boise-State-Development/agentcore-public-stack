@@ -24,53 +24,99 @@ html.dark .login-shell {
   pointer-events: none;
 }
 
+/* The .login-lava wrapper holds the morphing blobs. Keeping it as a separate
+   layer lets us isolate transforms and (in the future) drop a goo SVG filter
+   on it without affecting the grid overlay. */
+.login-lava {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
 .login-blob {
   position: absolute;
-  border-radius: 9999px;
-  filter: blur(80px);
+  filter: blur(70px);
   opacity: 0.55;
-  will-change: transform;
+  will-change: transform, border-radius;
+  /* Asymmetric border-radius gives an organic, non-circular blob silhouette;
+     keyframes morph these values to make the surface "wobble" as it rises. */
+  border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%;
 }
 
 .login-blob--a {
-  width: 60vw;
-  height: 60vw;
-  max-width: 720px;
-  max-height: 720px;
-  top: -15vw;
-  left: -10vw;
-  background: radial-gradient(circle at 30% 30%, var(--color-primary-400), var(--color-primary-600) 60%, transparent 75%);
-  animation: login-drift-a 18s ease-in-out infinite alternate;
+  width: 52vw;
+  height: 64vw;
+  max-width: 620px;
+  max-height: 760px;
+  bottom: -25vw;
+  left: -8vw;
+  background: radial-gradient(circle at 35% 35%, var(--color-primary-400), var(--color-primary-600) 60%, transparent 78%);
+  animation:
+    login-rise-a 20s ease-in-out infinite alternate,
+    login-morph-a 14s ease-in-out infinite alternate;
 }
 
 .login-blob--b {
-  width: 55vw;
-  height: 55vw;
-  max-width: 640px;
-  max-height: 640px;
-  bottom: -18vw;
-  right: -12vw;
-  background: radial-gradient(circle at 70% 70%, var(--color-primary-500), var(--color-primary-800) 65%, transparent 80%);
-  opacity: 0.45;
-  animation: login-drift-b 22s ease-in-out infinite alternate;
+  width: 46vw;
+  height: 58vw;
+  max-width: 560px;
+  max-height: 700px;
+  top: -22vw;
+  right: -10vw;
+  background: radial-gradient(circle at 65% 65%, var(--color-primary-500), var(--color-primary-800) 65%, transparent 82%);
+  opacity: 0.5;
+  animation:
+    login-rise-b 26s ease-in-out infinite alternate,
+    login-morph-b 17s ease-in-out infinite alternate;
 }
 
 .login-blob--c {
-  width: 38vw;
-  height: 38vw;
-  max-width: 480px;
-  max-height: 480px;
-  top: 35%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(circle, color-mix(in oklab, var(--color-primary-300) 70%, white), transparent 70%);
-  opacity: 0.35;
-  animation: login-drift-c 26s ease-in-out infinite alternate;
+  width: 32vw;
+  height: 40vw;
+  max-width: 420px;
+  max-height: 520px;
+  top: 30%;
+  left: 45%;
+  background: radial-gradient(circle, color-mix(in oklab, var(--color-primary-300) 75%, white), transparent 72%);
+  opacity: 0.4;
+  animation:
+    login-rise-c 32s ease-in-out infinite alternate,
+    login-morph-c 19s ease-in-out infinite alternate;
+}
+
+.login-blob--d {
+  width: 26vw;
+  height: 34vw;
+  max-width: 340px;
+  max-height: 440px;
+  bottom: -10vw;
+  right: 18vw;
+  background: radial-gradient(circle at 50% 50%, var(--color-primary-300), var(--color-primary-500) 60%, transparent 80%);
+  opacity: 0.45;
+  animation:
+    login-rise-d 24s ease-in-out infinite alternate,
+    login-morph-a 16s ease-in-out infinite alternate -3s;
+}
+
+.login-blob--e {
+  width: 22vw;
+  height: 30vw;
+  max-width: 300px;
+  max-height: 400px;
+  top: -8vw;
+  left: 28vw;
+  background: radial-gradient(circle at 50% 50%, var(--color-primary-400), var(--color-primary-700) 65%, transparent 82%);
+  opacity: 0.4;
+  animation:
+    login-rise-e 28s ease-in-out infinite alternate,
+    login-morph-b 21s ease-in-out infinite alternate -5s;
 }
 
 html.dark .login-blob--a { opacity: 0.45; }
 html.dark .login-blob--b { opacity: 0.4; }
-html.dark .login-blob--c { opacity: 0.25; }
+html.dark .login-blob--c { opacity: 0.3; }
+html.dark .login-blob--d { opacity: 0.35; }
+html.dark .login-blob--e { opacity: 0.3; }
 
 .login-grid {
   position: absolute;
@@ -91,24 +137,60 @@ html.dark .login-grid {
   opacity: 0.5;
 }
 
-@keyframes login-drift-a {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(4vw, 3vw, 0) scale(1.08); }
+/* Rise/fall trajectories — primary motion is vertical with gentle horizontal
+   sway and squish/stretch via non-uniform scale, mimicking convection in a
+   lava lamp. */
+@keyframes login-rise-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate3d(3vw, -45vh, 0) scale(1.08, 0.92) rotate(8deg); }
+  100% { transform: translate3d(-2vw, -85vh, 0) scale(0.94, 1.1) rotate(-6deg); }
 }
-@keyframes login-drift-b {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(-3vw, -4vw, 0) scale(1.1); }
+@keyframes login-rise-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate3d(-4vw, 40vh, 0) scale(0.92, 1.1) rotate(-10deg); }
+  100% { transform: translate3d(2vw, 78vh, 0) scale(1.1, 0.9) rotate(7deg); }
 }
-@keyframes login-drift-c {
-  from { transform: translate(-50%, -50%) scale(1); }
-  to   { transform: translate(-48%, -52%) scale(1.06); }
+@keyframes login-rise-c {
+  0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate3d(-5vw, -8vh, 0) scale(1.12, 0.94) rotate(-12deg); }
+  100% { transform: translate3d(4vw, 6vh, 0) scale(0.9, 1.1) rotate(10deg); }
+}
+@keyframes login-rise-d {
+  0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate3d(-6vw, -55vh, 0) scale(1.05, 0.95) rotate(15deg); }
+  100% { transform: translate3d(3vw, -90vh, 0) scale(0.92, 1.08) rotate(-8deg); }
+}
+@keyframes login-rise-e {
+  0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+  50%  { transform: translate3d(5vw, 50vh, 0) scale(0.94, 1.08) rotate(-14deg); }
+  100% { transform: translate3d(-3vw, 88vh, 0) scale(1.1, 0.92) rotate(9deg); }
+}
+
+/* Morphing border-radius makes each blob's surface wobble independently of
+   its trajectory — the signature lava-lamp "skin" deformation. */
+@keyframes login-morph-a {
+  0%   { border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%; }
+  50%  { border-radius: 42% 58% 38% 62% / 60% 40% 60% 40%; }
+  100% { border-radius: 50% 50% 65% 35% / 45% 55% 50% 50%; }
+}
+@keyframes login-morph-b {
+  0%   { border-radius: 50% 50% 40% 60% / 55% 45% 55% 45%; }
+  50%  { border-radius: 65% 35% 55% 45% / 40% 60% 40% 60%; }
+  100% { border-radius: 38% 62% 50% 50% / 60% 50% 50% 40%; }
+}
+@keyframes login-morph-c {
+  0%   { border-radius: 60% 40% 50% 50% / 45% 60% 40% 55%; }
+  50%  { border-radius: 40% 60% 65% 35% / 55% 40% 60% 45%; }
+  100% { border-radius: 55% 45% 38% 62% / 50% 55% 45% 50%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .login-blob,
   .login-blob--a,
   .login-blob--b,
-  .login-blob--c {
+  .login-blob--c,
+  .login-blob--d,
+  .login-blob--e {
     animation: none;
   }
 }
