@@ -443,6 +443,14 @@ print(json.dumps(register_input))
             status_code=$(curl -s -o /dev/null -w "%{http_code}" "${alb_url}/health" --max-time 10 || echo "000")
             if [ "${status_code}" = "200" ]; then
                 log_success "  App API healthy after CORS patch (HTTP 200)"
+                # Wait for the ALB deregistration delay (30s configured in CDK)
+                # to ensure the old task is fully drained and no longer serving
+                # requests. Without this, the old task (with a different cookie
+                # encryption key) may handle the OAuth callback, producing a
+                # cookie that the new task cannot unseal.
+                log_info "  Waiting 35s for old task deregistration to complete..."
+                sleep 35
+                log_info "  Deregistration wait complete — only new task should be serving"
                 return 0
             fi
             retries=$((retries + 1))
@@ -580,6 +588,23 @@ print(params.get('redirect_uri', [''])[0])
             fi
         else
             log_warn "  Could not verify BFF login redirect (no redirect URL captured)"
+        fi
+
+        # Verify /auth/session returns 401 (not 500/503) when no cookie is sent.
+        # A 500/503 would indicate the BFF middleware or JWT validator is misconfigured.
+        log_info "Verifying BFF /auth/session endpoint is functional..."
+        local session_status
+        session_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${alb_url}/auth/session" --max-time 10 || echo "000")
+        if [ "${session_status}" = "401" ]; then
+            log_info "  /auth/session returns 401 (expected — no cookie sent)"
+        else
+            log_error "  /auth/session returned HTTP ${session_status} (expected 401)"
+            log_error "  This suggests the BFF middleware or JWT validator is broken."
+            # Fetch the response body for diagnostics
+            local session_body
+            session_body=$(curl -s "${alb_url}/auth/session" --max-time 10 || true)
+            log_error "  Response body: ${session_body:0:200}"
         fi
     fi
 
