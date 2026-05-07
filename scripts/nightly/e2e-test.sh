@@ -491,6 +491,28 @@ main() {
     base_url=$(get_base_url)
     log_info "Base URL: ${base_url}"
 
+    # Check if the ALB has a custom domain — if so, prefer it as the base URL.
+    # The BFF sets cookies on the domain that serves the /auth/callback response.
+    # When CDK configures a custom domain (e.g. nightly-api.alpha.example.com),
+    # the cookies are bound to that domain. The test must use the same domain
+    # so the browser sends cookies on subsequent requests.
+    local alb_url
+    alb_url=$(aws ssm get-parameter \
+        --name "/${CDK_PROJECT_PREFIX}/network/alb-url" \
+        --query "Parameter.Value" --output text \
+        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
+
+    if [ -n "${alb_url}" ] && [ "${alb_url}" != "None" ]; then
+        # If ALB URL is HTTPS with a custom domain (not a raw ELB hostname),
+        # use it as the base URL for tests since cookies will be set on that domain.
+        if [[ "${alb_url}" == https://* ]] && [[ "${alb_url}" != *elb.amazonaws.com* ]]; then
+            log_info "ALB has custom domain: ${alb_url}"
+            log_info "Using ALB URL as base URL (cookies are bound to this domain)"
+            base_url="${alb_url}"
+        fi
+    fi
+    log_info "Effective base URL for tests: ${base_url}"
+
     # --- Verify frontend is reachable ---
     log_info "Verifying frontend is reachable..."
     local response_code
@@ -502,11 +524,14 @@ main() {
     log_info "Frontend responded with HTTP ${response_code}"
 
     # --- Patch App API CORS to allow requests from the CloudFront origin ---
+    # Only patch BFF env vars if they're still set to localhost defaults.
+    # When CDK configured a custom domain, the BFF env vars are already correct
+    # and we only need to add the base_url to CORS_ORIGINS.
     log_info "Patching App API env vars (CORS, BFF redirect URLs) for CloudFront..."
     patch_app_api_cors "${base_url}"
 
-    # --- Ensure Cognito allows the dynamic CloudFront callback URL ---
-    log_info "Patching Cognito app client with CloudFront callback URL..."
+    # --- Ensure Cognito allows the callback URL ---
+    log_info "Patching Cognito app client with callback URL..."
     patch_cognito_callback_urls "${base_url}"
 
     # --- Seed bootstrap data (models, tools, roles, quotas) ---
