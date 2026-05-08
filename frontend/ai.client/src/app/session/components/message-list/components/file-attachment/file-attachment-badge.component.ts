@@ -8,8 +8,10 @@ import {
   heroPhoto,
   heroArrowTopRightOnSquare,
 } from '@ng-icons/heroicons/outline';
+import { MarkdownComponent } from 'ngx-markdown';
 import { formatBytes, FileUploadService } from '../../../../../services/file-upload';
 import { FileAttachmentData } from '../../../../services/models/message.model';
+import { MarkdownPreviewModalComponent } from './markdown-preview-modal.component';
 
 interface FileTypeStyle {
   icon: string;
@@ -120,7 +122,7 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
 @Component({
   selector: 'app-file-attachment-badge',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, MarkdownComponent, MarkdownPreviewModalComponent],
   providers: [
     provideIcons({
       heroDocument,
@@ -141,6 +143,70 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
     }
     :host-context(.dark) .corner-fold {
       --corner-bg: #374151;
+    }
+
+    /* Compact markdown styling for the small in-card preview. The card body
+       is only ~128px tall so we shrink everything aggressively and strip the
+       margins that the global .message-block prose styles add. */
+    .md-card-preview {
+      font-size: 9px;
+      line-height: 1.45;
+      color: rgb(55 65 81);
+    }
+    :host-context(.dark) .md-card-preview {
+      color: rgb(209 213 219);
+    }
+    .md-card-preview :is(h1, h2, h3, h4, h5, h6) {
+      font-weight: 700;
+      line-height: 1.25;
+      margin: 0 0 2px;
+      color: rgb(17 24 39);
+    }
+    :host-context(.dark) .md-card-preview :is(h1, h2, h3, h4, h5, h6) {
+      color: rgb(243 244 246);
+    }
+    .md-card-preview h1 { font-size: 12px; }
+    .md-card-preview h2 { font-size: 11px; }
+    .md-card-preview h3,
+    .md-card-preview h4,
+    .md-card-preview h5,
+    .md-card-preview h6 { font-size: 10px; }
+    .md-card-preview p { margin: 0 0 4px; }
+    .md-card-preview ul,
+    .md-card-preview ol {
+      margin: 0 0 4px;
+      padding-left: 14px;
+    }
+    .md-card-preview li { margin: 0 0 1px; }
+    .md-card-preview code {
+      font-size: 8.5px;
+      background: rgb(243 244 246);
+      padding: 0 2px;
+      border-radius: 2px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .md-card-preview pre {
+      font-size: 8.5px;
+      background: rgb(243 244 246);
+      padding: 4px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 0 0 4px;
+    }
+    :host-context(.dark) .md-card-preview code,
+    :host-context(.dark) .md-card-preview pre {
+      background: rgb(31 41 55);
+    }
+    .md-card-preview a {
+      color: rgb(99 102 241);
+      text-decoration: underline;
+    }
+    .md-card-preview strong { font-weight: 600; }
+    .md-card-preview blockquote {
+      border-left: 2px solid rgb(209 213 219);
+      padding-left: 6px;
+      margin: 0 0 4px;
+      color: rgb(107 114 128);
     }
   `,
   template: `
@@ -185,9 +251,15 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
         ></div>
 
         @if (snippetState() === 'ready' && hasSnippet()) {
-          <pre
-            class="m-0 max-h-full overflow-hidden whitespace-pre-wrap break-words px-3 py-2 font-mono text-[9px] leading-snug text-gray-700 dark:text-gray-300"
-          >{{ truncatedSnippet() }}</pre>
+          @if (isMarkdown()) {
+            <div class="md-card-preview h-full overflow-hidden px-3 py-2">
+              <markdown [data]="truncatedSnippet()" />
+            </div>
+          } @else {
+            <pre
+              class="m-0 max-h-full overflow-hidden whitespace-pre-wrap break-words px-3 py-2 font-mono text-[9px] leading-snug text-gray-700 dark:text-gray-300"
+            >{{ truncatedSnippet() }}</pre>
+          }
         } @else {
           <div class="space-y-1.5 px-3 py-2.5" aria-hidden="true">
             @for (width of skeletonWidths; track $index) {
@@ -216,6 +288,14 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
         </p>
       </div>
     </button>
+
+    @if (markdownModalOpen()) {
+      <app-markdown-preview-modal
+        [uploadId]="attachment().uploadId"
+        [filename]="attachment().filename"
+        (close)="markdownModalOpen.set(false)"
+      />
+    }
   `,
 })
 export class FileAttachmentBadgeComponent {
@@ -227,6 +307,7 @@ export class FileAttachmentBadgeComponent {
 
   protected readonly snippetState = signal<'idle' | 'loading' | 'ready' | 'error'>('idle');
   private readonly snippet = signal<string>('');
+  protected readonly markdownModalOpen = signal(false);
 
   protected readonly formattedSize = computed(() => formatBytes(this.attachment().sizeBytes));
 
@@ -235,6 +316,8 @@ export class FileAttachmentBadgeComponent {
   );
 
   protected readonly hasSnippet = computed(() => this.snippet().trim().length > 0);
+
+  protected readonly isMarkdown = computed(() => this.attachment().mimeType === 'text/markdown');
 
   /** Cap chars so very long unbroken lines don't blow out the card. */
   protected readonly truncatedSnippet = computed(() => {
@@ -263,6 +346,10 @@ export class FileAttachmentBadgeComponent {
   }
 
   protected async openFile(): Promise<void> {
+    if (this.isMarkdown()) {
+      this.markdownModalOpen.set(true);
+      return;
+    }
     try {
       const response = await this.fileUploadService.getPreviewUrl(this.attachment().uploadId);
       window.open(response.url, '_blank', 'noopener,noreferrer');
