@@ -642,6 +642,11 @@ print(params.get('redirect_uri', [''])[0])
             cf_login_redirect=$(curl -s -o /dev/null -w "%{redirect_url}" \
                 "${base_url}/api/auth/login" --max-time 15 || true)
 
+            # Also capture the HTTP status code for diagnostics
+            local cf_status_code
+            cf_status_code=$(curl -s -o /dev/null -w "%{http_code}" \
+                "${base_url}/api/auth/login" --max-time 15 || echo "000")
+
             if [ -n "${cf_login_redirect}" ] && echo "${cf_login_redirect}" | grep -qF "redirect_uri="; then
                 local cf_actual_redirect_uri
                 cf_actual_redirect_uri=$(echo "${cf_login_redirect}" | python3 -c "
@@ -660,8 +665,15 @@ print(params.get('redirect_uri', [''])[0])
                     log_warn "  Expected: ${expected_callback}"
                     log_warn "  Old task may still be draining — retrying in 10s..."
                 fi
+            elif [ -n "${cf_login_redirect}" ]; then
+                # Got a redirect but not to Cognito — likely ALB HTTP→HTTPS redirect
+                # This indicates CloudFront is connecting to ALB over HTTP and getting
+                # a 301 redirect to HTTPS instead of reaching the BFF directly.
+                log_warn "  CloudFront /api/auth/login returned HTTP ${cf_status_code} redirect to: ${cf_login_redirect:0:120}"
+                log_warn "  This looks like an ALB HTTP→HTTPS redirect. CloudFront may be using HTTP_ONLY protocol."
+                log_warn "  Fix: Ensure CDK_CERTIFICATE_ARN is set when deploying FrontendStack so CloudFront uses HTTPS to ALB."
             else
-                log_warn "  CloudFront /api/auth/login did not return a redirect (attempt $((cf_retries + 1))/${cf_max_retries}) — retrying in 10s..."
+                log_warn "  CloudFront /api/auth/login returned HTTP ${cf_status_code} with no redirect (attempt $((cf_retries + 1))/${cf_max_retries}) — retrying in 10s..."
             fi
 
             cf_retries=$((cf_retries + 1))
