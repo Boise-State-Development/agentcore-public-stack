@@ -385,7 +385,13 @@ def test_slide_within_throttle_window_does_not_write_or_reemit() -> None:
 def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
     """Once `last_seen_at` is older than the throttle window, the slide
     fires: one DDB touch with a fresh ttl, plus a Set-Cookie carrying a
-    fresh Max-Age = session_ttl_seconds."""
+    fresh Max-Age = session_ttl_seconds.
+
+    The slide-write is fire-and-forget (task 3.5) — we poll for the
+    background task's side effect rather than sample immediately. The
+    observable external contract (Set-Cookie Max-Age) is unchanged; only
+    the internal timing of the write moves off the request path.
+    """
     record = _make_record()
     record.last_seen_at = int(time.time()) - 120  # past the 60s throttle
     repo = AsyncMock()
@@ -401,6 +407,10 @@ def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
 
     assert response.status_code == 200
     # Exactly one slide-write, and it carries a ttl bumped by ~session_ttl_seconds.
+    # Poll because the write is on a detached asyncio.Task.
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
+        time.sleep(0.01)
     repo.touch_last_seen.assert_awaited_once()
     args, kwargs = repo.touch_last_seen.await_args
     # session_id passed positionally; last_seen_at/ttl by keyword.

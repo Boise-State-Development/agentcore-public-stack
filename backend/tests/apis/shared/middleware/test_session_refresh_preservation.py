@@ -313,6 +313,26 @@ def _find_set_cookies(
     return parsed
 
 
+def _wait_for(predicate: Any, *, timeout_s: float = 1.0, interval_s: float = 0.01) -> bool:
+    """Poll ``predicate`` until it returns truthy or ``timeout_s`` elapses.
+
+    The slide-write path became fire-and-forget in task 3.5 — `_maybe_slide`
+    schedules the DDB `touch_last_seen` on a detached `asyncio.create_task`
+    and returns the Max-Age synchronously. `TestClient` returns the response
+    before the scheduled task has a chance to run on slower CI schedulers,
+    so assertions about `update_item_calls == 1` must poll rather than
+    sample immediately. The observable external contract (cookie attributes,
+    Max-Age, response body) is unchanged — only the internal timing of the
+    background write moves.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval_s)
+    return predicate()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Requirement 3.1 — Dormant pass-through with zero AWS calls
 # ═══════════════════════════════════════════════════════════════════════════
@@ -612,7 +632,11 @@ def test_3_4_slide_max_age_matches_on_both_cookies(
         response = client.get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
 
     assert response.status_code == 200
-    # Slide must have fired exactly once (one DDB update_item).
+    # Slide must have fired exactly once (one DDB update_item). The write
+    # is fire-and-forget (task 3.5) so we poll rather than sample — the
+    # external contract (cookie attributes, Max-Age) is unchanged; only
+    # internal timing of the write moves.
+    _wait_for(lambda: table.update_item_calls >= 1)
     assert table.update_item_calls == 1, (
         f"[3.4] slide must issue exactly one update_item; got "
         f"{table.update_item_calls}"
