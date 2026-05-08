@@ -226,12 +226,16 @@ def test_near_expiry_session_triggers_refresh_once() -> None:
     repo = AsyncMock()
     repo.get.return_value = record
     codec = _make_codec()
+    # `refresh_client.refresh` is now `async` (task 3.2) — use AsyncMock so
+    # `await self._refresh_client.refresh(...)` in the middleware resolves.
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.fresh",
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.fresh",
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -245,7 +249,7 @@ def test_near_expiry_session_triggers_refresh_once() -> None:
     assert body["has_session"] is True
     # The refreshed token should be exposed downstream.
     assert body["access_token"] == "access.fresh"
-    refresh.refresh.assert_called_once_with(
+    refresh.refresh.assert_awaited_once_with(
         username="alice", refresh_token="refresh.original"
     )
     repo.update_tokens.assert_awaited_once()
@@ -259,7 +263,7 @@ def test_refresh_failure_clears_cookie() -> None:
     repo.get.return_value = record
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.side_effect = CognitoRefreshError("rotated")
+    refresh.refresh = AsyncMock(side_effect=CognitoRefreshError("rotated"))
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
     )
@@ -298,7 +302,7 @@ async def test_storm_coalesces_to_single_refresh() -> None:
         )
 
     refresh = MagicMock()
-    refresh.refresh.side_effect = slow_refresh
+    refresh.refresh = AsyncMock(side_effect=slow_refresh)
 
     # After the first refresh, repo.get returns the *fresh* record so other
     # waiters short-circuit out of the refresh branch.
@@ -481,11 +485,13 @@ def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
     repo.get.return_value = record
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.original",  # no rotation
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.original",  # no rotation
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -517,11 +523,13 @@ def test_rotation_persist_failure_invalidates_session() -> None:
     repo.update_tokens.side_effect = RuntimeError("DDB throttled")
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.ROTATED",  # rotation kicked in
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.ROTATED",  # rotation kicked in
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -550,11 +558,13 @@ def test_non_rotation_persist_failure_does_not_invalidate() -> None:
     repo.update_tokens.side_effect = RuntimeError("DDB throttled")
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.original",  # SAME — no rotation
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.original",  # SAME — no rotation
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh

@@ -24,7 +24,7 @@
     "enabled": true,
     "cpu": 512,
     "memory": 1024,
-    "desiredCount": 1,
+    "desiredCount": 2,
     "maxCapacity": 10
   },
   "inferenceApi": {

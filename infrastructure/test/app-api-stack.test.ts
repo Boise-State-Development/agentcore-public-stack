@@ -52,6 +52,26 @@ describe('AppApiStack', () => {
         DesiredCount: config.appApi.desiredCount,
       });
     });
+
+    test('production context sets DesiredCount to 2 for event-loop blocking mitigation', () => {
+      // The production cdk.context.json sets appApi.desiredCount=2 so that a
+      // single blocked event loop on one ECS task can no longer halt all
+      // ingress (see .kiro/specs/bff-middleware-event-loop-blocking). When
+      // that default is unintentionally reverted to 1, this test fails.
+      const productionConfig = createMockConfig({
+        production: true,
+        appApi: { ...config.appApi, desiredCount: 2 },
+      });
+      const app = createMockApp(productionConfig, ['AppApiStack']);
+      const stack = new AppApiStack(app, 'ProdAppApiStack', {
+        config: productionConfig,
+        env: mockEnv(productionConfig),
+      });
+      const prodTemplate = Template.fromStack(stack);
+      prodTemplate.hasResourceProperties('AWS::ECS::Service', {
+        DesiredCount: 2,
+      });
+    });
   });
 
   // ============================================================

@@ -1,6 +1,6 @@
 # Implementation Plan
 
-- [ ] 1. Write bug condition exploration test
+- [x] 1. Write bug condition exploration test
   - **Property 1: Bug Condition** - Event-Loop Blocking, Missing Coalescing, Aligned Windows, Inline Slide-Write
   - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
   - **DO NOT attempt to fix the test or the code when it fails**
@@ -23,7 +23,7 @@
   - Mark task complete when test is written, run, and failures are documented
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
 
-- [ ] 2. Write preservation property tests (BEFORE implementing fix)
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
   - **Property 2: Preservation** - BFF Middleware Contracts Unchanged for Non-Buggy Inputs
   - **IMPORTANT**: Follow observation-first methodology
   - Test location: `backend/tests/apis/shared/middleware/test_session_refresh_preservation.py`
@@ -47,9 +47,9 @@
   - Mark task complete when tests are written, run, and passing on unfixed code
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11_
 
-- [ ] 3. Fix for BFF middleware event-loop blocking and fan-out amplification
+- [x] 3. Fix for BFF middleware event-loop blocking and fan-out amplification
 
-  - [ ] 3.1 Offload `SessionRepository` boto3 calls via `asyncio.to_thread`
+  - [x] 3.1 Offload `SessionRepository` boto3 calls via `asyncio.to_thread`
     - Edit `backend/src/apis/shared/sessions_bff/repository.py`
     - For each of `get`, `touch_last_seen`, `update_tokens`, `put`, `delete`: extract the boto3 invocation into a nested sync helper and invoke it via `await asyncio.to_thread(helper, ...)`
     - Keep method signatures, return types, and exception-handling branches identical
@@ -60,7 +60,7 @@
     - _Preservation: 3.3, 3.10 — exception branches and fail-closed rotation unchanged_
     - _Requirements: 2.1_
 
-  - [ ] 3.2 Offload `CognitoRefreshClient.refresh` via `asyncio.to_thread`
+  - [x] 3.2 Offload `CognitoRefreshClient.refresh` via `asyncio.to_thread`
     - Edit `backend/src/apis/shared/sessions_bff/refresh.py`
     - Rename existing `refresh` to `_refresh_sync` (or equivalent private sync form) and add a new `async def refresh(...)` that calls `await asyncio.to_thread(self._refresh_sync, username=..., refresh_token=...)`
     - Update the callsite in `SessionRefreshMiddleware._resolve_session` to `await self._refresh_client.refresh(...)`
@@ -71,7 +71,7 @@
     - _Preservation: 3.5 — refresh-storm coalescing preserved_
     - _Requirements: 2.2_
 
-  - [ ] 3.3 Add per-session single-flight primitive module
+  - [x] 3.3 Add per-session single-flight primitive module
     - Create `backend/src/apis/shared/sessions_bff/single_flight.py`
     - Export `async def resolve_once(session_id: str, loader_coro_factory: Callable[[], Awaitable[tuple[Optional[SessionRecord], bool]]]) -> tuple[Optional[SessionRecord], bool]`
     - Internal state: module-level `dict[str, asyncio.Future[tuple[Optional[SessionRecord], bool]]]` guarded by a `threading.Lock` (mirroring the shape of `sessions_bff/lock.py`)
@@ -85,7 +85,7 @@
     - _Preservation: 3.5 — the existing `get_session_lock` scope around the Cognito exchange is unchanged (this is a separate primitive upstream)_
     - _Requirements: 2.3_
 
-  - [ ] 3.4 Wire single-flight into `SessionRefreshMiddleware._resolve_session`
+  - [x] 3.4 Wire single-flight into `SessionRefreshMiddleware._resolve_session`
     - Edit `backend/src/apis/shared/middleware/session_refresh.py`
     - Wrap the `_cache.get → _repository.get → needs_refresh → (maybe refresh)` block in `_resolve_session` inside `resolve_once(session_id, loader_coro_factory)` where the loader factory builds the coroutine that performs today's cache/repo/refresh sequence and returns `(Optional[SessionRecord], clear_cookie: bool)`
     - Ensure the existing `get_session_lock(session_id)` scope around the Cognito refresh exchange remains exactly where it is today — do NOT move or widen it
@@ -95,7 +95,7 @@
     - _Preservation: 3.3, 3.5, 3.11 — unrecoverable cookie clearing, refresh-storm coalescing, uniform decode failure preserved_
     - _Requirements: 2.3, 2.7_
 
-  - [ ] 3.5 Convert `_maybe_slide` to fire-and-forget DDB write
+  - [x] 3.5 Convert `_maybe_slide` to fire-and-forget DDB write
     - Edit `backend/src/apis/shared/middleware/session_refresh.py`
     - In `_maybe_slide`, update the local cache synchronously (`record.last_seen_at = now`, `record.ttl = new_ttl`, `self._cache.set(record)`) BEFORE scheduling the background task
     - Replace `await self._repository.touch_last_seen(...)` with `asyncio.create_task(self._slide_write_task(...))`
@@ -108,7 +108,7 @@
     - _Preservation: 3.4, 3.9 — Max-Age re-emit contract and absolute-lifetime cap preserved_
     - _Requirements: 2.5_
 
-  - [ ] 3.6 De-align cache/leeway and throttle windows in config
+  - [x] 3.6 De-align cache/leeway and throttle windows in config
     - Edit `backend/src/apis/shared/sessions_bff/config.py`
     - Change `_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS` from `60` to `60 * 5` (or explicit `300`)
     - Verify `_DEFAULT_REFRESH_LEEWAY_SECONDS` remains `60`
@@ -119,7 +119,7 @@
     - _Preservation: none impacted (pure default-value change; overrides preserved)_
     - _Requirements: 2.4_
 
-  - [ ] 3.7 Raise production `appApi.desiredCount` to 2
+  - [x] 3.7 Raise production `appApi.desiredCount` to 2
     - Edit `infrastructure/cdk.context.json` to set `appApi.desiredCount` to `2` in the production/non-test context
     - Keep `appApi.maxCapacity` unchanged (4)
     - Test fixtures under `infrastructure/test/` may stay at `1` if needed for CDK unit-test speed; only the top-level production context value must change
@@ -129,7 +129,7 @@
     - _Preservation: none impacted (deployment-config change; in-process singletons untouched)_
     - _Requirements: 2.6_
 
-  - [ ] 3.8 Verify bug condition exploration test now passes
+  - [x] 3.8 Verify bug condition exploration test now passes
     - **Property 1: Expected Behavior** - Event-Loop Non-Blocking, Coalesced, Window-Staggered, Fire-and-Forget BFF Middleware
     - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
     - The test from task 1 encodes the expected behavior from design Property 1
@@ -143,7 +143,7 @@
       - `appApi.desiredCount >= 2` in production context (1.6)
     - _Requirements: Expected Behavior Properties from design (2.1–2.7)_
 
-  - [ ] 3.9 Verify preservation tests still pass
+  - [x] 3.9 Verify preservation tests still pass
     - **Property 2: Preservation** - BFF Middleware Contracts Unchanged for Non-Buggy Inputs
     - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
     - Run: `cd backend && uv run python -m pytest tests/apis/shared/middleware/test_session_refresh_preservation.py -v`
@@ -160,7 +160,7 @@
       - Uniform `CookieDecodeError` handling preserved (3.11)
     - Confirm all tests still pass after fix (no regressions)
 
-- [ ] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Run the full backend test suite: `cd backend && uv run python -m pytest tests/ -v`
   - Run CDK unit tests: `cd infrastructure && npm run build && npm test`
   - Confirm the bug condition exploration test (task 1) passes on fixed code

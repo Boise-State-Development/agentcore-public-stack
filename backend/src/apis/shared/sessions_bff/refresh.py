@@ -15,6 +15,7 @@ the previous refresh token.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -156,9 +157,15 @@ class CognitoRefreshClient:
             return self._cognito_idp
         return boto3.client("cognito-idp", region_name=self._region)
 
-    def refresh(self, *, username: str, refresh_token: str) -> RefreshResult:
-        """Call Cognito to exchange the refresh token for a fresh access
-        token. Raises `CognitoRefreshError` on any failure."""
+    def _refresh_sync(self, *, username: str, refresh_token: str) -> RefreshResult:
+        """Synchronous Cognito refresh exchange.
+
+        This is the raw boto3 path — kept private so callers can't invoke it
+        directly from the event loop. Use :meth:`refresh` instead, which
+        offloads this call via ``asyncio.to_thread`` so the uvicorn event
+        loop stays responsive (and so other sessions' ``get_session_lock``
+        acquisitions can still progress while ours is held).
+        """
         if not self.enabled:
             raise CognitoRefreshError("BFF refresh client is not configured")
 
@@ -186,4 +193,23 @@ class CognitoRefreshClient:
             refresh_token=result.get("RefreshToken") or refresh_token,
             id_token=result.get("IdToken"),
             access_token_exp=int(time.time()) + expires_in,
+        )
+
+    async def refresh(self, *, username: str, refresh_token: str) -> RefreshResult:
+        """Exchange the refresh token for a fresh access token, off the loop.
+
+        Offloads the synchronous boto3 ``initiate_auth`` call via
+        ``asyncio.to_thread`` so the event loop keeps scheduling other
+        coroutines while Cognito is in flight. Critically, this matters
+        while the per-session ``get_session_lock(session_id)`` is held —
+        unrelated sessions' locks must remain acquirable on the loop.
+
+        The exception contract and :class:`RefreshResult` return shape are
+        identical to :meth:`_refresh_sync`: ``CognitoRefreshError`` is
+        raised on any Cognito failure and should be treated as terminal.
+        """
+        return await asyncio.to_thread(
+            self._refresh_sync,
+            username=username,
+            refresh_token=refresh_token,
         )

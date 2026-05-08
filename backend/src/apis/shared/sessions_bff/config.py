@@ -29,9 +29,12 @@ _DEFAULT_REFRESH_LEEWAY_SECONDS = 60
 # fail anyway, so there's no value in carrying the cookie further.
 _DEFAULT_ABSOLUTE_LIFETIME_SECONDS = 30 * 24 * 3600
 # Don't write to DDB / re-emit cookies on every request; coalesce to once per
-# minute. Tabs that hit the BFF more often than this just ride the existing
-# row.
-_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS = 60
+# 5 minutes. Kept a strict multiple of `_DEFAULT_REFRESH_LEEWAY_SECONDS` (60s)
+# so cache-expiry (TTL = leeway) and slide-throttle boundaries are never
+# aligned — without this, a single request crossing the 60s boundary would
+# incur BOTH a `get_item` AND an `update_item` on the critical path. De-
+# alignment keeps a cache-miss request from also paying the slide-write cost.
+_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS = 60 * 5
 
 
 @dataclass(frozen=True)

@@ -43,6 +43,7 @@ from apis.shared.sessions_bff.refresh import (
     CognitoRefreshError,
 )
 from apis.shared.sessions_bff.repository import SessionRepository
+from apis.shared.sessions_bff.single_flight import resolve_once
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,13 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         past it, the cookie is allowed to expire on its own original Max-Age
         — we don't extend, but we also don't proactively clear (the user
         might still complete the in-flight request).
+
+        The DDB `touch_last_seen` write is dispatched as a detached
+        `asyncio.Task` — the response path must not wait on it. The local
+        cache is updated synchronously BEFORE scheduling so subsequent
+        same-request reads (and the next cache window) see the slid state
+        even if the background write hasn't landed yet. Today's "swallow
+        failures" semantics are preserved inside `_slide_write_task`.
         """
         assert self._config is not None
         now = int(time.time())
@@ -165,25 +173,49 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             return None
 
         new_ttl = now + new_max_age
-        try:
-            await self._repository.touch_last_seen(
-                record.session_id, last_seen_at=now, ttl=new_ttl
-            )
-        except Exception as exc:
-            # Don't fail the request if the slide-write fails — the user
-            # still has a valid session for the rest of its current TTL.
-            logger.warning(
-                "BFF session slide failed for %s: %s", record.session_id, exc
-            )
-            return None
 
-        # Reflect the slide locally so subsequent same-request reads (and the
-        # cache) don't think the row still needs a slide.
+        # Reflect the slide locally BEFORE dispatching the background write
+        # so subsequent same-request reads (and the cache) don't think the
+        # row still needs a slide — even if the background task hasn't yet
+        # landed the DDB write.
         record.last_seen_at = now
         record.ttl = new_ttl
         if self._cache is not None:
             self._cache.set(record)
+
+        # Fire-and-forget: the response path MUST NOT wait on the DDB write.
+        # Failures are swallowed inside `_slide_write_task` (preserving
+        # today's "slide failures are non-fatal" semantics — the user still
+        # has a valid session for the rest of its current TTL).
+        asyncio.create_task(
+            self._slide_write_task(
+                session_id=record.session_id,
+                last_seen_at=now,
+                ttl=new_ttl,
+            )
+        )
         return new_max_age
+
+    async def _slide_write_task(
+        self, *, session_id: str, last_seen_at: int, ttl: int
+    ) -> None:
+        """Background helper for `_maybe_slide`'s fire-and-forget DDB write.
+
+        Swallows exceptions so a DDB blip doesn't surface as an unhandled
+        task exception — today's inline slide-write already swallowed
+        failures, and we preserve that contract verbatim. The local cache
+        was updated synchronously in `_maybe_slide` before this task was
+        scheduled, so the user keeps seeing the slid state for the rest of
+        their current cache window.
+        """
+        try:
+            await self._repository.touch_last_seen(
+                session_id, last_seen_at=last_seen_at, ttl=ttl
+            )
+        except Exception as exc:
+            logger.warning(
+                "BFF session slide failed for %s: %s", session_id, exc
+            )
 
     async def _persist_refresh(
         self,
@@ -247,6 +279,21 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
 
         `should_clear_cookie` is True when the cookie is present but
         unrecoverable — bad seal, missing row, expired TTL, or refresh failure.
+
+        Cookie unseal happens before the single-flight wrap so a bad seal
+        short-circuits without registering a Future (and without keying the
+        registry off an untrusted session id). Once we have a validated
+        session id, the cache → `repository.get` → `needs_refresh` →
+        (maybe refresh) path is coalesced through `resolve_once` so an
+        Angular page-load fan-out of N same-session requests issues at most
+        one DynamoDB `get_item` per cache window.
+
+        The per-session `get_session_lock(session_id)` around the Cognito
+        refresh exchange stays exactly where it is today — the single-flight
+        sits upstream of it. In the common case that the single-flight
+        already coalesces N callers to one loader invocation, only the
+        leader ever reaches the refresh lock; the existing one-`initiate_auth`-
+        per-`session_id`-per-leeway-window contract is preserved end-to-end.
         """
         try:
             payload = self._cookie_codec.unseal(cookie_value)
@@ -256,92 +303,95 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
 
         session_id = payload.session_id
 
-        cached = self._cache.get(session_id) if self._cache else None
-        if cached is not None and not cached.needs_refresh(
-            int(time.time()), self._config.refresh_leeway_seconds
-        ):
-            return cached, False
-
-        record = await self._repository.get(session_id)
-        if record is None:
-            logger.info("Discarding BFF cookie — no matching session row")
-            return None, True
-
-        if not record.needs_refresh(
-            int(time.time()), self._config.refresh_leeway_seconds
-        ):
-            self._cache.set(record)
-            return record, False
-
-        # Coalesce concurrent refreshes for the same session id.
-        async with get_session_lock(session_id):
-            # Re-check after acquiring the lock — another waiter may have
-            # already refreshed, in which case we serve the fresh row.
-            current = await self._repository.get(session_id)
-            if current is None:
-                return None, True
-            if not current.needs_refresh(
+        async def _loader() -> tuple[Optional[SessionRecord], bool]:
+            cached = self._cache.get(session_id) if self._cache else None
+            if cached is not None and not cached.needs_refresh(
                 int(time.time()), self._config.refresh_leeway_seconds
             ):
-                self._cache.set(current)
-                return current, False
+                return cached, False
 
-            try:
-                refreshed = self._refresh_client.refresh(
-                    username=current.username,
-                    refresh_token=current.cognito_refresh_token,
+            record = await self._repository.get(session_id)
+            if record is None:
+                logger.info("Discarding BFF cookie — no matching session row")
+                return None, True
+
+            if not record.needs_refresh(
+                int(time.time()), self._config.refresh_leeway_seconds
+            ):
+                self._cache.set(record)
+                return record, False
+
+            # Coalesce concurrent refreshes for the same session id.
+            async with get_session_lock(session_id):
+                # Re-check after acquiring the lock — another waiter may have
+                # already refreshed, in which case we serve the fresh row.
+                current = await self._repository.get(session_id)
+                if current is None:
+                    return None, True
+                if not current.needs_refresh(
+                    int(time.time()), self._config.refresh_leeway_seconds
+                ):
+                    self._cache.set(current)
+                    return current, False
+
+                try:
+                    refreshed = await self._refresh_client.refresh(
+                        username=current.username,
+                        refresh_token=current.cognito_refresh_token,
+                    )
+                except CognitoRefreshError:
+                    # Refresh refused — treat as terminal, force re-login.
+                    self._cache.invalidate(session_id)
+                    return None, True
+
+                now = int(time.time())
+                # Slide the row's DDB TTL alongside the token rotation: the user
+                # is provably active. Capped at `created_at + absolute_lifetime`
+                # so a long-lived browser tab can't roll the session forever.
+                absolute_cap = (
+                    current.created_at + self._config.absolute_lifetime_seconds
                 )
-            except CognitoRefreshError:
-                # Refresh refused — treat as terminal, force re-login.
-                self._cache.invalidate(session_id)
-                return None, True
+                new_ttl = min(
+                    now + self._config.session_ttl_seconds,
+                    absolute_cap,
+                )
+                # Detect refresh-token rotation. When Cognito rotates, the OLD
+                # refresh token is dead the moment the new one is issued — so a
+                # DDB write failure here means the session is unrecoverable on
+                # the *next* request even though *this* one succeeded. Retry
+                # aggressively, then fail-closed (clear cookie now) so the user
+                # re-auths immediately rather than getting silently 401'd later.
+                # Without rotation, the previous refresh token is still valid,
+                # so a DDB write failure is benign: the next request will just
+                # re-trigger refresh with the same (still good) refresh token.
+                rotated = refreshed.refresh_token != current.cognito_refresh_token
+                persist_ok = await self._persist_refresh(
+                    session_id=session_id,
+                    refreshed=refreshed,
+                    last_seen_at=now,
+                    ttl=new_ttl,
+                    rotated=rotated,
+                )
+                if not persist_ok:
+                    self._cache.invalidate(session_id)
+                    return None, True
+                updated = SessionRecord(
+                    session_id=current.session_id,
+                    user_id=current.user_id,
+                    username=current.username,
+                    cognito_access_token=refreshed.access_token,
+                    cognito_refresh_token=refreshed.refresh_token,
+                    id_token=refreshed.id_token,
+                    access_token_exp=refreshed.access_token_exp,
+                    csrf_secret=current.csrf_secret,
+                    created_at=current.created_at,
+                    last_seen_at=now,
+                    ttl=new_ttl,
+                )
+                self._cache.set(updated)
+                return updated, False
 
-            now = int(time.time())
-            # Slide the row's DDB TTL alongside the token rotation: the user
-            # is provably active. Capped at `created_at + absolute_lifetime`
-            # so a long-lived browser tab can't roll the session forever.
-            absolute_cap = (
-                current.created_at + self._config.absolute_lifetime_seconds
-            )
-            new_ttl = min(
-                now + self._config.session_ttl_seconds,
-                absolute_cap,
-            )
-            # Detect refresh-token rotation. When Cognito rotates, the OLD
-            # refresh token is dead the moment the new one is issued — so a
-            # DDB write failure here means the session is unrecoverable on
-            # the *next* request even though *this* one succeeded. Retry
-            # aggressively, then fail-closed (clear cookie now) so the user
-            # re-auths immediately rather than getting silently 401'd later.
-            # Without rotation, the previous refresh token is still valid,
-            # so a DDB write failure is benign: the next request will just
-            # re-trigger refresh with the same (still good) refresh token.
-            rotated = refreshed.refresh_token != current.cognito_refresh_token
-            persist_ok = await self._persist_refresh(
-                session_id=session_id,
-                refreshed=refreshed,
-                last_seen_at=now,
-                ttl=new_ttl,
-                rotated=rotated,
-            )
-            if not persist_ok:
-                self._cache.invalidate(session_id)
-                return None, True
-            updated = SessionRecord(
-                session_id=current.session_id,
-                user_id=current.user_id,
-                username=current.username,
-                cognito_access_token=refreshed.access_token,
-                cognito_refresh_token=refreshed.refresh_token,
-                id_token=refreshed.id_token,
-                access_token_exp=refreshed.access_token_exp,
-                csrf_secret=current.csrf_secret,
-                created_at=current.created_at,
-                last_seen_at=now,
-                ttl=new_ttl,
-            )
-            self._cache.set(updated)
-            return updated, False
+        return await resolve_once(session_id, _loader)
 
     @staticmethod
     def _reemit_cookies(

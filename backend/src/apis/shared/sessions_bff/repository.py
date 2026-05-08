@@ -15,6 +15,7 @@ the cleanup paths, DynamoDB will eventually evict it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -31,11 +32,16 @@ logger = logging.getLogger(__name__)
 class SessionRepository:
     """Async-shaped wrapper over the BFF sessions DynamoDB table.
 
-    The methods are declared `async` to match the rest of `apis.shared`,
-    but boto3 is sync — calls run on the event loop thread. That mirrors
-    `UserRepository` and is intentional: refresh-storm coalescing happens
-    one layer up via `get_session_lock()`, so the lookup itself never
-    fans out enough to need a thread pool.
+    The methods are ``async def`` and offload each boto3 call via
+    ``asyncio.to_thread`` so the uvicorn event loop stays free to schedule
+    unrelated coroutines during the DynamoDB round-trip. Without this
+    offload, a single slow DDB call freezes every in-flight request — and
+    under page-load fan-out the blocking calls serialize, producing the
+    80s+ latency tails that motivated the event-loop-blocking bugfix.
+
+    The ``_item_to_record`` translation and the post-read TTL
+    defense-in-depth check run on the calling coroutine (pure Python, no
+    I/O); only the boto3 round-trip is offloaded.
     """
 
     def __init__(self, table_name: Optional[str] = None) -> None:
@@ -100,8 +106,14 @@ class SessionRepository:
     async def get(self, session_id: str) -> Optional[SessionRecord]:
         if not self._enabled:
             return None
+
+        key = self._key(session_id)
+
+        def _call() -> dict:
+            return self._table.get_item(Key=key)
+
         try:
-            response = self._table.get_item(Key=self._key(session_id))
+            response = await asyncio.to_thread(_call)
         except ClientError as exc:
             logger.error("BFF session get_item failed for %s: %s", session_id, exc)
             return None
@@ -118,7 +130,13 @@ class SessionRepository:
     async def put(self, record: SessionRecord) -> None:
         if not self._enabled:
             return
-        self._table.put_item(Item=self._record_to_item(record))
+
+        item = self._record_to_item(record)
+
+        def _call() -> None:
+            self._table.put_item(Item=item)
+
+        await asyncio.to_thread(_call)
 
     async def update_tokens(
         self,
@@ -159,7 +177,7 @@ class SessionRepository:
         if ttl is not None:
             update_expr += ", #ttl = :ttl"
             expr_values[":ttl"] = ttl
-        kwargs = {
+        kwargs: dict = {
             "Key": self._key(session_id),
             "UpdateExpression": update_expr,
             "ExpressionAttributeValues": expr_values,
@@ -167,7 +185,11 @@ class SessionRepository:
         if ttl is not None:
             # `ttl` is a reserved word in DynamoDB expressions.
             kwargs["ExpressionAttributeNames"] = {"#ttl": "ttl"}
-        self._table.update_item(**kwargs)
+
+        def _call() -> None:
+            self._table.update_item(**kwargs)
+
+        await asyncio.to_thread(_call)
 
     async def touch_last_seen(
         self,
@@ -195,8 +217,12 @@ class SessionRepository:
             expr_values[":ttl"] = ttl
             kwargs["UpdateExpression"] = update_expr
             kwargs["ExpressionAttributeNames"] = {"#ttl": "ttl"}
-        try:
+
+        def _call() -> None:
             self._table.update_item(**kwargs)
+
+        try:
+            await asyncio.to_thread(_call)
         except ClientError as exc:
             # Touch failures are non-critical — log and move on rather than
             # surfacing as a request error.
@@ -205,4 +231,10 @@ class SessionRepository:
     async def delete(self, session_id: str) -> None:
         if not self._enabled:
             return
-        self._table.delete_item(Key=self._key(session_id))
+
+        key = self._key(session_id)
+
+        def _call() -> None:
+            self._table.delete_item(Key=key)
+
+        await asyncio.to_thread(_call)
