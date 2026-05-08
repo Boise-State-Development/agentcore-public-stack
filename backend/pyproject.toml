@@ -39,6 +39,10 @@ dependencies = [
     "cryptography==47.0.0",
     "python-multipart==0.0.27",
     "aiohttp==3.13.5",
+
+    # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
+    # Bundles PDFium (no system poppler/ghostscript needed).
+    "pypdfium2==4.30.0",
 ]
 
 [project.optional-dependencies]

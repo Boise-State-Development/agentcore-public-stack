@@ -106,6 +106,9 @@ const FILE_TYPE_STYLES: Record<string, FileTypeStyle> = {
 
 const TEXT_PREVIEW_MIMES = new Set(['text/plain', 'text/markdown', 'text/csv', 'text/html']);
 
+/** MIME types where the backend can produce a real first-page thumbnail. */
+const THUMBNAIL_PREVIEW_MIMES = new Set(['application/pdf']);
+
 /** Skeleton "lines of text" widths (percent), tuned to look like a paragraph. */
 const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
 
@@ -250,7 +253,15 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
           aria-hidden="true"
         ></div>
 
-        @if (snippetState() === 'ready' && hasSnippet()) {
+        @if (thumbnailUrl(); as url) {
+          <img
+            [src]="url"
+            [alt]="'First page of ' + attachment().filename"
+            class="size-full object-cover object-top"
+            loading="lazy"
+            decoding="async"
+          />
+        } @else if (snippetState() === 'ready' && hasSnippet()) {
           @if (isMarkdown()) {
             <div class="md-card-preview h-full overflow-hidden px-3 py-2">
               <markdown [data]="truncatedSnippet()" />
@@ -271,11 +282,14 @@ const SKELETON_LINE_WIDTHS = [92, 78, 88, 64, 95, 70, 84, 58];
           </div>
         }
 
-        <!-- Bottom fade for long text -->
-        <div
-          class="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900/40"
-          aria-hidden="true"
-        ></div>
+        <!-- Bottom fade for long text. Suppressed when a thumbnail is shown
+             so the rendered page edge stays crisp. -->
+        @if (!thumbnailUrl()) {
+          <div
+            class="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900/40"
+            aria-hidden="true"
+          ></div>
+        }
       </div>
 
       <!-- Footer -->
@@ -309,6 +323,10 @@ export class FileAttachmentBadgeComponent {
   private readonly snippet = signal<string>('');
   protected readonly markdownModalOpen = signal(false);
 
+  /** Presigned URL for a real first-page thumbnail (PDFs today). null on
+      unsupported types or render failure — caller falls back to skeleton. */
+  protected readonly thumbnailUrl = signal<string | null>(null);
+
   protected readonly formattedSize = computed(() => formatBytes(this.attachment().sizeBytes));
 
   protected readonly style = computed<FileTypeStyle>(
@@ -331,6 +349,9 @@ export class FileAttachmentBadgeComponent {
       if (TEXT_PREVIEW_MIMES.has(att.mimeType)) {
         this.loadSnippet(att.uploadId);
       }
+      if (THUMBNAIL_PREVIEW_MIMES.has(att.mimeType)) {
+        this.loadThumbnail(att.uploadId);
+      }
     });
   }
 
@@ -343,6 +364,11 @@ export class FileAttachmentBadgeComponent {
     } catch {
       this.snippetState.set('error');
     }
+  }
+
+  private async loadThumbnail(uploadId: string): Promise<void> {
+    const result = await this.fileUploadService.getThumbnail(uploadId);
+    this.thumbnailUrl.set(result.status === 'ready' ? result.response.url : null);
   }
 
   protected async openFile(): Promise<void> {

@@ -99,6 +99,26 @@ export interface TextSnippetResponse {
 }
 
 /**
+ * Response from GET /files/{uploadId}/thumbnail
+ */
+export interface ThumbnailResponse {
+  uploadId: string;
+  url: string;
+  expiresAt: string;
+  cached: boolean;
+}
+
+/**
+ * Outcome of a thumbnail fetch — `unsupported` (415) and `unavailable`
+ * (404/422/network) collapse into typed states the UI can switch on
+ * without parsing HTTP errors at the call site.
+ */
+export type ThumbnailFetchResult =
+  | { status: 'ready'; response: ThumbnailResponse }
+  | { status: 'unsupported' }
+  | { status: 'unavailable' };
+
+/**
  * File metadata from list/get operations
  */
 export interface FileMetadata {
@@ -600,6 +620,29 @@ export class FileUploadService {
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get text snippet');
+    }
+  }
+
+  /**
+   * Fetch a presigned URL for a PNG thumbnail of the file's first page.
+   *
+   * Backend lazy-renders on first call and caches the result, so subsequent
+   * calls return instantly. Distinguishes between "this file type can never
+   * have a thumbnail" (415 → `unsupported`) and "we tried but it didn't
+   * work" (404/422/network → `unavailable`) so the UI can decide whether
+   * to retry or give up.
+   */
+  async getThumbnail(uploadId: string): Promise<ThumbnailFetchResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`)
+      );
+      return { status: 'ready', response };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 415) {
+        return { status: 'unsupported' };
+      }
+      return { status: 'unavailable' };
     }
   }
 

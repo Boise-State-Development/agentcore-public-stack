@@ -273,6 +273,25 @@ class TextSnippetResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+# MIME types the thumbnail renderer can currently produce a preview image for.
+# Callers should consult this set before invoking the thumbnail endpoint to
+# avoid hammering the service for unsupported types.
+THUMBNAIL_SUPPORTED_MIME_TYPES = frozenset({
+    "application/pdf",
+})
+
+
+class ThumbnailResponse(BaseModel):
+    """Response for GET /api/files/{uploadId}/thumbnail."""
+
+    upload_id: str = Field(..., alias="uploadId")
+    url: str = Field(..., description="Short-lived presigned GET URL for a PNG thumbnail")
+    expires_at: str = Field(..., alias="expiresAt", description="ISO8601 expiration time")
+    cached: bool = Field(..., description="True if served from cache, False if newly rendered")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class FileResponse(BaseModel):
     """Single file in list response."""
 

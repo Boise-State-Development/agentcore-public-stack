@@ -4,6 +4,7 @@ File Upload Service
 Business logic for file uploads with S3 pre-signed URLs and quota management.
 """
 
+import asyncio
 import os
 import logging
 import uuid
@@ -22,11 +23,19 @@ from apis.shared.files.models import (
     CompleteUploadResponse,
     PreviewUrlResponse,
     TextSnippetResponse,
+    ThumbnailResponse,
+    THUMBNAIL_SUPPORTED_MIME_TYPES,
     FileResponse,
     FileListResponse,
     QuotaResponse,
     is_allowed_mime_type,
     ALLOWED_MIME_TYPES,
+)
+from .thumbnails import (
+    ThumbnailRenderer,
+    ThumbnailRenderError,
+    ThumbnailUnsupportedError,
+    get_thumbnail_renderer,
 )
 
 
@@ -103,6 +112,10 @@ class FileUploadService:
     - File listing and deletion
     """
 
+    # Sibling key, in the same per-upload S3 "folder" as the original.
+    # Stored alongside the original so cleanup happens with the file.
+    THUMBNAIL_KEY_NAME = "_thumb.png"
+
     def __init__(
         self,
         repository: Optional[FileUploadRepository] = None,
@@ -111,9 +124,11 @@ class FileUploadService:
         max_file_size: Optional[int] = None,
         max_files_per_message: Optional[int] = None,
         user_quota_bytes: Optional[int] = None,
+        thumbnail_renderer: Optional[ThumbnailRenderer] = None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_file_upload_repository()
+        self._thumbnail_renderer = thumbnail_renderer or get_thumbnail_renderer()
 
         # S3 configuration
         # Use region from AWS_REGION env var to ensure presigned URLs use regional endpoint
@@ -446,6 +461,155 @@ class FileUploadService:
         )
 
     # =========================================================================
+    # Thumbnails
+    # =========================================================================
+
+    def _thumbnail_s3_key(self, file_meta: FileMetadata) -> str:
+        """
+        Derive the sibling thumbnail key for an original file.
+
+        Originals live at ``user-files/{user}/{session}/{upload_id}/{filename}``,
+        thumbnails at ``user-files/{user}/{session}/{upload_id}/_thumb.png`` —
+        same parent prefix so cleanup paths can find both.
+        """
+        base, _, _ = file_meta.s3_key.rpartition("/")
+        return f"{base}/{self.THUMBNAIL_KEY_NAME}"
+
+    async def get_or_create_thumbnail(
+        self, user_id: str, upload_id: str
+    ) -> ThumbnailResponse:
+        """
+        Return a presigned URL for a PNG thumbnail of the file's first page.
+
+        Lazy-renders on first request: checks for a cached ``_thumb.png``
+        sibling object in S3, generates one synchronously if missing, then
+        returns a short-lived presigned URL. Subsequent calls hit the cache.
+
+        Args:
+            user_id: The owner's user ID.
+            upload_id: The upload identifier.
+
+        Returns:
+            ThumbnailResponse with a presigned GET URL and ``cached`` flag.
+
+        Raises:
+            FileNotFoundError: File not found, not owned, or not ready.
+            ThumbnailUnsupportedError: MIME type has no registered renderer.
+            ThumbnailRenderError: The file was unreadable / corrupt / encrypted.
+        """
+        file_meta = await self.repository.get_file(user_id, upload_id)
+        if not file_meta:
+            raise FileNotFoundError(f"File {upload_id} not found")
+
+        if file_meta.status != FileStatus.READY:
+            raise FileNotFoundError(
+                f"File {upload_id} is not ready (status: {file_meta.status})"
+            )
+
+        if file_meta.mime_type not in THUMBNAIL_SUPPORTED_MIME_TYPES:
+            raise ThumbnailUnsupportedError(
+                f"No thumbnail renderer for {file_meta.mime_type}"
+            )
+
+        thumb_key = self._thumbnail_s3_key(file_meta)
+
+        # Cache check via HEAD — cheap, no body transfer.
+        cached = True
+        try:
+            self._s3_client.head_object(Bucket=self.bucket_name, Key=thumb_key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                cached = False
+            else:
+                logger.error(f"HEAD failed for thumbnail {thumb_key}: {e}")
+                raise
+
+        if not cached:
+            await self._render_and_store_thumbnail(file_meta, thumb_key)
+
+        # Generate the presigned URL for the thumbnail. Use the same
+        # expiration window as preview URLs so the UI's caching expectations
+        # line up.
+        try:
+            url = self._s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": thumb_key,
+                    "ResponseContentType": "image/png",
+                },
+                ExpiresIn=self.preview_url_expiration,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to generate thumbnail presigned URL: {e}")
+            raise
+
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=self.preview_url_expiration)
+        ).isoformat() + "Z"
+
+        return ThumbnailResponse(
+            upload_id=upload_id,
+            url=url,
+            expires_at=expires_at,
+            cached=cached,
+        )
+
+    async def _render_and_store_thumbnail(
+        self, file_meta: FileMetadata, thumb_key: str
+    ) -> None:
+        """Stream the original from S3, rasterize page 1, store the PNG."""
+        try:
+            response = self._s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=file_meta.s3_key,
+            )
+            raw = response["Body"].read()
+        except ClientError as e:
+            logger.error(f"Failed to read source for thumbnail {file_meta.upload_id}: {e}")
+            raise ThumbnailRenderError(f"Failed to read source: {e}") from e
+
+        # Run the CPU-bound render off the event loop so we don't stall the
+        # request worker. pypdfium2 releases the GIL for the heavy bits.
+        loop = asyncio.get_event_loop()
+        png_bytes = await loop.run_in_executor(
+            None,
+            self._thumbnail_renderer.render,
+            file_meta.mime_type,
+            raw,
+        )
+
+        try:
+            self._s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=thumb_key,
+                Body=png_bytes,
+                ContentType="image/png",
+            )
+        except ClientError as e:
+            logger.error(f"Failed to write thumbnail {thumb_key}: {e}")
+            raise
+
+        logger.info(
+            f"Rendered thumbnail for upload {file_meta.upload_id} "
+            f"({len(png_bytes)} bytes)"
+        )
+
+    def _delete_thumbnail_object(self, file_meta: FileMetadata) -> None:
+        """
+        Best-effort delete of the thumbnail sibling.
+
+        S3 ``delete_object`` is idempotent — a missing key is not an error.
+        We swallow other errors so a broken thumbnail never blocks deletion
+        of the underlying file.
+        """
+        thumb_key = self._thumbnail_s3_key(file_meta)
+        try:
+            self._s3_client.delete_object(Bucket=self.bucket_name, Key=thumb_key)
+        except ClientError as e:
+            logger.warning(f"Failed to delete thumbnail {thumb_key}: {e}")
+
+    # =========================================================================
     # File Management
     # =========================================================================
 
@@ -487,6 +651,9 @@ class FileUploadService:
         except ClientError as e:
             logger.warning("Failed to delete S3 object", exc_info=True)
             # Continue with metadata deletion even if S3 fails
+
+        # Best-effort delete of the thumbnail sibling, if one exists.
+        self._delete_thumbnail_object(file_meta)
 
         # Delete metadata
         deleted = await self.repository.delete_file(user_id, upload_id)
@@ -631,6 +798,9 @@ class FileUploadService:
                 except ClientError as e:
                     logger.warning(f"Failed to delete S3 object for {file_meta.upload_id}: {e}")
                     # Continue with metadata deletion
+
+                # Best-effort delete of the thumbnail sibling, if one exists.
+                self._delete_thumbnail_object(file_meta)
 
                 # Delete metadata
                 deleted = await self.repository.delete_file(
