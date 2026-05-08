@@ -231,6 +231,227 @@ async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enable
 
 
 # ============================================================
+# Spreadsheet Analysis Tool Injection
+# ============================================================
+
+SPREADSHEET_TOOL_IDS = {"list_spreadsheets", "analyze_spreadsheet"}
+
+
+def _build_spreadsheet_tools(
+    enabled_tools: list | None,
+    assistant_id: str | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound spreadsheet analysis tools if enabled by the user."""
+    if not enabled_tools:
+        return []
+
+    requested = SPREADSHEET_TOOL_IDS.intersection(enabled_tools)
+    if not requested:
+        return []
+
+    from agents.builtin_tools.spreadsheet_analysis import make_list_spreadsheets_tool, make_analyze_tool
+
+    tools = []
+    if "list_spreadsheets" in requested:
+        tools.append(make_list_spreadsheets_tool(assistant_id, session_id, user_id))
+    if "analyze_spreadsheet" in requested:
+        tools.append(make_analyze_tool(assistant_id, session_id, user_id))
+
+    logger.info(f"Created {len(tools)} spreadsheet analysis tools (assistant={assistant_id})")
+    return tools
+
+
+# ============================================================
+# Attachment Partitioning (#206)
+# ============================================================
+
+def _estimate_decoded_size(file: "FileContent") -> int:
+    """Estimate decoded byte size of a base64-encoded FileContent payload.
+
+    Base64 inflates bytes by ~4/3, so decoded size ≈ len(b64) * 3 / 4.
+    This avoids allocating the full bytes just to check a threshold.
+    """
+    try:
+        # Account for base64 padding: strip "=" padding before estimating.
+        stripped = (file.bytes or "").rstrip("=")
+        return (len(stripped) * 3) // 4
+    except Exception:
+        return 0
+
+
+def _partition_attachments(
+    all_files: list,
+) -> tuple[list, list, list]:
+    """Split attachments into (inline_for_bedrock, tabular, oversized_non_tabular).
+
+    - Tabular files (csv/xlsx) are never sent inline — they route through
+      the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
+      from exploding on XLSX files that expand during internal parsing.
+    - Non-tabular files larger than INLINE_DOCUMENT_MAX_BYTES are dropped
+      from the inline set with a user-facing note, to prevent mid-stream
+      ValidationException on the raw AWS error path.
+    - Everything else rides along as a regular document/image content block.
+    """
+    from apis.shared.files.models import INLINE_DOCUMENT_MAX_BYTES, is_tabular_file
+
+    inline: list = []
+    tabular: list = []
+    oversized: list = []
+
+    for file in all_files:
+        if is_tabular_file(file.filename, file.content_type):
+            tabular.append(file)
+            continue
+        # Only size-gate non-image documents. Images have their own Bedrock
+        # limits (much larger) and the prompt builder reroutes them as
+        # image blocks, which are not affected by the document-size cap.
+        content_type = (file.content_type or "").lower()
+        is_image = content_type.startswith("image/")
+        if not is_image and _estimate_decoded_size(file) > INLINE_DOCUMENT_MAX_BYTES:
+            oversized.append(file)
+            continue
+        inline.append(file)
+
+    return inline, tabular, oversized
+
+
+def _build_attachment_guidance(
+    diverted_tabular: list,
+    oversized_inline: list,
+    enabled_tools: list | None,
+) -> str:
+    """Return a short markdown addendum describing how attachments will be
+    handled, to append to the user's message so the agent (and the user)
+    both understand why a file isn't inline.
+    """
+    parts: list[str] = []
+
+    if diverted_tabular:
+        names = ", ".join(f"`{f.filename}`" for f in diverted_tabular)
+        tool_is_enabled = bool(enabled_tools) and (
+            "analyze_spreadsheet" in enabled_tools or "list_spreadsheets" in enabled_tools
+        )
+        if tool_is_enabled:
+            parts.append(
+                f"_Attached spreadsheet(s) {names} are available through the "
+                f"Spreadsheet Analysis tool rather than inline — use "
+                f"`list_spreadsheets` to see them and `analyze_spreadsheet` "
+                f"to run aggregations or lookups._"
+            )
+        else:
+            parts.append(
+                f"_Attached spreadsheet(s) {names} can't be read inline at "
+                f"this size. To analyze them, enable **Spreadsheet Analysis** "
+                f"in the Tools section of the settings panel (gear icon next "
+                f"to the message input), then re-send your message._"
+            )
+
+    if oversized_inline:
+        names = ", ".join(f"`{f.filename}`" for f in oversized_inline)
+        parts.append(
+            f"_Attached file(s) {names} exceed the inline document size limit "
+            f"and were skipped. Try a smaller file, or convert to CSV/XLSX "
+            f"and use the Spreadsheet Analysis tool._"
+        )
+
+    return "\n\n".join(parts)
+
+
+def _build_tabular_inventory(
+    session_id: str,
+    assistant_id: str | None,
+    enabled_tools: list | None,
+) -> str:
+    """Inventory every tabular file visible to the agent this turn, and
+    prepend it to the user message when more than one exists.
+
+    Motivation: when the vector search returns chunks from multiple source
+    files with identical schemas (e.g. two monthly FY ledgers), the model
+    has no way to tell there's more than one spreadsheet at all — RAG
+    surfaces chunk content but not a full file inventory. The model picks
+    whichever file yielded the first high-ranked chunk and silently runs
+    analyze_spreadsheet against just that one. The user's "total" is
+    wrong by exactly the other file(s).
+
+    We ship the file list inline so the agent sees the full set at turn
+    start and can call list_spreadsheets / pick deliberately / ask the
+    user / aggregate across files. Only emitted when the analysis tools
+    are enabled (otherwise the agent can't act on it anyway) and when at
+    least two tabular files exist (one file isn't ambiguous).
+    """
+    if not enabled_tools:
+        return ""
+    tool_is_enabled = (
+        "analyze_spreadsheet" in enabled_tools
+        or "list_spreadsheets" in enabled_tools
+    )
+    if not tool_is_enabled:
+        return ""
+
+    # Lazy imports to avoid pulling the agent layer into module-load time
+    # on cold starts where this code path isn't exercised.
+    try:
+        from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
+            _get_kb_files,
+            _get_session_files,
+        )
+    except Exception:
+        return ""
+
+    files: list[dict] = []
+    try:
+        if assistant_id:
+            files.extend(_get_kb_files(assistant_id))
+        files.extend(_get_session_files(session_id))
+    except Exception:
+        logger.warning("Failed to enumerate tabular files for inventory", exc_info=True)
+        return ""
+
+    # De-duplicate by (filename, source) — a single file shouldn't be
+    # listed twice if our lookups overlap.
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for f in files:
+        key = (f.get("filename", ""), f.get("source", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(f)
+
+    if len(unique) < 2:
+        # Single file: no ambiguity, and list_spreadsheets covers discovery
+        # for the agent if it ever needs it.
+        return ""
+
+    def _fmt_size(n: int) -> str:
+        if n >= 1024 * 1024:
+            return f"{n / (1024 * 1024):.1f} MB"
+        if n >= 1024:
+            return f"{n // 1024} KB"
+        return f"{n} B"
+
+    lines = []
+    for f in unique:
+        name = f.get("filename", "")
+        source = "knowledge base" if f.get("source") == "knowledge_base" else "chat attachment"
+        size = _fmt_size(int(f.get("size_bytes") or 0))
+        lines.append(f"- `{name}` ({source}, {size})")
+
+    listing = "\n".join(lines)
+    return (
+        f"_Multiple spreadsheet files are attached. Before running "
+        f"`analyze_spreadsheet`, decide which file(s) the user's request "
+        f"refers to — if it's ambiguous or spans multiple files, call "
+        f"`list_spreadsheets` and/or ask the user rather than picking one "
+        f"silently. State which file(s) you analyzed in your response._\n\n"
+        f"**Available spreadsheets:**\n{listing}"
+    )
+
+
+
+# ============================================================
 # Helper Functions for Streaming Error/Status Messages
 # ============================================================
 
@@ -357,8 +578,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.file_upload_ids:
         logger.info(f"File upload IDs: {len(input_data.file_upload_ids)} IDs to resolve")
 
-    # Resolve file upload IDs to FileContent objects
-    files_to_send = list(input_data.files) if input_data.files else []
+    # Resolve file upload IDs to FileContent objects, then partition:
+    #   - inline_files: images + non-tabular documents that Bedrock can
+    #     ingest directly as document content blocks
+    #   - tabular_files: csv/xlsx, which we intentionally NEVER send inline
+    #     because XLSX in particular inflates dramatically inside Bedrock
+    #     (1.4MB zipped → >4.5MB internal, triggering ValidationException).
+    #     They remain available to the agent via list_spreadsheets /
+    #     analyze_spreadsheet, which run pandas on the real file. See #206.
+    #   - oversized_files: non-tabular docs that exceed our inline size
+    #     budget; we skip them inline and surface a note instead of
+    #     letting Bedrock reject the turn.
+    all_files = list(input_data.files) if input_data.files else []
 
     if input_data.file_upload_ids:
         try:
@@ -368,13 +599,26 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 upload_ids=input_data.file_upload_ids,
                 max_files=5,  # Bedrock document limit
             )
-            # Convert ResolvedFileContent to FileContent
             for rf in resolved_files:
-                files_to_send.append(FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes))
+                all_files.append(
+                    FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
+                )
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
-        except Exception as e:
-            logger.warning("Failed to resolve file upload IDs")
+        except Exception:
+            logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request
+
+    files_to_send, diverted_tabular, oversized_inline = _partition_attachments(all_files)
+    if diverted_tabular:
+        logger.info(
+            f"Diverted {len(diverted_tabular)} tabular file(s) from inline document blocks; "
+            f"available via spreadsheet tools: {[f.filename for f in diverted_tabular]}"
+        )
+    if oversized_inline:
+        logger.warning(
+            f"Skipped {len(oversized_inline)} oversized file(s) (> inline limit): "
+            f"{[(f.filename, _estimate_decoded_size(f)) for f in oversized_inline]}"
+        )
 
     # Pre-create session metadata so OAuth interrupts and other state can
     # attach to the session row from turn one. Best-effort; on failure the
@@ -637,11 +881,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 if existing_metadata:
-                    # Update existing metadata with assistant_id in preferences
-                    prefs_dict = existing_metadata.preferences.model_dump(by_alias=False) if existing_metadata.preferences else {}
+                    # Update existing metadata: merge assistant_id into the
+                    # preferences sub-model. The top-level SessionMetadata has
+                    # no assistant_id field, so applying the update there
+                    # (previous behavior) silently did nothing under
+                    # extra="allow" and left preferences.assistant_id=None.
+                    # That broke the mid-session validation above on turn 2+
+                    # because the check relies on preferences.assistant_id to
+                    # recognize an already-attached assistant (#205).
+                    prefs_dict = (
+                        existing_metadata.preferences.model_dump(by_alias=False)
+                        if existing_metadata.preferences
+                        else {}
+                    )
                     prefs_dict["assistant_id"] = input_data.rag_assistant_id
+                    merged_preferences = SessionPreferences(**prefs_dict)
 
-                    updated_metadata = existing_metadata.model_copy(update={"assistant_id": input_data.rag_assistant_id})
+                    updated_metadata = existing_metadata.model_copy(
+                        update={"preferences": merged_preferences}
+                    )
 
                 else:
                     # Create new metadata with assistant_id in preferences
@@ -750,6 +1008,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if caching_enabled is False:
                 logger.info("Prompt caching disabled for model")
 
+            # Get agent instance with user-specific configuration
+            # AgentCore Memory tracks preferences across sessions per user_id
+            # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
+            # Use augmented message and assistant system prompt if assistant RAG was applied
+
+            # Spreadsheet tools scoped to the assistant's document corpus,
+            # when an assistant is attached to this request. The frontend
+            # keeps the assistant id in the URL for the whole session's
+            # lifetime, so we can trust `input_data.rag_assistant_id`
+            # directly; no preferences fallback needed.
+            extra_tools = _build_spreadsheet_tools(
+                enabled_tools=input_data.enabled_tools,
+                assistant_id=input_data.rag_assistant_id,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            )
+
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -761,6 +1036,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 provider=input_data.provider,
                 inference_params=inference_params,
                 agent_type=input_data.agent_type,
+                extra_tools=extra_tools,
                 is_resume=False,
             )
 
@@ -821,11 +1097,33 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # will be modified before reaching the model. This happens when:
             #   1. RAG augmentation prepends context chunks to the message
             #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            #   3. Attachment guidance is appended (tabular routed to tools, etc.)
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            attachment_guidance = _build_attachment_guidance(
+                diverted_tabular, oversized_inline, input_data.enabled_tools
+            )
+            # When multiple spreadsheets are visible, ship the full inventory
+            # up front so the agent can disambiguate intentionally instead of
+            # silently picking whichever file the vector search ranked first.
+            tabular_inventory = _build_tabular_inventory(
+                session_id=input_data.session_id,
+                assistant_id=input_data.rag_assistant_id,
+                enabled_tools=input_data.enabled_tools,
+            )
+            # Bind to a new local so we don't trip Python's local-scope rules
+            # inside this generator closure (augmented_message is defined in
+            # the outer function; reassigning it here would make the whole
+            # name local and UnboundLocalError before the assignment runs).
+            final_message = augmented_message
+            if attachment_guidance:
+                final_message = f"{final_message}\n\n{attachment_guidance}"
+            if tabular_inventory:
+                final_message = f"{final_message}\n\n{tabular_inventory}"
+
             message_will_be_modified = (
-                augmented_message != input_data.message  # RAG augmentation
-                or bool(files_to_send)                   # File attachments
+                final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
+                or bool(files_to_send)               # File attachments
             )
             # Strands' resume protocol wants each entry wrapped as
             # {"interruptResponse": {...}}. The InvocationRequest schema
@@ -838,7 +1136,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             )
 
             async for event in agent.stream_async(
-                augmented_message,
+                final_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
                 citations=citations_for_storage if citations_for_storage else None,

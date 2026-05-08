@@ -160,6 +160,21 @@ export class SessionList {
   }
 
   /**
+   * Gets the queryParams for a session's routerLink. When the session has
+   * an assistant attached in preferences, we include it in the URL so the
+   * session page can load the assistant without a second round-trip. Keeping
+   * the URL the single source of truth also avoids a race where the user
+   * sends a message before the metadata fetch hydrates preferences.
+   *
+   * @param session - Session metadata from the list
+   * @returns queryParams object for routerLink, or null when no assistant
+   */
+  protected getSessionQueryParams(session: SessionMetadata): Record<string, string> | null {
+    const assistantId = session.preferences?.assistantId;
+    return assistantId ? { assistantId } : null;
+  }
+
+  /**
    * Formats a timestamp for display.
    * Shows relative time if recent, otherwise shows date.
    * @param timestamp - ISO 8601 timestamp string

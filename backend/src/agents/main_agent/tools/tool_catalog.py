@@ -84,6 +84,22 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         icon="code-bracket",
     ),
 
+    # --- Built-in Tools (Spreadsheet Analysis) ---
+    "list_spreadsheets": ToolMetadata(
+        tool_id="list_spreadsheets",
+        name="List Spreadsheet Files",
+        description="List spreadsheet files available for analysis from the assistant's knowledge base or conversation attachments.",
+        category=ToolCategory.DATA,
+        icon="folder-open",
+    ),
+    "analyze_spreadsheet": ToolMetadata(
+        tool_id="analyze_spreadsheet",
+        name="Spreadsheet Analysis",
+        description="Analyze spreadsheet data using Python code. Use for aggregations, comparisons, trends, filtering, and chart generation. For simple factual lookups, use the knowledge base search instead.",
+        category=ToolCategory.DATA,
+        icon="table-cells",
+    ),
+
     # --- Gateway/MCP Tools ---
     # These are loaded dynamically from the gateway but we define metadata here
     # for the admin UI. Actual tool availability depends on gateway configuration.

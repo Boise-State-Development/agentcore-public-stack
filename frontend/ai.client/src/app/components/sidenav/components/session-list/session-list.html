@@ -33,6 +33,7 @@
                                     } @else {
                                         <a
                                             [routerLink]="['/s', getSessionId(session.sessionId)]"
+                                            [queryParams]="getSessionQueryParams(session)"
                                             routerLinkActive="bg-gray-200 !text-secondary-500 dark:bg-white/5 dark:!text-white"
                                             (click)="onSessionClick()"
                                             class="flex gap-x-3 rounded-md px-2 py-2 pr-10 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
