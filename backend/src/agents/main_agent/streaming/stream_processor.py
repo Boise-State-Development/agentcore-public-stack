@@ -1092,7 +1092,16 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
                     metadata_data["metrics"] = metrics_data
             
             if metadata_data:
-                metadata_event = _create_event("metadata", metadata_data)
+                # Emit on the turn-summary track, NOT the per-message track.
+                # `result.metrics.accumulated_usage` is summed across every
+                # LLM call in the turn (Strands' EventLoopMetrics). If we
+                # emitted this as a `metadata` event, the stream coordinator
+                # would route it into per_message_metadata[last] and clobber
+                # that message's per-call usage — pricing each entry would
+                # then double-count earlier messages' input tokens. The
+                # main loop also accumulates `metadata_summary` events
+                # (see below), so the final summary stays cumulative.
+                metadata_event = _create_event("metadata_summary", metadata_data)
                 events.append(metadata_event)
 
     # Check for metadata in nested event structure (like content blocks)
@@ -1311,8 +1320,14 @@ async def process_agent_stream(
             # NOTE: timeToFirstByteMs from provider will be stored in metrics
             # and the coordinator can use it as a fallback if first_token_time is not set
             for processed_event in _handle_metadata_events(event):
-                # Accumulate metadata for summary
-                if processed_event.get("type") == "metadata":
+                # Accumulate metadata for the final summary. Both per-call
+                # `metadata` events (each LLM call's usage) and the
+                # turn-cumulative `metadata_summary` event (extracted from
+                # AgentResult.metrics.accumulated_usage) feed this dict —
+                # the cumulative event arrives last and `update()` makes it
+                # last-write-wins, so accumulated_metadata ends the turn
+                # carrying true totals.
+                if processed_event.get("type") in ("metadata", "metadata_summary"):
                     event_data = processed_event.get("data", {})
                     if "usage" in event_data:
                         accumulated_metadata["usage"].update(event_data["usage"])
@@ -1336,8 +1351,11 @@ async def process_agent_stream(
                 # Check one more time for metadata in case result came with complete
                 metadata_events_after_complete = _handle_metadata_events(event)
                 for processed_event in metadata_events_after_complete:
-                    # Accumulate metadata for summary
-                    if processed_event.get("type") == "metadata":
+                    # Accumulate metadata for summary — see note on the main
+                    # loop's accumulator above. Both `metadata` (per-call)
+                    # and `metadata_summary` (turn-cumulative from result)
+                    # feed accumulated_metadata so the final emit is total.
+                    if processed_event.get("type") in ("metadata", "metadata_summary"):
                         event_data = processed_event.get("data", {})
                         if "usage" in event_data:
                             accumulated_metadata["usage"].update(event_data["usage"])

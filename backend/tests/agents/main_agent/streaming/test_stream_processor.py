@@ -608,7 +608,13 @@ class TestHandleMetadataEvents:
         assert _handle_metadata_events({}) == []
 
     def test_result_with_accumulated_usage(self):
-        """result.metrics.accumulated_usage produces a metadata event."""
+        """result.metrics.accumulated_usage rides the metadata_summary track.
+
+        It must NOT be emitted as a `metadata` event — those land in
+        per_message_metadata in the stream coordinator and would clobber
+        the last assistant message's per-call usage with a turn-cumulative
+        value, double-counting earlier messages at pricing time.
+        """
         raw = {
             "result": {
                 "metrics": {
@@ -621,9 +627,11 @@ class TestHandleMetadataEvents:
             }
         }
         events = _handle_metadata_events(raw)
-        m = [e for e in events if e["type"] == "metadata"]
-        assert len(m) >= 1
-        assert m[0]["data"]["usage"]["inputTokens"] == 500
+        per_message_typed = [e for e in events if e["type"] == "metadata"]
+        summary_typed = [e for e in events if e["type"] == "metadata_summary"]
+        assert per_message_typed == []
+        assert len(summary_typed) == 1
+        assert summary_typed[0]["data"]["usage"]["inputTokens"] == 500
 
 
 # ---------------------------------------------------------------------------

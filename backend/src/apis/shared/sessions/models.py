@@ -332,11 +332,22 @@ class MessageContent(BaseModel):
 
 
 class LatencyMetrics(BaseModel):
-    """Latency measurements in milliseconds"""
+    """Latency measurements in milliseconds.
+
+    ``time_to_first_token`` is ``None`` when the provider did not emit
+    ``timeToFirstByteMs`` and we couldn't compute it locally — distinct from
+    a measured value of 0ms (which is physically impossible). Aggregations
+    over TTFT must filter ``None`` so a missing measurement doesn't pull
+    averages toward zero.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    time_to_first_token: int = Field(..., alias="timeToFirstToken", description="Time from request start to first token received (ms)")
+    time_to_first_token: Optional[int] = Field(
+        None,
+        alias="timeToFirstToken",
+        description="Time from request start to first token (ms); None if not measured",
+    )
     end_to_end_latency: int = Field(..., alias="endToEndLatency", description="Total time from request start to completion (ms)")
 
 

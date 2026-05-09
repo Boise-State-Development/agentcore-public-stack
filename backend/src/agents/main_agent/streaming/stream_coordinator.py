@@ -180,13 +180,26 @@ class StreamCoordinator:
                     if "metrics" in event_data:
                         accumulated_metadata["metrics"].update(event_data["metrics"])
 
-                # Collect metadata_summary event (don't send to client as-is)
+                # Collect metadata_summary event (don't send to client as-is).
+                #
+                # NOTE: metadata_summary carries Strands' EventLoopMetrics
+                # `accumulated_usage`, which sums each LLM call's full
+                # context-size across the turn (and across the agent's
+                # whole lifetime, per Strands' docs). For a 2-call tool
+                # turn with call_1.input=1000 and call_2.input=2500,
+                # accumulated_usage.inputTokens=3500 — but the *current*
+                # context occupancy is 2500, not 3500. We deliberately do
+                # NOT update accumulated_metadata["usage"] / ["metrics"]
+                # from this event: stream_coordinator's accumulated_metadata
+                # drives (a) the final SSE `usage` the frontend uses for
+                # the context-% badge and (b) the compaction trigger —
+                # both want "current context size", which the per-call
+                # `metadata` events already provide via last-write-wins
+                # `.update()`. Per-message cost attribution rides
+                # per_message_metadata (per-call) and is unaffected.
+                # We only keep the first_token_time backstop.
                 if event.get("type") == "metadata_summary":
                     event_data = event.get("data", {})
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
                     if "first_token_time" in event_data:
                         first_token_time = event_data["first_token_time"]
                         # Associate first_token_time with first assistant message if we have one
@@ -327,6 +340,16 @@ class StreamCoordinator:
                     # checkpoint advanced on this turn, emit a `compaction` SSE
                     # so the frontend can place an inline "earlier messages
                     # summarized" divider. Fires after metadata, before done.
+                    #
+                    # CAUTION: do NOT replace this with Strands'
+                    # AgentResult.context_size / EventLoopMetrics.latest_context_size.
+                    # Both return ONLY `inputTokens` from the last cycle —
+                    # under Bedrock prompt caching that's the uncached
+                    # suffix only, so a 50k-token fully-cached context
+                    # reports ~50 (inputTokens) and hides ~49,950 in
+                    # cacheReadInputTokens. Summing all three buckets
+                    # below is the only correct "current context size"
+                    # under caching.
                     if hasattr(session_manager, "update_after_turn"):
                         usage = accumulated_metadata.get("usage", {})
                         total_input_tokens = (
@@ -1165,27 +1188,25 @@ class StreamCoordinator:
                 end_to_end_latency_ms = int((stream_end_time - stream_start_time) * 1000)
                 logger.info(f"📊 Calculated E2E latency: {end_to_end_latency_ms}ms")
 
-            # Get time to first token
-            # PRIORITY 1: Use provider's timeToFirstByteMs if available (most accurate)
+            # Get time to first token. We persist `None` (not 0) when the
+            # provider didn't emit `timeToFirstByteMs` and we couldn't
+            # measure it locally — a real TTFT can never be 0ms, and any
+            # downstream aggregation (averages, percentiles) needs to
+            # distinguish "not measured" from a real value to avoid
+            # pulling stats toward zero.
             if accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
                 time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
                 logger.info(f"📊 Using provider timeToFirstByteMs: {time_to_first_token_ms}ms")
-            # PRIORITY 2: Estimate TTFT as a portion of latency if we don't have it
-            # This is a rough estimate but better than 0 or None
-            # For most LLM calls, TTFT is typically 20-40% of total latency
-            elif end_to_end_latency_ms and end_to_end_latency_ms > 100:
-                # If E2E latency is available and substantial, estimate TTFT
-                # We don't have actual TTFT so we can't store it accurately
-                # Instead, log that we're missing it
-                logger.info(f"📊 No TTFT available - provider did not send timeToFirstByteMs for this message")
-                # Still create latency metrics with just E2E, using a placeholder of 0 for TTFT
-                # This is better than losing all latency data
-                time_to_first_token_ms = 0  # Indicates "not measured"
+            else:
+                logger.info("📊 No TTFT available - provider did not send timeToFirstByteMs for this message")
 
-            # Create latency metrics if we have at least E2E latency
+            # Create latency metrics if we have at least E2E latency.
+            # `time_to_first_token_ms` may be None — LatencyMetrics.time_to_first_token
+            # is Optional, so this serializes as JSON null.
             if end_to_end_latency_ms is not None:
                 latency_metrics = LatencyMetrics(
-                    time_to_first_token=time_to_first_token_ms if time_to_first_token_ms is not None else 0, end_to_end_latency=end_to_end_latency_ms
+                    time_to_first_token=time_to_first_token_ms,
+                    end_to_end_latency=end_to_end_latency_ms,
                 )
                 logger.info(f"📊 Created LatencyMetrics: TTFT={time_to_first_token_ms}ms, E2E={end_to_end_latency_ms}ms")
             else:

@@ -119,7 +119,7 @@ const RING_FILL_DELAY_MS = 750;
                 {{ tokensTotalLabel() }} tokens
               </span>
               <span class="mt-2 block text-[11px] leading-snug text-gray-500 dark:text-gray-400">
-                Includes system prompt and tool definitions.
+                Reflects the most recent turn (includes system prompt and tool definitions). May shrink after a context compaction.
               </span>
             </span>
           </span>
@@ -246,6 +246,6 @@ export class SessionCostBadgeComponent {
   protected readonly contextAriaLabel = computed(() => {
     const tokens = this.contextTokens().toLocaleString();
     const window = this.contextWindow().toLocaleString();
-    return `Context window: ${this.contextLabel()} used (${tokens} of ${window} tokens, includes system prompt and tools)`;
+    return `Context window: ${this.contextLabel()} used by the most recent turn (${tokens} of ${window} tokens, includes system prompt and tools)`;
   });
 }
