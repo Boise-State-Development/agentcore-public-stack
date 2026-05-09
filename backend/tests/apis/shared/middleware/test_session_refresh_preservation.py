@@ -630,13 +630,20 @@ def test_3_4_slide_max_age_matches_on_both_cookies(
     sealed = codec.seal(CookiePayload(session_id=record.session_id))
     with TestClient(app) as client:
         response = client.get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+        # Slide-write is fire-and-forget (task 3.5) — drive the event
+        # loop with a second request to let the background task from the
+        # first request flush. MUST happen inside the `with TestClient`
+        # block because TestClient tears down its anyio portal (and the
+        # event loop) on `__exit__`, which cancels any pending tasks.
+        _wait_for(lambda: table.update_item_calls >= 1)
+        if table.update_item_calls == 0:
+            # A no-op second request keeps the event loop alive long
+            # enough for the pending slide task to run.
+            client.get("/echo")
+            _wait_for(lambda: table.update_item_calls >= 1)
 
     assert response.status_code == 200
-    # Slide must have fired exactly once (one DDB update_item). The write
-    # is fire-and-forget (task 3.5) so we poll rather than sample — the
-    # external contract (cookie attributes, Max-Age) is unchanged; only
-    # internal timing of the write moves.
-    _wait_for(lambda: table.update_item_calls >= 1)
+    # Slide must have fired exactly once (one DDB update_item).
     assert table.update_item_calls == 1, (
         f"[3.4] slide must issue exactly one update_item; got "
         f"{table.update_item_calls}"

@@ -403,14 +403,24 @@ def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
     )
 
     sealed = codec.seal(CookiePayload(session_id=record.session_id))
-    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+    with TestClient(app) as client:
+        response = client.get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+        # Poll for the fire-and-forget slide-write (task 3.5) INSIDE the
+        # `with` block — TestClient tears down its anyio portal (and the
+        # event loop) on `__exit__`, cancelling any unfinished tasks.
+        # Drive the loop with a second GET if the first request's
+        # background task hasn't flushed yet.
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
+            time.sleep(0.01)
+        if repo.touch_last_seen.await_count == 0:
+            client.get("/echo")
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
+                time.sleep(0.01)
 
     assert response.status_code == 200
     # Exactly one slide-write, and it carries a ttl bumped by ~session_ttl_seconds.
-    # Poll because the write is on a detached asyncio.Task.
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
-        time.sleep(0.01)
     repo.touch_last_seen.assert_awaited_once()
     args, kwargs = repo.touch_last_seen.await_args
     # session_id passed positionally; last_seen_at/ttl by keyword.
