@@ -48,8 +48,8 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.37.0",
-    "strands-agents-tools==0.5.1",
+    "strands-agents==1.39.0",
+    "strands-agents-tools==0.5.2",
 
     "aws-opentelemetry-distro==0.17.0",
     "bedrock-agentcore==1.6.4",
@@ -60,7 +60,7 @@ agentcore = [
 
 # Voice/BidiAgent dependencies (Nova Sonic speech-to-speech)
 bidi = [
-    "strands-agents[bidi]==1.37.0",
+    "strands-agents[bidi]==1.39.0",
 ]
 
 # Document ingestion pipeline dependencies (for Lambda deployment)

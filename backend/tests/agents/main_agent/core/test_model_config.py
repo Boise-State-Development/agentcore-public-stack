@@ -98,15 +98,17 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    def test_bedrock_config_with_caching_disabled_due_to_bedrock_limitation(self):
-        """Req 1.6 — caching_enabled=True but cache_config omitted due to
-        Bedrock limitation with non-PDF document blocks. See model_config.py TODO."""
+    def test_bedrock_config_with_caching_enabled(self):
+        """Req 1.6 — caching_enabled=True emits a CacheConfig with strategy='auto'."""
+        from strands.models import CacheConfig
+
         cfg = ModelConfig(caching_enabled=True)
         result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
         assert "temperature" not in result  # No default temperature emitted
-        assert "cache_config" not in result
+        assert isinstance(result["cache_config"], CacheConfig)
+        assert result["cache_config"].strategy == "auto"
 
     def test_bedrock_config_without_caching(self):
         """Req 1.6 (negative) — caching disabled → no cache_config key."""

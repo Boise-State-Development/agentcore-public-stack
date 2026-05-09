@@ -107,9 +107,9 @@ requires-dist = [
     { name = "python-multipart", specifier = "==0.0.27" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
     { name = "starlette", specifier = "==1.0.0" },
-    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.37.0" },
-    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.37.0" },
-    { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.5.1" },
+    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.39.0" },
+    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.39.0" },
+    { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.5.2" },
     { name = "tiktoken", marker = "extra == 'dev'", specifier = "==0.12.0" },
     { name = "types-aiofiles", marker = "extra == 'dev'", specifier = "==25.1.0.20260409" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.46.0" },
@@ -4384,7 +4384,7 @@ wheels = [
 
 [[package]]
 name = "strands-agents"
-version = "1.37.0"
+version = "1.39.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -4400,9 +4400,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/03/88/cf23aa713ea68c8a0ad5144341da7ee022e88ce6206512aeafddba257b75/strands_agents-1.37.0.tar.gz", hash = "sha256:3fe6821f730f0468eee91e1ff38eb27a5244046893ffba63e8f5345288096509", size = 824168, upload-time = "2026-04-22T19:18:01.378Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/5b/e267a7dab0b4a6d39133c9c0c516f93f33483e29f39e05c03b755f993ef6/strands_agents-1.39.0.tar.gz", hash = "sha256:efff5914323b8b4b472ca3f13c7115a5746935b00bc86dacc40a5d1ab1242817", size = 873258, upload-time = "2026-05-08T13:27:19.661Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/ff/bede1b8d5fe1c776bd5ed33575505681b3b65ab20889fe6b8344b92fc82d/strands_agents-1.37.0-py3-none-any.whl", hash = "sha256:2fa12e22ed1dac228aa93e91c2ea5381d9b3f08416ed8162222b61b255fee0b1", size = 404526, upload-time = "2026-04-22T19:17:59.634Z" },
+    { url = "https://files.pythonhosted.org/packages/95/41/d054b5a5f54175eb4e775d1e408e169439eba6be63e9e8f2e77ff44e38fc/strands_agents-1.39.0-py3-none-any.whl", hash = "sha256:7369dbfc6be29f59483a6183f5aacf0bdd0e7e5973b4b70f8d0e663880d42f79", size = 430272, upload-time = "2026-05-08T13:27:18.088Z" },
 ]
 
 [package.optional-dependencies]
@@ -4413,7 +4413,7 @@ bidi = [
 
 [[package]]
 name = "strands-agents-tools"
-version = "0.5.1"
+version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -4434,9 +4434,9 @@ dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/fc/8a9da78b5c4a8802367a8eeec046f98eda742b1ee1b2fff568c81c1b3479/strands_agents_tools-0.5.1.tar.gz", hash = "sha256:616ba88b5849d9fd495da057ccb670108580320b8cb0fc4faac5fc327f2622aa", size = 483123, upload-time = "2026-04-22T20:01:13.305Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/32/710a49ffd32b0a232ec1731620ee6105c045e9a77ecee1f3ecaa1a80a6cd/strands_agents_tools-0.5.2.tar.gz", hash = "sha256:96763c8ae75933c5dd327cca87561f573aed720c9c0f3d17fd20835910d11381", size = 483164, upload-time = "2026-04-30T17:08:13.151Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/59/79360f718683ae15cefeb8b0ca1e6d96608c4581280fb12b0f502375a705/strands_agents_tools-0.5.1-py3-none-any.whl", hash = "sha256:790865d073410e9a16ac44ce3a46c169b98e1f89844ce8670472b869257b7686", size = 316122, upload-time = "2026-04-22T20:01:11.599Z" },
+    { url = "https://files.pythonhosted.org/packages/59/ef/fe73b6d25d095784d2e1f6f33419265e796143100fb2f32a6e86f8ae68af/strands_agents_tools-0.5.2-py3-none-any.whl", hash = "sha256:8f85e4cb28d9411e62e1f159aa7e300d3a0f4b1d2b878a7cdfd5d746d9333343", size = 316178, upload-time = "2026-04-30T17:08:11.416Z" },
 ]
 
 [[package]]

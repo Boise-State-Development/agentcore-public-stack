@@ -229,15 +229,9 @@ class ModelConfig:
         config: Dict[str, Any] = {"model_id": self.model_id}
         _apply_canonical_params(config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock")
 
-        # TODO: Re-enable once Bedrock supports cachePoint blocks alongside
-        # non-PDF document blocks (.md, .docx, etc.). Currently causes:
-        # ValidationException: messages.N.content.M.type: Field required
-        # because Bedrock can't translate cachePoint after document blocks
-        # to the Anthropic format.
-        # See: https://github.com/strands-agents/sdk-python/pull/1438
-        # if self.caching_enabled:
-        #     from strands.models import CacheConfig
-        #     config["cache_config"] = CacheConfig(strategy="auto")
+        if self.caching_enabled:
+            from strands.models import CacheConfig
+            config["cache_config"] = CacheConfig(strategy="auto")
 
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig
