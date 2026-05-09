@@ -72,6 +72,13 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         self._cookie_codec = cookie_codec
         self._refresh_client = refresh_client
         self._cache = cache
+        # Strong-reference set for fire-and-forget slide-write tasks.
+        # Without keeping a reference, `asyncio.create_task(...)` can be
+        # garbage-collected mid-execution — Python's docs explicitly warn
+        # about this, and on fast CI runners the task dies before the
+        # scheduler picks it up. We remove each task via `add_done_callback`
+        # so the set doesn't grow unboundedly.
+        self._slide_tasks: set[asyncio.Task] = set()
 
     def _ensure_collaborators(self) -> None:
         if self._config is None:
@@ -187,13 +194,22 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         # Failures are swallowed inside `_slide_write_task` (preserving
         # today's "slide failures are non-fatal" semantics — the user still
         # has a valid session for the rest of its current TTL).
-        asyncio.create_task(
+        #
+        # CRITICAL: keep a strong reference on the middleware instance
+        # (`self._slide_tasks`). Without this, Python is free to GC the
+        # task before it runs — we observed this on Python 3.12 CI runners
+        # where the preservation tests saw 0 update_item calls because the
+        # task was collected mid-flight. The done-callback removes the task
+        # again so the set doesn't leak.
+        task = asyncio.create_task(
             self._slide_write_task(
                 session_id=record.session_id,
                 last_seen_at=now,
                 ttl=new_ttl,
             )
         )
+        self._slide_tasks.add(task)
+        task.add_done_callback(self._slide_tasks.discard)
         return new_max_age
 
     async def _slide_write_task(
