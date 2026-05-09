@@ -15,7 +15,7 @@
     var(--color-gray-50);
 }
 
-html.dark .login-shell {
+:host-context(html.dark) .login-shell {
   background:
     radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--color-primary-900) 50%, black) 0%, transparent 60%),
     radial-gradient(120% 80% at 100% 100%, color-mix(in oklab, var(--color-primary-800) 35%, black) 0%, transparent 55%),
@@ -134,12 +134,12 @@ html.dark .login-shell {
     login-morph-c 9s ease-in-out infinite alternate -2s;
 }
 
-html.dark .login-blob--a { opacity: 0.32; }
-html.dark .login-blob--b { opacity: 0.28; }
-html.dark .login-blob--c { opacity: 0.38; }
-html.dark .login-blob--d { opacity: 0.42; }
-html.dark .login-blob--e { opacity: 0.5; }
-html.dark .login-blob--f { opacity: 0.55; }
+:host-context(html.dark) .login-blob--a { opacity: 0.32; }
+:host-context(html.dark) .login-blob--b { opacity: 0.28; }
+:host-context(html.dark) .login-blob--c { opacity: 0.38; }
+:host-context(html.dark) .login-blob--d { opacity: 0.42; }
+:host-context(html.dark) .login-blob--e { opacity: 0.5; }
+:host-context(html.dark) .login-blob--f { opacity: 0.55; }
 
 .login-grid {
   position: absolute;
@@ -153,7 +153,7 @@ html.dark .login-blob--f { opacity: 0.55; }
   opacity: 0.6;
 }
 
-html.dark .login-grid {
+:host-context(html.dark) .login-grid {
   background-image:
     linear-gradient(to right, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px),
     linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px);
@@ -237,7 +237,7 @@ html.dark .login-grid {
     0 8px 24px -12px rgba(0, 0, 0, 0.15);
 }
 
-html.dark .login-card {
+:host-context(html.dark) .login-card {
   background: color-mix(in oklab, var(--color-gray-900) 55%, transparent);
   border-color: color-mix(in oklab, white 12%, transparent);
   box-shadow:
