@@ -227,6 +227,29 @@ def _get_bff_cognito_validator():
     return _bff_cognito_validator
 
 
+def _skip_auth_user() -> Optional[User]:
+    """Return a fake admin user when SKIP_AUTH=true, else None.
+
+    Local-dev-only bypass so an unattended agent (or a dev with no IdP
+    access) can hit protected routes without the OAuth round-trip. The
+    startup check in `app_api/main.py` refuses to boot when this is
+    combined with deployed-environment indicators.
+    """
+    if os.environ.get("SKIP_AUTH", "").lower() != "true":
+        return None
+    roles = [
+        r.strip()
+        for r in os.environ.get("SKIP_AUTH_ROLES", "admin").split(",")
+        if r.strip()
+    ]
+    return User(
+        user_id=os.environ.get("SKIP_AUTH_USER_ID", "local-dev"),
+        email=os.environ.get("SKIP_AUTH_EMAIL", "dev@local"),
+        name="Local Dev",
+        roles=roles,
+    )
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> User:
@@ -247,6 +270,9 @@ async def get_current_user(
             - 401 if token is missing or invalid
             - 500 if no JWT validator is available
     """
+    if (fake := _skip_auth_user()) is not None:
+        return fake
+
     # Check if credentials are missing
     if credentials is None:
         raise HTTPException(
@@ -308,6 +334,9 @@ async def get_current_user_from_session(request: Request) -> User:
         HTTPException 401 if no session was resolved by the upstream
         middleware (cookie missing, malformed, or session record gone).
     """
+    if (fake := _skip_auth_user()) is not None:
+        return fake
+
     record = getattr(request.state, "bff_session", None)
     if record is None:
         raise HTTPException(
@@ -394,6 +423,9 @@ async def get_current_user_trusted(
             - 401 if token is missing or malformed
     """
     logger.debug("[get_current_user_trusted] Trusted auth extraction started")
+
+    if (fake := _skip_auth_user()) is not None:
+        return fake
 
     # Check if credentials are missing
     if credentials is None:

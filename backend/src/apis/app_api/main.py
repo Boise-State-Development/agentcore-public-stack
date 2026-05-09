@@ -28,6 +28,40 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Refuse to boot unless SKIP_AUTH is paired with a positive local-dev
+# signal. Allowlist over blocklist: every CORS_ORIGINS entry must be a
+# localhost URL. Any deployed origin (or empty config) trips this — far
+# safer than enumerating every env var a deployed runtime might set, and
+# fails closed for new deploy targets we haven't met yet.
+if os.environ.get("SKIP_AUTH", "").lower() == "true":
+    from urllib.parse import urlparse
+
+    _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+    _skip_auth_origins = [
+        o.strip()
+        for o in os.environ.get("CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+
+    def _is_local_origin(origin: str) -> bool:
+        try:
+            return (urlparse(origin).hostname or "") in _LOCAL_HOSTS
+        except Exception:
+            return False
+
+    if not _skip_auth_origins or not all(
+        _is_local_origin(o) for o in _skip_auth_origins
+    ):
+        raise RuntimeError(
+            "SKIP_AUTH=true requires CORS_ORIGINS to contain only localhost "
+            "origins (localhost, 127.0.0.1, ::1, 0.0.0.0). Refusing to start "
+            "— this bypass is local-dev only."
+        )
+    logger.warning(
+        "SKIP_AUTH=true — auth dependencies will return a fake admin user. "
+        "DO NOT enable this in any deployed environment."
+    )
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
