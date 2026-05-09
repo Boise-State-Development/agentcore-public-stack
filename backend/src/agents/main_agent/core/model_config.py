@@ -229,9 +229,16 @@ class ModelConfig:
         config: Dict[str, Any] = {"model_id": self.model_id}
         _apply_canonical_params(config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock")
 
-        if self.caching_enabled:
-            from strands.models import CacheConfig
-            config["cache_config"] = CacheConfig(strategy="auto")
+        # Bedrock prompt caching is intentionally deferred. The previous SDK
+        # blocker — strands PR #1438, which fixed `cachePoint` blocks landing
+        # alongside non-PDF document attachments — is resolved in
+        # strands-agents 1.39.0, so the technical barrier is gone. Re-enabling
+        # is being held for a separate, scoped rollout (cost/badge impact is
+        # user-visible the moment caching turns on).
+        # See: https://github.com/strands-agents/sdk-python/pull/1438
+        # if self.caching_enabled:
+        #     from strands.models import CacheConfig
+        #     config["cache_config"] = CacheConfig(strategy="auto")
 
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig

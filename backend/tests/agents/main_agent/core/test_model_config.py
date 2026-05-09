@@ -98,17 +98,16 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    def test_bedrock_config_with_caching_enabled(self):
-        """Req 1.6 — caching_enabled=True emits a CacheConfig with strategy='auto'."""
-        from strands.models import CacheConfig
-
+    def test_bedrock_config_with_caching_enabled_currently_omits_cache_config(self):
+        """Req 1.6 — caching_enabled=True but cache_config omitted while
+        Bedrock prompt caching rollout is deferred. The SDK-side blocker is
+        resolved in strands 1.39.0; see model_config.py for the deferral note."""
         cfg = ModelConfig(caching_enabled=True)
         result = cfg.to_bedrock_config()
 
         assert result["model_id"] == cfg.model_id
         assert "temperature" not in result  # No default temperature emitted
-        assert isinstance(result["cache_config"], CacheConfig)
-        assert result["cache_config"].strategy == "auto"
+        assert "cache_config" not in result
 
     def test_bedrock_config_without_caching(self):
         """Req 1.6 (negative) — caching disabled → no cache_config key."""
