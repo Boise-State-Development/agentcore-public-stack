@@ -26,13 +26,28 @@ if str(SRC_DIR) not in sys.path:
 # auth-aware test downstream of that reload returns the fake bypass
 # user. Tests that need SKIP_AUTH on can still set it via monkeypatch
 # (test-local setenv runs after this autouse delenv).
+#
+# Manages os.environ directly rather than depending on monkeypatch so
+# this autouse fixture doesn't perturb fixture-teardown ordering for
+# tests that already use monkeypatch + their own autouse fixtures
+# (e.g. tests/apis/app_api/test_connectors_routes.py).
+_SKIP_AUTH_ENV_KEYS = (
+    "SKIP_AUTH",
+    "SKIP_AUTH_ROLES",
+    "SKIP_AUTH_USER_ID",
+    "SKIP_AUTH_EMAIL",
+)
+
+
 @pytest.fixture(autouse=True)
-def _clear_skip_auth_env(monkeypatch):
-    for key in (
-        "SKIP_AUTH",
-        "SKIP_AUTH_ROLES",
-        "SKIP_AUTH_USER_ID",
-        "SKIP_AUTH_EMAIL",
-    ):
-        monkeypatch.delenv(key, raising=False)
+def _clear_skip_auth_env():
+    saved = {k: os.environ.pop(k, None) for k in _SKIP_AUTH_ENV_KEYS}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
