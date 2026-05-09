@@ -8,9 +8,23 @@ Schema (single-table, fits the `BFFSessionsTable` provisioned in Phase 1):
     Attrs: user_id, cognito_access_token, cognito_refresh_token, id_token,
            access_token_exp, csrf_secret, created_at, last_seen_at, ttl
 
+    Cross-task refresh-lock attrs (added at runtime, never on the initial
+    write — both default to "absent" until a refresh contender writes them):
+       refresh_lock_owner: short opaque token identifying the leader
+       refresh_lock_until: epoch seconds; lock is considered expired past this
+
 The `ttl` attribute is wired to DynamoDB TTL so absolute session lifetime is
 enforced by the table itself — even if a session row is somehow leaked from
 the cleanup paths, DynamoDB will eventually evict it.
+
+The refresh-lock attrs coordinate the Cognito refresh exchange across tasks:
+the per-process `get_session_lock` and `single_flight` only coalesce within
+a single Python process, so under `desiredCount > 1` two tasks can otherwise
+issue parallel `cognito-idp:initiate_auth` calls with the same refresh token —
+Cognito rotates on the first; the second fails `NotAuthorizedException` and
+the loser unilaterally clears the user's cookie. The lock turns this into a
+leader/follower handoff: one task does the refresh, the other reads the
+freshly persisted tokens off the row.
 """
 
 from __future__ import annotations
@@ -147,6 +161,7 @@ class SessionRepository:
         access_token_exp: int,
         last_seen_at: int,
         ttl: Optional[int] = None,
+        expected_lock_owner: Optional[str] = None,
     ) -> None:
         """Atomically replace the Cognito tokens after a refresh.
 
@@ -156,6 +171,15 @@ class SessionRepository:
         is supplied, the row's DynamoDB TTL slides forward in the same write
         — a refresh proves the user is active, so the session row's expiry
         should slide alongside it.
+
+        When `expected_lock_owner` is supplied, the write is conditional on
+        the row's `refresh_lock_owner` attribute matching (or being absent).
+        The lock attributes are also REMOVED in the same write, releasing
+        the cross-task lock alongside the token rotation. If the condition
+        fails (a peer has acquired the lock — implies our lock had expired
+        and someone else owns the refresh now), `ConditionalCheckFailedException`
+        is raised so the caller can re-read the row and adopt the peer's
+        tokens instead of stomping on them.
         """
         if not self._enabled:
             return
@@ -186,8 +210,114 @@ class SessionRepository:
             # `ttl` is a reserved word in DynamoDB expressions.
             kwargs["ExpressionAttributeNames"] = {"#ttl": "ttl"}
 
+        if expected_lock_owner is not None:
+            # Atomically release the cross-task refresh lock alongside the
+            # token write. The condition guards against a stale leader
+            # (whose lock TTL'd while another task took over) overwriting
+            # the new leader's freshly persisted tokens.
+            kwargs["UpdateExpression"] = (
+                update_expr + " REMOVE refresh_lock_owner, refresh_lock_until"
+            )
+            expr_values[":owner"] = expected_lock_owner
+            kwargs["ConditionExpression"] = (
+                "attribute_not_exists(refresh_lock_owner) "
+                "OR refresh_lock_owner = :owner"
+            )
+
         def _call() -> None:
             self._table.update_item(**kwargs)
+
+        await asyncio.to_thread(_call)
+
+    async def try_acquire_refresh_lock(
+        self,
+        session_id: str,
+        owner: str,
+        lock_ttl_seconds: int,
+    ) -> bool:
+        """Atomically claim leadership of a cross-task Cognito refresh.
+
+        Conditional `UpdateItem` on the session row: succeeds (returns True)
+        only if no peer holds the lock OR the holder's lock has expired
+        (`refresh_lock_until < now`). On contention returns False — the
+        caller should poll the row for the leader's persisted tokens.
+
+        Lock TTL bounds the worst case: a leader that crashes mid-refresh
+        strands the lock for at most `lock_ttl_seconds` (we use 30s in the
+        middleware), after which any peer can re-acquire and retry.
+
+        Returns False on `ConditionalCheckFailedException`. Other DDB
+        errors propagate so the caller can surface them as 5xx — silently
+        suppressing them would create a "neither leader nor follower" gap.
+        """
+        if not self._enabled:
+            return False
+        now = int(time.time())
+        kwargs: dict = {
+            "Key": self._key(session_id),
+            "UpdateExpression": (
+                "SET refresh_lock_owner = :owner, "
+                "refresh_lock_until = :until"
+            ),
+            "ConditionExpression": (
+                "attribute_not_exists(refresh_lock_until) "
+                "OR refresh_lock_until < :now"
+            ),
+            "ExpressionAttributeValues": {
+                ":owner": owner,
+                ":until": now + lock_ttl_seconds,
+                ":now": now,
+            },
+        }
+
+        def _call() -> bool:
+            try:
+                self._table.update_item(**kwargs)
+                return True
+            except ClientError as exc:
+                if (
+                    exc.response.get("Error", {}).get("Code")
+                    == "ConditionalCheckFailedException"
+                ):
+                    return False
+                raise
+
+        return await asyncio.to_thread(_call)
+
+    async def release_refresh_lock(self, session_id: str, owner: str) -> None:
+        """Release the cross-task refresh lock if `owner` still holds it.
+
+        Used when the leader's Cognito refresh fails terminally and we want
+        a peer to be able to retry without waiting for the full lock TTL.
+        Best-effort: a `ConditionalCheckFailedException` (lock TTL'd or
+        re-acquired) is treated as a no-op.
+
+        `update_tokens` clears the lock attributes atomically with a
+        successful refresh, so this is only for the failure path.
+        """
+        if not self._enabled:
+            return
+        kwargs: dict = {
+            "Key": self._key(session_id),
+            "UpdateExpression": (
+                "REMOVE refresh_lock_owner, refresh_lock_until"
+            ),
+            "ConditionExpression": "refresh_lock_owner = :owner",
+            "ExpressionAttributeValues": {":owner": owner},
+        }
+
+        def _call() -> None:
+            try:
+                self._table.update_item(**kwargs)
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code")
+                if code == "ConditionalCheckFailedException":
+                    return  # peer re-acquired or lock TTL'd — fine
+                logger.warning(
+                    "BFF refresh lock release failed for %s: %s",
+                    session_id,
+                    exc,
+                )
 
         await asyncio.to_thread(_call)
 

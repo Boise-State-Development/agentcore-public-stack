@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from typing import Optional
+
+from botocore.exceptions import ClientError
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -65,6 +68,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         cookie_codec: Optional[CookieCodec] = None,
         refresh_client: Optional[CognitoRefreshClient] = None,
         cache: Optional[SessionCache] = None,
+        refresh_lock_ttl_seconds: int = 30,
     ) -> None:
         super().__init__(app)
         self._config = config
@@ -72,6 +76,12 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         self._cookie_codec = cookie_codec
         self._refresh_client = refresh_client
         self._cache = cache
+        # Cross-task refresh lock TTL. A leader that crashes mid-refresh
+        # strands the lock for at most this many seconds, after which any
+        # peer can re-acquire and retry. Followers poll for at most this
+        # long before falling back to terminal. 30s is a safety cushion
+        # over the worst-case (Cognito + DDB + retries) refresh latency.
+        self._refresh_lock_ttl_seconds = refresh_lock_ttl_seconds
         # Strong-reference set for fire-and-forget slide-write tasks.
         # Without keeping a reference, `asyncio.create_task(...)` can be
         # garbage-collected mid-execution — Python's docs explicitly warn
@@ -241,18 +251,26 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         last_seen_at: int,
         ttl: int,
         rotated: bool,
+        lock_owner: str,
     ) -> bool:
         """Write refreshed tokens to DDB. Retry when rotation makes it critical.
 
         Returns True on success or on a benign (non-rotation) failure. Returns
         False only when rotation happened *and* every retry failed — caller
         should treat that as session-unrecoverable.
+
+        The write also clears the cross-task refresh lock (atomic with the
+        token rotation), conditional on `lock_owner` matching. A
+        `ConditionalCheckFailedException` here means a peer task acquired
+        the lock after ours expired — we abandon the persist and the caller
+        should re-read DDB to adopt the peer's tokens.
         """
         # Three attempts on rotation (≈350ms total worst-case), single shot
         # otherwise. boto3 already retries below us for transient API errors;
         # this layer handles longer blips and validation/throttling errors
         # that boto3 lets through.
         attempts = 3 if rotated else 1
+        last_exc: Optional[Exception] = None
         for attempt in range(attempts):
             try:
                 await self._repository.update_tokens(
@@ -263,8 +281,26 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                     access_token_exp=refreshed.access_token_exp,
                     last_seen_at=last_seen_at,
                     ttl=ttl,
+                    expected_lock_owner=lock_owner,
                 )
                 return True
+            except ClientError as exc:
+                # Lock-ownership condition failed — a peer task took over.
+                # Don't retry: their refresh is authoritative now. Caller
+                # adopts their tokens via the post-failure DDB re-read.
+                if (
+                    exc.response.get("Error", {}).get("Code")
+                    == "ConditionalCheckFailedException"
+                ):
+                    logger.info(
+                        "BFF refresh persist for %s lost lock to a peer task — "
+                        "deferring to peer's tokens.",
+                        session_id,
+                    )
+                    return False
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(0.05 * (2**attempt))  # 50ms, 100ms
             except Exception as exc:
                 last_exc = exc
                 if attempt + 1 < attempts:
@@ -287,6 +323,48 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             last_exc,
         )
         return True
+
+    async def _wait_for_peer_refresh(
+        self,
+        *,
+        session_id: str,
+        previous: SessionRecord,
+        max_wait_seconds: float,
+    ) -> Optional[SessionRecord]:
+        """Poll DDB for a peer task's freshly persisted tokens.
+
+        Called when we lost the cross-task refresh lock to a peer. Polls
+        the session row with bounded backoff (50ms → 500ms) until we
+        observe tokens that differ from `previous` — at which point we
+        adopt them — or `max_wait_seconds` elapses.
+
+        Returns the peer's record on success, or `None` if we timed out
+        (peer crashed mid-refresh). The caller treats `None` as terminal
+        and clears the cookie; the lock TTL ensures the next request can
+        re-acquire and retry without waiting for a stuck row.
+        """
+        deadline = time.monotonic() + max_wait_seconds
+        sleep_for = 0.05
+        while time.monotonic() < deadline:
+            await asyncio.sleep(sleep_for)
+            peer = await self._repository.get(session_id)
+            if peer is None:
+                # Row gone (delete or TTL eviction) — terminal.
+                return None
+            # Refresh-token rotation: peer issued a new refresh token, ours
+            # is now revoked. Adopt their record.
+            if peer.cognito_refresh_token != previous.cognito_refresh_token:
+                return peer
+            # No rotation but a fresh access token landed: peer refreshed
+            # successfully, we can use the new access token.
+            if (
+                peer.cognito_access_token != previous.cognito_access_token
+                and peer.access_token_exp
+                > int(time.time()) + self._config.refresh_leeway_seconds
+            ):
+                return peer
+            sleep_for = min(sleep_for * 1.5, 0.5)
+        return None
 
     async def _resolve_session(
         self, cookie_value: str
@@ -337,10 +415,24 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 self._cache.set(record)
                 return record, False
 
-            # Coalesce concurrent refreshes for the same session id.
+            # Two-tier coalescing:
+            #
+            # 1. `get_session_lock` (in-process): collapses N concurrent
+            #    same-session callers within ONE task to a single refresh
+            #    contender.
+            # 2. `try_acquire_refresh_lock` (cross-process, DDB conditional
+            #    write): one of those contenders, across all tasks, becomes
+            #    the leader and actually calls Cognito. Followers poll DDB
+            #    for the leader's persisted tokens.
+            #
+            # Without the cross-process lock, two tasks under desiredCount: 2
+            # would each call `cognito-idp:initiate_auth` with the same refresh
+            # token — Cognito rotates on the first; the second fails
+            # `NotAuthorizedException` and the loser's middleware clears the
+            # user's cookie. The DDB lock turns that race into a leader/
+            # follower handoff so exactly one Cognito refresh happens per
+            # session per leeway window across the entire fleet.
             async with get_session_lock(session_id):
-                # Re-check after acquiring the lock — another waiter may have
-                # already refreshed, in which case we serve the fresh row.
                 current = await self._repository.get(session_id)
                 if current is None:
                     return None, True
@@ -350,13 +442,42 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                     self._cache.set(current)
                     return current, False
 
+                lock_owner = secrets.token_hex(16)
+                lock_acquired = await self._repository.try_acquire_refresh_lock(
+                    session_id=session_id,
+                    owner=lock_owner,
+                    lock_ttl_seconds=self._refresh_lock_ttl_seconds,
+                )
+                if not lock_acquired:
+                    # FOLLOWER: a peer task is doing the Cognito refresh.
+                    # Wait for their tokens to land on the row, then adopt.
+                    peer = await self._wait_for_peer_refresh(
+                        session_id=session_id,
+                        previous=current,
+                        max_wait_seconds=self._refresh_lock_ttl_seconds,
+                    )
+                    if peer is None:
+                        # Peer never wrote — likely crashed or hit a Cognito
+                        # error. Lock will TTL out; the user's next request
+                        # will get to retry. Fail closed for *this* request.
+                        self._cache.invalidate(session_id)
+                        return None, True
+                    self._cache.set(peer)
+                    return peer, False
+
+                # LEADER: do the Cognito refresh and persist.
                 try:
                     refreshed = await self._refresh_client.refresh(
                         username=current.username,
                         refresh_token=current.cognito_refresh_token,
                     )
                 except CognitoRefreshError:
-                    # Refresh refused — treat as terminal, force re-login.
+                    # Refresh refused — release the lock so a peer can retry
+                    # the next request without waiting for the full lock TTL,
+                    # then treat as terminal for this request.
+                    await self._repository.release_refresh_lock(
+                        session_id, lock_owner
+                    )
                     self._cache.invalidate(session_id)
                     return None, True
 
@@ -387,8 +508,25 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                     last_seen_at=now,
                     ttl=new_ttl,
                     rotated=rotated,
+                    lock_owner=lock_owner,
                 )
                 if not persist_ok:
+                    # Two reasons this lands here:
+                    #   (a) Rotation persist exhausted retries — session is
+                    #       unrecoverable; clear cookie and force re-auth.
+                    #   (b) Lock-owner condition failed (peer took over) —
+                    #       re-read DDB and adopt the peer's tokens rather
+                    #       than logging the user out.
+                    peer = await self._repository.get(session_id)
+                    if (
+                        peer is not None
+                        and not peer.needs_refresh(
+                            int(time.time()),
+                            self._config.refresh_leeway_seconds,
+                        )
+                    ):
+                        self._cache.set(peer)
+                        return peer, False
                     self._cache.invalidate(session_id)
                     return None, True
                 updated = SessionRecord(

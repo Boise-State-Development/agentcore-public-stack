@@ -83,6 +83,20 @@ class InstrumentedTable:
     Records call counts so preservation tests can assert "zero AWS calls"
     for dormant / no-cookie pass-through paths, and "exactly one get_item"
     for the refresh-storm coalescing contract.
+
+    `update_item` writes are classified into three kinds by inspecting the
+    `UpdateExpression`:
+      - `lock_acquire_calls`: cross-task refresh-lock acquisition (writes
+        `refresh_lock_owner` + `refresh_lock_until`, no token columns).
+      - `token_persist_calls`: token rotation write (sets
+        `cognito_access_token` etc., usually also REMOVE-ing the lock).
+      - `slide_calls`: sliding-renewal touch (writes only `last_seen_at`
+        and optionally `ttl`).
+    `update_item_calls` remains the total (sum) so existing assertions on
+    "any update_item issued" continue to hold. The injected side-effect is
+    applied only to the token-persist path so tests that simulate "DDB
+    throttled during persist" don't accidentally fail at the lock-acquire
+    write — that's a different code path with different recovery semantics.
     """
 
     def __init__(
@@ -97,6 +111,9 @@ class InstrumentedTable:
         self._update_item_side_effect = update_item_side_effect
         self.get_item_calls = 0
         self.update_item_calls = 0
+        self.lock_acquire_calls = 0
+        self.token_persist_calls = 0
+        self.slide_calls = 0
         self.put_item_calls = 0
         self.delete_item_calls = 0
 
@@ -111,10 +128,34 @@ class InstrumentedTable:
             return {}
         return {"Item": _record_to_item(self._record)}
 
+    @staticmethod
+    def _classify_update(update_expr: str) -> str:
+        """Classify which middleware path issued this update_item.
+
+        Token persist writes always set `cognito_access_token`. Pure lock
+        acquires write `refresh_lock_owner` without touching tokens. Slide
+        writes touch only `last_seen_at` (+ optionally `ttl`).
+        """
+        if "cognito_access_token" in update_expr:
+            return "token_persist"
+        if "refresh_lock_owner" in update_expr:
+            return "lock_acquire"
+        return "slide"
+
     def update_item(self, **kwargs: Any) -> dict:
         self.update_item_calls += 1
+        kind = self._classify_update(kwargs.get("UpdateExpression", ""))
+        if kind == "token_persist":
+            self.token_persist_calls += 1
+        elif kind == "lock_acquire":
+            self.lock_acquire_calls += 1
+        else:
+            self.slide_calls += 1
         self._sleep()
-        if self._update_item_side_effect is not None:
+        # Side-effect injection applies only to the token-persist path —
+        # tests that simulate "rotation persist exhausted" mean exactly
+        # that write, not the upstream lock-acquire.
+        if self._update_item_side_effect is not None and kind == "token_persist":
             raise self._update_item_side_effect
         return {}
 
@@ -1094,10 +1135,12 @@ def test_3_10_rotation_persist_exhausts_invalidates_cache_and_clears_cookies() -
     _assert_clear_cookie_attrs(session_clears[0])
     _assert_clear_cookie_attrs(csrf_clears[0])
 
-    # Sanity: update_tokens was retried 3 times on rotation.
-    assert table.update_item_calls == 3, (
+    # Sanity: update_tokens was retried 3 times on rotation. Use the
+    # token_persist sub-counter so we measure persist attempts only,
+    # not the (also-incrementing) lock_acquire write that precedes them.
+    assert table.token_persist_calls == 3, (
         f"[3.10] rotation must retry update_tokens 3 times; got "
-        f"{table.update_item_calls}"
+        f"{table.token_persist_calls}"
     )
 
 
