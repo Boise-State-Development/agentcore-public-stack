@@ -3,6 +3,28 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { AppApiStack } from '../lib/app-api-stack';
 import { createMockConfig, createMockApp, mockEnv } from './helpers/mock-config';
 
+/**
+ * CDK splits a task role's policy across an inline AWS::IAM::Policy and one
+ * or more AWS::IAM::ManagedPolicy "overflow" attachments once the IAM inline
+ * policy size limit is exceeded. Match.arrayWith on a single resource type
+ * misses statements that landed in the overflow. Walk both types and return
+ * every statement carrying the requested Sid.
+ */
+function _findStatementsBySid(template: Template, sid: string): any[] {
+  const found: any[] = [];
+  for (const resourceType of ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
+    const policies = template.findResources(resourceType);
+    for (const policy of Object.values(policies)) {
+      const stmts =
+        (policy as any).Properties?.PolicyDocument?.Statement || [];
+      for (const stmt of stmts) {
+        if (stmt.Sid === sid) found.push(stmt);
+      }
+    }
+  }
+  return found;
+}
+
 describe('AppApiStack', () => {
   let template: Template;
   let config: ReturnType<typeof createMockConfig>;
@@ -254,6 +276,55 @@ describe('AppApiStack', () => {
             }),
           ]),
         }),
+      });
+    });
+
+    test('BFFCookieSigningKey grant is Decrypt-only — kms:GenerateDataKey is NOT granted to the runtime', () => {
+      // Least privilege: the wrapped data key is generated once at deploy
+      // time by the BFFCookieDataKey* AwsCustomResources in
+      // InfrastructureStack. The runtime only needs kms:Decrypt to unwrap
+      // it. A GenerateDataKey grant here would let a compromised app-api
+      // task mint a parallel data key and seal cookies under it.
+      const bffCookieGrants = _findStatementsBySid(template, 'BFFCookieSigningKeyAccess');
+      expect(bffCookieGrants.length).toBeGreaterThan(0);
+      for (const stmt of bffCookieGrants) {
+        const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+        expect(actions).not.toContain('kms:GenerateDataKey');
+        expect(actions).toContain('kms:Decrypt');
+      }
+    });
+
+    test('task role can read the BFF cookie data key secret (GetSecretValue)', () => {
+      const grants = _findStatementsBySid(template, 'BFFCookieDataKeySecretAccess');
+      expect(grants.length).toBeGreaterThan(0);
+      for (const stmt of grants) {
+        expect(stmt.Effect).toBe('Allow');
+        const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+        expect(actions).toContain('secretsmanager:GetSecretValue');
+        expect(actions).toContain('secretsmanager:DescribeSecret');
+      }
+    });
+  });
+
+  // ============================================================
+  // BFF Cookie Data Key — env var wiring
+  // ============================================================
+
+  describe('BFF Cookie Data Key', () => {
+    test('container env includes BFF_COOKIE_DATA_KEY_SECRET_ARN sourced from SSM', () => {
+      // Without this env var the CookieCodec falls back to "BFF disabled"
+      // and every cookie-bearing request unseals as bad seal — auth flow
+      // breaks across every app-api task.
+      template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        ContainerDefinitions: Match.arrayWith([
+          Match.objectLike({
+            Environment: Match.arrayWith([
+              Match.objectLike({
+                Name: 'BFF_COOKIE_DATA_KEY_SECRET_ARN',
+              }),
+            ]),
+          }),
+        ]),
       });
     });
   });

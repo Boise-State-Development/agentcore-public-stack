@@ -6,12 +6,14 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy, getAutoDeleteObjects, buildCorsOrigins } from './config';
 
@@ -689,6 +691,87 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`,
       stringValue: bffCookieSigningKey.keyArn,
       description: "KMS key ARN for BFF session cookie sealing",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Wrapped (KMS-encrypted) AES-256 data key for cookie sealing. Persisted
+    // once at deploy time so every app-api task — across desiredCount > 1 and
+    // across rolling deploys where two task revisions briefly coexist —
+    // decrypts to the same plaintext key. Without this, each task's
+    // process-wide CookieCodec singleton calls kms:GenerateDataKey at first
+    // use and gets its own random AES key, so any cookie sealed by one task
+    // unseals as `bad seal` on another task — every page-load fan-out
+    // becomes a 401 storm under the desiredCount: 2 deployment shape.
+    const bffCookieDataKeySecret = new secretsmanager.Secret(this, "BFFCookieDataKeySecret", {
+      secretName: getResourceName(config, "bff-cookie-data-key"),
+      description:
+        "KMS-wrapped AES-256 data key (base64) for sealing BFF session cookies. " +
+        "Generated once at deploy time; rotation invalidates active cookies (no kid versioning yet).",
+      encryptionKey: bffCookieSigningKey,
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    // One-shot bootstrap. AwsCustomResource invokes one API per resource, so
+    // we chain two: (a) kms:GenerateDataKey, (b) secretsmanager:PutSecretValue
+    // threading the ciphertext through getResponseField. Both run on Create
+    // only; rotation is deliberately not wired here because we don't yet
+    // version cookies with a key id (Phase 7 hardening).
+    //
+    // CRITICAL: outputPaths whitelists CiphertextBlob so the response Plaintext
+    // (the AES key itself) never enters the AwsCustomResource Lambda's CFN
+    // response payload — it stays inside that Lambda's request-scoped memory
+    // and is dropped before the response is written to CloudFormation state.
+    const generateBffDataKey = new cr.AwsCustomResource(this, "BFFCookieDataKeyGenerate", {
+      onCreate: {
+        service: "KMS",
+        action: "generateDataKey",
+        parameters: {
+          KeyId: bffCookieSigningKey.keyArn,
+          KeySpec: "AES_256",
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `${this.stackName}-bff-cookie-data-key-generate`,
+        ),
+        outputPaths: ["CiphertextBlob"],
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["kms:GenerateDataKey"],
+          resources: [bffCookieSigningKey.keyArn],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+
+    const wrappedDataKeyBase64 = generateBffDataKey.getResponseField("CiphertextBlob");
+
+    const storeBffDataKey = new cr.AwsCustomResource(this, "BFFCookieDataKeyStore", {
+      onCreate: {
+        service: "SecretsManager",
+        action: "putSecretValue",
+        parameters: {
+          SecretId: bffCookieDataKeySecret.secretArn,
+          SecretString: wrappedDataKeyBase64,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `${this.stackName}-bff-cookie-data-key-store`,
+        ),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["secretsmanager:PutSecretValue"],
+          resources: [bffCookieDataKeySecret.secretArn],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+    storeBffDataKey.node.addDependency(bffCookieDataKeySecret);
+    storeBffDataKey.node.addDependency(generateBffDataKey);
+
+    new ssm.StringParameter(this, "BFFCookieDataKeySecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-cookie-data-key-secret-arn`,
+      stringValue: bffCookieDataKeySecret.secretArn,
+      description: "Secrets Manager ARN for the BFF cookie wrapped AES-256 data key",
       tier: ssm.ParameterTier.STANDARD,
     });
 

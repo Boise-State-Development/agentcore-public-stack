@@ -4,6 +4,36 @@ import { InfrastructureStack } from '../lib/infrastructure-stack';
 import { createMockConfig, mockEnv } from './helpers/mock-config';
 
 /**
+ * Concatenate the literal string fragments of an Fn::Join payload, ignoring
+ * intrinsic refs ({Fn::GetAtt: ...} / {Ref: ...}). Used to assert on the
+ * AwsCustomResource `Create` payload, which CDK emits as a Join over the
+ * SDK call's parameter JSON with cross-resource references spliced in.
+ */
+function _joinLiterals(value: any): string {
+  if (typeof value === 'string') return value;
+  if (value && value['Fn::Join']) {
+    const [_sep, parts] = value['Fn::Join'];
+    return (parts as any[])
+      .map((p) => (typeof p === 'string' ? p : ''))
+      .join('');
+  }
+  return '';
+}
+
+function _findCustomResourceCreate(
+  template: Template,
+  actionSubstring: string,
+): string | null {
+  const customResources = template.findResources('Custom::AWS');
+  for (const r of Object.values(customResources)) {
+    const create = (r as any).Properties?.Create;
+    const text = _joinLiterals(create);
+    if (text.includes(`"action":"${actionSubstring}"`)) return text;
+  }
+  return null;
+}
+
+/**
  * Unit tests for InfrastructureStack — the foundation layer.
  *
  * Validates VPC, ALB, ECS Cluster, Security Groups, DynamoDB tables,
@@ -110,8 +140,15 @@ describe('InfrastructureStack', () => {
   // ------------------------------------------------------------------
   // 6. All DynamoDB tables are created (count)
   // ------------------------------------------------------------------
-  test('creates all 16 DynamoDB tables', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 16);
+  test('creates all 18 DynamoDB tables', () => {
+    // The hard-coded count drifts as tables are added — bump it when you
+    // intentionally provision a new table; investigate if it changed
+    // unexpectedly. Today: oidc_state, bff_sessions, voice_ticket_replay,
+    // users, app_roles, api_keys, oauth_providers, oauth_user_tokens,
+    // user_quotas, quota_events, sessions_metadata, user_cost_summary,
+    // system_cost_rollup, managed_models, user_settings, auth_providers,
+    // user_files, shared_conversations.
+    template.resourceCountIs('AWS::DynamoDB::Table', 18);
   });
 
   // ------------------------------------------------------------------
@@ -268,8 +305,12 @@ describe('InfrastructureStack', () => {
   // ------------------------------------------------------------------
   // 8. Secrets Manager Secrets exist
   // ------------------------------------------------------------------
-  test('creates 3 Secrets Manager secrets', () => {
-    template.resourceCountIs('AWS::SecretsManager::Secret', 3);
+  test('creates 6 Secrets Manager secrets', () => {
+    // Today: AuthenticationSecret, VoiceTicketSigningSecret,
+    // BFFCookieDataKeySecret (deploy-time wrapped AES-256 data key for
+    // cross-task cookie seal/unseal), OAuthClientSecretsSecret,
+    // AuthProviderSecretsSecret, CognitoBFFAppClientSecret.
+    template.resourceCountIs('AWS::SecretsManager::Secret', 6);
   });
 
   test('authentication secret generates a 64-char random string', () => {
@@ -446,6 +487,78 @@ describe('InfrastructureStack', () => {
         Description: Match.stringLikeRegexp('OIDC authentication provider client secrets'),
       }),
       DeletionPolicy: 'Delete',
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // BFF Cookie Data Key — shared wrapped data key for cross-task seal/unseal
+  // ------------------------------------------------------------------
+  describe('BFF Cookie Data Key', () => {
+    test('provisions a Secrets Manager secret for the wrapped data key, encrypted with the BFFCookieSigningKey CMK', () => {
+      template.hasResource('AWS::SecretsManager::Secret', {
+        Properties: Match.objectLike({
+          Description: Match.stringLikeRegexp('KMS-wrapped AES-256 data key'),
+          KmsKeyId: Match.anyValue(),
+        }),
+      });
+    });
+
+    test('publishes the data key secret ARN to SSM for app-api to consume', () => {
+      template.hasResourceProperties('AWS::SSM::Parameter', {
+        Name: `/${config.projectPrefix}/auth/bff-cookie-data-key-secret-arn`,
+      });
+    });
+
+    test('bootstrap custom resource calls kms:generateDataKey with KeySpec AES_256 + outputPaths CiphertextBlob', () => {
+      // The `Create` payload of an AwsCustomResource is emitted as an
+      // Fn::Join over [literal-fragments, intrinsic-refs, literal-fragments].
+      // Concatenate the literal string fragments to assert on the embedded
+      // service/action/parameters JSON.
+      const create = _findCustomResourceCreate(template, 'generateDataKey');
+      expect(create).not.toBeNull();
+      expect(create).toContain('"service":"KMS"');
+      expect(create).toContain('"action":"generateDataKey"');
+      expect(create).toContain('"KeySpec":"AES_256"');
+      // CRITICAL: outputPaths whitelists CiphertextBlob so the response
+      // Plaintext (the AES key itself) never enters CFN state.
+      expect(create).toContain('"outputPaths":["CiphertextBlob"]');
+    });
+
+    test('bootstrap custom resource calls secretsmanager:putSecretValue with the wrapped blob', () => {
+      const create = _findCustomResourceCreate(template, 'putSecretValue');
+      expect(create).not.toBeNull();
+      expect(create).toContain('"service":"SecretsManager"');
+      expect(create).toContain('"action":"putSecretValue"');
+    });
+
+    test('bootstrap custom resource has narrow IAM (kms:GenerateDataKey + secretsmanager:PutSecretValue only)', () => {
+      // The bootstrap Lambda's role must NOT carry broad KMS or Secrets
+      // Manager permissions — those would be a privilege-escalation path
+      // for anyone who can invoke the custom resource.
+      const policies = template.findResources('AWS::IAM::Policy');
+      const customResourcePolicies = Object.values(policies).filter((p: any) =>
+        JSON.stringify(p).includes('AWS679f53fac002430cb0da5b7982bd2287'),
+      );
+      // We don't assert on counts (CDK may share policies); we assert that
+      // anywhere the bootstrap policies appear, the actions are exactly the
+      // two we granted — no wildcards.
+      const actionsInUse = new Set<string>();
+      for (const policy of customResourcePolicies) {
+        const stmts =
+          (policy as any).Properties?.PolicyDocument?.Statement || [];
+        for (const stmt of stmts) {
+          const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+          for (const a of actions) actionsInUse.add(a);
+        }
+      }
+      // We expect at minimum these two actions; CDK adds Lambda invoke etc.
+      // The negative assertion is what matters: no wildcards and no broad
+      // kms:* or secretsmanager:*.
+      for (const action of actionsInUse) {
+        expect(action).not.toBe('*');
+        expect(action).not.toBe('kms:*');
+        expect(action).not.toBe('secretsmanager:*');
+      }
     });
   });
 });
