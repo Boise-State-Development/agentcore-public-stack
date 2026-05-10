@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for ways to improve the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem, frontier model announcements, and agent-harness patterns. Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for ways to improve the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem, frontier model announcements, and agent-harness patterns. Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills) AND security posture (open Dependabot + CodeQL alerts, auth-surface churn). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -9,7 +9,7 @@ Friday early morning. The "what's the rest of the world learning that we should 
 
 ## Philosophy
 
-- **Subtraction first.** Every research run should propose at least as many things to *remove or simplify* as to add. A smaller stack you trust beats a bigger one you route around.
+- **Subtraction first.** Every research run should propose at least as many things to *remove or simplify* as to add. A smaller stack you trust beats a bigger one you route around. **Subtraction explicitly includes replacing custom code with library-native equivalents** — when an upstream release (Strands, AgentCore SDK, FastMCP, MCP, etc.) ships a capability we'd already built or filed an issue for, the win is closing our version and adopting upstream. Example: the 2026-05-10 bootstrap run found that Strands v1.37/v1.38 silently closed our open issues #266 and #267 — the codebase surface area shrinks even though we "added" a dep bump.
 - **Subagent fan-out.** External sources are independent — fan them out to parallel subagents and synthesize. Keeps the main context clean and runs faster.
 - **Web budget soft cap.** Target ≤50 web requests. If a source is exhausted, unreachable, or rate-limited, list it as "not scanned this week" — don't skip silently. Going modestly over the cap (say, to 60) is fine if the extra requests are surfacing real signal; document the overage in the Web Budget block. Don't pad — if 30 requests covered every source meaningfully, stop at 30.
 - **Cite everything.** Every external claim gets a URL + access date in the Sources Scanned appendix. Web findings rot fast and you'll re-read them next week.
@@ -44,6 +44,13 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - https://modelcontextprotocol.io (blog, spec changes)
    - https://github.com/modelcontextprotocol/servers (new servers, retired servers)
    - MCP registry / awesome-mcp lists for new servers relevant to the stack (Bedrock, AWS, GitHub, Slack, observability).
+
+4a. **FastMCP** — used by our externally hosted MCP servers (Lambda-backed, behind AgentCore Gateway). FastMCP is **not** pinned in this repo's `pyproject.toml`; it lives in the MCP server repos this stack consumes via Gateway. Track upstream releases because changes affect server behavior we depend on.
+   - https://github.com/jlowin/fastmcp/releases
+   - https://github.com/jlowin/fastmcp/blob/main/CHANGELOG.md
+   - https://github.com/jlowin/fastmcp/issues?q=is%3Aissue+sort%3Aupdated-desc
+   - https://pypi.org/project/fastmcp/ (for latest version + release date)
+   - Identify: breaking changes, new server-side primitives (resources/prompts/tool decorators, lifespan, auth helpers), transport changes (especially relevant if MCP SEP-2567 sessionless transport lands), and Lambda/runtime adapter changes.
 
 5. **Frontier model announcements**
    - https://www.anthropic.com/news
@@ -98,6 +105,14 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 18. **Skill inventory.** `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`. Skills not modified in 60+ days and not visibly referenced in recent PRs are retirement candidates.
 
+18a. **Security posture audit.** Snapshot the active security signal against the repo. Run in parallel with the other internal Bash calls:
+   - `gh api repos/:owner/:repo/dependabot/alerts --paginate` — open count + severity breakdown (critical / high / medium / low). Cluster by ecosystem (npm / pip / etc.) and package. Cross-reference against the external "Security advisories" scan — overlap is the "what we already know is hitting us" signal.
+   - `gh api repos/:owner/:repo/code-scanning/alerts --paginate` — open CodeQL findings with severity, rule id, file path. Group by rule (e.g., `py/log-injection × N`). Note `error`-severity findings in real backend paths separately from `note`-severity hygiene findings.
+   - `gh api repos/:owner/:repo/secret-scanning/alerts --paginate` — open leaked-secret alerts (this endpoint may 404 if secret scanning isn't enabled; record the gap).
+   - `gh issue list --state open --label security` — human-filed security tickets.
+   - `git log develop --since="7 days ago" -- '*auth*' '*oauth*' '*cookie*' '*jwt*' '*secret*' '*token*'` — recent commits touching the auth/secrets surface. High churn here is a defensive-review prompt (consider asking: is the surface stabilized or still in flux?).
+   - Most recent `CHANGELOG.md` `### 🔒 Security` block — what was just shipped.
+
 19. **Version-pin lag.** For each tracked dep, fetch latest release version and compute lag:
     - Backend: `strands-agents`, `boto3`, `botocore`, `fastapi`, `pydantic`, `bedrock-agentcore`, `mcp`
     - Frontend: `@angular/core`, `@analogjs/platform`, `vitest`
@@ -140,6 +155,9 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 #### MCP ecosystem
 - …
+
+#### FastMCP
+- **[Release / change]** — [URL] — *implications for our MCP servers*: [breaking change? new primitive worth adopting?]
 
 #### Frontier model announcements
 - …
@@ -186,6 +204,26 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 | Dep | Pinned | Latest | Lag | Notes |
 |---|---|---|---|---|
 | strands-agents | x.y.z | a.b.c | N releases / N days | [breaking? new feature relevant to us?] |
+
+### Security posture
+
+**Open Dependabot alerts**: N total ([N critical / N high / N medium / N low])
+| # | Severity | Ecosystem / Package | Summary | Same vuln in last week's external advisories scan? |
+|---|---|---|---|---|
+| #N | high | npm / fast-uri | host confusion | yes — appeared as "adjacent" advisory last week |
+
+**Open CodeQL alerts**: N total (N error, N warning, N note)
+| # | Severity | Rule | Path | Real surface or hygiene? |
+|---|---|---|---|---|
+| #N | error | py/log-injection | backend/src/.../service.py | real (user-controlled input → log) |
+
+**Open security-labeled issues**: N — [link]
+
+**Auth-surface churn (last 7 days)**: N commits touching `*auth*` / `*oauth*` / `*cookie*` / `*jwt*` / `*secret*` / `*token*`. Cluster: [BFF / Cognito / MCP auth / ...]. *Read*: [stabilizing / still in flux / suspicious].
+
+**Last-shipped security work**: link to most recent `🔒 Security` block in `CHANGELOG.md`.
+
+**Net read**: [1-2 sentences. Is the security posture trending tightening, drifting, or steady?]
 
 ### Retirement candidates
 - **[Skill / file / config]** — [evidence: not modified in N days, replaced by X, never referenced]
@@ -278,8 +316,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - `gh run list --status=failure --limit 30`
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
+   - **Security posture** (parallel with the above):
+     - `gh api repos/:owner/:repo/dependabot/alerts --paginate` (filter `state==open`)
+     - `gh api repos/:owner/:repo/code-scanning/alerts --paginate` (filter `state==open`)
+     - `gh api repos/:owner/:repo/secret-scanning/alerts --paginate` (note 404 if disabled)
+     - `gh issue list --state open --label security`
+     - `git log develop --since="7 days ago" -- '*auth*' '*oauth*' '*cookie*' '*jwt*' '*secret*' '*token*'`
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–11 above. Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (12 categories including FastMCP). Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
@@ -290,7 +334,9 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 5. **Version-pin diff.** For each tracked dep, fetch latest release version (WebFetch on the release page or registry equivalent — counts toward budget). Compute lag in releases and days. If a budget hit prevents a check, list the dep under "Skipped".
 
-6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself.
+5a. **Security cross-reference.** For each open Dependabot alert, mark whether the same vulnerability appeared in the external "Security advisories" subagent report (yes = "we already know it's hitting us" — escalate priority). For each high-severity CodeQL finding, note whether the path is real backend code or hygiene-only.
+
+6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**: high-severity security findings on real surfaces get a priority boost; library-native subtraction opportunities (where upstream closed a custom-code need) get a subtraction boost.
 
 7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
 
