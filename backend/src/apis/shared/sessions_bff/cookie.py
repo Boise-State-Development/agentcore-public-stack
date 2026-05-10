@@ -1,31 +1,36 @@
-"""Cookie codec — AES-GCM-sealed session id with a KMS-wrapped data key.
+"""Cookie codec — AES-GCM-sealed session id with a SHA-256-derived data key.
 
 The CDK provisions two collaborating resources:
 
-    - `BFFCookieSigningKey` — symmetric KMS CMK (envelope key).
-    - `BFFCookieDataKeySecret` — Secrets Manager secret holding the wrapped
-      AES-256 data key, generated **once at deploy time** by a CDK custom
-      resource (`kms:GenerateDataKey` -> `secretsmanager:PutSecretValue`).
+    - `BFFCookieSigningKey` — symmetric KMS CMK that encrypts the secret at
+      rest. App-api never calls KMS directly; SecretsManager invokes
+      `kms:Decrypt` on the caller's behalf when `GetSecretValue` runs.
+    - `BFFCookieDataKeySecret` — Secrets Manager secret holding a 44-char
+      high-entropy random string (~261 bits of entropy) generated once at
+      stack create.
 
 Every app-api task on first use:
 
-    1. Reads the wrapped blob from `BFFCookieDataKeySecret`.
-    2. Calls `kms:Decrypt(KeyId=BFFCookieSigningKey, CiphertextBlob=blob)`
-       to recover the plaintext AES key — `KeyId` is pinned so a substituted
-       blob wrapped under a different CMK is rejected.
+    1. Reads the secret string from `BFFCookieDataKeySecret`.
+    2. Derives the 32-byte AES-256 key with `SHA-256(secret_string)` — a
+       single-shot KDF that is secure when the input has ≥256 bits of
+       entropy (a 44-char alphanumeric secret has ~261).
     3. Caches the resulting `AESGCM` cipher as the process-wide singleton.
 
-This shared-blob design replaces the prior pattern of each task calling
+This shared-secret design replaces the prior pattern of each task calling
 `kms:GenerateDataKey` directly: that produced a fresh random key per
 process, so under `desiredCount > 1` cookies sealed by Task A unsealed as
-`bad seal` on Task B (every page-load fan-out became a 401 storm). The
-shape of the singleton is unchanged — only the source of the key material.
+`bad seal` on Task B (every page-load fan-out became a 401 storm). It
+also avoids the chained `AwsCustomResource` bootstrap design that broke
+on first deploy because the framework Lambda JSON-stringifies KMS's
+`Uint8Array` ciphertext as `{"0":233,...}`, exceeding the 4 KB
+CloudFormation response limit.
 
     - Cookie value = base64url( version || nonce || AES-GCM(payload) ).
     - The KMS key is *not* embedded — rotation requires regenerating the
-      wrapped secret AND restarting all tasks; in-flight cookies sealed
-      under the old key fail to unseal (Phase 7 hardening: kid-versioned
-      cookies enable hot rotation).
+      secret AND restarting all tasks; in-flight cookies sealed under the
+      old key fail to unseal (Phase 7 hardening: kid-versioned cookies
+      enable hot rotation).
     - `unseal` is constant-time on failure: any decode/auth-tag error maps
       to `CookieDecodeError` so callers can't time-distinguish failure modes.
 
@@ -37,7 +42,7 @@ sealed cookie fits comfortably under 256 bytes for a 36-char session id.
 from __future__ import annotations
 
 import base64
-import binascii
+import hashlib
 import json
 import logging
 import os
@@ -68,11 +73,11 @@ class CookieDecodeError(Exception):
 
 
 class CookieDataKeyUnavailable(Exception):
-    """Raised when the wrapped data key can't be fetched/unwrapped at startup.
+    """Raised when the data-key secret can't be fetched at startup.
 
     Distinct from `CookieDecodeError` so callers can return 5xx (transient
-    infra problem — Secrets Manager unreachable, KMS down, secret empty)
-    rather than silently clearing every active user's cookie.
+    infra problem — Secrets Manager unreachable, secret empty) rather than
+    silently clearing every active user's cookie.
     """
 
 
@@ -80,12 +85,12 @@ class CookieCodec:
     """Stateful seal/unseal pair backed by a process-cached AES-GCM cipher.
 
     Construct one per process. The first `seal()` or `unseal()` call lazily
-    fetches the **shared** wrapped data key from Secrets Manager and
-    unwraps it via KMS; subsequent calls reuse the cached cipher.
-    Thread-safe on the lazy-init path.
+    fetches the **shared** data-key secret from Secrets Manager and
+    derives the AES key via SHA-256; subsequent calls reuse the cached
+    cipher. Thread-safe on the lazy-init path.
 
     Across multiple ECS tasks (`desiredCount > 1`), every task's codec
-    decrypts to the **same** plaintext key, so cookies sealed by any task
+    derives the **same** plaintext key, so cookies sealed by any task
     unseal on any other task. This is the property that the prior
     `kms:GenerateDataKey`-per-process design lacked.
     """
@@ -95,9 +100,12 @@ class CookieCodec:
         kms_key_arn: Optional[str] = None,
         *,
         data_key_secret_arn: Optional[str] = None,
-        kms_client: Optional[object] = None,
         secrets_manager_client: Optional[object] = None,
     ) -> None:
+        # `kms_key_arn` is retained for config-shape compatibility (and so
+        # callers can introspect which CMK encrypts the secret at rest), but
+        # the codec no longer calls KMS directly — SecretsManager handles
+        # decryption on the caller's behalf when GetSecretValue runs.
         if kms_key_arn is None:
             kms_key_arn = os.environ.get("BFF_COOKIE_SIGNING_KEY_ARN") or ""
         if data_key_secret_arn is None:
@@ -106,7 +114,6 @@ class CookieCodec:
             )
         self._kms_key_arn = kms_key_arn
         self._data_key_secret_arn = data_key_secret_arn
-        self._kms_client = kms_client
         self._secrets_manager_client = secrets_manager_client
         self._cipher: Optional[AESGCM] = None
         self._init_lock = Lock()
@@ -135,44 +142,25 @@ class CookieCodec:
                 # Infra failure — propagate so the request returns 5xx
                 # rather than silently invalidating sessions.
                 raise CookieDataKeyUnavailable(
-                    f"Failed to fetch wrapped BFF data key from Secrets Manager: {exc}"
+                    f"Failed to fetch BFF data key secret from Secrets Manager: {exc}"
                 ) from exc
-            wrapped_b64 = secret.get("SecretString") or ""
-            if not wrapped_b64:
+            secret_string = secret.get("SecretString") or ""
+            if not secret_string:
                 raise CookieDataKeyUnavailable(
                     "BFF cookie data key secret is empty — bootstrap missing"
                 )
-            try:
-                wrapped_blob = base64.b64decode(wrapped_b64, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise CookieDataKeyUnavailable(
-                    f"BFF cookie data key secret is not valid base64: {exc}"
-                ) from exc
 
-            kms = self._kms_client or boto3.client("kms")
-            try:
-                # Pin KeyId: KMS will reject a blob wrapped under any other
-                # key, defending against blob substitution if the secret is
-                # ever tampered with. Without KeyId, KMS auto-selects the
-                # wrapping key, which is the substitution oracle we don't want.
-                response = kms.decrypt(
-                    CiphertextBlob=wrapped_blob,
-                    KeyId=self._kms_key_arn,
-                )
-            except Exception as exc:
-                raise CookieDataKeyUnavailable(
-                    f"Failed to unwrap BFF data key via KMS: {exc}"
-                ) from exc
-            plaintext_key = response.get("Plaintext")
-            if not plaintext_key or len(plaintext_key) != 32:
-                raise CookieDataKeyUnavailable(
-                    "BFF data key after KMS unwrap is not a 32-byte AES-256 key"
-                )
+            # Single-shot KDF: SHA-256 of a high-entropy random input
+            # produces a uniformly distributed 32-byte AES-256 key. The
+            # CDK generates a 44-char alphanumeric secret (~261 bits of
+            # entropy), so the SHA-256 output is statistically
+            # indistinguishable from random.
+            plaintext_key = hashlib.sha256(secret_string.encode("utf-8")).digest()
 
             self._cipher = AESGCM(plaintext_key)
             logger.info(
                 "BFF cookie codec initialized "
-                "(wrapped data key fetched from Secrets Manager + KMS unwrap)"
+                "(data key derived from Secrets Manager secret via SHA-256)"
             )
             return self._cipher
 
@@ -203,10 +191,10 @@ class CookieCodec:
         unknown version) raise `CookieDecodeError` with no information about
         the cause — callers treat every decode failure identically.
 
-        Infrastructure failures from `_ensure_cipher` (KMS unavailable, etc.)
-        propagate up so the middleware can return 5xx instead of silently
-        clearing the session cookie and forcing every active user to re-login
-        on a transient KMS hiccup.
+        Infrastructure failures from `_ensure_cipher` (Secrets Manager
+        unavailable, etc.) propagate up so the middleware can return 5xx
+        instead of silently clearing the session cookie and forcing every
+        active user to re-login on a transient hiccup.
         """
         # Cipher acquisition is intentionally outside the try/except below —
         # a botocore error here must not be coerced into CookieDecodeError.
@@ -247,14 +235,15 @@ class CookieCodec:
 
 
 # Process-wide singleton. The first `seal` or `unseal` call fetches the
-# shared wrapped data key from Secrets Manager and unwraps it via KMS;
-# subsequent calls reuse the same `AESGCM` cipher. Across processes (e.g.
-# multiple ECS tasks under `desiredCount > 1`), every task's singleton
-# decrypts to the **same** plaintext key — so a cookie sealed by any task
-# unseals on any other task, including across rolling deploys where two
-# task revisions briefly coexist. The seal happens in the auth/callback
-# route, the unseal happens in `SessionRefreshMiddleware` and the voice
-# WebSocket route, and they all MUST go through this singleton.
+# shared data-key secret from Secrets Manager and derives the AES key via
+# SHA-256; subsequent calls reuse the same `AESGCM` cipher. Across
+# processes (e.g. multiple ECS tasks under `desiredCount > 1`), every
+# task's singleton derives the **same** plaintext key — so a cookie
+# sealed by any task unseals on any other task, including across rolling
+# deploys where two task revisions briefly coexist. The seal happens in
+# the auth/callback route, the unseal happens in `SessionRefreshMiddleware`
+# and the voice WebSocket route, and they all MUST go through this
+# singleton.
 _default_codec: Optional[CookieCodec] = None
 _default_codec_lock = Lock()
 
@@ -278,7 +267,7 @@ def _reset_default_codec_for_tests() -> None:
 
 def _set_default_codec_for_tests(codec: CookieCodec) -> None:
     """Install a pre-built codec (typically with `_cipher` pre-injected so
-    no KMS call is made) as the process-wide singleton."""
+    no Secrets Manager call is made) as the process-wide singleton."""
     global _default_codec
     with _default_codec_lock:
         _default_codec = codec

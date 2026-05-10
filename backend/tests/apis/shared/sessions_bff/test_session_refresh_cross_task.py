@@ -95,7 +95,7 @@ def two_task_setup(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
 
-        # Both tasks share the wrapped data key (otherwise the cookie sealed
+        # Both tasks share the data-key secret (otherwise the cookie sealed
         # by Task A would unseal as `bad seal` on Task B — that's the OTHER
         # bug in this branch, exercised by test_cookie). We pre-inject one
         # AES key here to keep the test focused on the refresh-lock path.

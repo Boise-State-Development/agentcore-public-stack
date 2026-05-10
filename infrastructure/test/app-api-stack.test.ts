@@ -280,11 +280,11 @@ describe('AppApiStack', () => {
     });
 
     test('BFFCookieSigningKey grant is Decrypt-only — kms:GenerateDataKey is NOT granted to the runtime', () => {
-      // Least privilege: the wrapped data key is generated once at deploy
-      // time by the BFFCookieDataKey* AwsCustomResources in
-      // InfrastructureStack. The runtime only needs kms:Decrypt to unwrap
-      // it. A GenerateDataKey grant here would let a compromised app-api
-      // task mint a parallel data key and seal cookies under it.
+      // Least privilege: BFFCookieDataKeySecret is encrypted at rest with
+      // BFFCookieSigningKey, so SecretsManager invokes kms:Decrypt on the
+      // caller's behalf when app-api calls GetSecretValue. The runtime
+      // never mints a fresh key — a GenerateDataKey grant here would let a
+      // compromised task seal cookies under a parallel key.
       const bffCookieGrants = _findStatementsBySid(template, 'BFFCookieSigningKeyAccess');
       expect(bffCookieGrants.length).toBeGreaterThan(0);
       for (const stmt of bffCookieGrants) {

@@ -3,20 +3,21 @@
 Two layers of coverage:
 
   1. Round-trip / decode tests — use an injected `AESGCM` cipher (set on
-     `_cipher` directly) so we don't need to mock Secrets Manager or KMS.
-  2. `_ensure_cipher` path — exercises the deploy-time-bootstrapped wrapped
-     data key flow (`secretsmanager:GetSecretValue` ->
-     `kms:Decrypt(KeyId=...)` -> AESGCM cipher) with mock clients. This is
-     the path that runs in production every time a task starts.
+     `_cipher` directly) so we don't need to mock Secrets Manager.
+  2. `_ensure_cipher` path — exercises the deploy-time-bootstrapped data
+     key flow (`secretsmanager:GetSecretValue` -> SHA-256 -> AESGCM cipher)
+     with mock clients. This is the path that runs in production every
+     time a task starts.
 
 The cross-task seal/unseal regression — a cookie sealed by one process
 unsealing on a *different* process — is locked in by
-`test_two_codecs_with_same_wrapped_blob_decrypt_to_the_same_cipher`.
+`test_two_codecs_with_same_secret_derive_the_same_cipher`.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import secrets
 from unittest.mock import MagicMock
@@ -122,10 +123,10 @@ def test_default_codec_is_a_singleton() -> None:
     """The auth/callback route seals with this codec and the
     `SessionRefreshMiddleware` unseals with it on the next request — they
     must be the *same* instance within a process so we don't refetch the
-    wrapped data key from Secrets Manager + KMS on every cookie operation.
+    data-key secret on every cookie operation.
 
     Cross-process consistency (Task A's seal unsealing on Task B) is locked
-    in by `test_two_codecs_with_same_wrapped_blob_decrypt_to_the_same_cipher`.
+    in by `test_two_codecs_with_same_secret_derive_the_same_cipher`.
     """
     _reset_default_codec_for_tests()
     try:
@@ -161,90 +162,96 @@ def test_default_codec_round_trip_seals_and_unseals() -> None:
 
 
 # =====================================================================
-# `_ensure_cipher` — wrapped data key fetch + KMS unwrap path.
+# `_ensure_cipher` — Secrets Manager fetch + SHA-256 derivation path.
 # =====================================================================
 
 KMS_KEY_ARN = "arn:aws:kms:us-east-1:0:key/test"
 DATA_KEY_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:0:secret:bff-data-key"
 
 
-def _wrap_plaintext_key_for_test(plaintext: bytes) -> tuple[bytes, str]:
-    """Stand-in for `kms:GenerateDataKey`'s ciphertext — opaque bytes in,
-    base64 string out (matches what CDK's AwsCustomResource stores in
-    Secrets Manager)."""
-    fake_wrapped = b"fake-wrapped:" + plaintext
-    return fake_wrapped, base64.b64encode(fake_wrapped).decode("ascii")
-
-
-def _make_mocks_for(plaintext_key: bytes) -> tuple[MagicMock, MagicMock, str]:
-    fake_wrapped, b64 = _wrap_plaintext_key_for_test(plaintext_key)
+def _make_sm_mock(secret_string: str) -> MagicMock:
     sm = MagicMock()
-    sm.get_secret_value.return_value = {"SecretString": b64}
-    kms = MagicMock()
-    kms.decrypt.return_value = {"Plaintext": plaintext_key}
-    return sm, kms, b64
+    sm.get_secret_value.return_value = {"SecretString": secret_string}
+    return sm
 
 
-def test_ensure_cipher_fetches_wrapped_blob_and_unwraps() -> None:
-    """Happy path: codec fetches the wrapped blob from Secrets Manager and
-    unwraps it via KMS, then seals/unseals successfully."""
-    plaintext = secrets.token_bytes(32)
-    sm, kms, _ = _make_mocks_for(plaintext)
+def test_ensure_cipher_fetches_secret_and_derives_key() -> None:
+    """Happy path: codec fetches the secret from Secrets Manager, derives
+    a 32-byte AES-256 key with SHA-256, then seals/unseals successfully."""
+    secret_string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL012345"  # 44 chars
+    sm = _make_sm_mock(secret_string)
 
     codec = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms,
         secrets_manager_client=sm,
     )
     sealed = codec.seal(CookiePayload(session_id="sess-bootstrapped"))
     assert codec.unseal(sealed).session_id == "sess-bootstrapped"
 
     sm.get_secret_value.assert_called_once_with(SecretId=DATA_KEY_SECRET_ARN)
-    kms.decrypt.assert_called_once()
-    # Defense against blob substitution: KeyId MUST be pinned on Decrypt.
-    kwargs = kms.decrypt.call_args.kwargs
-    assert kwargs["KeyId"] == KMS_KEY_ARN
-    assert kwargs["CiphertextBlob"] == b"fake-wrapped:" + plaintext
 
 
-def test_ensure_cipher_caches_after_first_call() -> None:
-    """Hot-path requirement: only one Secrets Manager + KMS call per process."""
-    sm, kms, _ = _make_mocks_for(secrets.token_bytes(32))
+def test_ensure_cipher_derived_key_matches_sha256_of_secret() -> None:
+    """Lock the KDF: a future change must keep the same derivation, or
+    every cookie sealed by an old task fails to unseal on a new task
+    after deploy."""
+    secret_string = "deterministic-secret-for-kdf-pinning-test-1234"
+    sm = _make_sm_mock(secret_string)
+
     codec = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms,
+        secrets_manager_client=sm,
+    )
+    # Force initialization without exposing _cipher's key directly: use a
+    # parallel cipher with the expected key, encrypt, and decrypt with the
+    # codec. If the codec didn't derive via SHA-256, decrypt fails.
+    codec.seal(CookiePayload(session_id="x"))
+    expected_key = hashlib.sha256(secret_string.encode("utf-8")).digest()
+    expected_cipher = AESGCM(expected_key)
+    nonce = secrets.token_bytes(12)
+    ciphertext = expected_cipher.encrypt(nonce, b'{"sid":"y"}', bytes([1]))
+    blob = bytes([1]) + nonce + ciphertext
+    sealed = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
+    decoded = codec.unseal(sealed)
+    assert decoded.session_id == "y"
+
+
+def test_ensure_cipher_caches_after_first_call() -> None:
+    """Hot-path requirement: only one Secrets Manager call per process."""
+    sm = _make_sm_mock("a" * 44)
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
         secrets_manager_client=sm,
     )
     for _ in range(5):
         codec.seal(CookiePayload(session_id="x"))
     assert sm.get_secret_value.call_count == 1
-    assert kms.decrypt.call_count == 1
 
 
-def test_two_codecs_with_same_wrapped_blob_decrypt_to_the_same_cipher() -> None:
+def test_two_codecs_with_same_secret_derive_the_same_cipher() -> None:
     """Regression lock for the dev `bad seal` 401 storm.
 
     Two independent `CookieCodec` instances simulate two ECS tasks. Both
-    fetch the SAME wrapped blob from Secrets Manager and unwrap it with
-    the same CMK. A cookie sealed on `task_a` MUST unseal on `task_b`.
-    Pre-fix, each task generated its own random data key and this failed.
+    fetch the SAME secret string from Secrets Manager and derive the same
+    32-byte key via SHA-256. A cookie sealed on `task_a` MUST unseal on
+    `task_b`. Pre-fix, each task generated its own random data key and
+    this failed.
     """
-    plaintext = secrets.token_bytes(32)
-    sm_a, kms_a, _ = _make_mocks_for(plaintext)
-    sm_b, kms_b, _ = _make_mocks_for(plaintext)
+    secret_string = "shared-secret-across-tasks-1234567890ABCDEFGH"
+    sm_a = _make_sm_mock(secret_string)
+    sm_b = _make_sm_mock(secret_string)
 
     task_a = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms_a,
         secrets_manager_client=sm_a,
     )
     task_b = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms_b,
         secrets_manager_client=sm_b,
     )
 
@@ -262,21 +269,6 @@ def test_ensure_cipher_propagates_secrets_manager_failure() -> None:
     codec = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=MagicMock(),
-        secrets_manager_client=sm,
-    )
-    with pytest.raises(CookieDataKeyUnavailable):
-        codec.unseal("anything")
-
-
-def test_ensure_cipher_propagates_kms_decrypt_failure() -> None:
-    sm, _, _ = _make_mocks_for(secrets.token_bytes(32))
-    kms = MagicMock()
-    kms.decrypt.side_effect = RuntimeError("KMS unreachable")
-    codec = CookieCodec(
-        kms_key_arn=KMS_KEY_ARN,
-        data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms,
         secrets_manager_client=sm,
     )
     with pytest.raises(CookieDataKeyUnavailable):
@@ -286,47 +278,13 @@ def test_ensure_cipher_propagates_kms_decrypt_failure() -> None:
 def test_ensure_cipher_rejects_empty_secret_string() -> None:
     """Bootstrap not yet completed (or secret manually wiped) — fail loud
     rather than silently invalidate every active session."""
-    sm = MagicMock()
-    sm.get_secret_value.return_value = {"SecretString": ""}
+    sm = _make_sm_mock("")
     codec = CookieCodec(
         kms_key_arn=KMS_KEY_ARN,
         data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=MagicMock(),
         secrets_manager_client=sm,
     )
     with pytest.raises(CookieDataKeyUnavailable, match="bootstrap missing"):
-        codec.unseal("anything")
-
-
-def test_ensure_cipher_rejects_non_base64_secret() -> None:
-    sm = MagicMock()
-    sm.get_secret_value.return_value = {"SecretString": "!!! not base64 !!!"}
-    codec = CookieCodec(
-        kms_key_arn=KMS_KEY_ARN,
-        data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=MagicMock(),
-        secrets_manager_client=sm,
-    )
-    with pytest.raises(CookieDataKeyUnavailable, match="not valid base64"):
-        codec.unseal("anything")
-
-
-def test_ensure_cipher_rejects_wrong_size_plaintext_key() -> None:
-    """KMS returned something, but it's not a 32-byte AES-256 key. Bail
-    rather than constructing an invalid `AESGCM` cipher."""
-    sm = MagicMock()
-    sm.get_secret_value.return_value = {
-        "SecretString": base64.b64encode(b"wrapped").decode("ascii")
-    }
-    kms = MagicMock()
-    kms.decrypt.return_value = {"Plaintext": b"too-short"}
-    codec = CookieCodec(
-        kms_key_arn=KMS_KEY_ARN,
-        data_key_secret_arn=DATA_KEY_SECRET_ARN,
-        kms_client=kms,
-        secrets_manager_client=sm,
-    )
-    with pytest.raises(CookieDataKeyUnavailable, match="32-byte"):
         codec.unseal("anything")
 
 

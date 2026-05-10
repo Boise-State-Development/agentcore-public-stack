@@ -30,7 +30,6 @@ Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11
 from __future__ import annotations
 
 import asyncio
-import base64
 import secrets
 import time
 from typing import Any, Optional
@@ -834,25 +833,22 @@ def test_3_6_get_default_codec_is_singleton_with_no_per_request_kms() -> None:
     """(3.6) Codec singleton.
 
     `get_default_codec()` returns the same instance across calls. The
-    *underlying* AWS calls — `secretsmanager:GetSecretValue` to fetch the
-    wrapped data key and `kms:Decrypt` to unwrap it — happen at most once
+    underlying `secretsmanager:GetSecretValue` call happens at most once
     per process. Hot seal/unseal traffic must not re-fetch.
 
     (This contract held under the original `kms:GenerateDataKey`-per-process
-    design too; only the underlying AWS APIs changed when the codec was
-    moved to a shared wrapped data key for cross-task seal/unseal.)
+    design and the interim KMS-wrap design too; only the underlying AWS
+    APIs and KDF changed when the codec was moved to a shared
+    Secrets-Manager-generated secret for cross-task seal/unseal.)
     """
-    plaintext_key = secrets.token_bytes(32)
-    wrapped_b64 = base64.b64encode(b"wrapped-blob:" + plaintext_key).decode("ascii")
     sm_client = MagicMock()
-    sm_client.get_secret_value.return_value = {"SecretString": wrapped_b64}
-    kms_client = MagicMock()
-    kms_client.decrypt.return_value = {"Plaintext": plaintext_key}
+    sm_client.get_secret_value.return_value = {
+        "SecretString": "secret-3-6-high-entropy-1234567890ABCDEFGHIJ"
+    }
 
     codec = CookieCodec(
         kms_key_arn="arn:aws:kms:fake-3.6",
         data_key_secret_arn="arn:aws:secretsmanager:fake-3.6",
-        kms_client=kms_client,
         secrets_manager_client=sm_client,
     )
     cookie_module._set_default_codec_for_tests(codec)
@@ -875,17 +871,6 @@ def test_3_6_get_default_codec_is_singleton_with_no_per_request_kms() -> None:
         f"{sm_client.get_secret_value.call_count} times — must be at most "
         "one per process."
     )
-    assert kms_client.decrypt.call_count <= 1, (
-        f"[3.6] KMS decrypt invoked {kms_client.decrypt.call_count} times "
-        "— must be at most one per process."
-    )
-    # Defense against blob substitution: KeyId must be pinned on Decrypt.
-    if kms_client.decrypt.call_count == 1:
-        kwargs = kms_client.decrypt.call_args.kwargs
-        assert kwargs.get("KeyId") == "arn:aws:kms:fake-3.6", (
-            "[3.6] kms:Decrypt must pin KeyId so a substituted blob wrapped "
-            "under a different CMK is rejected."
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

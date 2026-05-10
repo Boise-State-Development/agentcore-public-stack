@@ -537,11 +537,10 @@ export class AppApiStack extends cdk.Stack {
         // BFF Token Handler — wired in Phase 1, used starting Phase 2.
         BFF_SESSIONS_TABLE_NAME: bffSessionsTableName,
         BFF_COOKIE_SIGNING_KEY_ARN: bffCookieSigningKeyArn,
-        // Wrapped AES-256 data key — fetched once at task startup, decrypted
-        // via kms:Decrypt against BFF_COOKIE_SIGNING_KEY_ARN, cached as the
-        // CookieCodec singleton's cipher. Bootstrapped at deploy time by the
-        // BFFCookieDataKey* AwsCustomResources in infrastructure-stack.ts so
-        // every app-api task shares one plaintext key.
+        // High-entropy secret string fetched once at task startup; SHA-256
+        // is applied at runtime to derive the 32-byte AES-256 cookie key.
+        // Generated once by Secrets Manager at stack create so every app-api
+        // task derives the same plaintext key (cross-task seal/unseal).
         BFF_COOKIE_DATA_KEY_SECRET_ARN: bffCookieDataKeySecretArn,
         BFF_SESSION_TTL_SECONDS: '28800',
         BFF_SESSION_REFRESH_LEEWAY_SECONDS: '60',
@@ -1045,13 +1044,12 @@ export class AppApiStack extends cdk.Stack {
       new iam.PolicyStatement({
         sid: 'BFFCookieSigningKeyAccess',
         effect: iam.Effect.ALLOW,
-        // The wrapped data key is generated once at deploy time by the
-        // BFFCookieDataKey* AwsCustomResources; runtime only needs Decrypt
-        // (against BFFCookieSigningKey) to unwrap the blob fetched from
-        // Secrets Manager. kms:GenerateDataKey is intentionally NOT granted
-        // to the runtime — least privilege; a compromised task can no longer
-        // mint a parallel data key and seal cookies under it.
-        actions: ['kms:Decrypt', 'kms:DescribeKey'],
+        // BFFCookieDataKeySecret is encrypted at rest with this CMK, so
+        // SecretsManager invokes kms:Decrypt on the caller's behalf when
+        // app-api calls GetSecretValue. kms:GenerateDataKey is intentionally
+        // NOT granted — the runtime never mints a fresh key, so a compromised
+        // task can't seal cookies under a parallel key.
+        actions: ['kms:Decrypt'],
         resources: [bffCookieSigningKeyArn],
       })
     );
@@ -1060,9 +1058,8 @@ export class AppApiStack extends cdk.Stack {
       new iam.PolicyStatement({
         sid: 'BFFCookieDataKeySecretAccess',
         effect: iam.Effect.ALLOW,
-        // Read-only on the wrapped data key. PutSecretValue is held only by
-        // the deploy-time bootstrap custom resource — runtime cannot rotate
-        // or substitute the blob.
+        // Read-only on the data-key secret. PutSecretValue is intentionally
+        // not granted — the runtime cannot rotate or substitute the value.
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
         resources: [`${bffCookieDataKeySecretArn}*`], // Wildcard for random suffix
       })
