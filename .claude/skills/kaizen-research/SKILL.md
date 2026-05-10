@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for ways to improve the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem, frontier model announcements, and agent-harness patterns. Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills) AND security posture (open Dependabot + CodeQL alerts, auth-surface churn). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns, and agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -52,6 +52,15 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - https://pypi.org/project/fastmcp/ (for latest version + release date)
    - Identify: breaking changes, new server-side primitives (resources/prompts/tool decorators, lifespan, auth helpers), transport changes (especially relevant if MCP SEP-2567 sessionless transport lands), and Lambda/runtime adapter changes.
 
+4b. **Agentic UI/UX patterns** — emerging UI and UX conventions for AI/agentic apps. We're Angular + Tailwind, so React-specific libraries are **pattern-only** references (extract the idea, implement in signals). Focus on functionality + interaction + visual conventions, not generic "good chat UX".
+   - **MCP Apps + extensions** (priority): https://modelcontextprotocol.io/extensions/apps/overview, https://github.com/modelcontextprotocol/ext-apps, https://blog.modelcontextprotocol.io. The "MCP server returns an interactive UI inline with the chat" standard. Track host adoption (Claude Desktop, ChatGPT, VS Code Copilot, Goose, Postman) and new MCP extension SEPs.
+   - **AI SDK / Generative UI** (Vercel): https://ai-sdk.dev/docs/ai-sdk-ui, https://ai-sdk.dev/cookbook. Canonical reference for tool-call rendering, multi-step UI, generative UI, streaming state patterns. React, but the patterns port.
+   - **assistant-ui**: https://www.assistant-ui.com/docs, https://github.com/Yonom/assistant-ui/releases. React component library purpose-built for AI chat UI. Tracks attachment UX, threading, tool-call rendering primitives.
+   - **Vendor product-blog UX writeups**: https://linear.app/blog (Linear Agent), https://www.cursor.com/blog (canvas, agent harness), https://www.anthropic.com/news filtered for `artifact`/`ui`/`design`. Where in-app agentic patterns get documented by the teams shipping them.
+   - **OpenAI Canvas + ChatGPT UI**: https://openai.com/blog filtered for `canvas`, `chatgpt`, agent UI updates.
+   - **Nielsen Norman Group AI articles**: https://www.nngroup.com/topic/artificial-intelligence/. UX-research perspective; evidence-based; slow cadence — surfaces in ~1 of 4 weekly runs but high signal when it does.
+   - Identify: new agentic UI standards (especially MCP Apps + adjacent SEPs), tool-result rendering patterns, attachment/preview UX, multi-agent attribution patterns, consent/elicitation UX, evidence-based usability findings.
+
 5. **Frontier model announcements**
    - https://www.anthropic.com/news
    - https://openai.com/blog (filter: API, agents, tools)
@@ -77,16 +86,12 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - HN search: `site:news.ycombinator.com bedrock OR agentcore OR strands OR "claude code"` (last 7 days)
    - r/LocalLLaMA, r/MachineLearning — agent-harness critiques and patterns surface here before vendor blogs.
 
-10. **Security advisories**
-    - https://github.com/advisories — filter for `boto3`, `strands-agents`, `fastapi`, `mcp`, `@angular`, `aws-cdk-lib`, `pydantic`.
-    - Cross-reference against pinned versions in this repo.
-
-11. **Anthropic cookbook + courses**
+10. **Anthropic cookbook + courses**
     - https://github.com/anthropics/anthropic-cookbook
     - https://github.com/anthropics/courses
     - Worked examples often outpace docs — especially for caching, tool use, and agent loops.
 
-12. **Seasonal sources** (only when in window)
+11. **Seasonal sources** (only when in window)
     - AWS re:Invent (typically late Nov / early Dec) — Bedrock/AgentCore announcements.
     - NeurIPS / ICLR / EMNLP agent tracks (when proceedings drop).
     - If today's date is not in a known window, skip with "no seasonal sources this week".
@@ -104,14 +109,6 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 17. **Recent CHANGELOG.md / RELEASE_NOTES.md entries** (last 14 days). Used as the "don't re-propose what we just shipped" filter.
 
 18. **Skill inventory.** `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`. Skills not modified in 60+ days and not visibly referenced in recent PRs are retirement candidates.
-
-18a. **Security posture audit.** Snapshot the active security signal against the repo. Run in parallel with the other internal Bash calls:
-   - `gh api repos/:owner/:repo/dependabot/alerts --paginate` — open count + severity breakdown (critical / high / medium / low). Cluster by ecosystem (npm / pip / etc.) and package. Cross-reference against the external "Security advisories" scan — overlap is the "what we already know is hitting us" signal.
-   - `gh api repos/:owner/:repo/code-scanning/alerts --paginate` — open CodeQL findings with severity, rule id, file path. Group by rule (e.g., `py/log-injection × N`). Note `error`-severity findings in real backend paths separately from `note`-severity hygiene findings.
-   - `gh api repos/:owner/:repo/secret-scanning/alerts --paginate` — open leaked-secret alerts (this endpoint may 404 if secret scanning isn't enabled; record the gap).
-   - `gh issue list --state open --label security` — human-filed security tickets.
-   - `git log develop --since="7 days ago" -- '*auth*' '*oauth*' '*cookie*' '*jwt*' '*secret*' '*token*'` — recent commits touching the auth/secrets surface. High churn here is a defensive-review prompt (consider asking: is the surface stabilized or still in flux?).
-   - Most recent `CHANGELOG.md` `### 🔒 Security` block — what was just shipped.
 
 19. **Version-pin lag.** For each tracked dep, fetch latest release version and compute lag:
     - Backend: `strands-agents`, `boto3`, `botocore`, `fastapi`, `pydantic`, `bedrock-agentcore`, `mcp`
@@ -159,6 +156,9 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 #### FastMCP
 - **[Release / change]** — [URL] — *implications for our MCP servers*: [breaking change? new primitive worth adopting?]
 
+#### Agentic UI/UX patterns
+- **[Pattern / release]** — [URL] — *what it is*: [1-2 sentences] — *fit for our stack*: [direct port / pattern-only (Angular equivalent: …) / not applicable] — *where it'd land*: [SSE event / component / route]
+
 #### Frontier model announcements
 - …
 
@@ -169,9 +169,6 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 - …
 
 #### Community + GitHub issues
-- …
-
-#### Security advisories
 - …
 
 #### Cookbook / courses
@@ -204,26 +201,6 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 | Dep | Pinned | Latest | Lag | Notes |
 |---|---|---|---|---|
 | strands-agents | x.y.z | a.b.c | N releases / N days | [breaking? new feature relevant to us?] |
-
-### Security posture
-
-**Open Dependabot alerts**: N total ([N critical / N high / N medium / N low])
-| # | Severity | Ecosystem / Package | Summary | Same vuln in last week's external advisories scan? |
-|---|---|---|---|---|
-| #N | high | npm / fast-uri | host confusion | yes — appeared as "adjacent" advisory last week |
-
-**Open CodeQL alerts**: N total (N error, N warning, N note)
-| # | Severity | Rule | Path | Real surface or hygiene? |
-|---|---|---|---|---|
-| #N | error | py/log-injection | backend/src/.../service.py | real (user-controlled input → log) |
-
-**Open security-labeled issues**: N — [link]
-
-**Auth-surface churn (last 7 days)**: N commits touching `*auth*` / `*oauth*` / `*cookie*` / `*jwt*` / `*secret*` / `*token*`. Cluster: [BFF / Cognito / MCP auth / ...]. *Read*: [stabilizing / still in flux / suspicious].
-
-**Last-shipped security work**: link to most recent `🔒 Security` block in `CHANGELOG.md`.
-
-**Net read**: [1-2 sentences. Is the security posture trending tightening, drifting, or steady?]
 
 ### Retirement candidates
 - **[Skill / file / config]** — [evidence: not modified in N days, replaced by X, never referenced]
@@ -316,14 +293,8 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - `gh run list --status=failure --limit 30`
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
-   - **Security posture** (parallel with the above):
-     - `gh api repos/:owner/:repo/dependabot/alerts --paginate` (filter `state==open`)
-     - `gh api repos/:owner/:repo/code-scanning/alerts --paginate` (filter `state==open`)
-     - `gh api repos/:owner/:repo/secret-scanning/alerts --paginate` (note 404 if disabled)
-     - `gh issue list --state open --label security`
-     - `git log develop --since="7 days ago" -- '*auth*' '*oauth*' '*cookie*' '*jwt*' '*secret*' '*token*'`
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (12 categories including FastMCP). Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–11 above (13 categories total including 4a FastMCP and 4b Agentic UI/UX). Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
@@ -334,9 +305,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 5. **Version-pin diff.** For each tracked dep, fetch latest release version (WebFetch on the release page or registry equivalent — counts toward budget). Compute lag in releases and days. If a budget hit prevents a check, list the dep under "Skipped".
 
-5a. **Security cross-reference.** For each open Dependabot alert, mark whether the same vulnerability appeared in the external "Security advisories" subagent report (yes = "we already know it's hitting us" — escalate priority). For each high-severity CodeQL finding, note whether the path is real backend code or hygiene-only.
-
-6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**: high-severity security findings on real surfaces get a priority boost; library-native subtraction opportunities (where upstream closed a custom-code need) get a subtraction boost.
+6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**: library-native subtraction opportunities (where upstream closed a custom-code need) get a subtraction boost; UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a "concrete fit" boost over generic "interesting trend" items.
 
 7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
 
@@ -363,7 +332,7 @@ gh pr create --base develop --head "$BRANCH" \
   --title "chore(kaizen): weekly research scan ${DATE}" \
   --body "$(cat <<'EOF'
 ## Summary
-- External scan: AWS Bedrock/AgentCore, Strands Agents, reference repo, MCP, frontier models, agent-harness patterns, pricing, security advisories.
+- External scan: AWS Bedrock/AgentCore, Strands Agents, FastMCP, reference repo, MCP, agentic UI/UX patterns, frontier models, agent-harness patterns, pricing.
 - Internal audit: recent commits, open PRs, GitHub issues, CI failures, version-pin lag, retirement candidates.
 - Top 5 ideas in the dated research doc and queued in `docs/kaizen/review-queue.md`.
 
