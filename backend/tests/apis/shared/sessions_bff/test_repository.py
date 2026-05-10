@@ -277,3 +277,102 @@ async def test_update_tokens_rejects_persist_when_peer_owns_the_lock(
         exc_info.value.response.get("Error", {}).get("Code")
         == "ConditionalCheckFailedException"
     )
+
+
+@pytest.mark.asyncio
+async def test_update_tokens_rejects_persist_when_peer_already_cleared_the_lock(
+    repository, sample_record
+) -> None:
+    """The other half of the stale-leader guard: a peer whose lock TTL'd,
+    took over, refreshed, and successfully persisted (which atomically
+    REMOVEs the lock attrs) — the row now has NO lock attributes at all.
+    A stale leader trying to persist with `expected_lock_owner=our-task`
+    must still fail closed; otherwise our older Cognito tokens would
+    silently overwrite the peer's freshly rotated ones, and the next
+    request would get NotAuthorizedException from Cognito (our refresh
+    token was revoked when the peer's rotation was issued).
+
+    Sequence:
+        1. Task A acquires lock at T0.
+        2. Task A's Cognito call hangs.
+        3. Task B sees lock TTL'd, acquires, refreshes, persists (clears).
+        4. Task A's Cognito finally returns; A tries to persist.
+        => MUST fail with ConditionalCheckFailedException.
+    """
+    from botocore.exceptions import ClientError
+
+    record = sample_record()
+    await repository.put(record)
+
+    # Peer acquired the lock and successfully persisted (clearing it).
+    await repository.try_acquire_refresh_lock(
+        session_id=record.session_id, owner="peer-task", lock_ttl_seconds=30
+    )
+    await repository.update_tokens(
+        session_id=record.session_id,
+        access_token="access.peer-fresh",
+        refresh_token="refresh.peer-rotated",
+        id_token="id.peer",
+        access_token_exp=int(time.time()) + 3600,
+        last_seen_at=int(time.time()),
+        expected_lock_owner="peer-task",
+    )
+
+    # Stale leader (our-task) — never owned a lock that's still on the
+    # row, but holds an old `lock_owner` from before the TTL. Must fail.
+    with pytest.raises(ClientError) as exc_info:
+        await repository.update_tokens(
+            session_id=record.session_id,
+            access_token="access.stale-leader",
+            refresh_token="refresh.stale-leader",
+            id_token="id.stale-leader",
+            access_token_exp=int(time.time()) + 3600,
+            last_seen_at=int(time.time()),
+            expected_lock_owner="our-task",
+        )
+    assert (
+        exc_info.value.response.get("Error", {}).get("Code")
+        == "ConditionalCheckFailedException"
+    )
+
+    # Peer's tokens are still intact on the row.
+    fetched = await repository.get(record.session_id)
+    assert fetched is not None
+    assert fetched.cognito_access_token == "access.peer-fresh"
+    assert fetched.cognito_refresh_token == "refresh.peer-rotated"
+
+
+@pytest.mark.asyncio
+async def test_try_acquire_refresh_lock_does_not_create_phantom_row(
+    repository, moto_bff_dynamodb
+) -> None:
+    """Logout-during-refresh guard: if the session row was deleted between
+    `repository.get()` and `try_acquire_refresh_lock`, UpdateItem would
+    upsert a phantom row containing only the lock attrs (and crucially no
+    `ttl`, so DDB TTL would never reap it). The `attribute_exists(PK)`
+    guard turns that into a clean False return.
+
+    Asserts via raw DDB get_item — `repository.get` would mask a phantom
+    behind its post-read TTL check (a row with no `ttl` attribute reads
+    as `int(item.get("ttl", 0)) <= now`, treated as missing), so we
+    bypass that and look at the raw item.
+    """
+    # Session row never existed (or was just deleted by a logout from
+    # another task between this request's repository.get() and here).
+    acquired = await repository.try_acquire_refresh_lock(
+        session_id="never-existed",
+        owner="task-A",
+        lock_ttl_seconds=30,
+    )
+    assert acquired is False
+
+    # No phantom row was created — check the raw table, since
+    # repository.get() would also return None for a phantom (no `ttl`).
+    table = moto_bff_dynamodb.Table("test-bff-sessions")
+    response = table.get_item(
+        Key={"PK": "SESSION#never-existed", "SK": "META"}
+    )
+    assert "Item" not in response, (
+        "try_acquire_refresh_lock created a phantom row with no `ttl` — "
+        "DDB TTL would never reap it"
+    )

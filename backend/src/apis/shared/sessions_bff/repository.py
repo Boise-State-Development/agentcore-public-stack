@@ -173,13 +173,19 @@ class SessionRepository:
         should slide alongside it.
 
         When `expected_lock_owner` is supplied, the write is conditional on
-        the row's `refresh_lock_owner` attribute matching (or being absent).
-        The lock attributes are also REMOVED in the same write, releasing
-        the cross-task lock alongside the token rotation. If the condition
-        fails (a peer has acquired the lock — implies our lock had expired
-        and someone else owns the refresh now), `ConditionalCheckFailedException`
-        is raised so the caller can re-read the row and adopt the peer's
-        tokens instead of stomping on them.
+        the row's `refresh_lock_owner` attribute strictly matching. The lock
+        attributes are also REMOVED in the same write, releasing the
+        cross-task lock alongside the token rotation. The condition fires
+        on two distinct stale-leader cases that both must NOT stomp:
+
+        1. A peer holds the lock right now (their owner != ours) — we never
+           had it or our acquisition was stale.
+        2. A peer held the lock, completed the refresh, and `REMOVE`d the
+           attrs — the row has no lock owner at all but our tokens are
+           now older than the row's persisted state.
+
+        Both surface as `ConditionalCheckFailedException`; the caller
+        re-reads the row and adopts the peer's tokens instead of stomping.
         """
         if not self._enabled:
             return
@@ -212,17 +218,22 @@ class SessionRepository:
 
         if expected_lock_owner is not None:
             # Atomically release the cross-task refresh lock alongside the
-            # token write. The condition guards against a stale leader
-            # (whose lock TTL'd while another task took over) overwriting
-            # the new leader's freshly persisted tokens.
+            # token write. The condition is strict — `refresh_lock_owner`
+            # MUST equal our owner. We don't accept "lock attrs absent"
+            # because that's exactly the stale-leader stomp case: a peer
+            # whose lock TTL'd, took over, refreshed, and persisted (which
+            # REMOVEs the lock attrs) — letting `attribute_not_exists`
+            # match here would let our stale tokens overwrite the peer's
+            # freshly rotated ones, silently logging the user out on the
+            # next request when Cognito rejects our (now-revoked) refresh
+            # token. The leader always set these attrs in
+            # `try_acquire_refresh_lock`, so the strict form is correct
+            # in every legitimate flow.
             kwargs["UpdateExpression"] = (
                 update_expr + " REMOVE refresh_lock_owner, refresh_lock_until"
             )
             expr_values[":owner"] = expected_lock_owner
-            kwargs["ConditionExpression"] = (
-                "attribute_not_exists(refresh_lock_owner) "
-                "OR refresh_lock_owner = :owner"
-            )
+            kwargs["ConditionExpression"] = "refresh_lock_owner = :owner"
 
         def _call() -> None:
             self._table.update_item(**kwargs)
@@ -259,9 +270,17 @@ class SessionRepository:
                 "SET refresh_lock_owner = :owner, "
                 "refresh_lock_until = :until"
             ),
+            # `attribute_exists(PK)` guards against UpdateItem's
+            # upsert-by-default behavior — without it, a logout that races
+            # the refresh path (deletes the row between `repository.get()`
+            # and this call) would let us create a phantom row containing
+            # only the lock attrs and no `ttl`, which DDB TTL would never
+            # reap. With it, lock acquisition on a missing row fails
+            # cleanly via ConditionalCheckFailedException → False.
             "ConditionExpression": (
+                "attribute_exists(PK) AND ("
                 "attribute_not_exists(refresh_lock_until) "
-                "OR refresh_lock_until < :now"
+                "OR refresh_lock_until < :now)"
             ),
             "ExpressionAttributeValues": {
                 ":owner": owner,

@@ -496,6 +496,44 @@ def test_slide_max_age_capped_by_remaining_absolute_lifetime() -> None:
     assert 350 <= max_age <= 400
 
 
+def test_refresh_path_past_absolute_cap_clears_cookie_without_calling_cognito() -> None:
+    """The refresh path must mirror the slide path's absolute-cap behavior:
+    once `created_at + absolute_lifetime` has passed, do NOT mint fresh
+    tokens. Persisting them would also write a past-dated `ttl`
+    (`min(now + session_ttl_seconds, absolute_cap)` is `< now` past the
+    cap), which would instantly TTL-evict the row right after the write
+    and silently log the user out one request later. Failing closed up
+    front avoids burning a Cognito refresh-token rotation we'd just
+    throw away."""
+    record = _make_record(access_token_exp=int(time.time()) + 5)  # within leeway
+    record.created_at = int(time.time()) - 200  # past 100s absolute cap
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh = AsyncMock(
+        side_effect=AssertionError(
+            "Cognito refresh MUST NOT be called past absolute lifetime"
+        )
+    )
+    app = _build_app(
+        config=_enabled_config(absolute_lifetime_seconds=100),
+        repository=repo,
+        codec=codec,
+        refresh_client=refresh,
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    assert response.json()["has_session"] is False
+    refresh.refresh.assert_not_called()
+    repo.update_tokens.assert_not_called()
+    cleared = " ".join(response.headers.get_list("set-cookie"))
+    assert SESSION_COOKIE_NAME in cleared and "Max-Age=0" in cleared
+
+
 def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
     """The token-rotation write must also slide the row's ttl forward —
     otherwise a session that just refreshed could still expire moments

@@ -442,6 +442,23 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                     self._cache.set(current)
                     return current, False
 
+                # Past absolute lifetime — terminal. Don't burn a Cognito
+                # refresh-token rotation on a session we'd just write a
+                # past-dated TTL onto (which would instantly TTL-evict the
+                # row right after we wrote tokens). Mirrors the slide path
+                # in `_maybe_slide`, which also short-circuits at the cap.
+                if (
+                    current.created_at + self._config.absolute_lifetime_seconds
+                    <= int(time.time())
+                ):
+                    logger.info(
+                        "BFF session %s past absolute lifetime — clearing cookie "
+                        "rather than refreshing.",
+                        session_id,
+                    )
+                    self._cache.invalidate(session_id)
+                    return None, True
+
                 lock_owner = secrets.token_hex(16)
                 lock_acquired = await self._repository.try_acquire_refresh_lock(
                     session_id=session_id,
@@ -462,6 +479,14 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                         # will get to retry. Fail closed for *this* request.
                         self._cache.invalidate(session_id)
                         return None, True
+                    # Cross-task adoption succeeded — peer's refresh is
+                    # authoritative. Log at INFO so CloudWatch can answer
+                    # "how often is cross-task coalescing actually firing?"
+                    logger.info(
+                        "BFF session %s adopted peer task's refreshed tokens "
+                        "(cross-task lock follower path).",
+                        session_id,
+                    )
                     self._cache.set(peer)
                     return peer, False
 
