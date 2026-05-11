@@ -1,13 +1,214 @@
-# Release Notes — v1.0.0-beta.24
+# Release Notes — v1.0.0-beta.25
 
-**Release Date:** May 6, 2026
-**Previous Release:** v1.0.0-beta.23 (April 29, 2026)
+**Release Date:** May 11, 2026
+**Previous Release:** v1.0.0-beta.24 (May 6, 2026)
 
 ---
 
 ## Highlights
 
-This release lands the **BFF Token Handler** — a ground-up rewrite of the SPA's auth surface. `localStorage` Bearer tokens are replaced with server-side Cognito session storage keyed by an opaque session id in a KMS-sealed AES-GCM cookie, the public PKCE Cognito client is decommissioned in favor of a confidential client whose secret never leaves the server, and same-origin `/api/*` routing via CloudFront enables `__Host-` cookies, double-submit CSRF, and eliminates the CORS preflight from every chat turn. **Voice mode returns** via a WebSocket-ticket proxy on app-api. The chat view gains a **per-conversation cost + context-window badge** with write-time aggregation, and **context compaction events** now surface inline with refresh-survival. Anthropic **extended thinking** is wired end-to-end via per-model inference parameters. The backend finishes its architecture cleanup: cost, tools, storage, and API-keys modules now live under `apis.shared` with AST-enforced import boundaries.
+This release is the **production-readiness fix for the BFF Token Handler** shipped in v1.0.0-beta.24. Beta.24 rewrote the SPA's auth surface onto cookie-based sessions but left three production-breaking bugs that only surfaced under real traffic: the `SessionRefreshMiddleware` ran synchronous boto3 on the uvicorn event loop so Angular's ~8-endpoint page-load fan-out produced ~16 serialized blocking AWS calls per user per minute (504s, 80s `/files/quota` tails, 15.6s p-max on a 0.7% CPU task); the `CookieCodec` minted a fresh random AES-256 key per process, so as soon as we raised `desiredCount` for concurrency slack every cookie started failing as `bad seal` on ~50% of requests; and the per-session refresh lock only coalesced in-process, so two tasks could still race `cognito-idp:initiate_auth` with the same refresh token and Cognito's rotation would silently log out the loser. This release lands the **event-loop offload + single-flight resolve**, a **cross-task shared AES key via Secrets Manager**, and a **DDB conditional-write refresh lock** that elects exactly one leader fleet-wide.
+
+Also shipping: **server-rendered PDF page-1 thumbnails** on attachment cards, **rich iMessage-style image mosaics** with a full-screen lightbox and inline markdown preview for `.md` files in user messages, **spreadsheet analysis tools** (`list_spreadsheets`, `analyze_spreadsheet`) that run CSV/XLSX analysis inside the Code Interpreter sandbox, **centralized 401 handling** with proactive session-loss detection on tab refocus, and a **`SKIP_AUTH=true` local-dev bypass** gated by a CORS-origin allowlist and a CI guard workflow. Token accounting was corrected across the board — per-message cost no longer double-counts tool-use turns and the context-% badge reflects current context occupancy rather than Strands' summed-across-calls value.
+
+### Heads-up on beta.24
+
+If you deployed beta.24 to a multi-replica environment, you saw some or all of: 401 storms on `/auth/session`, page-load latency tails in the tens of seconds, and users silently logged out after tab refocus. Beta.25 is the fix. The CookieCodec and refresh-lock changes require redeploying the Infrastructure and App API stacks in order — see **🚀 Deployment notes** at the bottom.
+
+---
+
+## BFF Middleware Event-Loop Blocking & Fan-Out Amplification
+
+The middleware introduced in beta.24 ran three independent classes of work on the uvicorn event loop that weren't safe to run there: synchronous boto3 for DynamoDB + Cognito, an inline-awaited sliding-session write on the response path, and a refresh-coalescing lock that only wrapped the Cognito exchange instead of the full resolve path. Under Angular's ~8-endpoint page-load fan-out with a cold `SessionCache` window, a single cookie-bearing user produced ~16 serialized blocking AWS round-trips on one uvicorn worker running in a single ECS task — every slow call stalled every concurrent request on the same task. The observable symptoms were ALB 504s, `TargetResponseTime` p-max of 15.6s at 0.7% CPU, `/files/quota` outliers reaching ~80s, and endpoint p95s climbing into the hundreds of ms under trivial load. (#264)
+
+### How it works now
+
+`SessionRepository.{get,put,update_tokens,touch_last_seen,delete}` and `CognitoRefreshClient.refresh` now offload every boto3 call via `asyncio.to_thread`, so the event loop keeps scheduling other coroutines for the full AWS round-trip duration. A new per-session single-flight primitive (`apis/shared/sessions_bff/single_flight.py`) wraps the whole `cache.get → repository.get → needs_refresh → (maybe refresh)` block in `SessionRefreshMiddleware._resolve_session` — the first caller per `session_id` runs the loader; N concurrent followers await a shared `asyncio.Future` and consume the leader's result. The existing `get_session_lock(session_id)` around the Cognito exchange is preserved end-to-end as defense in depth. `_maybe_slide` no longer `await`s `touch_last_seen` inline — the DDB write dispatches as a detached `asyncio.Task` and the response returns the fresh `Max-Age` synchronously. The cache/throttle boundary alignment that forced a single request to pay both `get_item` and `update_item` on the cache-miss boundary has been de-aligned: `_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS` is now a strict multiple of `_DEFAULT_REFRESH_LEEWAY_SECONDS` (300s vs 60s).
+
+### Backend
+
+- `apis/shared/sessions_bff/repository.py` — every boto3 call now wrapped in a nested sync helper invoked via `await asyncio.to_thread(helper, ...)`; method signatures, return types, and exception branches unchanged
+- `apis/shared/sessions_bff/refresh.py` — `refresh` is now `async def`, calling `await asyncio.to_thread(self._refresh_sync, ...)`; `CognitoRefreshError` contract and `RefreshResult` shape preserved verbatim
+- `apis/shared/sessions_bff/single_flight.py` — new module. `async def resolve_once(session_id, loader_coro_factory) -> tuple[Optional[SessionRecord], bool]`. Leader registers an `asyncio.Future` under a thread-lock-guarded `dict`, runs the loader, sets the result/exception on the Future, removes the registry entry in a `finally` block. Followers `await` the existing Future. Distinct `session_id`s never share a Future
+- `apis/shared/middleware/session_refresh.py` — `_resolve_session` wraps the cache/repo/refresh block in `resolve_once(session_id, _loader)`. `_maybe_slide` updates the local cache synchronously and dispatches `touch_last_seen` via `asyncio.create_task`, keeping the task on `self._slide_tasks` with an `add_done_callback(self._slide_tasks.discard)` — Python's asyncio docs explicitly warn that unreferenced tasks can be GC'd mid-flight, and our initial fix landed this footgun (caught by CI on Python 3.12)
+- `apis/shared/sessions_bff/config.py` — `_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS` raised 60s → 300s. Strict multiple of the 60s leeway guarantees cache-miss and slide-throttle boundaries never coincide
+
+### Infrastructure
+
+- `infrastructure/cdk.context.json` — `appApi.desiredCount` raised 1 → 2 for concurrency slack. A single blocked event loop on one task can no longer halt all ingress
+
+### Test Coverage
+
+~900 lines of new property-based tests. `test_session_refresh_bug_condition.py` encodes each of the seven sub-conditions as a hypothesis property that fails on unfixed code and passes on fixed code (Property 1 / Expected Behavior from the bugfix spec). `test_session_refresh_preservation.py` locks in the 11 preservation invariants that must stay unchanged for non-buggy inputs — dormant pass-through, no-cookie pass-through, unrecoverable-cookie clearing, `Max-Age` re-emit contract, refresh-storm coalescing, codec + client-secret singletons, CSRF decision unchanged, absolute-lifetime cap, fail-closed rotation, uniform `CookieDecodeError` handling. `test_single_flight.py` covers the primitive itself: concurrent callers share one loader invocation, exceptions propagate to every waiter, registry entries clean up after failure, distinct sessions are independent.
+
+---
+
+## BFF Cross-Task Cookie & Refresh Correctness
+
+The `desiredCount: 1 → 2` bump in the event-loop fix immediately exposed two latent defects in beta.24's BFF design that were hidden when only one task existed. Both had to be fixed before the deployment was actually safe to run with more than one replica. (#273, #274, #275)
+
+### Shared AES-256 data key via Secrets Manager
+
+`CookieCodec` in beta.24 called `kms:GenerateDataKey` on first use per process and cached the resulting plaintext AES-256 key in memory. The code's own docstring predicted what would happen with more than one task: _"two codecs in one process can never decrypt each other's output."_ And that's what happened — Task A sealed a cookie with Key-A, the ALB routed the follow-up to Task B which had its own Key-B, `unseal` hit `InvalidTag` → `CookieDecodeError` → `Discarding unrecoverable BFF cookie (bad seal)` → 401. CloudWatch confirmed: three app-api streams each independently logged _"BFF cookie codec initialized (KMS data key fetched)"_ and every subsequent `/auth/session` returned 401.
+
+The fix moves the data key out of per-process state and into a single Secrets Manager secret, encrypted at rest by the existing `BFFCookieSigningKey` CMK:
+
+- CDK creates `BFFCookieDataKeySecret` with `generateSecretString` (44-char alphanumeric, ~261 bits of entropy). On every deploy the secret already exists so the value is stable — cookies survive redeploys
+- `CookieCodec._ensure_cipher` reads the secret string and applies SHA-256 to derive the 32-byte AES-256 key. Single-shot SHA-256 of a ≥256-bit-entropy random input is a sound KDF for AES-256 usage
+- Every app-api task decrypts the same secret and derives the same key → all codecs round-trip each other's seals. The `kms:GenerateDataKey` permission dropped from the runtime task role (least privilege); `kms:Decrypt` stays because Secrets Manager invokes it on the caller's behalf when reading a CMK-encrypted secret
+
+A previous attempt at this bootstrap (#273's initial chained `AwsCustomResource` flow with `kms:GenerateDataKey → secretsmanager:PutSecretValue`) failed stack create with `Response object is too long`. Root cause: the `AwsCustomResource` framework Lambda JSON-stringifies the AWS-SDK response before applying `outputPaths`, and KMS returns `CiphertextBlob` as a Uint8Array that serializes as `{"0":233,"1":18,...}` — ~1.5 KB for a 200-byte ciphertext, past CloudFormation's 4 KB response-object limit. The Secrets-Manager-native `generateSecretString` path in #274 removes the chained custom resources entirely (-153 lines net), no per-cold-start `kms:Decrypt` call, simpler runtime IAM surface.
+
+### Cross-task refresh lock via DDB conditional-write
+
+The in-process single-flight and the existing `get_session_lock` only coalesce same-session callers within one Python process. Once the cookie-codec fix lands and both tasks can share cookies again, under `desiredCount: 2` two tasks each receive a same-session request crossing the refresh-leeway window and each call `cognito-idp:initiate_auth` with the same refresh token. Cognito rotates on the winning call; the loser receives `NotAuthorizedException`, the loser's middleware clears the cookie, and the user is silently logged out.
+
+- `SessionRepository.try_acquire_refresh_lock(session_id, owner, lock_ttl_seconds)` — conditional `UpdateItem` that succeeds iff `attribute_not_exists(refresh_lock_until) OR refresh_lock_until < :now` AND `attribute_exists(PK)` (no phantom rows for sessions that don't exist). Loser returns `False`
+- `SessionRepository.update_tokens` gains `expected_lock_owner=...` — when supplied, the write conditionally requires `refresh_lock_owner = :owner` (strict, not "owner-or-absent") and atomically `REMOVE`s the lock attrs in the same write. The stale-leader-stomp case (Task A's lock TTLs, Task B refreshes, Task A returns with older tokens) now surfaces as `ConditionalCheckFailedException` so the caller can re-read and adopt the peer's tokens
+- `SessionRepository.release_refresh_lock(session_id, owner)` — best-effort cleanup for the leader-failed path so a peer doesn't have to wait the full TTL before retrying
+- `SessionRefreshMiddleware._resolve_session._loader` — two-tier coalescing: (1) existing `get_session_lock` collapses N in-process same-session callers to one contender; (2) `try_acquire_refresh_lock` elects exactly one leader fleet-wide. Followers poll the row via `_wait_for_peer_refresh` and adopt the leader's tokens (rotation detected by refresh-token mismatch; non-rotation by access-token mismatch + future-dated `exp`). Absolute-lifetime guard added ahead of the lock acquisition — if `now > created_at + absolute_lifetime_seconds`, clear the cookie instead of burning a Cognito refresh on a row that's about to TTL-evict
+
+### Test Coverage
+
+Cross-task integration tests (`test_session_refresh_cross_task.py`, 480 lines) run two `SessionRefreshMiddleware` instances against one moto DDB table and exercise leader/follower paths, follower-polling-then-adopting, lock TTL recovery after a dead leader, follower-fall-back-terminal when the leader is stuck, and the headline invariant: two tasks racing in parallel call Cognito at most once. Eight new repository tests lock the lock primitive shape, plus targeted tests for the strict-owner release condition and the phantom-row-prevention guard on acquire.
+
+### Infrastructure
+
+- New `BFFCookieDataKeySecret` (Secrets Manager), encrypted with `BFFCookieSigningKey`. SSM parameter `/${projectPrefix}/auth/bff-cookie-data-key-secret-arn` publishes the ARN for app-api
+- App-api task role: added `secretsmanager:GetSecretValue` on the new secret; kept `kms:Decrypt` (needed by Secrets Manager to read the CMK-encrypted secret); removed `kms:GenerateDataKey` and `kms:DescribeKey`
+- No IAM change required for the DDB refresh lock — app-api task role already had `dynamodb:UpdateItem` on `BFFSessionsTable`
+
+### Breaking changes
+
+- None user-facing. The new env var and SSM parameter are additive; existing deployments redeploy Infrastructure first, then App API, to pick up the shared secret
+
+---
+
+## Token Accounting Correctness
+
+Two related bugs were inflating cost and context-% reporting on tool-use turns. (#270)
+
+### Per-message cost double-count
+
+Strands emits per-LLM-call metadata (each call's tokens) AND a final `AgentResultEvent` whose `EventLoopMetrics.accumulated_usage` is summed across every call in the turn. Both were emitted as `metadata` events and routed into `per_message_metadata[current_assistant_message_index]["usage"]` via `.update()`. Because the `AgentResult` event arrives after every `message_stop`, the index still pointed at the last assistant message — so cumulative tokens overwrote that message's per-call values, double-counting earlier messages' input tokens when each entry was priced and summed.
+
+Fix: route the result-extracted cumulative on the existing `metadata_summary` (turn-summary) track instead of `metadata`. The `stream_processor` main loop consumes both event types into `accumulated_metadata` so the final summary still carries true totals.
+
+### Context-% inflation within a tool turn
+
+Bedrock reports each per-LLM-call `inputTokens` as the FULL context size sent on that call. For a 2-call tool turn (`call_1.input=1000`, `call_2.input=2500`), Strands' `accumulated_usage` reports 3500 — but the actual current context occupancy is 2500. The final SSE `usage` field driving the context-% badge and compaction trigger was inheriting Strands' summed value.
+
+Fix: `stream_coordinator` no longer accumulates `metadata_summary` into `accumulated_metadata`. Per-call `metadata` events last-write-wins via `.update()`, so `accumulated_metadata.usage` equals the most recent call's full input = current context. Added a `CAUTION` comment noting `AgentResult.context_size` / `EventLoopMetrics.latest_context_size` return only `inputTokens` (excluding `cacheRead` / `cacheWrite`) — under prompt caching they under-report by 99%+, so we deliberately sum all three buckets. `TTFT` placeholder of 0 changed to `null` (a real time-to-first-token can never be 0ms and aggregations need to distinguish absence from a real zero); `LatencyMetrics.time_to_first_token` is now `Optional[int]` in both the shared and app-api models.
+
+### Test Coverage
+
+`test_per_message_cost_attribution.py` pins the `metadata` vs `metadata_summary` contract, the main-loop accumulator's both-tracks consumption, and the `stream_coordinator` current-context semantics (two parametrized cases plus all-three-buckets-summed for cache-read/write). Direct unit coverage for `CostCalculator` arrived in `test_calculator.py` (26 cases: per-bucket pricing, cache scenarios against Sonnet 4.5 rates, defensive missing-key / None handling, `calculate_cache_savings`, `validate_pricing` / `validate_usage`).
+
+---
+
+## Auth UX & Local-Dev Bypass
+
+### Centralized 401 handling + proactive session detection
+
+Beta.24 only redirected on 401 from the SessionService bootstrap path — a session that expired mid-session left the user stranded with a generic toast (CRUD endpoints) or no feedback (SSE chat stream). Every 401 now flows through `SessionService.handleUnauthorized()`, which dedupes concurrent calls and queues a single navigation to `/auth/login` with a preserved `returnUrl`. Session loss is surfaced proactively rather than waiting for the next HTTP call to fail: (#277)
+
+- **Cookie-presence fast-path** in bootstrap and recheck. The JS-readable `__Host-bff_csrf` cookie is set and cleared alongside `__Host-bff_session` with matching `Max-Age`, so if the CSRF cookie is gone the session cookie is gone too — skip the `/auth/session` round-trip and bounce straight to login
+- **Visibility re-probe** in the app shell. On tab refocus, `recheck()` runs the cookie check and falls back to `/auth/session`, so a session that expired while the tab was backgrounded is caught immediately rather than on the next user action
+
+### `SKIP_AUTH=true` local-dev bypass
+
+A single-env-var bypass for unattended local dev (and Claude Code agents) that can't round-trip through an external IdP. (#272)
+
+- Returns a fake admin `User` from the three auth dependencies in `apis.shared.auth.dependencies`; CSRF middleware, RBAC, and profile cache flow naturally because no `bff_session` is resolved
+- **Allowlist startup guard** in `app_api/main.lifespan` — app refuses to boot when `SKIP_AUTH=true` is paired with any non-localhost entry in `CORS_ORIGINS` (or an empty `CORS_ORIGINS`). Fails closed for deploy targets we haven't anticipated rather than blocklisting known cloud env vars
+- **CI guard workflow** (`.github/workflows/skip-auth-guard.yml`) — greps CDK source, workflow files, and Dockerfiles for `SKIP_AUTH=true` / `SKIP_AUTH: true` patterns and fails the build if any leak into deployed config
+- Inference-api is intentionally not bypassed — all SPA traffic flows through app-api per the BFF pattern, so one bypass is sufficient
+- Optional tuning: `SKIP_AUTH_ROLES`, `SKIP_AUTH_USER_ID`, `SKIP_AUTH_EMAIL` override the default fake user
+
+### Lava-lamp backdrop dark-mode fix
+
+The dark-mode CSS for the auth pages' lava-lamp backdrop and frosted-glass card never applied on cold load: hand-written `html.dark .X` selectors don't match under Angular's emulated view encapsulation, and `ThemeService` (`providedIn:'root'`) was never injected by anything in the pre-auth tree. Switched the auth-page CSS to `:host-context(html.dark) .X` (the pattern already used component-scoped elsewhere) and forced `ThemeService` to construct at bootstrap via `provideAppInitializer`, so the persisted/system theme is applied to `<html>` before any route renders, including `/auth/login` and `/auth/first-boot` on cold load. (#271)
+
+---
+
+## Attachments: PDF Thumbnails, Rich Previews, Markdown Modal
+
+### Server-rendered PDF page-1 thumbnails
+
+Real first-page thumbnails for PDF attachments instead of the skeleton mockup. Page rasterization runs in app-api via `pypdfium2` (Apache 2.0 / BSD, bundled PDFium binary, no system `poppler`/`ghostscript`). (#263)
+
+- New `ThumbnailRenderer` with a MIME-type dispatcher; PDF only today. Class docstring documents the recommended out-of-process design for `.docx` / `.xlsx` so the dispatcher stays small
+- `GET /files/{upload_id}/thumbnail` — lazy: HEAD-checks for a cached `_thumb.png` sibling next to the original, renders + stores on miss, returns a short-lived presigned GET URL. 415 for unsupported MIME types, 422 for unreadable / corrupt PDFs. Render runs in `loop.run_in_executor` so request workers aren't blocked
+- Single-file and session-cascade deletes also remove the thumbnail sibling
+- `FileUploadService.getThumbnail()` returns a typed result so callers switch on `ready` / `unsupported` / `unavailable` without parsing HTTP errors. Badge fetches on mount for PDFs and renders as `object-cover`, suppressing the bottom fade. Silent fall-back to the skeleton on any error
+
+### Rich previews in user messages
+
+The dense badge is replaced with a richer attachment renderer in user message history. (#254)
+
+- **Images** render as an iMessage-style mosaic: 1-bubble, 2-col, 1+2 split, 2×2 grid, 5+ with `+N` overlay. Opens in a full-screen lightbox with arrow-key navigation
+- **Non-image files** render as a document-style card: tinted header strip with type chip, white "page" body with a folded corner, filename + size footer. Text-based files (txt, md, csv, html) show a real content excerpt; binary types (pdf, docx, xls/xlsx) get skeleton lines
+- `GET /files/{upload_id}/preview-url` — short-lived presigned GET URL scoped to the file owner, used for inline images and the lightbox
+- `GET /files/{upload_id}/text-snippet` — first 2KB of a text-based file decoded as UTF-8 for the document card content peek
+
+### Inline markdown preview for `.md` files
+
+Parsed markdown renders in the attachment card excerpt instead of raw text; clicking a `.md` card opens a full-screen modal viewer rather than opening the raw source in a new tab. Reuses `ngx-markdown` (already wired up for assistant messages) and the existing presigned preview-url flow. (#262)
+
+---
+
+## Spreadsheet Analysis Tools
+
+New spreadsheet analysis capability for CSV/XLSX files. (#f88ce7ec, #0ab90bb1)
+
+- `list_spreadsheets` — enumerates CSV/Excel files from knowledge bases and chat attachments; includes file size and MIME type metadata
+- `analyze_spreadsheet` — downloads files from S3, executes Python analysis via Code Interpreter, returns results. Intelligent schema detection with skiprows probing handles report-style exports with metadata rows. Stderr is cleaned to filter pandas/numpy internal frames and show only user-relevant errors. Output truncated at 10K chars, errors at 600 chars, to prevent context-window overflow
+- Tools injected per-request into `ToolRegistry` via `extra_tools`; chat routes (app-api and inference-api) pass conversation context to the factories
+- Targeted error hints for XLSX→CSV filename mismatches in the sandbox environment; tolerant filename matching for CSV↔XLSX aliasing to prevent retry loops; schema footer preservation on errors for better retry context
+- File metadata models and utilities for consistent attachment handling; stream processor error handling improved for Code Interpreter responses
+
+---
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| strands-agents (backend) | 1.37.0 | 1.39.0 |
+| strands-agents-tools (backend) | 0.5.1 | 0.5.2 |
+| pypdfium2 (backend, new) | — | latest |
+
+`CacheConfig(strategy="auto")` remains intentionally deferred on `BedrockModel`. The strands v1.39.0 bump includes the SDK-side fix (strands PR #1438 — `cachePoint` blocks alongside non-PDF document attachments), so the technical barrier is gone — but the user-visible cost/badge impact warrants a separate scoped rollout. (#265)
+
+---
+
+## 🏗️ Infrastructure
+
+- **New**: `BFFCookieDataKeySecret` (Secrets Manager), encrypted at rest with the existing `BFFCookieSigningKey` CMK. SSM parameter `/${projectPrefix}/auth/bff-cookie-data-key-secret-arn`
+- **Changed**: `appApi.desiredCount` raised 1 → 2
+- **IAM delta on app-api task role**: added `secretsmanager:GetSecretValue` on `BFFCookieDataKeySecret`; removed `kms:GenerateDataKey` and `kms:DescribeKey` on `BFFCookieSigningKey`; kept `kms:Decrypt` (Secrets Manager invokes it on the caller's behalf when reading a CMK-encrypted secret)
+- **No new tables**. The cross-task refresh lock reuses `BFFSessionsTable` via conditional `UpdateItem`
+
+---
+
+## 🔧 CI/CD
+
+- **New workflow**: `.github/workflows/skip-auth-guard.yml` — greps CDK source, workflow files, and Dockerfiles for `SKIP_AUTH=true` / `SKIP_AUTH: true` patterns and fails the build if any leak into deployed config. Uses SHA-pinned `actions/checkout` and `ubuntu-24.04` per existing supply-chain conventions in `tests/supply_chain/`
+
+---
+
+## 🚀 Deployment notes
+
+Deploy Infrastructure first, then App API, in that order.
+
+1. **Infrastructure stack** creates `BFFCookieDataKeySecret` and publishes its ARN to SSM. The secret value is generated by Secrets Manager on create and stays stable across subsequent deploys — cookies survive redeploys
+2. **App API stack** picks up `BFF_COOKIE_DATA_KEY_SECRET_ARN` on the next task rotation; existing tasks keep the old per-process data key until they drain. Both states coexist cleanly — new tasks seal under the shared key; old tasks still seal under their own; unsealing on a task that holds a different key fails the same way it does today and the SPA bounces to login. End state (all tasks rotated): cookies round-trip cleanly across the fleet
+3. **`desiredCount: 2` takes effect** on the App API stack's next deploy. CloudFormation scales up without draining traffic; the fix makes multi-replica safe
+
+No manual cleanup required if you were running on beta.24 — the migration is forward-only. If you want zero-drift on the user population, invalidate active sessions once post-deploy: `aws dynamodb scan --table-name ${BFFSessionsTable} --select COUNT` then a bulk delete, or just let the 30-day absolute-lifetime cap roll them off naturally.
+
+---
+
+
 
 ---
 
