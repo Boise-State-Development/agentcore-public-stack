@@ -11,6 +11,7 @@ Friday late morning, after `kaizen-research` ran earlier the same morning. This 
 
 - **Review is a decision forum, not a status update.** Everything that lands in the output should be either: (a) actionable this week, (b) explicitly deferred with a reason and revisit date, or (c) declined. Nothing is "noted." Noted-and-forgotten is how systems accumulate friction.
 - **Subtraction first.** Every proposal ranks against "do nothing" and "retire something instead." If a proposal adds anything, it must explain what existing thing it either replaces or simplifies.
+- **Dual lens — impact + capability-unlock.** Rank proposals through *two* lenses, not one: (a) **impact on existing code** (does this change, simplify, or obsolete something we already have?) and (b) **capability unlock** (what *new* product capability or UX enhancement does this enable that we couldn't easily build before?). Subtraction-first applies to lens (a). But proposals that genuinely unlock new product surface — code-interpreter sandboxes, persistent agent state, multi-agent UI attribution, new SSE event types that enable inline UI, etc. — must be evaluated on their strategic merit, *not* auto-deferred because they don't intersect existing code. A proposal with no `Subtracts` value but a substantive `Unlocks` value can rank above a low-impact dep-bump. Don't penalize net-new capability for not being a cleanup.
 - **Multiple cycles.** Kaizen is small changes, weekly, compounding. If this week's review touches 3 things, next week's will touch 3 different things. Phil doesn't need a grand plan — he needs a reliable weekly cadence.
 - **One-week feedback lag is intentional.** Phil reviews Friday → POCs over the weekend → those POC findings surface in the *next* Friday's review-prep as Carried Over items. Don't try to fold same-day POC findings in — they don't exist yet.
 - **No edits outside `docs/kaizen/`.** This skill writes one Markdown file under `docs/kaizen/reviews/` and updates `docs/kaizen/review-queue.md` (moves Open → Resolved post-review). It never touches source code, `CLAUDE.md`, or skill files. Those changes happen in separate PRs after the review.
@@ -74,6 +75,7 @@ check before decisions.]
 - **Surface area**: backend / frontend / infrastructure / cross-cutting / docs / skills
 - **Change**: [concrete description — what files change, what the new behavior is]
 - **Subtracts**: [required field — what this retires, simplifies, or replaces. Or explicitly "addition only — justified because…"]
+- **Unlocks** (if applicable): [net-new product capability, UX pattern, or enhancement this enables — bulleted if multiple. Required for proposals where `Subtracts: no — addition only`; the unlock is the justification. Omit when purely a cleanup/dep-bump and not applicable.]
 - **Effort**: Low / Med / High
 - **Impact**: Low / Med / High
 - **POC findings (if Phil tried it)**: [summary or "not POCed"]
@@ -177,7 +179,11 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    - All `## Open` entries in `review-queue.md` (the primary source)
    - Any new friction patterns surfaced from PR comments / merged PRs / CI that weren't already in the queue
    - Carried Over items
-   Rank: Low-effort × High-impact first; retirement candidates get a +1 boost (subtraction bias); items with POC findings rank above untested items at the same effort/impact.
+   Rank:
+   - Low-effort × High-impact first.
+   - **Retirement candidates** get a +1 boost (subtraction bias).
+   - **Capability-unlock items** (proposals with a substantive `Unlocks` field — new product capability, UX surface, or platform primitive adoption) rank on their strategic merit. Do not auto-defer just because `Subtracts: no`. A High-impact unlock can rank above a Low-impact subtraction.
+   - Items with **POC findings** rank above untested items at the same effort/impact.
 
 8. **Cap the proposal count at 10.** If more than 10 candidates, defer the lowest-ranked to next week with a note. The review is supposed to take 10-15 minutes, not be exhaustive.
 

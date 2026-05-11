@@ -10,6 +10,7 @@ Friday early morning. The "what's the rest of the world learning that we should 
 ## Philosophy
 
 - **Subtraction first.** Every research run should propose at least as many things to *remove or simplify* as to add. A smaller stack you trust beats a bigger one you route around. **Subtraction explicitly includes replacing custom code with library-native equivalents** — when an upstream release (Strands, AgentCore SDK, FastMCP, MCP, etc.) ships a capability we'd already built or filed an issue for, the win is closing our version and adopting upstream. Example: the 2026-05-10 bootstrap run found that Strands v1.37/v1.38 silently closed our open issues #266 and #267 — the codebase surface area shrinks even though we "added" a dep bump.
+- **Dual lens — impact + capability-unlock.** Evaluate every upstream feature through *two* lenses, not one: (a) **impact on existing code** (does it change, simplify, or obsolete something we already have?) and (b) **capability unlock** (what *new* product capability, UX pattern, or enhancement does this make possible that we couldn't easily do before?). Subtraction-first still applies to the first lens. But capability-unlock items — features that enable net-new product surface — must be evaluated on their strategic merit, *not* hedged into "replaces future glue we haven't written." Example: the 2026-05-10 AgentCore Runtime BYO filesystem was first framed only as "could replace future filesystem-staging glue" — under-weighting the real story (code-interpreter sandboxes, cross-session uploads, shared skill hot-swap, persistent vector indexes). A dep-bump's win is usually subtraction; a *new* platform primitive's win is usually capability unlock. Don't mis-classify.
 - **Subagent fan-out.** External sources are independent — fan them out to parallel subagents and synthesize. Keeps the main context clean and runs faster.
 - **Web budget soft cap.** Target ≤50 web requests. If a source is exhausted, unreachable, or rate-limited, list it as "not scanned this week" — don't skip silently. Going modestly over the cap (say, to 60) is fine if the extra requests are surfacing real signal; document the overage in the Web Budget block. Don't pad — if 30 requests covered every source meaningfully, stop at 30.
 - **Cite everything.** Every external claim gets a URL + access date in the Sources Scanned appendix. Web findings rot fast and you'll re-read them next week.
@@ -141,8 +142,14 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 ### Notable items by source
 
+> **Annotation conventions:**
+> - `*relevance*:` — impact-on-existing-code lens. What construct/file does this affect? What does it replace, simplify, or obsolete?
+> - `*unlocks*:` — capability-unlock lens (use when applicable, especially for *new* platform primitives, SDK hooks, or UX patterns). What net-new product capability or enhancement does this make possible? What could we now build that we couldn't before?
+>
+> Bug-fixes and incremental dep-bumps usually only need `*relevance*`. New platform features, new SDK primitives, new spec capabilities, and new UX patterns usually deserve both.
+
 #### AWS Bedrock / AgentCore
-- **[Item]** — [1-2 sentence summary] — [URL] — *relevance*: [specific construct/file]
+- **[Item]** — [1-2 sentence summary] — [URL] — *relevance*: [specific construct/file] — *unlocks* (if applicable): [net-new capability or enhancement this enables]
 
 #### Strands Agents
 - **[Item]** — …
@@ -211,16 +218,17 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 ## Ideas — Top 5 (ranked)
 
-| # | Idea | Surface | Effort | Impact | Subtracts? |
-|---|---|---|---|---|---|
-| 1 | [Title] | backend / frontend / infra / cross-cutting | L/M/H | L/M/H | [what it retires, or "addition only — justified because…"] |
-| 2 | … | | | | |
+| # | Idea | Surface | Effort | Impact | Subtracts? | Unlocks? |
+|---|---|---|---|---|---|---|
+| 1 | [Title] | backend / frontend / infra / cross-cutting | L/M/H | L/M/H | [what it retires, or "addition only — justified because…"] | [net-new capability, or "—" if not applicable] |
+| 2 | … | | | | | |
 
 ### 1. [Idea title]
 - **Source**: [external item / internal signal — URL or commit SHA]
 - **Surface area**: [paths affected]
 - **Change**: [what specifically would change]
 - **Subtracts**: [what this retires/simplifies, or explicitly: "addition only — justified because…"]
+- **Unlocks** (if applicable): [net-new product capability, UX pattern, or enhancement this enables — bulleted if multiple. Omit field when not a capability-unlock item.]
 - **Effort × Impact**: [Low/Med/High] × [Low/Med/High]
 - **Verdict**: [Worth trying / Not a fit / Monitor]
 
@@ -263,6 +271,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Surface**: backend | frontend | infrastructure | cross-cutting
 - **Effort × Impact**: L/M/H × L/M/H
 - **Subtracts**: [yes — what / no — justification]
+- **Unlocks** (if applicable): [net-new capability, UX pattern, or enhancement this enables; bulleted if multiple. Omit when not a capability-unlock item.]
 - **Status**: open
 
 ## Resolved
@@ -305,7 +314,10 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 5. **Version-pin diff.** For each tracked dep, fetch latest release version (WebFetch on the release page or registry equivalent — counts toward budget). Compute lag in releases and days. If a budget hit prevents a check, list the dep under "Skipped".
 
-6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**: library-native subtraction opportunities (where upstream closed a custom-code need) get a subtraction boost; UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a "concrete fit" boost over generic "interesting trend" items.
+6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**:
+   - **Library-native subtraction** opportunities (where upstream closed a custom-code need) get a subtraction boost.
+   - **Capability-unlock** items — new platform primitives, SDK hooks, spec capabilities, or UX patterns that enable net-new product surface we couldn't easily build before — rank on their strategic merit, *not* deprioritized just because they don't intersect existing code. Apply the dual lens from Philosophy: if a feature genuinely unlocks new capability (code-interpreter, persistent agent state, multi-agent UI attribution, etc.), rank it like a fit item, not like a "monitor" item. Resist the temptation to hedge unlock items into "replaces future glue we haven't written" — that under-weights the real story.
+   - **Concrete fit** UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a fit boost over generic "interesting trend" items.
 
 7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
 

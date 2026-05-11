@@ -4,6 +4,20 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ## Open
 
+### [2026-05-10] Scope AgentCore Runtime BYO filesystem (S3 Files / EFS) for persistent agent workspaces
+- **Source**: research/2026-05-10.md ▸ AWS Bedrock / AgentCore (re-evaluated 2026-05-10 via strategic-lens follow-up — original framing under-weighted the capability-unlock angle)
+- **Surface**: backend (`inference-api` invocation handler reads/writes mount) + infrastructure (VPC config, IAM mount permissions, S3 Files or EFS access points, per-user prefix/access-point layout for RBAC); ADR-worthy
+- **Effort × Impact**: H × H
+- **Subtracts**: no — pure capability addition
+- **Unlocks**:
+  - Code-interpreter / persistent agent workspace (artifacts survive turn and session boundaries)
+  - Cross-session file uploads — PDFs/spreadsheets persist between conversations instead of re-staging per session
+  - Shared skill/template/prompt hot-swap without redeploying the runtime container
+  - A2A multi-agent intermediate-result handoff via shared mount
+  - Persistent vector indexes / embedding caches — avoids cold-start rebuild
+- **Open questions**: GA vs preview status (March 2026 managed session storage was preview; May 2026 BYO needs verification); VPC requirement is a new architectural surface for the runtime; multi-tenancy isolation strategy (per-user S3 prefix vs per-user EFS access point); RBAC mount-path layout; runtime data plane still only proxies `/invocations` + `/ping` so this doesn't unlock new HTTP routes
+- **Status**: open
+
 ### [2026-05-10] Scope an MCP Apps host renderer in our chat (multi-PR initiative)
 - **Source**: research/2026-05-10.md ▸ Top 6 #1 ▸ Agentic UI/UX
 - **Surface**: frontend + backend (new SSE event `ui_resource`; `<mcp-app-frame>` Angular component; consent UX)
