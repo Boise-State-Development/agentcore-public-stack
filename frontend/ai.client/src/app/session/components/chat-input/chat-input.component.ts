@@ -22,6 +22,7 @@ import {
   formatBytes
 } from '../../../services/file-upload';
 import { ToastService } from '../../../services/toast/toast.service';
+import { ToolService } from '../../../services/tool/tool.service';
 import { VoiceChatService, type VoiceStatus } from '../../services/voice';
 
 interface Message {
@@ -50,6 +51,7 @@ export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
+  private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
 
   // Input: session ID for file uploads
@@ -342,6 +344,12 @@ export class ChatInputComponent {
       return;
     }
 
+    // Nudge the user once per batch if they're attaching tabular files
+    // without the Spreadsheet Analysis tool enabled — the backend routes
+    // these to the tool instead of inline Bedrock document blocks (#206),
+    // so the user needs the tool enabled to get answers about the data.
+    let tabularNudgeShown = false;
+
     // Validate and upload each file
     for (const file of newFiles) {
       // Check file size
@@ -363,6 +371,19 @@ export class ChatInputComponent {
         continue;
       }
 
+      if (!tabularNudgeShown && this.isTabularFile(file)) {
+        const enabled = this.toolService
+          .enabledToolIds()
+          .includes('analyze_spreadsheet');
+        if (!enabled) {
+          this.toastService.info(
+            'Enable Spreadsheet Analysis',
+            'To analyze spreadsheets, enable "Spreadsheet Analysis" in the Tools section of the settings panel.'
+          );
+          tabularNudgeShown = true;
+        }
+      }
+
       // Upload file
       try {
         await this.fileUploadService.uploadFile(sessionId, file);
@@ -371,5 +392,17 @@ export class ChatInputComponent {
         this.toastService.error('Upload Failed', `${file.name}: ${message}`);
       }
     }
+  }
+
+  private isTabularFile(file: File): boolean {
+    const tabularExts = ['.csv', '.xls', '.xlsx'];
+    const tabularMimes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    const lower = file.name.toLowerCase();
+    if (tabularExts.some(ext => lower.endsWith(ext))) return true;
+    return tabularMimes.includes((file.type || '').toLowerCase());
   }
 }

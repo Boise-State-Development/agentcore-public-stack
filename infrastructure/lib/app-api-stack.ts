@@ -7,11 +7,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
-import * as sns from "aws-cdk-lib/aws-sns";
-import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
+
 import { Construct } from "constructs";
 import { AppConfig, getResourceName, applyStandardTags, getRemovalPolicy, buildCorsOrigins } from "./config";
 
@@ -371,6 +367,10 @@ export class AppApiStack extends cdk.Stack {
       this,
       `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`
     );
+    const bffCookieDataKeySecretArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/auth/bff-cookie-data-key-secret-arn`
+    );
     const cognitoBFFAppClientId = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/auth/cognito/bff-app-client-id`
@@ -537,6 +537,11 @@ export class AppApiStack extends cdk.Stack {
         // BFF Token Handler — wired in Phase 1, used starting Phase 2.
         BFF_SESSIONS_TABLE_NAME: bffSessionsTableName,
         BFF_COOKIE_SIGNING_KEY_ARN: bffCookieSigningKeyArn,
+        // High-entropy secret string fetched once at task startup; SHA-256
+        // is applied at runtime to derive the 32-byte AES-256 cookie key.
+        // Generated once by Secrets Manager at stack create so every app-api
+        // task derives the same plaintext key (cross-task seal/unseal).
+        BFF_COOKIE_DATA_KEY_SECRET_ARN: bffCookieDataKeySecretArn,
         BFF_SESSION_TTL_SECONDS: '28800',
         BFF_SESSION_REFRESH_LEEWAY_SECONDS: '60',
         COGNITO_BFF_APP_CLIENT_ID: cognitoBFFAppClientId,
@@ -1039,9 +1044,24 @@ export class AppApiStack extends cdk.Stack {
       new iam.PolicyStatement({
         sid: 'BFFCookieSigningKeyAccess',
         effect: iam.Effect.ALLOW,
-        // GenerateDataKey at startup; Decrypt is reserved for future key rotation.
-        actions: ['kms:GenerateDataKey', 'kms:Decrypt', 'kms:DescribeKey'],
+        // BFFCookieDataKeySecret is encrypted at rest with this CMK, so
+        // SecretsManager invokes kms:Decrypt on the caller's behalf when
+        // app-api calls GetSecretValue. kms:GenerateDataKey is intentionally
+        // NOT granted — the runtime never mints a fresh key, so a compromised
+        // task can't seal cookies under a parallel key.
+        actions: ['kms:Decrypt'],
         resources: [bffCookieSigningKeyArn],
+      })
+    );
+
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'BFFCookieDataKeySecretAccess',
+        effect: iam.Effect.ALLOW,
+        // Read-only on the data-key secret. PutSecretValue is intentionally
+        // not granted — the runtime cannot rotate or substitute the value.
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [`${bffCookieDataKeySecretArn}*`], // Wildcard for random suffix
       })
     );
 

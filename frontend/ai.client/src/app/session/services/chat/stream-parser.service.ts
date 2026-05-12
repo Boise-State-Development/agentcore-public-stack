@@ -805,7 +805,7 @@ export class StreamParserService {
 
     // Check if we need to update
     const existingMetadata = lastMessage.metadata as Record<string, unknown>;
-    const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number | null } | undefined;
     const existingTTFT = existingLatency?.timeToFirstToken;
     const existingCost = existingMetadata['cost'] as number | undefined;
     const existingTokenUsage = existingMetadata['tokenUsage'] as {
@@ -813,7 +813,7 @@ export class StreamParserService {
       cacheWriteInputTokens?: number;
     } | undefined;
 
-    const newLatency = newMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const newLatency = newMetadata['latency'] as { timeToFirstToken?: number | null } | undefined;
     const newTTFT = newLatency?.timeToFirstToken;
     const newCost = newMetadata['cost'] as number | undefined;
     const newTokenUsage = newMetadata['tokenUsage'] as {
@@ -901,8 +901,11 @@ export class StreamParserService {
     }
 
     if (metadataEvent.metrics) {
+      // Preserve `null` for unmeasured TTFT instead of coercing to 0 — a
+      // real time-to-first-token can never be 0ms, and the badge below
+      // already hides itself for null/undefined/0 via a truthy check.
       result['latency'] = {
-        timeToFirstToken: metadataEvent.metrics.timeToFirstByteMs ?? 0,
+        timeToFirstToken: metadataEvent.metrics.timeToFirstByteMs ?? null,
         endToEndLatency: metadataEvent.metrics.latencyMs,
       };
     }

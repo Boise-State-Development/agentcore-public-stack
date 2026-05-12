@@ -566,7 +566,7 @@ async def dismiss_pending_interrupt_endpoint(
     """
     user_id = current_user.user_id
 
-    logger.info("DELETE /sessions/%s/pending-interrupts/%s", session_id, interrupt_id)
+    logger.info("DELETE /sessions/.../pending-interrupts/...")
 
     try:
         await remove_pending_interrupts(

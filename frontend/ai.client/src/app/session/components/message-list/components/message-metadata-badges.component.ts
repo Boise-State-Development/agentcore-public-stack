@@ -17,7 +17,11 @@ interface CostBreakdown {
 
 interface MessageMetadata {
     latency?: {
-        timeToFirstToken?: number;
+        // null = not measured (provider didn't emit timeToFirstByteMs and
+        // we couldn't compute it locally). Distinct from 0, which is
+        // physically impossible — keep them separate so any future
+        // analytics can filter unmeasured samples cleanly.
+        timeToFirstToken?: number | null;
         endToEndLatency?: number;
     };
     tokenUsage?: {

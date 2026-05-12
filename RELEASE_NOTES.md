@@ -1,3 +1,462 @@
+# Release Notes — v1.0.0-beta.25
+
+**Release Date:** May 11, 2026
+**Previous Release:** v1.0.0-beta.24 (May 6, 2026)
+
+---
+
+## Highlights
+
+This release is the **production-readiness fix for the BFF Token Handler** shipped in v1.0.0-beta.24. Beta.24 rewrote the SPA's auth surface onto cookie-based sessions but left three production-breaking bugs that only surfaced under real traffic: the `SessionRefreshMiddleware` ran synchronous boto3 on the uvicorn event loop so Angular's ~8-endpoint page-load fan-out produced ~16 serialized blocking AWS calls per user per minute (504s, 80s `/files/quota` tails, 15.6s p-max on a 0.7% CPU task); the `CookieCodec` minted a fresh random AES-256 key per process, so as soon as we raised `desiredCount` for concurrency slack every cookie started failing as `bad seal` on ~50% of requests; and the per-session refresh lock only coalesced in-process, so two tasks could still race `cognito-idp:initiate_auth` with the same refresh token and Cognito's rotation would silently log out the loser. This release lands the **event-loop offload + single-flight resolve**, a **cross-task shared AES key via Secrets Manager**, and a **DDB conditional-write refresh lock** that elects exactly one leader fleet-wide.
+
+Also shipping: **server-rendered PDF page-1 thumbnails** on attachment cards, **rich iMessage-style image mosaics** with a full-screen lightbox and inline markdown preview for `.md` files in user messages, **spreadsheet analysis tools** (`list_spreadsheets`, `analyze_spreadsheet`) that run CSV/XLSX analysis inside the Code Interpreter sandbox, **centralized 401 handling** with proactive session-loss detection on tab refocus, and a **`SKIP_AUTH=true` local-dev bypass** gated by a CORS-origin allowlist and a CI guard workflow. Token accounting was corrected across the board — per-message cost no longer double-counts tool-use turns and the context-% badge reflects current context occupancy rather than Strands' summed-across-calls value.
+
+### Heads-up on beta.24
+
+If you deployed beta.24 to a multi-replica environment, you saw some or all of: 401 storms on `/auth/session`, page-load latency tails in the tens of seconds, and users silently logged out after tab refocus. Beta.25 is the fix. The CookieCodec and refresh-lock changes require redeploying the Infrastructure and App API stacks in order — see **🚀 Deployment notes** at the bottom.
+
+---
+
+## BFF Middleware Event-Loop Blocking & Fan-Out Amplification
+
+The middleware introduced in beta.24 ran three independent classes of work on the uvicorn event loop that weren't safe to run there: synchronous boto3 for DynamoDB + Cognito, an inline-awaited sliding-session write on the response path, and a refresh-coalescing lock that only wrapped the Cognito exchange instead of the full resolve path. Under Angular's ~8-endpoint page-load fan-out with a cold `SessionCache` window, a single cookie-bearing user produced ~16 serialized blocking AWS round-trips on one uvicorn worker running in a single ECS task — every slow call stalled every concurrent request on the same task. The observable symptoms were ALB 504s, `TargetResponseTime` p-max of 15.6s at 0.7% CPU, `/files/quota` outliers reaching ~80s, and endpoint p95s climbing into the hundreds of ms under trivial load. (#264)
+
+### How it works now
+
+`SessionRepository.{get,put,update_tokens,touch_last_seen,delete}` and `CognitoRefreshClient.refresh` now offload every boto3 call via `asyncio.to_thread`, so the event loop keeps scheduling other coroutines for the full AWS round-trip duration. A new per-session single-flight primitive (`apis/shared/sessions_bff/single_flight.py`) wraps the whole `cache.get → repository.get → needs_refresh → (maybe refresh)` block in `SessionRefreshMiddleware._resolve_session` — the first caller per `session_id` runs the loader; N concurrent followers await a shared `asyncio.Future` and consume the leader's result. The existing `get_session_lock(session_id)` around the Cognito exchange is preserved end-to-end as defense in depth. `_maybe_slide` no longer `await`s `touch_last_seen` inline — the DDB write dispatches as a detached `asyncio.Task` and the response returns the fresh `Max-Age` synchronously. The cache/throttle boundary alignment that forced a single request to pay both `get_item` and `update_item` on the cache-miss boundary has been de-aligned: `_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS` is now a strict multiple of `_DEFAULT_REFRESH_LEEWAY_SECONDS` (300s vs 60s).
+
+### Backend
+
+- `apis/shared/sessions_bff/repository.py` — every boto3 call now wrapped in a nested sync helper invoked via `await asyncio.to_thread(helper, ...)`; method signatures, return types, and exception branches unchanged
+- `apis/shared/sessions_bff/refresh.py` — `refresh` is now `async def`, calling `await asyncio.to_thread(self._refresh_sync, ...)`; `CognitoRefreshError` contract and `RefreshResult` shape preserved verbatim
+- `apis/shared/sessions_bff/single_flight.py` — new module. `async def resolve_once(session_id, loader_coro_factory) -> tuple[Optional[SessionRecord], bool]`. Leader registers an `asyncio.Future` under a thread-lock-guarded `dict`, runs the loader, sets the result/exception on the Future, removes the registry entry in a `finally` block. Followers `await` the existing Future. Distinct `session_id`s never share a Future
+- `apis/shared/middleware/session_refresh.py` — `_resolve_session` wraps the cache/repo/refresh block in `resolve_once(session_id, _loader)`. `_maybe_slide` updates the local cache synchronously and dispatches `touch_last_seen` via `asyncio.create_task`, keeping the task on `self._slide_tasks` with an `add_done_callback(self._slide_tasks.discard)` — Python's asyncio docs explicitly warn that unreferenced tasks can be GC'd mid-flight, and our initial fix landed this footgun (caught by CI on Python 3.12)
+- `apis/shared/sessions_bff/config.py` — `_DEFAULT_SLIDING_RENEWAL_THROTTLE_SECONDS` raised 60s → 300s. Strict multiple of the 60s leeway guarantees cache-miss and slide-throttle boundaries never coincide
+
+### Infrastructure
+
+- `infrastructure/cdk.context.json` — `appApi.desiredCount` raised 1 → 2 for concurrency slack. A single blocked event loop on one task can no longer halt all ingress
+
+### Test Coverage
+
+~900 lines of new property-based tests. `test_session_refresh_bug_condition.py` encodes each of the seven sub-conditions as a hypothesis property that fails on unfixed code and passes on fixed code (Property 1 / Expected Behavior from the bugfix spec). `test_session_refresh_preservation.py` locks in the 11 preservation invariants that must stay unchanged for non-buggy inputs — dormant pass-through, no-cookie pass-through, unrecoverable-cookie clearing, `Max-Age` re-emit contract, refresh-storm coalescing, codec + client-secret singletons, CSRF decision unchanged, absolute-lifetime cap, fail-closed rotation, uniform `CookieDecodeError` handling. `test_single_flight.py` covers the primitive itself: concurrent callers share one loader invocation, exceptions propagate to every waiter, registry entries clean up after failure, distinct sessions are independent.
+
+---
+
+## BFF Cross-Task Cookie & Refresh Correctness
+
+The `desiredCount: 1 → 2` bump in the event-loop fix immediately exposed two latent defects in beta.24's BFF design that were hidden when only one task existed. Both had to be fixed before the deployment was actually safe to run with more than one replica. (#273, #274, #275)
+
+### Shared AES-256 data key via Secrets Manager
+
+`CookieCodec` in beta.24 called `kms:GenerateDataKey` on first use per process and cached the resulting plaintext AES-256 key in memory. The code's own docstring predicted what would happen with more than one task: _"two codecs in one process can never decrypt each other's output."_ And that's what happened — Task A sealed a cookie with Key-A, the ALB routed the follow-up to Task B which had its own Key-B, `unseal` hit `InvalidTag` → `CookieDecodeError` → `Discarding unrecoverable BFF cookie (bad seal)` → 401. CloudWatch confirmed: three app-api streams each independently logged _"BFF cookie codec initialized (KMS data key fetched)"_ and every subsequent `/auth/session` returned 401.
+
+The fix moves the data key out of per-process state and into a single Secrets Manager secret, encrypted at rest by the existing `BFFCookieSigningKey` CMK:
+
+- CDK creates `BFFCookieDataKeySecret` with `generateSecretString` (44-char alphanumeric, ~261 bits of entropy). On every deploy the secret already exists so the value is stable — cookies survive redeploys
+- `CookieCodec._ensure_cipher` reads the secret string and applies SHA-256 to derive the 32-byte AES-256 key. Single-shot SHA-256 of a ≥256-bit-entropy random input is a sound KDF for AES-256 usage
+- Every app-api task decrypts the same secret and derives the same key → all codecs round-trip each other's seals. The `kms:GenerateDataKey` permission dropped from the runtime task role (least privilege); `kms:Decrypt` stays because Secrets Manager invokes it on the caller's behalf when reading a CMK-encrypted secret
+
+A previous attempt at this bootstrap (#273's initial chained `AwsCustomResource` flow with `kms:GenerateDataKey → secretsmanager:PutSecretValue`) failed stack create with `Response object is too long`. Root cause: the `AwsCustomResource` framework Lambda JSON-stringifies the AWS-SDK response before applying `outputPaths`, and KMS returns `CiphertextBlob` as a Uint8Array that serializes as `{"0":233,"1":18,...}` — ~1.5 KB for a 200-byte ciphertext, past CloudFormation's 4 KB response-object limit. The Secrets-Manager-native `generateSecretString` path in #274 removes the chained custom resources entirely (-153 lines net), no per-cold-start `kms:Decrypt` call, simpler runtime IAM surface.
+
+### Cross-task refresh lock via DDB conditional-write
+
+The in-process single-flight and the existing `get_session_lock` only coalesce same-session callers within one Python process. Once the cookie-codec fix lands and both tasks can share cookies again, under `desiredCount: 2` two tasks each receive a same-session request crossing the refresh-leeway window and each call `cognito-idp:initiate_auth` with the same refresh token. Cognito rotates on the winning call; the loser receives `NotAuthorizedException`, the loser's middleware clears the cookie, and the user is silently logged out.
+
+- `SessionRepository.try_acquire_refresh_lock(session_id, owner, lock_ttl_seconds)` — conditional `UpdateItem` that succeeds iff `attribute_not_exists(refresh_lock_until) OR refresh_lock_until < :now` AND `attribute_exists(PK)` (no phantom rows for sessions that don't exist). Loser returns `False`
+- `SessionRepository.update_tokens` gains `expected_lock_owner=...` — when supplied, the write conditionally requires `refresh_lock_owner = :owner` (strict, not "owner-or-absent") and atomically `REMOVE`s the lock attrs in the same write. The stale-leader-stomp case (Task A's lock TTLs, Task B refreshes, Task A returns with older tokens) now surfaces as `ConditionalCheckFailedException` so the caller can re-read and adopt the peer's tokens
+- `SessionRepository.release_refresh_lock(session_id, owner)` — best-effort cleanup for the leader-failed path so a peer doesn't have to wait the full TTL before retrying
+- `SessionRefreshMiddleware._resolve_session._loader` — two-tier coalescing: (1) existing `get_session_lock` collapses N in-process same-session callers to one contender; (2) `try_acquire_refresh_lock` elects exactly one leader fleet-wide. Followers poll the row via `_wait_for_peer_refresh` and adopt the leader's tokens (rotation detected by refresh-token mismatch; non-rotation by access-token mismatch + future-dated `exp`). Absolute-lifetime guard added ahead of the lock acquisition — if `now > created_at + absolute_lifetime_seconds`, clear the cookie instead of burning a Cognito refresh on a row that's about to TTL-evict
+
+### Test Coverage
+
+Cross-task integration tests (`test_session_refresh_cross_task.py`, 480 lines) run two `SessionRefreshMiddleware` instances against one moto DDB table and exercise leader/follower paths, follower-polling-then-adopting, lock TTL recovery after a dead leader, follower-fall-back-terminal when the leader is stuck, and the headline invariant: two tasks racing in parallel call Cognito at most once. Eight new repository tests lock the lock primitive shape, plus targeted tests for the strict-owner release condition and the phantom-row-prevention guard on acquire.
+
+### Infrastructure
+
+- New `BFFCookieDataKeySecret` (Secrets Manager), encrypted with `BFFCookieSigningKey`. SSM parameter `/${projectPrefix}/auth/bff-cookie-data-key-secret-arn` publishes the ARN for app-api
+- App-api task role: added `secretsmanager:GetSecretValue` on the new secret; kept `kms:Decrypt` (needed by Secrets Manager to read the CMK-encrypted secret); removed `kms:GenerateDataKey` and `kms:DescribeKey`
+- No IAM change required for the DDB refresh lock — app-api task role already had `dynamodb:UpdateItem` on `BFFSessionsTable`
+
+### Breaking changes
+
+- None user-facing. The new env var and SSM parameter are additive; existing deployments redeploy Infrastructure first, then App API, to pick up the shared secret
+
+---
+
+## Token Accounting Correctness
+
+Two related bugs were inflating cost and context-% reporting on tool-use turns. (#270)
+
+### Per-message cost double-count
+
+Strands emits per-LLM-call metadata (each call's tokens) AND a final `AgentResultEvent` whose `EventLoopMetrics.accumulated_usage` is summed across every call in the turn. Both were emitted as `metadata` events and routed into `per_message_metadata[current_assistant_message_index]["usage"]` via `.update()`. Because the `AgentResult` event arrives after every `message_stop`, the index still pointed at the last assistant message — so cumulative tokens overwrote that message's per-call values, double-counting earlier messages' input tokens when each entry was priced and summed.
+
+Fix: route the result-extracted cumulative on the existing `metadata_summary` (turn-summary) track instead of `metadata`. The `stream_processor` main loop consumes both event types into `accumulated_metadata` so the final summary still carries true totals.
+
+### Context-% inflation within a tool turn
+
+Bedrock reports each per-LLM-call `inputTokens` as the FULL context size sent on that call. For a 2-call tool turn (`call_1.input=1000`, `call_2.input=2500`), Strands' `accumulated_usage` reports 3500 — but the actual current context occupancy is 2500. The final SSE `usage` field driving the context-% badge and compaction trigger was inheriting Strands' summed value.
+
+Fix: `stream_coordinator` no longer accumulates `metadata_summary` into `accumulated_metadata`. Per-call `metadata` events last-write-wins via `.update()`, so `accumulated_metadata.usage` equals the most recent call's full input = current context. Added a `CAUTION` comment noting `AgentResult.context_size` / `EventLoopMetrics.latest_context_size` return only `inputTokens` (excluding `cacheRead` / `cacheWrite`) — under prompt caching they under-report by 99%+, so we deliberately sum all three buckets. `TTFT` placeholder of 0 changed to `null` (a real time-to-first-token can never be 0ms and aggregations need to distinguish absence from a real zero); `LatencyMetrics.time_to_first_token` is now `Optional[int]` in both the shared and app-api models.
+
+### Test Coverage
+
+`test_per_message_cost_attribution.py` pins the `metadata` vs `metadata_summary` contract, the main-loop accumulator's both-tracks consumption, and the `stream_coordinator` current-context semantics (two parametrized cases plus all-three-buckets-summed for cache-read/write). Direct unit coverage for `CostCalculator` arrived in `test_calculator.py` (26 cases: per-bucket pricing, cache scenarios against Sonnet 4.5 rates, defensive missing-key / None handling, `calculate_cache_savings`, `validate_pricing` / `validate_usage`).
+
+---
+
+## Auth UX & Local-Dev Bypass
+
+### Centralized 401 handling + proactive session detection
+
+Beta.24 only redirected on 401 from the SessionService bootstrap path — a session that expired mid-session left the user stranded with a generic toast (CRUD endpoints) or no feedback (SSE chat stream). Every 401 now flows through `SessionService.handleUnauthorized()`, which dedupes concurrent calls and queues a single navigation to `/auth/login` with a preserved `returnUrl`. Session loss is surfaced proactively rather than waiting for the next HTTP call to fail: (#277)
+
+- **Cookie-presence fast-path** in bootstrap and recheck. The JS-readable `__Host-bff_csrf` cookie is set and cleared alongside `__Host-bff_session` with matching `Max-Age`, so if the CSRF cookie is gone the session cookie is gone too — skip the `/auth/session` round-trip and bounce straight to login
+- **Visibility re-probe** in the app shell. On tab refocus, `recheck()` runs the cookie check and falls back to `/auth/session`, so a session that expired while the tab was backgrounded is caught immediately rather than on the next user action
+
+### `SKIP_AUTH=true` local-dev bypass
+
+A single-env-var bypass for unattended local dev (and Claude Code agents) that can't round-trip through an external IdP. (#272)
+
+- Returns a fake admin `User` from the three auth dependencies in `apis.shared.auth.dependencies`; CSRF middleware, RBAC, and profile cache flow naturally because no `bff_session` is resolved
+- **Allowlist startup guard** in `app_api/main.lifespan` — app refuses to boot when `SKIP_AUTH=true` is paired with any non-localhost entry in `CORS_ORIGINS` (or an empty `CORS_ORIGINS`). Fails closed for deploy targets we haven't anticipated rather than blocklisting known cloud env vars
+- **CI guard workflow** (`.github/workflows/skip-auth-guard.yml`) — greps CDK source, workflow files, and Dockerfiles for `SKIP_AUTH=true` / `SKIP_AUTH: true` patterns and fails the build if any leak into deployed config
+- Inference-api is intentionally not bypassed — all SPA traffic flows through app-api per the BFF pattern, so one bypass is sufficient
+- Optional tuning: `SKIP_AUTH_ROLES`, `SKIP_AUTH_USER_ID`, `SKIP_AUTH_EMAIL` override the default fake user
+
+### Lava-lamp backdrop dark-mode fix
+
+The dark-mode CSS for the auth pages' lava-lamp backdrop and frosted-glass card never applied on cold load: hand-written `html.dark .X` selectors don't match under Angular's emulated view encapsulation, and `ThemeService` (`providedIn:'root'`) was never injected by anything in the pre-auth tree. Switched the auth-page CSS to `:host-context(html.dark) .X` (the pattern already used component-scoped elsewhere) and forced `ThemeService` to construct at bootstrap via `provideAppInitializer`, so the persisted/system theme is applied to `<html>` before any route renders, including `/auth/login` and `/auth/first-boot` on cold load. (#271)
+
+---
+
+## Attachments: PDF Thumbnails, Rich Previews, Markdown Modal
+
+### Server-rendered PDF page-1 thumbnails
+
+Real first-page thumbnails for PDF attachments instead of the skeleton mockup. Page rasterization runs in app-api via `pypdfium2` (Apache 2.0 / BSD, bundled PDFium binary, no system `poppler`/`ghostscript`). (#263)
+
+- New `ThumbnailRenderer` with a MIME-type dispatcher; PDF only today. Class docstring documents the recommended out-of-process design for `.docx` / `.xlsx` so the dispatcher stays small
+- `GET /files/{upload_id}/thumbnail` — lazy: HEAD-checks for a cached `_thumb.png` sibling next to the original, renders + stores on miss, returns a short-lived presigned GET URL. 415 for unsupported MIME types, 422 for unreadable / corrupt PDFs. Render runs in `loop.run_in_executor` so request workers aren't blocked
+- Single-file and session-cascade deletes also remove the thumbnail sibling
+- `FileUploadService.getThumbnail()` returns a typed result so callers switch on `ready` / `unsupported` / `unavailable` without parsing HTTP errors. Badge fetches on mount for PDFs and renders as `object-cover`, suppressing the bottom fade. Silent fall-back to the skeleton on any error
+
+### Rich previews in user messages
+
+The dense badge is replaced with a richer attachment renderer in user message history. (#254)
+
+- **Images** render as an iMessage-style mosaic: 1-bubble, 2-col, 1+2 split, 2×2 grid, 5+ with `+N` overlay. Opens in a full-screen lightbox with arrow-key navigation
+- **Non-image files** render as a document-style card: tinted header strip with type chip, white "page" body with a folded corner, filename + size footer. Text-based files (txt, md, csv, html) show a real content excerpt; binary types (pdf, docx, xls/xlsx) get skeleton lines
+- `GET /files/{upload_id}/preview-url` — short-lived presigned GET URL scoped to the file owner, used for inline images and the lightbox
+- `GET /files/{upload_id}/text-snippet` — first 2KB of a text-based file decoded as UTF-8 for the document card content peek
+
+### Inline markdown preview for `.md` files
+
+Parsed markdown renders in the attachment card excerpt instead of raw text; clicking a `.md` card opens a full-screen modal viewer rather than opening the raw source in a new tab. Reuses `ngx-markdown` (already wired up for assistant messages) and the existing presigned preview-url flow. (#262)
+
+---
+
+## Spreadsheet Analysis Tools
+
+New spreadsheet analysis capability for CSV/XLSX files. (#f88ce7ec, #0ab90bb1)
+
+- `list_spreadsheets` — enumerates CSV/Excel files from knowledge bases and chat attachments; includes file size and MIME type metadata
+- `analyze_spreadsheet` — downloads files from S3, executes Python analysis via Code Interpreter, returns results. Intelligent schema detection with skiprows probing handles report-style exports with metadata rows. Stderr is cleaned to filter pandas/numpy internal frames and show only user-relevant errors. Output truncated at 10K chars, errors at 600 chars, to prevent context-window overflow
+- Tools injected per-request into `ToolRegistry` via `extra_tools`; chat routes (app-api and inference-api) pass conversation context to the factories
+- Targeted error hints for XLSX→CSV filename mismatches in the sandbox environment; tolerant filename matching for CSV↔XLSX aliasing to prevent retry loops; schema footer preservation on errors for better retry context
+- File metadata models and utilities for consistent attachment handling; stream processor error handling improved for Code Interpreter responses
+
+---
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| strands-agents (backend) | 1.37.0 | 1.39.0 |
+| strands-agents-tools (backend) | 0.5.1 | 0.5.2 |
+| pypdfium2 (backend, new) | — | latest |
+
+`CacheConfig(strategy="auto")` remains intentionally deferred on `BedrockModel`. The strands v1.39.0 bump includes the SDK-side fix (strands PR #1438 — `cachePoint` blocks alongside non-PDF document attachments), so the technical barrier is gone — but the user-visible cost/badge impact warrants a separate scoped rollout. (#265)
+
+---
+
+## 🏗️ Infrastructure
+
+- **New**: `BFFCookieDataKeySecret` (Secrets Manager), encrypted at rest with the existing `BFFCookieSigningKey` CMK. SSM parameter `/${projectPrefix}/auth/bff-cookie-data-key-secret-arn`
+- **Changed**: `appApi.desiredCount` raised 1 → 2
+- **IAM delta on app-api task role**: added `secretsmanager:GetSecretValue` on `BFFCookieDataKeySecret`; removed `kms:GenerateDataKey` and `kms:DescribeKey` on `BFFCookieSigningKey`; kept `kms:Decrypt` (Secrets Manager invokes it on the caller's behalf when reading a CMK-encrypted secret)
+- **No new tables**. The cross-task refresh lock reuses `BFFSessionsTable` via conditional `UpdateItem`
+
+---
+
+## 🔧 CI/CD
+
+- **New workflow**: `.github/workflows/skip-auth-guard.yml` — greps CDK source, workflow files, and Dockerfiles for `SKIP_AUTH=true` / `SKIP_AUTH: true` patterns and fails the build if any leak into deployed config. Uses SHA-pinned `actions/checkout` and `ubuntu-24.04` per existing supply-chain conventions in `tests/supply_chain/`
+
+---
+
+## 🚀 Deployment notes
+
+Deploy Infrastructure first, then App API, in that order.
+
+1. **Infrastructure stack** creates `BFFCookieDataKeySecret` and publishes its ARN to SSM. The secret value is generated by Secrets Manager on create and stays stable across subsequent deploys — cookies survive redeploys
+2. **App API stack** picks up `BFF_COOKIE_DATA_KEY_SECRET_ARN` on the next task rotation; existing tasks keep the old per-process data key until they drain. Both states coexist cleanly — new tasks seal under the shared key; old tasks still seal under their own; unsealing on a task that holds a different key fails the same way it does today and the SPA bounces to login. End state (all tasks rotated): cookies round-trip cleanly across the fleet
+3. **`desiredCount: 2` takes effect** on the App API stack's next deploy. CloudFormation scales up without draining traffic; the fix makes multi-replica safe
+
+No manual cleanup required if you were running on beta.24 — the migration is forward-only. If you want zero-drift on the user population, invalidate active sessions once post-deploy: `aws dynamodb scan --table-name ${BFFSessionsTable} --select COUNT` then a bulk delete, or just let the 30-day absolute-lifetime cap roll them off naturally.
+
+---
+
+
+
+---
+
+## BFF Token Handler — Cookie-Based Auth
+
+The SPA's entire auth surface has been rewritten. Bearer tokens in `localStorage` are out; an opaque session id in a `__Host-bff_session` httpOnly cookie is in. The public PKCE Cognito client is decommissioned in favor of a confidential BFF client whose secret never leaves the server. Chat streams and voice WebSockets now transit same-origin `/api/*` through CloudFront, with app-api proxying to inference-api server-side. This closes the window where an XSS could exfiltrate a long-lived Cognito access token, removes the CORS preflight from every chat turn, and sets the foundation for the voice re-enablement below.
+
+### How authentication works now
+
+A successful login goes: SPA → `GET /auth/login` → Cognito Hosted UI (with PKCE) → `GET /auth/callback` on app-api. The callback exchanges the code server-side using the confidential client secret, writes the Cognito access/refresh/ID tokens to `BFFSessionsTable` keyed by an opaque session id, and seals that id into an AES-GCM cookie whose data key is wrapped by KMS. The browser never sees a JWT. Subsequent requests carry only the cookie; `SessionRefreshMiddleware` unseals it, looks up the session row, silently refreshes the Cognito token when it's near expiry, and forwards the request. Unsafe methods require a double-submit CSRF header matching the `__Host-bff_csrf` cookie.
+
+### What shipped
+
+**Backend (`apis/shared/sessions_bff/`).** `CookieCodec` (AES-GCM with version-byte associated data, promoted to a process-wide singleton so the `/auth/callback` seal and middleware unseal share the same KMS-derived key), `BFFSessionRepository` with conditional TTL writes, `SessionRefreshMiddleware` and `CSRFMiddleware` on app-api, per-session `asyncio.Lock` so multi-tab refresh storms drive exactly one Cognito exchange, and a Cognito refresh-token client that retries rotation writes three times before failing closed (an old refresh token dies the instant Cognito rotates it, so a silently-failed write would log users out on the next request).
+
+**BFF auth routes.**
+
+- `GET /auth/login` — Cognito authorize with PKCE, optional `identity_provider` for federated one-click SSO, optional `return_to` for deep-link preservation. `_sanitized_return_to` rejects all C0 control bytes (U+0000..U+001F), not just CR/LF, so browser URL-parser strip tricks like `/\t/evil.com` can't pivot through the `//` check.
+- `GET /auth/callback` — server-side code exchange, cookie seal, upsert of the Users row directly from ID-token claims (`email`, `name`, `picture`, `custom:roles` / `cognito:groups`); previously the per-request sync ran off the access token, which carries no email, so first-login users had `email=None` and the Cognito provider-group string in `roles` instead of the IdP-mapped values.
+- `GET /auth/session` — returns the session payload the SPA uses to bootstrap.
+- `POST /auth/logout` — clears cookies, invalidates the DDB row, returns `{post_logout_url}` pointing at `{cognito_domain}/logout` so the browser bounces through Cognito Hosted UI to clear the upstream session. Without this, Cognito silently re-issued a code on the next login without a credential prompt.
+
+**Sliding session lifetime.** The cookie's `Max-Age` and the DDB row's TTL bump on every successful resolution, capped at `created_at + BFF_SESSION_ABSOLUTE_LIFETIME_SECONDS` (default 30 d) and throttled by `BFF_SESSION_SLIDING_RENEWAL_THROTTLE_SECONDS`. Without this, active users were getting logged out after 1 hour even though their refresh token was valid for 30 days.
+
+**Chat SSE proxy.** `POST /chat/stream` on app-api is the cookie-authenticated proxy to `{INFERENCE_API_URL}/invocations`. It owns its `httpx.AsyncClient` lifecycle and closes it in the streaming generator's `finally` block — using `async with` would drain the upstream during `__aexit__` and buffer the entire stream before headers flush. Forwards the SPA's `OAuth2CallbackUrl` header so `AgentCoreContextMiddleware` can scope tool-side OAuth consent landing URLs to the SPA origin. The AgentCore Runtime data-plane URL is built by `_build_upstream_url()`, which percent-encodes the ARN as a single path segment and appends `?qualifier=DEFAULT` — without this the ARN's literal `/` split the path and AWS returned 404. Sets `X-Accel-Buffering: no` and `Cache-Control: no-cache` so late SSE events (notably `oauth_required` after `message_stop`) reach the browser. The same lifecycle fix was mirrored onto the API-key-authenticated `/chat/api-converse` proxy.
+
+**Frontend (`SessionService`).** Bootstraps from `GET {appApiUrl}/auth/session` in a chained `APP_INITIALIZER` (migrated to Angular 19+ `provideAppInitializer`). On 401, navigates to the SPA's `/auth/login` page with `returnUrl` — not Cognito Hosted UI directly — so the user can pick a provider. The bootstrap promise hangs on the 401 path so `APP_INITIALIZER` stays pending until the browser tears the page down (previously the router could render `/` in the brief window before navigation landed). A new `csrfInterceptor` mirrors the CSRF header onto unsafe-method requests; a new `withCredentialsInterceptor` flips `withCredentials: true` on every `HttpClient` call to `appApiUrl` (local dev runs cross-origin; production is same-origin via CloudFront so the flag is a no-op, but without it cross-origin dev 401'd on every call after login). `ChatHttpService` and `PreviewChatService` target `${appApiUrl}/chat/stream` with `credentials: 'include'` instead of hitting inference-api directly.
+
+**Legacy AuthService retired.** `auth.service.ts`, `auth.interceptor.ts`, the SPA's `/auth/callback` page + `callback.service.ts`, and their specs are deleted. `UserService.currentUser` is derived from `SessionService.user()`. `authGuard` and `adminGuard` gate on `SessionService.isAuthenticated()`. The SPA `/auth/callback` route is gone — the BFF callback at `${appApiUrl}/auth/callback` is the only OAuth landing.
+
+**Infrastructure.** `BFFSessionsTable` (DynamoDB, TTL attribute), `BFFCookieSigningKey` (KMS), `CognitoBFFAppClient` (confidential, secret in Secrets Manager). CloudFront `/api/*` behavior on the frontend distribution forwards to the app-api ALB with a viewer-request Function that strips the `/api` prefix. Caching disabled, all-viewer-except-host-header policy, no compression (SSE must not be re-gzipped), `readTimeout` capped at CloudFront's 60 s default max. SPA fallback moved off distribution-wide `errorResponses` (which was rewriting `/api/*` 4xx into 200 + `index.html`, choking `HttpClient` JSON parsing) onto a viewer-request Function scoped to the S3 behavior. `CognitoConfig.supportedIdentityProviders` (env `CDK_COGNITO_SUPPORTED_IDPS`) wires federated IdPs onto the BFF client; previously only the now-deleted public client had them.
+
+**Public PKCE client decommissioned.** The SPA-public `appClient` is gone, along with SSM parameters `/auth/cognito/app-client-id` and `/oauth/callback-url`. `InferenceApiStack`'s runtime authorizer repoints to `/auth/cognito/bff-app-client-id`. `AppApiStack`'s `COGNITO_APP_CLIENT_ID` also repoints to the BFF client, which keeps `/chat/agent-stream` Bearer validation alive for API-key and scripted callers.
+
+**`/config.json` retired.** `appApiUrl` is baked into the bundle via Angular `fileReplacements` (dev → `http://localhost:8000`, prod → `/api`). `version` is generated from the monorepo root `VERSION` file by a `scripts/gen-version.js` prebuild hook. `cognitoDomainUrl` is fetched on demand from a new `GET /admin/auth-providers/cognito-redirect-uri` admin endpoint. `ConfigService` collapses to a thin signal accessor over `environment.appApiUrl`; `APP_INITIALIZER` drops the chained `loadConfig` step.
+
+### Breaking changes
+
+- **`Authorization: Bearer` is no longer accepted on SPA-facing routes.** Cookie auth is required. External callers must migrate to the BFF session flow or hit `/chat/agent-stream` (Bearer-only) instead.
+- **`POST /chat/stream` is now the cookie-authenticated proxy.** The legacy in-process agent loop moved to `POST /chat/agent-stream` for API-key and scripted callers.
+- **SPA `/auth/callback` route removed.** Third-party tools that deep-linked there must use `${appApiUrl}/auth/callback`.
+- **SSM parameters deleted:** `/auth/cognito/app-client-id` and `/oauth/callback-url`. Consumers must migrate to `/auth/cognito/bff-app-client-id` and register a per-system callback URL.
+
+---
+
+## Voice Mode via WebSocket-Ticket Proxy
+
+Voice returns on top of the new cookie flow. The SPA no longer holds a Cognito access token, so it can't authenticate the WebSocket upgrade against the AgentCore Runtime's `customJwtAuthorizer` directly. Instead the SPA mints a single-use HMAC ticket, opens a same-origin WS to `/api/voice/stream`, and app-api opens the upstream WS using the BFF-stored Cognito token (#211, #233).
+
+### How it works
+
+- `POST /voice/ticket` (cookie + CSRF auth) issues a 60-second ticket bound to `{user_sub, session_id, jti, exp}`
+- WebSocket `/voice/stream` gates on Origin allowlist, cookie unseal, ticket verify + replay (via `VoiceTicketReplayTable`, jti partition key, TTL attribute), and ticket↔session `user_id` binding before relaying
+- The aiohttp WS relay rewrites `auth_token` and `user_id` on every text-type `config` frame — not a one-shot flag, which would have let a SPA that sent any non-config frame first consume the injection slot and forge identity on subsequent frames
+- New infrastructure: `VoiceTicketReplayTable` and `VoiceTicketSigningSecret` (Secrets Manager), plus IAM grants and `VOICE_TICKET_*` env vars on app-api; inference-api unchanged
+
+### Shared primitive
+
+`apis/shared/voice_ticket/` packages the HMAC-SHA256 codec, the DynamoDB conditional-put replay store, and a service facade that enforces verify-then-consume atomically.
+
+### Frontend
+
+- `VoiceTicketService` makes the REST hop; `VoiceChatService` opens WS at `${appApiUrl}/voice/stream?ticket=…` and sends a `config` frame without `auth_token` (the proxy injects it upstream)
+
+Covered by 30 backend tests (codec, replay, service, URL builder, config injection, route auth gates) and 2 frontend tests.
+
+---
+
+## Per-Conversation Cost + Context-Window Badge
+
+A compact badge above the full-page composer shows the running USD cost of the current conversation and a color-graded SVG ring filled by the most recent turn's context-window usage (#223).
+
+### Backend — write-time aggregation
+
+After each cost-record `put_item`, an atomic `ADD totalCost` / `SET lastContextTokens, contextWindow` bumps the session row. Metadata GET becomes a single `GetItem` instead of a per-turn GSI scan. Legacy sessions lazily backfill on first read (sum the C# records once, write totals back) — no migration script needed. `StreamCoordinator` looks up `max_input_tokens` for the current model and surfaces it both on the SSE `metadata` event (live badge) and on stored `MessageMetadata` (persistence).
+
+### Frontend
+
+- `ChatStateService` gains `costDollars`, `contextTokens`, `contextWindowSize`, and computed `contextPct` signals
+- Seeds from session metadata on route change; clears stale state before new metadata loads; increments per-turn from the SSE `metadata` event
+- SVG ring animates in from empty on first render and smoothly between turns; color steps through emerald → blue → amber → red as fill increases; tooltip surfaces underlying token counts and notes that the total includes system prompt + tools
+- Theme-aware fade gradient above the composer so messages scrolling under the fixed footer fade out instead of cutting against a hard edge
+
+### Correctness fixes folded into the feature
+
+- Multi-step tool-loop turns emit multiple metadata events per message (intermediate plus cumulative); the initial implementation priced the last event and undercounted. Now walks per-message metadata, prices each independently, and sums — matching the per-message C# records persisted server-side.
+- `inputTokens` from Bedrock is the uncached portion only. The cached prefix and freshly-cached content live in `cacheReadInputTokens` / `cacheWriteInputTokens`. Summing all three buckets in three places (live frontend update, `_bump_session_aggregates`, legacy-session backfill) gives true context-window occupancy; gating the badge update on `data.contextWindow` being present (only attached to the end-of-turn synthesized event) stops per-call intermediates from overwriting the badge mid-turn.
+
+---
+
+## Context Compaction Events with Refresh-Survival
+
+When the backend rolls older turns into a summary to keep input under the token threshold, users now see a subtle "Earlier messages summarized" indicator at the bottom of the conversation with a tooltip showing the cumulative turn count — explaining the sudden context-window drops that show up on the cost badge (#243).
+
+### Backend
+
+- New `compaction` SSE event in `StreamCoordinator`, emitted after the final `metadata` event so the cost badge updates before the indicator changes (payload: `previousCheckpoint`, `newCheckpoint`, `summarizedTurns`, `inputTokens`)
+- `TurnBasedSessionManager.update_after_turn` returns `CompactionResult` on checkpoint advance and accepts `current_messages` so the cutoff cache stays correct when AgentCoreMemory loads via hooks
+- `CompactionState` carries a cumulative `totalSummarizedTurns` counter persisted alongside the nested compaction map; lifted to a top-level field on the session-metadata GET so the frontend can rehydrate after refresh without knowing the internal state shape
+- Lazy-load fix: on the AgentCoreMemory existing-session path, `agent.messages` is empty during `initialize()`, so `_apply_compaction()` skipped `_load_compaction_state`. The first sub-threshold `update_after_turn` then saved default zeros over the persisted counter. Tracked via `_compaction_state_loaded` and lazy-loaded on first `update_after_turn` if not.
+
+### Frontend
+
+- `CompactionSummaryService` holds the running total as a signal; `recordLive` for SSE events, `seedFromHydration` for session-load replay. A `wasHydrated` flag suppresses the one-shot fade-in animation on reload while still firing it for live events.
+- End-of-conversation indicator replaces the original per-message inline divider (which caused jarring layout shifts)
+- `session.page` seeds from `currentSession.totalSummarizedTurns` and resets the service on session change so totals don't bleed across sessions
+
+---
+
+## Per-Model Inference Parameters with Extended Thinking
+
+Replaces the global `temperature` / `max_tokens` knobs with a per-model `supportedParams` map keyed by canonical name (`temperature`, `top_p`, `top_k`, `max_tokens`, `thinking`, `reasoning_effort`, etc.). Admins author which params apply to each model, the runtime translates canonical names into provider-native shapes (Bedrock / OpenAI / Gemini), and users can override per-request from a new Settings → Advanced panel (#203).
+
+### Extended thinking on Anthropic Bedrock
+
+- Stored as an int budget per model; runtime wraps it into the `{type, budget_tokens}` Anthropic request shape under `additional_request_fields` (the field Strands' `BedrockConfig` actually forwards — the previously-attempted `additional_model_request_fields` was dropped)
+- Suppresses `temperature` / `top_p` / `top_k` while thinking is on (Anthropic constraint)
+- Validated up front: budget ≥ 1024 and < `max_tokens`, with inline errors on the admin form, an "unsatisfiable" disabled state on the user panel when `max_tokens` drops below the floor, and a final cross-param safety drop in the merge step so direct API callers never ship a Bedrock-rejecting request
+
+### Persistence fix for thinking + tool use
+
+The persistence-side `_filter_empty_text` in `TurnBasedSessionManager` was dropping `reasoningContent` blocks. Anthropic requires the prior thinking block (with its signature) to be replayed verbatim while a tool-use cycle is open; losing it triggers `messages.X.content.Y.thinking.signature: Field required` on subsequent Bedrock calls. Replaced the narrow allowlist with the full set of Bedrock Converse content block keys mirrored from Strands' `BedrockModel._format_request_message_content`, with a warning when an unrecognized block is dropped.
+
+### Safety hardening
+
+- `_merge_inference_params` gates request-side passthrough against a `KNOWN_CANONICAL_PARAMS` allow-list (union of all provider mapping keys) so future canonical keys a future provider mapping might forward can't bypass per-model bounds
+- `lastTemperature` on `SessionPreferences` and the dead `isReasoningModel` field on `ManagedModel` are removed
+
+---
+
+## Login Page Redesign
+
+A translucent backdrop-blur card floats over a layered primary-color background with soft drifting blobs, a masked grid overlay, and a subtle inset highlight (#246). Light/dark themes both supported; animation respects `prefers-reduced-motion`. The Cognito button now uses the app's primary color instead of a generic blue.
+
+---
+
+## Backend Architecture Cleanup
+
+Completes the multi-release decoupling of app-api from inference-api and the agent layer (#200). Moves from `apis.app_api` into `apis.shared`:
+
+- `costs/` — calculator, pricing_config, models, aggregator
+- `auth/api_keys/` — models, service, repository
+- `tools/` — models, repository, freshness
+- `storage/` — metadata_storage, dynamodb_storage
+
+New AST-based architectural boundary tests (`tests/architecture/test_import_boundaries.py`) enforce:
+
+- `inference_api` never imports from `app_api`
+- `agents/` never imports from `app_api` or `inference_api`
+- `apis.shared` never imports from `app_api` or `inference_api`
+- `app_api` never imports from `inference_api`
+
+Updates `CLAUDE.MD` and steering docs with the import boundary rule. Closes #120.
+
+---
+
+## RAG Ingestion Improvements
+
+Tabular data ingestion rewrite and embeddings scaling fix for the RAG pipeline.
+
+### XLSX chunker
+
+A new `xlsx_chunker.py` converts Excel sheets to CSV and chunks by rows, bypassing Docling's slow table parsing. Sheet names are prepended to each chunk for multi-sheet workbooks so context survives embedding. `_is_likely_header()` and `_find_header_row_index_from_rows()` locate the first actual header row, skipping sparse title/banner rows at sheet start — chunks now start at the real data table instead of embedding metadata rows as content.
+
+### Batched S3 Vectors writes
+
+Replaces single-batch vector upload with batched processing (50 vectors per batch), preventing request-body-size failures when storing large numbers of embeddings. Progress logged at 500-vector intervals.
+
+---
+
+## Compaction, Cost, and Chat Reliability Fixes
+
+- **Paused agent orphaned after resume** (#207). The agent cache keyed on the unbuilt `system_prompt` parameter, but the construction snapshot persisted the built prompt. Resume requests passed the built form back into `get_agent`, hashing to a different cache slot — resume rebuilt a fresh agent (cache MISS), left the paused agent stuck, and the next non-resume turn cache-hit the paused agent, triggering "must resume from interrupt with list of interruptResponse's". Fix: snapshot the unbuilt prompt so resume hashes to the same key. Defense in depth: when `get_agent` cache-hits a paused agent on a non-resume request, evict and rebuild instead of serving the stale state.
+- **Cost summary `InvalidOperation` on breakdown dicts** (#208). The streaming path produces a cost breakdown dict (`{"total": ..., "inputCost": ...}`), which flowed through `cost = message_metadata.cost or 0.0` unchanged and hit `Decimal(str(cost_delta))` in the DynamoDB summary writer — only the rollup path crashed, so the summary was silently going stale. Two layers of defense: `_coerce_cost_total` normalizes dict/float/None/NaN/inf to a finite float before the summary call, and a boundary `_safe_decimal` in `dynamodb_storage` collapses bad values to `Decimal("0")` across five `cost_delta` / `cache_savings_delta` sites.
+- **Converse-proxy SSE header flush** (#217). The `/chat/api-converse` proxy used `async with httpx.AsyncClient(...)` and returned a `StreamingResponse` from inside the block. When the handler returned, `__aexit__` closed the client, which made `httpx` drain the upstream's full response — buffering the entire SSE stream before headers flushed. Same bug Phase 4 hit on the BFF proxy. Mirrored the fix: `_build_upstream_client()` seam, manual lifecycle, close in the generator's `finally` (SSE) or after `aread()` (non-SSE / 4xx). API-key authenticated path, independent of the BFF migration.
+- **Google hourly-reconsent loop** (#210, #245). AgentCore Identity's refresh flow was never getting a chance to run: the in-process token cache returned warmed entries past the upstream 3600s lifetime, and a 401 on the AfterToolCallEvent retry path was writing the durable disconnect flag, which pinned subsequent fetches to `force_authentication=True`. Three coordinated changes: TTL on the cache (default 3000s); stop writing the disconnect flag from the 401 retry (reserved for the explicit Disconnect button); always send `prompt=consent` on Google's `initiate_consent` path so Disconnect/Reconnect cycles actually re-issue a refresh token (Google only re-issues refresh tokens on subsequent grants if the consent screen is shown).
+
+---
+
+## Bug Fixes
+
+- Shared BFF `CookieCodec` singleton across seal and unseal paths (see Phase 7 above)
+- `preview-chat` test flake: `PreviewChatService` imported `fetchEventSource` directly while the spec mocked the module; the Angular vitest builder's shared worker pool sometimes resolved the production binding to a different `vi.fn()` instance than the spec captured, producing "expected 1, got 0" on ~20-30% of CI runs. Replaced with a `FETCH_EVENT_SOURCE` `InjectionToken` overridden via `TestBed.providers` — 25/25 consecutive runs green (was 6/20).
+- Cost service spec: absorb stray `resource()` loader request under shared vitest mock pool (#225)
+- CSRF assertion in preview-chat spec hardened against shared-mock pollution (fails with `toHaveBeenCalled` now instead of `Cannot read properties of undefined`)
+- Scrubbed `AGENTCORE_RUNTIME_WORKLOAD_NAME` in `tests/apis/shared/oauth/conftest.py` — local `.env` with that var set was flipping `_resolve_workload_token` into the workload-mint branch instead of the cache-hit / consent-required branches eight tests wanted to exercise (#214)
+
+---
+
+## Security
+
+- Pygments 2.19.2 → 2.20.0 (ReDoS in GUID-matching regex, Dependabot alert #71)
+- BFF `return_to` control-byte bypass closed (C0 range rejection, see Phase 7)
+- CodeQL remediation (#247): log-injection via user-controlled values, unused imports/locals in `infrastructure-stack.ts`, `unused-local-variable` dead-code sites, empty-except explanatory comments
+- CodeQL and Dependabot workflows retargeted from `develop` to `main`
+
+---
+
+## Dependency Upgrades
+
+| Component | From | To |
+|---|---|---|
+| pillow | older | 12.2.0 |
+| cryptography | older | 47.0.0 |
+| python-multipart | older | 0.0.27 |
+| aiohttp | older | 3.13.5 |
+| pygments | 2.19.2 | 2.20.0 |
+| @angular/core + packages | 21.2.7 | 21.2.11 |
+| @angular/cdk | 21.2.5 | 21.2.9 |
+| @angular/build, @angular/cli | 21.2.6 | 21.2.9 |
+| @angular/compiler-cli | 21.2.7 | 21.2.11 |
+| tailwindcss, @tailwindcss/postcss | 4.2.2 | 4.2.4 |
+| vitest, @vitest/coverage-v8 | 4.1.2 | 4.1.5 |
+| ngx-markdown | 21.1.0 | 21.2.0 |
+| @ng-icons/core, @ng-icons/heroicons | 33.2.0 | 33.2.2 |
+| postcss | 8.5.8 | 8.5.12 |
+| jsdom | 29.0.1 | 29.1.0 |
+| fast-check | 4.6.0 | 4.7.0 |
+| uuid | 13.0.0 | 14.0.0 |
+| @analogjs/vite-plugin-angular | 3.0.0-alpha.26 | 3.0.0-alpha.53 |
+| @analogjs/vitest-angular | 3.0.0-alpha.26 | 3.0.0-alpha.30 |
+| aws-cdk-lib | 2.248.0 | 2.251.0 |
+| aws-cdk | 2.1117.0 | 2.1120.0 |
+| @types/node (infra) | 25.5.2 | 25.6.0 |
+
+Frontend transitive overrides: `vite >= 7.3.2`, `dompurify >= 3.4.0`, `lodash-es >= 4.18.0`, `hono >= 4.12.14`, `@hono/node-server >= 1.19.13`, `undici < 8.0.0` (jsdom compatibility), mermaid's nested `uuid` pinned to 14.0.0.
+
+---
+
+## Deployment Notes
+
+This release is operationally significant — the BFF migration changes infrastructure, IAM, SSM, and several external contracts. Deploy order matters.
+
+- **Infrastructure first.** New resources: `BFFSessionsTable`, `BFFCookieSigningKey` (KMS), `CognitoBFFAppClient` (with secret in Secrets Manager), `VoiceTicketReplayTable`, `VoiceTicketSigningSecret`. CloudFront `/api/*` behavior + rewrite function on the frontend distribution. SPA fallback moved from distribution-wide `errorResponses` to a viewer-request function on the S3 behavior. CloudFront `readTimeout` capped at 60s without a service-quota increase.
+- **Infrastructure second pass after cutover.** The public PKCE Cognito client is removed in Phase 7. Any external consumer of the SSM parameters `/auth/cognito/app-client-id` or `/oauth/callback-url` must migrate off before this deploy — they're gone post-deploy. Migrate to `/auth/cognito/bff-app-client-id` and register a per-system callback URL of your own.
+- **Environment variables.** New on app-api: `BFF_AUTH_CALLBACK_URL`, `BFF_POST_LOGIN_REDIRECT_URL`, `BFF_SESSION_ABSOLUTE_LIFETIME_SECONDS`, `BFF_SESSION_SLIDING_RENEWAL_THROTTLE_SECONDS`, `VOICE_TICKET_*`, `INFERENCE_API_URL`, `CDK_COGNITO_SUPPORTED_IDPS`. All documented in `.env.example` (previously zero coverage for the Cognito and BFF blocks).
+- **Cognito callback/logout URL registration.** Ensure the BFF client's `callbackUrls` and `logoutUrls` cover every environment you deploy to. Trailing commas in `CDK_COGNITO_CALLBACK_URLS` / `CDK_COGNITO_LOGOUT_URLS` are now trimmed; prior to this release they produced empty strings Cognito rejected with a regex validation error.
+- **`CDK_CERTIFICATE_ARN` is required for the frontend stack** so the `/api/*` CloudFront origin uses `HTTPS_ONLY`. Without it the ALB HTTP listener 301-redirects to its public hostname and breaks same-origin cookie assumptions.
+- **Frontend build.** CI must set `BUILD_CONFIG=production` for cloud builds. The `develop`-branch default previously bundled `environment.ts` with `localhost:8000`, which Private Network Access blocks.
+- **External Bearer callers migrate endpoint.** The legacy in-process agent loop moved from `POST /chat/stream` to `POST /chat/agent-stream`. API-key and scripted callers against `/chat/stream` now hit the cookie-authenticated BFF proxy (which will 401 without a session).
+- **`/chat/proxy-stream` is deleted.** Any caller on that path during the rolling-deploy window must move to `/chat/stream`.
+- **SPA OAuth callback path deleted.** Third-party tools that deep-linked to `{spa}/auth/callback` must use the BFF path at `${appApiUrl}/auth/callback`.
+- **`/config.json` is no longer deployed.** The `BucketDeployment` is gone; no CloudFront invalidation is needed for it. `cognitoDomainUrl` is served on demand from `GET /admin/auth-providers/cognito-redirect-uri` (admin-only).
+- **Voice mode** requires the new `VOICE_TICKET_*` env vars and IAM grants on app-api. The SPA is wired to the WebSocket-ticket proxy automatically; no frontend config required.
+- **Backend module paths.** `apis.app_api.costs`, `apis.app_api.tools.models`, `apis.app_api.storage`, and `apis.app_api.auth.api_keys` are gone. Any out-of-tree imports must move to `apis.shared.*`.
+
+---
+
 # Release Notes — v1.0.0-beta.23
 
 **Release Date:** April 29, 2026

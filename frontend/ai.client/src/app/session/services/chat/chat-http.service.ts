@@ -22,6 +22,17 @@ class FatalError extends Error {
     this.name = 'FatalError';
   }
 }
+/**
+ * Thrown by the SSE `onopen` when the BFF returned 401. The session
+ * redirect is already in flight; `onerror` uses this marker to suppress
+ * the toast that would otherwise flash before the page tears down.
+ */
+class UnauthorizedError extends Error {
+  constructor() {
+    super('Session expired');
+    this.name = 'UnauthorizedError';
+  }
+}
 
 interface GenerateTitleRequest {
   session_id: string;
@@ -69,6 +80,10 @@ export class ChatHttpService {
     // an empty object before bootstrap or in the Bearer rollback path.
     const csrfHeaders = this.bffSession.csrfHeaders();
 
+    // Capture into a local so `onopen` (a method-shorthand on the config
+    // object, not a closure over `this`) can reach the BFF session.
+    const bffSession = this.bffSession;
+
     return fetchEventSource(`${baseUrl}/chat/stream`, {
       method: 'POST',
       // Send the BFF session cookie (`__Host-bff_session`) on cross-origin
@@ -88,6 +103,12 @@ export class ChatHttpService {
       async onopen(response) {
         if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
           return; // everything's good
+        } else if (response.status === 401) {
+          // BFF session is missing or expired. Bounce to /auth/login —
+          // `handleUnauthorized` is idempotent, so a 401 here that races
+          // with one from a parallel request only navigates once.
+          bffSession.handleUnauthorized();
+          throw new UnauthorizedError();
         } else if (response.status === 403) {
           // Handle forbidden (e.g., usage limit exceeded)
           let errorMessage = 'Access forbidden';
@@ -161,6 +182,12 @@ export class ChatHttpService {
       onerror: (err) => {
         this.messageMapService.endStreaming();
         this.chatStateService.setChatLoading(false);
+
+        // 401 already triggered the redirect — skip the toast so it
+        // doesn't flash before the page tears down.
+        if (err instanceof UnauthorizedError) {
+          throw err;
+        }
 
         // Display error message to user using ErrorService
         if (err instanceof FatalError) {

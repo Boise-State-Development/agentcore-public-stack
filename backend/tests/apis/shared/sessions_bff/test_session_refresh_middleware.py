@@ -226,12 +226,16 @@ def test_near_expiry_session_triggers_refresh_once() -> None:
     repo = AsyncMock()
     repo.get.return_value = record
     codec = _make_codec()
+    # `refresh_client.refresh` is now `async` (task 3.2) — use AsyncMock so
+    # `await self._refresh_client.refresh(...)` in the middleware resolves.
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.fresh",
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.fresh",
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -245,7 +249,7 @@ def test_near_expiry_session_triggers_refresh_once() -> None:
     assert body["has_session"] is True
     # The refreshed token should be exposed downstream.
     assert body["access_token"] == "access.fresh"
-    refresh.refresh.assert_called_once_with(
+    refresh.refresh.assert_awaited_once_with(
         username="alice", refresh_token="refresh.original"
     )
     repo.update_tokens.assert_awaited_once()
@@ -259,7 +263,7 @@ def test_refresh_failure_clears_cookie() -> None:
     repo.get.return_value = record
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.side_effect = CognitoRefreshError("rotated")
+    refresh.refresh = AsyncMock(side_effect=CognitoRefreshError("rotated"))
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
     )
@@ -298,7 +302,7 @@ async def test_storm_coalesces_to_single_refresh() -> None:
         )
 
     refresh = MagicMock()
-    refresh.refresh.side_effect = slow_refresh
+    refresh.refresh = AsyncMock(side_effect=slow_refresh)
 
     # After the first refresh, repo.get returns the *fresh* record so other
     # waiters short-circuit out of the refresh branch.
@@ -381,7 +385,13 @@ def test_slide_within_throttle_window_does_not_write_or_reemit() -> None:
 def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
     """Once `last_seen_at` is older than the throttle window, the slide
     fires: one DDB touch with a fresh ttl, plus a Set-Cookie carrying a
-    fresh Max-Age = session_ttl_seconds."""
+    fresh Max-Age = session_ttl_seconds.
+
+    The slide-write is fire-and-forget (task 3.5) — we poll for the
+    background task's side effect rather than sample immediately. The
+    observable external contract (Set-Cookie Max-Age) is unchanged; only
+    the internal timing of the write moves off the request path.
+    """
     record = _make_record()
     record.last_seen_at = int(time.time()) - 120  # past the 60s throttle
     repo = AsyncMock()
@@ -393,7 +403,21 @@ def test_slide_past_throttle_writes_ddb_and_reemits_cookie() -> None:
     )
 
     sealed = codec.seal(CookiePayload(session_id=record.session_id))
-    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+    with TestClient(app) as client:
+        response = client.get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+        # Poll for the fire-and-forget slide-write (task 3.5) INSIDE the
+        # `with` block — TestClient tears down its anyio portal (and the
+        # event loop) on `__exit__`, cancelling any unfinished tasks.
+        # Drive the loop with a second GET if the first request's
+        # background task hasn't flushed yet.
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
+            time.sleep(0.01)
+        if repo.touch_last_seen.await_count == 0:
+            client.get("/echo")
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and repo.touch_last_seen.await_count == 0:
+                time.sleep(0.01)
 
     assert response.status_code == 200
     # Exactly one slide-write, and it carries a ttl bumped by ~session_ttl_seconds.
@@ -472,6 +496,44 @@ def test_slide_max_age_capped_by_remaining_absolute_lifetime() -> None:
     assert 350 <= max_age <= 400
 
 
+def test_refresh_path_past_absolute_cap_clears_cookie_without_calling_cognito() -> None:
+    """The refresh path must mirror the slide path's absolute-cap behavior:
+    once `created_at + absolute_lifetime` has passed, do NOT mint fresh
+    tokens. Persisting them would also write a past-dated `ttl`
+    (`min(now + session_ttl_seconds, absolute_cap)` is `< now` past the
+    cap), which would instantly TTL-evict the row right after the write
+    and silently log the user out one request later. Failing closed up
+    front avoids burning a Cognito refresh-token rotation we'd just
+    throw away."""
+    record = _make_record(access_token_exp=int(time.time()) + 5)  # within leeway
+    record.created_at = int(time.time()) - 200  # past 100s absolute cap
+    repo = AsyncMock()
+    repo.get.return_value = record
+    codec = _make_codec()
+    refresh = MagicMock()
+    refresh.refresh = AsyncMock(
+        side_effect=AssertionError(
+            "Cognito refresh MUST NOT be called past absolute lifetime"
+        )
+    )
+    app = _build_app(
+        config=_enabled_config(absolute_lifetime_seconds=100),
+        repository=repo,
+        codec=codec,
+        refresh_client=refresh,
+    )
+
+    sealed = codec.seal(CookiePayload(session_id=record.session_id))
+    response = TestClient(app).get("/echo", cookies={SESSION_COOKIE_NAME: sealed})
+
+    assert response.status_code == 200
+    assert response.json()["has_session"] is False
+    refresh.refresh.assert_not_called()
+    repo.update_tokens.assert_not_called()
+    cleared = " ".join(response.headers.get_list("set-cookie"))
+    assert SESSION_COOKIE_NAME in cleared and "Max-Age=0" in cleared
+
+
 def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
     """The token-rotation write must also slide the row's ttl forward —
     otherwise a session that just refreshed could still expire moments
@@ -481,11 +543,13 @@ def test_refresh_path_bumps_ttl_when_persisting_tokens() -> None:
     repo.get.return_value = record
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.original",  # no rotation
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.original",  # no rotation
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -517,11 +581,13 @@ def test_rotation_persist_failure_invalidates_session() -> None:
     repo.update_tokens.side_effect = RuntimeError("DDB throttled")
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.ROTATED",  # rotation kicked in
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.ROTATED",  # rotation kicked in
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh
@@ -550,11 +616,13 @@ def test_non_rotation_persist_failure_does_not_invalidate() -> None:
     repo.update_tokens.side_effect = RuntimeError("DDB throttled")
     codec = _make_codec()
     refresh = MagicMock()
-    refresh.refresh.return_value = RefreshResult(
-        access_token="access.fresh",
-        refresh_token="refresh.original",  # SAME — no rotation
-        id_token="id.fresh",
-        access_token_exp=int(time.time()) + 3600,
+    refresh.refresh = AsyncMock(
+        return_value=RefreshResult(
+            access_token="access.fresh",
+            refresh_token="refresh.original",  # SAME — no rotation
+            id_token="id.fresh",
+            access_token_exp=int(time.time()) + 3600,
+        )
     )
     app = _build_app(
         config=_enabled_config(), repository=repo, codec=codec, refresh_client=refresh

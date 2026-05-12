@@ -98,9 +98,10 @@ class TestExplicitProviderOverride:
 class TestToBedrockConfig:
     """Validates: Requirements 1.6, 1.7"""
 
-    def test_bedrock_config_with_caching_disabled_due_to_bedrock_limitation(self):
-        """Req 1.6 — caching_enabled=True but cache_config omitted due to
-        Bedrock limitation with non-PDF document blocks. See model_config.py TODO."""
+    def test_bedrock_config_with_caching_enabled_currently_omits_cache_config(self):
+        """Req 1.6 — caching_enabled=True but cache_config omitted while
+        Bedrock prompt caching rollout is deferred. The SDK-side blocker is
+        resolved in strands 1.39.0; see model_config.py for the deferral note."""
         cfg = ModelConfig(caching_enabled=True)
         result = cfg.to_bedrock_config()
 

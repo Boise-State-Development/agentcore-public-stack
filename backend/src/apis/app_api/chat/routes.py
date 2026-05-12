@@ -376,11 +376,22 @@ async def chat_agent_stream(request: ChatRequest, current_user: User = Depends(g
     try:
         # Get agent instance (with or without tool filtering)
         # Use assistant's system prompt if provided
+
+        # Create context-bound spreadsheet analysis tools if enabled
+        from apis.inference_api.chat.routes import _build_spreadsheet_tools
+        extra_tools = _build_spreadsheet_tools(
+            enabled_tools=authorized_tools,
+            assistant_id=assistant_id_to_use,
+            session_id=request.session_id,
+            user_id=user_id,
+        )
+
         agent = await get_agent(
             session_id=request.session_id,
             user_id=user_id,
             enabled_tools=authorized_tools,  # Filtered by RBAC (may be None for all allowed)
             system_prompt=system_prompt,  # Assistant instructions if assistant is attached
+            extra_tools=extra_tools,
         )
 
         # Wrap stream to ensure flush on disconnect and prevent further processing

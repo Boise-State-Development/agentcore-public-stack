@@ -26,11 +26,21 @@ interface AuthProviderPublicListResponse {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
-      <!-- Decorative background: large primary-color blobs with soft blur -->
+      <!-- Decorative background: lava-lamp blobs across three depth tiers
+           (far/mid/near) for parallax — size, blur, speed, and travel
+           distance all scale with depth. -->
       <div class="login-bg" aria-hidden="true">
-        <div class="login-blob login-blob--a"></div>
-        <div class="login-blob login-blob--b"></div>
-        <div class="login-blob login-blob--c"></div>
+        <div class="login-lava">
+          <!-- Far layer: huge, slow, heavily blurred -->
+          <div class="login-blob login-blob--a"></div>
+          <div class="login-blob login-blob--b"></div>
+          <!-- Mid layer -->
+          <div class="login-blob login-blob--c"></div>
+          <div class="login-blob login-blob--d"></div>
+          <!-- Near layer: small, fast, sharper -->
+          <div class="login-blob login-blob--e"></div>
+          <div class="login-blob login-blob--f"></div>
+        </div>
         <div class="login-grid"></div>
       </div>
 

@@ -1,21 +1,33 @@
 """Tests for the AES-GCM cookie codec.
 
-Uses an injected `AESGCM` cipher to avoid mocking KMS — `CookieCodec` exposes
-the `_cipher` attribute which we set directly. (Production callers always go
-through `_ensure_cipher`, which is what the KMS-integration test exercises.)
+Two layers of coverage:
+
+  1. Round-trip / decode tests — use an injected `AESGCM` cipher (set on
+     `_cipher` directly) so we don't need to mock Secrets Manager.
+  2. `_ensure_cipher` path — exercises the deploy-time-bootstrapped data
+     key flow (`secretsmanager:GetSecretValue` -> SHA-256 -> AESGCM cipher)
+     with mock clients. This is the path that runs in production every
+     time a task starts.
+
+The cross-task seal/unseal regression — a cookie sealed by one process
+unsealing on a *different* process — is locked in by
+`test_two_codecs_with_same_secret_derive_the_same_cipher`.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import secrets
+from unittest.mock import MagicMock
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from apis.shared.sessions_bff.cookie import (
     CookieCodec,
+    CookieDataKeyUnavailable,
     CookieDecodeError,
     _reset_default_codec_for_tests,
     _set_default_codec_for_tests,
@@ -110,17 +122,24 @@ def test_seal_preserves_extras() -> None:
 def test_default_codec_is_a_singleton() -> None:
     """The auth/callback route seals with this codec and the
     `SessionRefreshMiddleware` unseals with it on the next request — they
-    must be the *same* instance, since each `CookieCodec` derives its own
-    random AES key. A second instance would fail every unseal as 'bad seal'.
+    must be the *same* instance within a process so we don't refetch the
+    data-key secret on every cookie operation.
+
+    Cross-process consistency (Task A's seal unsealing on Task B) is locked
+    in by `test_two_codecs_with_same_secret_derive_the_same_cipher`.
     """
     _reset_default_codec_for_tests()
     try:
         os.environ["BFF_COOKIE_SIGNING_KEY_ARN"] = "arn:aws:kms:fake"
+        os.environ["BFF_COOKIE_DATA_KEY_SECRET_ARN"] = (
+            "arn:aws:secretsmanager:us-east-1:0:secret:bff-data-key"
+        )
         first = get_default_codec()
         second = get_default_codec()
         assert first is second
     finally:
         os.environ.pop("BFF_COOKIE_SIGNING_KEY_ARN", None)
+        os.environ.pop("BFF_COOKIE_DATA_KEY_SECRET_ARN", None)
         _reset_default_codec_for_tests()
 
 
@@ -142,14 +161,136 @@ def test_default_codec_round_trip_seals_and_unseals() -> None:
         _reset_default_codec_for_tests()
 
 
-def test_unseal_propagates_kms_infrastructure_errors() -> None:
-    """KMS unavailable is not a decode error — it must surface so the caller
-    can return 5xx instead of clearing the cookie and forcing re-login."""
-    from unittest.mock import MagicMock
+# =====================================================================
+# `_ensure_cipher` — Secrets Manager fetch + SHA-256 derivation path.
+# =====================================================================
 
-    fake_kms = MagicMock()
-    fake_kms.generate_data_key.side_effect = RuntimeError("KMS unreachable")
+KMS_KEY_ARN = "arn:aws:kms:us-east-1:0:key/test"
+DATA_KEY_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:0:secret:bff-data-key"
 
-    codec = CookieCodec(kms_key_arn="arn:aws:kms:fake", kms_client=fake_kms)
-    with pytest.raises(RuntimeError, match="KMS unreachable"):
-        codec.unseal("doesnt-matter")
+
+def _make_sm_mock(secret_string: str) -> MagicMock:
+    sm = MagicMock()
+    sm.get_secret_value.return_value = {"SecretString": secret_string}
+    return sm
+
+
+def test_ensure_cipher_fetches_secret_and_derives_key() -> None:
+    """Happy path: codec fetches the secret from Secrets Manager, derives
+    a 32-byte AES-256 key with SHA-256, then seals/unseals successfully."""
+    secret_string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL012345"  # 44 chars
+    sm = _make_sm_mock(secret_string)
+
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm,
+    )
+    sealed = codec.seal(CookiePayload(session_id="sess-bootstrapped"))
+    assert codec.unseal(sealed).session_id == "sess-bootstrapped"
+
+    sm.get_secret_value.assert_called_once_with(SecretId=DATA_KEY_SECRET_ARN)
+
+
+def test_ensure_cipher_derived_key_matches_sha256_of_secret() -> None:
+    """Lock the KDF: a future change must keep the same derivation, or
+    every cookie sealed by an old task fails to unseal on a new task
+    after deploy."""
+    secret_string = "deterministic-secret-for-kdf-pinning-test-1234"
+    sm = _make_sm_mock(secret_string)
+
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm,
+    )
+    # Force initialization without exposing _cipher's key directly: use a
+    # parallel cipher with the expected key, encrypt, and decrypt with the
+    # codec. If the codec didn't derive via SHA-256, decrypt fails.
+    codec.seal(CookiePayload(session_id="x"))
+    expected_key = hashlib.sha256(secret_string.encode("utf-8")).digest()
+    expected_cipher = AESGCM(expected_key)
+    nonce = secrets.token_bytes(12)
+    ciphertext = expected_cipher.encrypt(nonce, b'{"sid":"y"}', bytes([1]))
+    blob = bytes([1]) + nonce + ciphertext
+    sealed = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
+    decoded = codec.unseal(sealed)
+    assert decoded.session_id == "y"
+
+
+def test_ensure_cipher_caches_after_first_call() -> None:
+    """Hot-path requirement: only one Secrets Manager call per process."""
+    sm = _make_sm_mock("a" * 44)
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm,
+    )
+    for _ in range(5):
+        codec.seal(CookiePayload(session_id="x"))
+    assert sm.get_secret_value.call_count == 1
+
+
+def test_two_codecs_with_same_secret_derive_the_same_cipher() -> None:
+    """Regression lock for the dev `bad seal` 401 storm.
+
+    Two independent `CookieCodec` instances simulate two ECS tasks. Both
+    fetch the SAME secret string from Secrets Manager and derive the same
+    32-byte key via SHA-256. A cookie sealed on `task_a` MUST unseal on
+    `task_b`. Pre-fix, each task generated its own random data key and
+    this failed.
+    """
+    secret_string = "shared-secret-across-tasks-1234567890ABCDEFGH"
+    sm_a = _make_sm_mock(secret_string)
+    sm_b = _make_sm_mock(secret_string)
+
+    task_a = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm_a,
+    )
+    task_b = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm_b,
+    )
+
+    sealed_on_a = task_a.seal(CookiePayload(session_id="sess-cross-task"))
+    decoded_on_b = task_b.unseal(sealed_on_a)
+    assert decoded_on_b.session_id == "sess-cross-task"
+
+
+def test_ensure_cipher_propagates_secrets_manager_failure() -> None:
+    """Secrets Manager unreachable must surface as `CookieDataKeyUnavailable`
+    so the request returns 5xx — never as a decode error that clears the
+    user's cookie."""
+    sm = MagicMock()
+    sm.get_secret_value.side_effect = RuntimeError("Secrets Manager unreachable")
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm,
+    )
+    with pytest.raises(CookieDataKeyUnavailable):
+        codec.unseal("anything")
+
+
+def test_ensure_cipher_rejects_empty_secret_string() -> None:
+    """Bootstrap not yet completed (or secret manually wiped) — fail loud
+    rather than silently invalidate every active session."""
+    sm = _make_sm_mock("")
+    codec = CookieCodec(
+        kms_key_arn=KMS_KEY_ARN,
+        data_key_secret_arn=DATA_KEY_SECRET_ARN,
+        secrets_manager_client=sm,
+    )
+    with pytest.raises(CookieDataKeyUnavailable, match="bootstrap missing"):
+        codec.unseal("anything")
+
+
+def test_ensure_cipher_missing_config_surfaces_as_decode_error() -> None:
+    """No KMS ARN or no secret ARN — same shape as today's "BFF disabled"
+    path. Treated as `bad seal` so the middleware clears the cookie."""
+    codec = CookieCodec(kms_key_arn="", data_key_secret_arn="")
+    with pytest.raises(CookieDecodeError):
+        codec.unseal("anything")

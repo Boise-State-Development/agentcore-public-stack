@@ -17,8 +17,12 @@ from .models import (
     QuotaExceededError,
     ALLOWED_MIME_TYPES,
     ALLOWED_EXTENSIONS,
+    TABULAR_MIME_TYPES,
+    TABULAR_EXTENSIONS,
+    INLINE_DOCUMENT_MAX_BYTES,
     get_file_format,
     is_allowed_mime_type,
+    is_tabular_file,
 )
 
 from .repository import (
@@ -47,8 +51,12 @@ __all__ = [
     "QuotaExceededError",
     "ALLOWED_MIME_TYPES",
     "ALLOWED_EXTENSIONS",
+    "TABULAR_MIME_TYPES",
+    "TABULAR_EXTENSIONS",
+    "INLINE_DOCUMENT_MAX_BYTES",
     "get_file_format",
     "is_allowed_mime_type",
+    "is_tabular_file",
     # Repository
     "FileUploadRepository",
     "get_file_upload_repository",

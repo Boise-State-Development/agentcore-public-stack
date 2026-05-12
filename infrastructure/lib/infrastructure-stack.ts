@@ -6,6 +6,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
@@ -689,6 +690,53 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`,
       stringValue: bffCookieSigningKey.keyArn,
       description: "KMS key ARN for BFF session cookie sealing",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // High-entropy random secret used to derive the AES-256 cookie-sealing
+    // key. Generated once at stack create by Secrets Manager itself
+    // (`generateSecretString`), so every app-api task — across desiredCount > 1
+    // and across rolling deploys where two task revisions briefly coexist —
+    // derives the same plaintext key. Without this, each task's CookieCodec
+    // singleton would mint its own random AES key and any cookie sealed by
+    // Task A would fail `bad seal` on Task B (a 401 storm under the
+    // desiredCount: 2 deployment shape).
+    //
+    // The runtime hashes the secret string with SHA-256 to produce the
+    // 32-byte AES-256 key — a single-shot KDF that's secure when the input
+    // already has ≥256 bits of entropy (a 44-char alphanumeric secret has
+    // ~261 bits). This avoids the AwsCustomResource binary-payload
+    // serialization bug that broke the prior KMS-wrap bootstrap design
+    // (the framework Lambda JSON-stringifies Uint8Array as `{"0":233,...}`,
+    // which exceeded the 4 KB CloudFormation response limit).
+    //
+    // The secret is encrypted at rest with `bffCookieSigningKey`; access
+    // requires both `secretsmanager:GetSecretValue` on this secret AND
+    // `kms:Decrypt` on the CMK (Secrets Manager invokes Decrypt on the
+    // caller's behalf using the secret-ARN encryption context).
+    const bffCookieDataKeySecret = new secretsmanager.Secret(this, "BFFCookieDataKeySecret", {
+      secretName: getResourceName(config, "bff-cookie-data-key"),
+      description:
+        "High-entropy random secret used to derive the AES-256 BFF cookie " +
+        "sealing key (SHA-256). Generated once at deploy time; rotation " +
+        "invalidates active cookies (no kid versioning yet).",
+      encryptionKey: bffCookieSigningKey,
+      generateSecretString: {
+        // 44 chars from the 62-char alphanumeric alphabet ≈ 261 bits of
+        // entropy — comfortably above the 256-bit AES-256 target after
+        // SHA-256 derivation. Punctuation/space excluded so the value
+        // round-trips cleanly through env-var-style consumers.
+        passwordLength: 44,
+        excludePunctuation: true,
+        includeSpace: false,
+      },
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "BFFCookieDataKeySecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-cookie-data-key-secret-arn`,
+      stringValue: bffCookieDataKeySecret.secretArn,
+      description: "Secrets Manager ARN for the BFF cookie data-key secret",
       tier: ssm.ParameterTier.STANDARD,
     });
 

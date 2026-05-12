@@ -21,8 +21,37 @@ describe('SessionService', () => {
     csrf_token: 'csrf-secret-abc',
   };
 
+  // Helpers — bootstrap takes the network path only when the JS-readable
+  // CSRF cookie is present; otherwise the fast-path bounces straight to
+  // login. Tests that exercise the network path set the cookie first.
+  //
+  // jsdom enforces `__Host-` cookie prefix rules (Secure required, no
+  // http://localhost), so a real `document.cookie` write is silently
+  // rejected. Install a minimal one-cookie shim per-test.
+  let cookieStore = '';
+  const installCookieShim = () => {
+    cookieStore = '';
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => cookieStore,
+      set: (input: string) => {
+        const [pair, ...attrs] = input.split(';');
+        const expired = attrs.some((a) => /expires=Thu, 01 Jan 1970/i.test(a));
+        cookieStore = expired ? '' : pair.trim();
+      },
+    });
+  };
+  const setCsrfCookie = (value = 'test-csrf-token') => {
+    document.cookie = `__Host-bff_csrf=${value}; path=/`;
+  };
+  const clearCsrfCookie = () => {
+    document.cookie =
+      '__Host-bff_csrf=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  };
+
   beforeEach(() => {
     TestBed.resetTestingModule();
+    installCookieShim();
 
     Object.defineProperty(window, 'location', {
       value: {
@@ -53,6 +82,7 @@ describe('SessionService', () => {
 
   afterEach(() => {
     httpMock.verify();
+    clearCsrfCookie();
     TestBed.resetTestingModule();
     vi.restoreAllMocks();
   });
@@ -68,6 +98,7 @@ describe('SessionService', () => {
 
   describe('bootstrap', () => {
     it('populates user and csrfToken on a successful 200', async () => {
+      setCsrfCookie();
       const promise = service.bootstrap();
 
       const req = httpMock.expectOne('http://localhost:8000/auth/session');
@@ -94,6 +125,7 @@ describe('SessionService', () => {
     });
 
     it('redirects to the SPA /auth/login page on 401 and clears state', async () => {
+      setCsrfCookie();
       window.location.pathname = '/admin/users';
       window.location.search = '?tab=roles';
 
@@ -120,6 +152,7 @@ describe('SessionService', () => {
     });
 
     it('does not redirect when the 401 lands on /auth/login itself', async () => {
+      setCsrfCookie();
       window.location.pathname = '/auth/login';
       window.location.search = '';
 
@@ -137,6 +170,7 @@ describe('SessionService', () => {
     });
 
     it('does not redirect on a non-401 transport error', async () => {
+      setCsrfCookie();
       const promise = service.bootstrap();
 
       const req = httpMock.expectOne('http://localhost:8000/auth/session');
@@ -151,6 +185,7 @@ describe('SessionService', () => {
     });
 
     it('uses same-origin path when appApiUrl is configured as /api', async () => {
+      setCsrfCookie();
       (configService.appApiUrl as any).set('/api');
 
       const promise = service.bootstrap();
@@ -164,6 +199,7 @@ describe('SessionService', () => {
     });
 
     it('strips a trailing slash from appApiUrl', async () => {
+      setCsrfCookie();
       (configService.appApiUrl as any).set('http://localhost:8000/');
 
       const promise = service.bootstrap();
@@ -175,6 +211,150 @@ describe('SessionService', () => {
 
       expect(service.isAuthenticated()).toBe(true);
     });
+
+    it('skips the /auth/session round-trip and redirects when no CSRF cookie is present', async () => {
+      window.location.pathname = '/files';
+      window.location.search = '';
+      // Cookie absent (cleared in beforeEach). The fast-path should
+      // detect this and bounce without making any HTTP request.
+      void service.bootstrap();
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      httpMock.expectNone('http://localhost:8000/auth/session');
+      expect(service.bootstrapped()).toBe(false);
+      expect(window.location.href).toBe(
+        `/auth/login?returnUrl=${encodeURIComponent('/files')}`,
+      );
+    });
+
+    it('still resolves on /auth/login when the CSRF cookie is absent', async () => {
+      window.location.pathname = '/auth/login';
+      window.location.search = '';
+      // No cookie — fast-path triggers, but handleUnauthorized returns
+      // false on /auth/login so bootstrap completes without hanging.
+      await service.bootstrap();
+
+      httpMock.expectNone('http://localhost:8000/auth/session');
+      expect(service.bootstrapped()).toBe(true);
+      expect(window.location.href).toBe('');
+    });
+  });
+
+  describe('handleUnauthorized', () => {
+    it('redirects to /auth/login with the current path as returnUrl', () => {
+      window.location.pathname = '/manage-sessions';
+      window.location.search = '?id=abc';
+
+      const navigated = service.handleUnauthorized();
+
+      expect(navigated).toBe(true);
+      expect(window.location.href).toBe(
+        `/auth/login?returnUrl=${encodeURIComponent('/manage-sessions?id=abc')}`,
+      );
+      expect(service.user()).toBeNull();
+      expect(service.csrfToken()).toBeNull();
+    });
+
+    it('is a no-op when already on /auth/login', () => {
+      window.location.pathname = '/auth/login';
+
+      const navigated = service.handleUnauthorized();
+
+      expect(navigated).toBe(false);
+      expect(window.location.href).toBe('');
+    });
+
+    it('dedupes concurrent calls — only the first navigates', () => {
+      window.location.pathname = '/files';
+
+      expect(service.handleUnauthorized()).toBe(true);
+
+      // Mid-burst 401s shouldn't queue more navigations.
+      window.location.href = ''; // simulate that nothing has actually navigated yet
+      expect(service.handleUnauthorized()).toBe(false);
+      expect(window.location.href).toBe('');
+    });
+  });
+
+  describe('hasSessionCookie', () => {
+    it('returns false when the cookie is absent', () => {
+      expect(service.hasSessionCookie()).toBe(false);
+    });
+
+    it('returns true when the cookie is present', () => {
+      setCsrfCookie();
+      expect(service.hasSessionCookie()).toBe(true);
+    });
+  });
+
+  describe('recheck', () => {
+    const bootstrapAuthenticated = async () => {
+      setCsrfCookie();
+      const promise = service.bootstrap();
+      httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
+      await promise;
+    };
+
+    it('is a no-op before bootstrap has resolved', async () => {
+      setCsrfCookie();
+      await service.recheck();
+      httpMock.expectNone('http://localhost:8000/auth/session');
+    });
+
+    it('refreshes session state on a successful 200', async () => {
+      await bootstrapAuthenticated();
+      window.location.pathname = '/files';
+
+      const promise = service.recheck();
+      const req = httpMock.expectOne('http://localhost:8000/auth/session');
+      req.flush({ ...sessionResponse, csrf_token: 'rotated-csrf' });
+      await promise;
+
+      expect(service.csrfToken()).toBe('rotated-csrf');
+      expect(service.isAuthenticated()).toBe(true);
+      expect(window.location.href).toBe('');
+    });
+
+    it('redirects when the BFF returns 401', async () => {
+      await bootstrapAuthenticated();
+      window.location.pathname = '/files';
+
+      const promise = service.recheck();
+      const req = httpMock.expectOne('http://localhost:8000/auth/session');
+      req.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+      await promise;
+
+      expect(window.location.href).toBe(
+        `/auth/login?returnUrl=${encodeURIComponent('/files')}`,
+      );
+    });
+
+    it('redirects without a network call when the CSRF cookie is gone', async () => {
+      await bootstrapAuthenticated();
+      window.location.pathname = '/files';
+      clearCsrfCookie();
+
+      await service.recheck();
+
+      httpMock.expectNone('http://localhost:8000/auth/session');
+      expect(window.location.href).toBe(
+        `/auth/login?returnUrl=${encodeURIComponent('/files')}`,
+      );
+    });
+
+    it('stays silent on a transient network error', async () => {
+      await bootstrapAuthenticated();
+      window.location.pathname = '/files';
+
+      const promise = service.recheck();
+      const req = httpMock.expectOne('http://localhost:8000/auth/session');
+      req.error(new ProgressEvent('network'), { status: 0, statusText: '' });
+      await promise;
+
+      expect(window.location.href).toBe('');
+      expect(service.isAuthenticated()).toBe(true);
+    });
   });
 
   describe('csrfHeaders', () => {
@@ -183,6 +363,7 @@ describe('SessionService', () => {
     });
 
     it('returns X-CSRF-Token after a successful bootstrap', async () => {
+      setCsrfCookie();
       const promise = service.bootstrap();
       httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
       await promise;
@@ -239,6 +420,7 @@ describe('SessionService', () => {
 
   describe('logout', () => {
     it('POSTs /auth/logout, clears local state, and navigates to the Cognito logout URL', async () => {
+      setCsrfCookie();
       const bootPromise = service.bootstrap();
       httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
       await bootPromise;
@@ -264,6 +446,7 @@ describe('SessionService', () => {
     });
 
     it('does not navigate when post_logout_url is null', async () => {
+      setCsrfCookie();
       const bootPromise = service.bootstrap();
       httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
       await bootPromise;
@@ -279,6 +462,7 @@ describe('SessionService', () => {
     });
 
     it('clears local state even when /auth/logout fails', async () => {
+      setCsrfCookie();
       const bootPromise = service.bootstrap();
       httpMock.expectOne('http://localhost:8000/auth/session').flush(sessionResponse);
       await bootPromise;

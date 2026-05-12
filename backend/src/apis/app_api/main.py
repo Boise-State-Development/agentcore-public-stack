@@ -28,9 +28,58 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Refuse to boot unless SKIP_AUTH is paired with a positive local-dev
+# signal. Allowlist over blocklist: every CORS_ORIGINS entry must be a
+# localhost URL. Any deployed origin (or empty config) trips this — far
+# safer than enumerating every env var a deployed runtime might set, and
+# fails closed for new deploy targets we haven't met yet.
+#
+# Runs from `lifespan()` rather than at import time so tests that import
+# this module (e.g. tests/routes/test_pbt_auth_sweep.py) don't trip the
+# check on environments where SKIP_AUTH=true is set globally.
+_SKIP_AUTH_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _validate_skip_auth_or_raise() -> None:
+    """Raise RuntimeError if SKIP_AUTH=true is paired with non-local CORS_ORIGINS.
+
+    No-op when SKIP_AUTH is unset/false. When set, every CORS_ORIGINS entry
+    must resolve to a localhost host or boot is refused.
+    """
+    if os.environ.get("SKIP_AUTH", "").lower() != "true":
+        return
+
+    from urllib.parse import urlparse
+
+    origins = [
+        o.strip()
+        for o in os.environ.get("CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+
+    def _is_local(origin: str) -> bool:
+        try:
+            return (urlparse(origin).hostname or "") in _SKIP_AUTH_LOCAL_HOSTS
+        except Exception:
+            return False
+
+    if not origins or not all(_is_local(o) for o in origins):
+        raise RuntimeError(
+            "SKIP_AUTH=true requires CORS_ORIGINS to contain only localhost "
+            "origins (localhost, 127.0.0.1, ::1, 0.0.0.0). Refusing to start "
+            "— this bypass is local-dev only."
+        )
+    logger.warning(
+        "SKIP_AUTH=true — auth dependencies will return a fake admin user. "
+        "DO NOT enable this in any deployed environment."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
     logger.info("Agent execution engine initialized")
 

@@ -202,41 +202,70 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Priority-based assistant loading: URL query param first, then session preferences
+    // Single source of truth: the URL's `assistantId` query parameter.
+    //
+    // The URL is authoritative for which assistant is attached to the
+    // current view. Session preferences on the backend still record the
+    // attached assistant (so we can rebuild the URL after a user lands on
+    // a bare `/s/:id` URL from a bookmark or legacy link), but that
+    // rebuild is handled by a dedicated self-heal redirect below — not by
+    // reading preferences here. Keeping this effect URL-only removes an
+    // entire class of races around metadata fetch timing and component
+    // recreation (see #205).
     effect(() => {
       const queryAssistantId = this.assistantIdFromQuery();
-      const session = this.sessionConversation();
-      const sessionAssistantId = session?.preferences?.assistantId;
-      const currentSessionId = this.sessionId();
-      
-      // Priority 1: URL query parameter (highest priority)
+      const loadedAssistant = this.assistant();
+
       if (queryAssistantId) {
-        // Validate: Can only attach to new sessions (no messages)
-        if (currentSessionId && this.hasMessages()) {
-          this.assistantError.set('Assistants can only be attached to new sessions');
-          this.assistant.set(null);
-          this.clearAssistantIdFromUrl();
+        // Already loaded — avoid a redundant fetch and the transient null
+        // state while the fetch would resolve.
+        if (loadedAssistant?.assistantId === queryAssistantId) {
           return;
         }
-        // Load from query param (existence check only, no access validation)
-        this.loadAssistant(queryAssistantId, false).catch(error => {
+        // Existence check only; access is validated on the backend when
+        // the next message is sent.
+        this.loadAssistant(queryAssistantId).catch(error => {
           console.error('Failed to load assistant from query param:', error);
         });
         return;
       }
-      
-      // Priority 2: Session preferences (fallback for existing sessions)
-      if (sessionAssistantId && currentSessionId) {
-        // Load from preferences - allow even if session has messages (persisted assistant)
-        this.loadAssistant(sessionAssistantId, true).catch(error => {
-          console.error('Failed to load assistant from session preferences:', error);
-        });
-        return;
+
+      // No assistant in the URL — clear any stale state from a prior load.
+      if (loadedAssistant || this.assistantError()) {
+        this.assistant.set(null);
+        this.assistantError.set(null);
       }
-      
-      // No assistant to load
-      this.assistant.set(null);
-      this.assistantError.set(null);
+    });
+
+    // Self-heal effect: when the user lands on `/s/:id` without an
+    // `assistantId` query param but the session's stored preferences carry
+    // one (bookmarks, legacy URLs, shared session links), redirect to the
+    // same session with the param filled in. From that point on, the URL
+    // is the sole source of truth for the assistant-loading effect above.
+    //
+    // Intentionally narrow: we only redirect when the URL is empty. If the
+    // URL already carries an `assistantId`, we trust it — including when
+    // it differs from preferences (the backend will reject a conflict on
+    // the next message).
+    effect(() => {
+      const session = this.sessionConversation();
+      const sessionAssistantId = session?.preferences?.assistantId;
+      const currentSessionId = this.sessionId();
+      const queryAssistantId = this.assistantIdFromQuery();
+
+      if (
+        currentSessionId &&
+        session?.sessionId === currentSessionId &&
+        sessionAssistantId &&
+        !queryAssistantId
+      ) {
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { assistantId: sessionAssistantId },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+      }
     });
 
     // Subscribe to route parameter changes
@@ -293,10 +322,15 @@ export class ConversationPage implements OnDestroy {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
-    // Get assistantId from query param (priority 1) or session preferences (priority 2)
-    const queryAssistantId = this.assistantIdFromQuery();
-    const sessionAssistantId = this.sessionConversation()?.preferences?.assistantId;
-    const assistantIdToUse = queryAssistantId || sessionAssistantId || undefined;
+    // The URL's `assistantId` query param is the sole source of truth. It's
+    // set on initial navigation (assistant card, share link) and kept in
+    // sync by the self-heal redirect in the constructor for existing
+    // sessions opened without one. Falling back to the in-memory
+    // `assistant()` signal guards the brief window during the `/` → `/s/:id`
+    // route transition where the component is recreated and the query
+    // param hasn't yet propagated to the new instance.
+    const assistantIdToUse =
+      this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
 
     // Set loading state before submitting
     this.chatStateService.setChatLoading(true);
@@ -382,7 +416,13 @@ export class ConversationPage implements OnDestroy {
       const user = this.userService.currentUser();
       const userId = user?.user_id || 'anonymous';
       this.sessionService.addSessionToCache(sessionId, userId);
-      this.router.navigate(['s', sessionId], { replaceUrl: true });
+      // Carry the assistant id forward if one is attached to this view —
+      // keeps the URL the single source of truth after voice ends.
+      const assistantId = this.assistantIdFromQuery() || this.assistant()?.assistantId;
+      this.router.navigate(['s', sessionId], {
+        replaceUrl: true,
+        queryParams: assistantId ? { assistantId } : {},
+      });
     }
 
     // Generate title for new voice sessions (fire and forget)
@@ -408,22 +448,16 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Load assistant by ID - only checks existence, not access
-   * Access validation happens on backend when message is sent
-   * @param assistantId - Assistant ID to load
-   * @param fromPreferences - If true, this is from session preferences (skip message check)
+   * Load assistant by ID - only checks existence, not access.
+   * Access and mid-session conflicts are validated on the backend when the
+   * next message is sent (the inference-api compares the request's
+   * rag_assistant_id against the session's stored assistant and rejects
+   * mismatches). Doing the same check here is unreliable because the
+   * component is recreated on the `/` → `/s/:id` route transition, so any
+   * "session has messages" guard fires on the normal first-turn flow and
+   * clears the assistant that the user just opened (#205).
    */
-  private async loadAssistant(assistantId: string, fromPreferences: boolean = false): Promise<void> {
-    // Validation: Only check messages for new attachments (not from preferences)
-    if (!fromPreferences) {
-      const sessionId = this.sessionId();
-      if (sessionId && this.hasMessages()) {
-        this.assistantError.set('Assistants can only be attached to new sessions');
-        this.assistant.set(null);
-        return;
-      }
-    }
-
+  private async loadAssistant(assistantId: string): Promise<void> {
     try {
       this.assistantError.set(null);
       this.isLoadingAssistant.set(true);
@@ -436,10 +470,6 @@ export class ConversationPage implements OnDestroy {
       // Only handle existence errors (404) - access errors (403) will be handled on backend
       if (error?.status === 404) {
         this.assistantError.set('Assistant not found');
-        // If from preferences and assistant doesn't exist, optionally clear it
-        if (fromPreferences) {
-          // TODO: Optionally clear assistantId from session preferences via API
-        }
       } else {
         // Other errors (network, etc.) - show generic error but don't block
         this.assistantError.set('Failed to load assistant');
