@@ -210,7 +210,7 @@ CLAUDE_CHAT_SUPPORTED_PARAMS: dict[str, Any] = {
 # Default Bedrock models to seed
 DEFAULT_MODELS: list[dict[str, Any]] = [
     {
-        "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "modelName": "Claude Haiku 4.5",
         "provider": "bedrock",
         "providerName": "Anthropic",
@@ -227,7 +227,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "supportedParams": CLAUDE_CHAT_SUPPORTED_PARAMS,
     },
     {
-        "modelId": "global.anthropic.claude-sonnet-4-6",
+        "modelId": "us.anthropic.claude-sonnet-4-6",
         "modelName": "Claude Sonnet 4.6",
         "provider": "bedrock",
         "providerName": "Anthropic",
