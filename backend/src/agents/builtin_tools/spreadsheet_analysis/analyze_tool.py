@@ -273,7 +273,7 @@ def make_analyze_tool(
     """Create an analyze_spreadsheet tool bound to the given context."""
 
     @tool
-    def analyze_spreadsheet(
+    async def analyze_spreadsheet(
         filename: str,
         python_code: str,
         output_filename: Optional[str] = None,
@@ -334,7 +334,7 @@ def make_analyze_tool(
             return {"content": [{"text": "❌ Code Interpreter is not configured. Contact your administrator."}], "status": "error"}
 
         # 2. Find the file in accessible sources
-        file_info = _find_file(filename, assistant_id, session_id)
+        file_info = await _find_file(filename, assistant_id, session_id)
         if not file_info:
             return {"content": [{"text": f"❌ File '{filename}' not found or not accessible. Use list_spreadsheets to see available files."}], "status": "error"}
 
@@ -550,7 +550,7 @@ wb.close()
     return analyze_spreadsheet
 
 
-def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
+async def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
     """Find a file by name in accessible sources. Returns file info or None.
 
     Matches are tolerant to XLSX ↔ CSV aliasing: if the model asks for
@@ -562,8 +562,8 @@ def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> O
     """
     candidates: list[Dict[str, Any]] = []
     if assistant_id:
-        candidates.extend(_get_kb_files(assistant_id))
-    candidates.extend(_get_session_files(session_id))
+        candidates.extend(await _get_kb_files(assistant_id))
+    candidates.extend(await _get_session_files(session_id))
 
     target_lower = filename.lower()
     target_stem, _ = os.path.splitext(target_lower)

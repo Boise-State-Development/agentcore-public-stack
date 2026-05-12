@@ -6,6 +6,7 @@ files belonging to the current assistant's knowledge base or chat session.
 
 import logging
 import os
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import boto3
@@ -34,7 +35,7 @@ def make_list_spreadsheets_tool(
     """Create a list_spreadsheets tool bound to the given context."""
 
     @tool
-    def list_spreadsheets() -> Dict[str, Any]:
+    async def list_spreadsheets() -> Dict[str, Any]:
         """List CSV/XLSX spreadsheet files available for analysis.
 
         Returns spreadsheets from the assistant's knowledge base (if a
@@ -50,10 +51,10 @@ def make_list_spreadsheets_tool(
 
         # 1. Assistant KB files
         if assistant_id:
-            files.extend(_get_kb_files(assistant_id))
+            files.extend(await _get_kb_files(assistant_id))
 
         # 2. Session-attached files
-        files.extend(_get_session_files(session_id))
+        files.extend(await _get_session_files(session_id))
 
         if not files:
             return {
@@ -74,63 +75,55 @@ def make_list_spreadsheets_tool(
     return list_spreadsheets
 
 
-def _get_kb_files(assistant_id: str) -> List[Dict[str, Any]]:
+async def _get_kb_files(assistant_id: str) -> List[Dict[str, Any]]:
     """Query DynamoDB for completed tabular documents in the assistant's KB."""
-    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-    if not table_name:
-        logger.warning("DYNAMODB_ASSISTANTS_TABLE_NAME not set, skipping KB files")
-        return []
+    def _fetch():
+        table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+        if not table_name:
+            logger.warning("DYNAMODB_ASSISTANTS_TABLE_NAME not set, skipping KB files")
+            return []
 
-    try:
-        dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-2"))
-        table = dynamodb.Table(table_name)
+        try:
+            dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+            table = dynamodb.Table(table_name)
 
-        response = table.query(
-            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
-            ExpressionAttributeValues={":pk": f"AST#{assistant_id}", ":sk_prefix": "DOC#"},
-        )
+            response = table.query(
+                KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+                ExpressionAttributeValues={":pk": f"AST#{assistant_id}", ":sk_prefix": "DOC#"},
+            )
 
-        files = []
-        for item in response.get("Items", []):
-            if item.get("status") != "complete":
-                continue
-            filename = item.get("filename", "")
-            content_type = item.get("contentType", item.get("content_type", ""))
-            if not _is_tabular_file(filename, content_type):
-                continue
-            files.append({
-                "filename": filename,
-                "source": "knowledge_base",
-                "content_type": content_type,
-                "size_bytes": int(item.get("sizeBytes", item.get("size_bytes", 0))),
-                "document_id": item.get("documentId", item.get("document_id", "")),
-                "s3_key": item.get("s3Key", item.get("s3_key", "")),
-            })
-        return files
+            files = []
+            for item in response.get("Items", []):
+                if item.get("status") != "complete":
+                    continue
+                filename = item.get("filename", "")
+                content_type = item.get("contentType", item.get("content_type", ""))
+                if not _is_tabular_file(filename, content_type):
+                    continue
+                files.append({
+                    "filename": filename,
+                    "source": "knowledge_base",
+                    "content_type": content_type,
+                    "size_bytes": int(item.get("sizeBytes", item.get("size_bytes", 0))),
+                    "document_id": item.get("documentId", item.get("document_id", "")),
+                    "s3_key": item.get("s3Key", item.get("s3_key", "")),
+                })
+            return files
 
-    except Exception as e:
-        logger.error(f"Error querying KB files for assistant {assistant_id}: {e}")
-        return []
+        except Exception as e:
+            logger.error(f"Error querying KB files for assistant {assistant_id}: {e}")
+            return []
+
+    return await asyncio.to_thread(_fetch)
 
 
-def _get_session_files(session_id: str) -> List[Dict[str, Any]]:
+async def _get_session_files(session_id: str) -> List[Dict[str, Any]]:
     """Query DynamoDB for tabular files attached to the current session."""
     try:
         from apis.shared.files.repository import get_file_upload_repository
 
         repo = get_file_upload_repository()
-
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    session_files = executor.submit(asyncio.run, repo.list_session_files(session_id)).result()
-            else:
-                session_files = loop.run_until_complete(repo.list_session_files(session_id))
-        except RuntimeError:
-            session_files = asyncio.run(repo.list_session_files(session_id))
+        session_files = await repo.list_session_files(session_id)
 
         files = []
         for f in session_files:
