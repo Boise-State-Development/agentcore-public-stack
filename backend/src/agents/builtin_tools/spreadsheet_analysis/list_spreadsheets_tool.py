@@ -4,9 +4,9 @@ Factory function creates a context-bound tool that only exposes CSV/XLSX
 files belonging to the current assistant's knowledge base or chat session.
 """
 
+import asyncio
 import logging
 import os
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import boto3
@@ -76,13 +76,17 @@ def make_list_spreadsheets_tool(
 
 
 async def _get_kb_files(assistant_id: str) -> List[Dict[str, Any]]:
-    """Query DynamoDB for completed tabular documents in the assistant's KB."""
-    def _fetch():
-        table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-        if not table_name:
-            logger.warning("DYNAMODB_ASSISTANTS_TABLE_NAME not set, skipping KB files")
-            return []
+    """Query DynamoDB for completed tabular documents in the assistant's KB.
 
+    Uses asyncio.to_thread to offload the blocking boto3 call so the event
+    loop is never stalled during the DynamoDB network round-trip (fixes #260).
+    """
+    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table_name:
+        logger.warning("DYNAMODB_ASSISTANTS_TABLE_NAME not set, skipping KB files")
+        return []
+
+    def _fetch() -> List[Dict[str, Any]]:
         try:
             dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-west-2"))
             table = dynamodb.Table(table_name)

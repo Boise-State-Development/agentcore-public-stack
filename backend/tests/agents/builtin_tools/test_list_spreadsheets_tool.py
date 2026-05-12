@@ -11,8 +11,8 @@ Verifies that:
 
 import asyncio
 import inspect
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -181,22 +181,24 @@ class TestGetKbFiles:
             calls.append("to_thread")
             return fn(*args, **kwargs)
 
+        # Patch asyncio.to_thread at the module level (not globally) so the
+        # patch is isolated to this module and does not require a reload.
         with (
             patch("boto3.resource", return_value=mock_dynamodb),
             patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "AssistantsTable"}),
-            patch("asyncio.to_thread", side_effect=_capturing_to_thread),
+            patch(
+                "agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool.asyncio.to_thread",
+                side_effect=_capturing_to_thread,
+            ),
             patch(
                 "agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool.is_tabular_file",
                 return_value=True,
             ),
         ):
-            from agents.builtin_tools.spreadsheet_analysis import list_spreadsheets_tool
-
-            # Reload to pick up patched asyncio.to_thread
-            import importlib
-            importlib.reload(list_spreadsheets_tool)
-
-            files = await list_spreadsheets_tool._get_kb_files("ast-1")
+            from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
+                _get_kb_files,
+            )
+            files = await _get_kb_files("ast-1")
 
         assert "to_thread" in calls, "_get_kb_files must use asyncio.to_thread"
         assert len(files) == 1
