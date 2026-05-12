@@ -270,7 +270,11 @@ def _clean_stderr(stderr: str) -> str:
         cleaned = "\n".join(filtered[-8:]).strip()
 
     if len(cleaned) > MAX_ERROR_CHARS:
-        cleaned = cleaned[:MAX_ERROR_CHARS] + " ..."
+        # Leave room for the ellipsis tail so the final string respects
+        # the budget strictly — callers rely on ``len(output) <=
+        # MAX_ERROR_CHARS``.
+        ellipsis = " ..."
+        cleaned = cleaned[:MAX_ERROR_CHARS - len(ellipsis)] + ellipsis
     return cleaned
 
 
@@ -291,10 +295,25 @@ def _build_preview_code(csv_filename: str) -> str:
 
     Output is bracketed with _SCHEMA_MARKER so it can be reliably extracted
     from the interpreter's stdout stream even if user code prints other things.
+
+    Filenames with quotes or other f-string-breaking characters are handled
+    by stashing the filename as a top-of-script local variable (``_FNAME``)
+    via ``repr()`` once. The rest of the template references ``_FNAME`` as
+    an ordinary string, so we never re-interpolate the raw filename into
+    nested f-string contexts. Before this indirection, a filename like
+    ``"O'Brien data.csv"`` would generate invalid Python because ``repr``
+    emits double quotes when the string contains a single quote, conflicting
+    with the outer f-string's own quoting.
     """
+    # repr() always produces a valid Python string literal; storing that
+    # literal once means the generated code can refer to the filename by
+    # name, without any further escaping.
+    fname_literal = repr(csv_filename)
     return f"""
 import warnings, pandas as pd
 warnings.filterwarnings('ignore')
+
+_FNAME = {fname_literal}
 
 def _score(cols):
     # Higher is better. Punishes Unnamed columns and duplicates.
@@ -307,7 +326,7 @@ def _score(cols):
     return named - (unnamed * 5) - dup_penalty - blank_penalty
 
 try:
-    with open({csv_filename!r}, 'r') as _fh:
+    with open(_FNAME, 'r') as _fh:
         _total_rows = sum(1 for _ in _fh)
 
     # Score skiprows=0..8, keep the winner and remember the baseline.
@@ -315,7 +334,7 @@ try:
     _best_skip, _best_score, _best_cols = 0, -float('inf'), []
     for _sk in range(9):
         try:
-            _cols = pd.read_csv({csv_filename!r}, nrows=0, skiprows=_sk, low_memory=False).columns.tolist()
+            _cols = pd.read_csv(_FNAME, nrows=0, skiprows=_sk, low_memory=False).columns.tolist()
         except Exception:
             continue
         _sc = _score(_cols)
@@ -354,21 +373,21 @@ try:
         _col_preview += f' ... (+{{len(_report_cols) - 20}} more)'
 
     try:
-        _head = pd.read_csv({csv_filename!r}, skiprows=_report_skip, nrows=1, low_memory=False)
+        _head = pd.read_csv(_FNAME, skiprows=_report_skip, nrows=1, low_memory=False)
         _first_row = _head.iloc[0].to_dict() if len(_head) else {{}}
         _first_row = {{k: (str(v)[:40] + '...' if len(str(v)) > 40 else v) for k, v in _first_row.items()}}
     except Exception:
         _first_row = {{}}
 
     if _prescribe:
-        _load = f"pd.read_csv({csv_filename!r}, skiprows={{_report_skip}}, low_memory=False)"
+        _load = f"pd.read_csv({{_FNAME!r}}, skiprows={{_report_skip}}, low_memory=False)"
         _note = f"  # {{_report_skip}} metadata row(s) detected before header"
     else:
-        _load = f"pd.read_csv({csv_filename!r}, low_memory=False)"
+        _load = f"pd.read_csv({{_FNAME!r}}, low_memory=False)"
         _note = ""
 
     print({_SCHEMA_MARKER!r})
-    print(f'file: {csv_filename} ({{_data_rows}} rows x {{len(_report_cols)}} cols)')
+    print(f'file: {{_FNAME}} ({{_data_rows}} rows x {{len(_report_cols)}} cols)')
     print(f'load: {{_load}}{{_note}}')
     print(f'columns: {{_col_preview}}')
     print(f'first_row: {{_first_row}}')
