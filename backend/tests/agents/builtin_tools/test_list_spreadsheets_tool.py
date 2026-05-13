@@ -78,7 +78,7 @@ class TestGetSessionFiles:
 
         with (
             patch(
-                "agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool.get_file_upload_repository",
+                "apis.shared.files.repository.get_file_upload_repository",
                 return_value=mock_repo,
             ),
             patch(
@@ -110,7 +110,7 @@ class TestGetSessionFiles:
 
         with (
             patch(
-                "agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool.get_file_upload_repository",
+                "apis.shared.files.repository.get_file_upload_repository",
                 return_value=mock_repo,
             ),
             patch(
@@ -134,7 +134,7 @@ class TestGetSessionFiles:
         mock_repo.list_session_files = AsyncMock(side_effect=RuntimeError("DDB down"))
 
         with patch(
-            "agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool.get_file_upload_repository",
+            "apis.shared.files.repository.get_file_upload_repository",
             return_value=mock_repo,
         ):
             from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
