@@ -1,3 +1,135 @@
+# Release Notes — v1.0.0-beta.26
+
+**Release Date:** May 13, 2026
+**Previous Release:** v1.0.0-beta.25 (May 11, 2026)
+
+---
+
+## Highlights
+
+A small, focused release that lands two operator-facing fixes and one user-facing feature on top of the beta.25 production hardening. The big ones: **multi-sheet XLSX support** in the spreadsheet analysis tool with defensive caps so a pathological workbook can't blow up latency or context, and an **async refactor of the spreadsheet file-lookup path** that closes a regression where concurrent chat load could block the event loop. Also shipping a **user default model preference applied at chat time**, a **green nightly E2E pipeline** after a multi-attempt fix, and **upstream contribution governance** — PRs are now restricted to approved collaborators (GitHub "Collaborators only") and Dependabot version-update PRs are disabled in favor of manual weekly upgrades.
+
+This release has no schema or infrastructure changes. Deploy in any order.
+
+---
+
+## Multi-Sheet XLSX Support in Spreadsheet Analysis
+
+The spreadsheet analysis tool from beta.25 only handled the first sheet of an XLSX file, which silently misled the agent on multi-tabbed workbooks (financial models, fine-tuning datasets, anything from a real BI export). Beta.26 expands the tool to convert every sheet into its own predictable CSV, with sane defaults that protect the latency budget and the model's context window from pathological inputs.
+
+### Backend
+
+- `backend/src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py` — adds two environment-configurable caps (`MAX_SHEETS_TO_CONVERT`, `MAX_ROWS_PER_SHEET`) so a workbook with thousands of small sheets can't blow out the Code Interpreter sandbox. New helpers:
+  - `_sanitize_sheet_name()` produces filesystem-safe deterministic CSV filenames (`stem.sheetname.csv`) so the model's downstream code paths are predictable
+  - `_parse_sheet_inventory()` extracts structured sheet metadata from the bootstrap stdout without `eval`/`literal_eval` on untrusted output
+  - `_safe_int()` parses bootstrap integers defensively
+  - `_format_sheet_note()` generates a markdown footer documenting which sheets converted, which were truncated, and the per-sheet CSV paths — surfacing caps to the model with actionable warnings rather than silently wrong results
+- Tool docstring documents the dual contract: single-sheet workbooks keep the legacy `stem.csv` fast path; multi-sheet workbooks get per-sheet CSVs plus a primary alias for the first sheet
+- `backend/src/agents/main_agent/core/system_prompt_builder.py` — system-prompt guidance updated so the model handles per-sheet filenames correctly on retries
+
+### Test Coverage
+
+2,800+ lines of new tests across `backend/tests/agents/builtin_tools/spreadsheet_analysis/`:
+
+- `test_analyze_tool_integration.py` (779 lines) — multi-sheet XLSX and CSV workflows end-to-end
+- `test_sheet_inventory.py` (307 lines) — parser robustness against malformed bootstrap output
+- `test_build_preview_code.py` (127 lines) — filename escaping for quotes and special characters via `repr()` indirection (closes a code-generation injection edge case)
+- `test_clean_stderr.py` (202 lines) — `MAX_ERROR_CHARS` budget is now respected strictly, accounting for ellipsis length
+- `test_helpers.py`, `test_find_file.py`, `test_list_spreadsheets.py`, `test_strip_first_row.py` — coverage for the smaller utilities
+
+A small robustness fix landed alongside the tests: code generation now stashes the filename as a `_FNAME` variable inside the generated snippet to prevent f-string interpolation conflicts when filenames contain quotes or braces.
+
+---
+
+## Async Spreadsheet File Lookups
+
+The `analyze_spreadsheet` and `list_spreadsheets` tools shipped in beta.25 ran synchronous DynamoDB queries on the event loop (`_find_file`, `_get_kb_files`, `_get_session_files`), and the inference-api `_build_tabular_inventory` chat-route helper used a nested `asyncio.run` + thread pool executor pattern that could block under concurrent chat load. This release converts the entire path to native async: tool entry points are `async def`, every DynamoDB query is offloaded via `asyncio.to_thread`, and the inference-api helper awaits directly. This fixes a regression introduced in #260 where high-concurrency chat traffic could stall the event loop during file lookups — the same class of bug the BFF middleware fix in beta.25 addressed for session resolution.
+
+### Backend
+
+- `backend/src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py` and `list_spreadsheets_tool.py` — `analyze_spreadsheet`, `list_spreadsheets`, `_find_file`, `_get_kb_files`, `_get_session_files` are all `async def`; DynamoDB calls offload via `asyncio.to_thread`
+- `backend/src/apis/inference_api/chat/routes.py` — `_build_tabular_inventory` is now `async` and awaits the file-operation calls directly. Replaces the nested `asyncio.run` + thread pool executor pattern that could deadlock under load
+
+---
+
+## User Default Model Preference
+
+User-saved default model preferences (set in Settings → Chat Preferences) are now actually applied when the chat starts. Previously the persisted `defaultModelId` was ignored and chat fell back to the hardcoded factory default — closes issue #161.
+
+### Backend
+
+- `backend/src/apis/app_api/chat/routes.py` and `backend/src/apis/inference_api/chat/routes.py` — new `_resolve_user_default_model()` helper looks up the persisted `defaultModelId` from user settings. Applied in `chat_agent_stream` and the invocations endpoint when the request does not specify a `model_id`
+- RBAC re-checks the resolved default at chat time, so a user whose access to the previously-saved default has been revoked falls back gracefully rather than getting a permission error mid-stream
+- A missing user-settings table now surfaces as `503 Service Unavailable` instead of silently dropping the user choice
+- `backend/src/apis/app_api/user_settings/routes.py` — defaults endpoint adjustments
+
+### Frontend
+
+- `frontend/ai.client/src/app/session/services/model/model.service.ts` — supports persisted default model resolution
+- `frontend/ai.client/src/app/settings/pages/chat-preferences/chat-preferences-settings.page.ts` — Chat Preferences page now wires the default model picker to the persisted setting
+
+### Test Coverage
+
+- `model.service.spec.ts` — 56 lines covering the default-model resolution flow
+- `chat-preferences-settings.page.spec.ts` — 101 lines covering the settings UI
+
+---
+
+## Nightly E2E Pipeline Restored
+
+The nightly E2E pipeline had been red since the multi-stack deployment hit a series of cookie/JWT validation issues against the dynamic CloudFront URL. This release lands the fixes that turn the pipeline green:
+
+- CloudFront URL handling for cookie auth in the test environment
+- CDK certificate ARN wiring through the nightly job
+- Increased agent test time limits (the multi-tool turns were tripping default timeouts)
+- Switched the nightly suite from global Bedrock model IDs to US-region IDs to avoid cross-region routing flakes
+- Rebased fix branch on `develop` to pick up the release-notes strategy update from #248
+
+---
+
+## Upstream Contribution Governance
+
+A non-code change worth flagging because it changes how external contributors interact with this repository.
+
+- **`CONTRIBUTING.md`** — pull requests are now restricted to approved collaborators only (GitHub "Collaborators only" setting). The repository remains source-available under PolyForm Noncommercial 1.0.0; issues stay open to everyone for bug reports and proposed changes, and a maintainer triages each one. The contributing guide explains the path: open an issue → maintainer triages → maintainer either implements upstream or coordinates next steps with the reporter.
+- **`.github/dependabot.yml`** — `open-pull-requests-limit: 0` across all four ecosystems (pip, frontend npm, infrastructure npm, github-actions). Scheduled version-update PRs are off; we handle dependency upgrades manually on a weekly cadence. Dependabot **security updates** are unaffected — when a CVE is published against a dependency, you'll still see a PR.
+
+The full schedules, groups, and labels are retained in the config so flipping the limit back to a positive number restores the previous behavior with a one-line change.
+
+---
+
+## Documentation
+
+- `backend/src/.env.example` — BFF cookie encryption architecture documentation updated to reflect the beta.25 shift from direct KMS cookie encryption to Secrets Manager-mediated approach. Clarifies that the `BFFCookieSigningKey` CMK now encrypts the Secrets Manager secret at rest (not the cookie directly), documents the new `BFF_COOKIE_DATA_KEY_SECRET_ARN` variable, explains the cross-task SHA-256 derivation, and adds the SSM parameter path for locating the secret ARN with an example ARN format
+
+---
+
+## 📦 Dependencies
+
+No dependency upgrades in this release. Dependabot version-update PRs are disabled going forward; the next deps refresh will land as a manually curated batch.
+
+---
+
+## 🏗️ Infrastructure
+
+No infrastructure changes. No new resources, no IAM changes, no SSM parameter changes.
+
+---
+
+## 🔧 CI/CD
+
+- Nightly E2E pipeline fixes (#290) — CloudFront URL handling, CDK certificate ARN, agent test timeouts, US-region Bedrock model IDs
+
+---
+
+## 🚀 Deployment notes
+
+- Deploy in any order. No schema, infrastructure, or IAM changes.
+- After deployment, set the `MAX_SHEETS_TO_CONVERT` and `MAX_ROWS_PER_SHEET` env vars on the Inference API task definition if you want non-default caps for the spreadsheet analysis tool. Reasonable defaults are baked into the code; only set these if your workbooks routinely need higher limits.
+- **Manual follow-up (not deploy-blocking):** in the GitHub repo settings, flip **Settings → General → Pull Requests → Collaborators only** to actually enforce the contribution policy documented in `CONTRIBUTING.md`. Verify **Settings → Code security → Dependabot security updates** is still enabled — we explicitly want CVE-driven PRs to keep flowing even with version-update PRs disabled.
+
+---
+
 # Release Notes — v1.0.0-beta.25
 
 **Release Date:** May 11, 2026
