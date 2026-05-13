@@ -61,8 +61,19 @@ def make_list_spreadsheets_tool(
                 "status": "success",
             }
 
+        _HARD_MB = 25  # mirrors FILE_SIZE_HARD_BYTES in analyze_tool.py
+        _WARN_MB = 10  # mirrors FILE_SIZE_WARN_BYTES in analyze_tool.py
+
+        def _size_label(size_bytes: int) -> str:
+            mb = size_bytes / (1024 * 1024)
+            if mb >= _HARD_MB:
+                return f"{mb:.1f} MB ⛔ exceeds {_HARD_MB} MB limit — filter before analyzing"
+            if mb >= _WARN_MB:
+                return f"{mb:.1f} MB ⚠️ large — analysis may be slow"
+            return f"{size_bytes / 1024:.0f} KB"
+
         file_list = "\n".join(
-            f"- {f['filename']} ({f['source']}, {f['size_bytes'] / 1024:.0f} KB)"
+            f"- {f['filename']} ({f['source']}, {_size_label(f['size_bytes'])})"
             for f in files
         )
         return {

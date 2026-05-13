@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_CHARS = 10000  # ~2500 tokens — safe margin under context limits
 MAX_ERROR_CHARS = 600  # cleaned traceback budget — full pandas tracebacks are noise
 
+# File-size guardrails (fixes #258).
+# Hard limit: refuse to download — avoids OOM and base64 (+33%) inflation for XLSX.
+# Soft limit: download succeeds but a warning is prepended to the response.
+FILE_SIZE_HARD_BYTES = 25 * 1024 * 1024   # 25 MB
+FILE_SIZE_WARN_BYTES = 10 * 1024 * 1024   # 10 MB
+
 _SCHEMA_MARKER = "[__SCHEMA__]"
 _SHEETS_MARKER = "[__SHEETS__]"
 
@@ -338,7 +344,33 @@ def make_analyze_tool(
         if not file_info:
             return {"content": [{"text": f"❌ File '{filename}' not found or not accessible. Use list_spreadsheets to see available files."}], "status": "error"}
 
-        # 3. Download from S3
+        # 3. File-size guard — fail fast before any S3 bytes are transferred (#258).
+        file_size = file_info.get("size_bytes", 0)
+        if file_size >= FILE_SIZE_HARD_BYTES:
+            size_mb = file_size / (1024 * 1024)
+            return {
+                "content": [{
+                    "text": (
+                        f"❌ '{filename}' is {size_mb:.1f} MB, which exceeds the "
+                        f"{FILE_SIZE_HARD_BYTES // (1024 * 1024)} MB limit. "
+                        "Please filter the data (e.g. export a date range or subset of columns) "
+                        "and re-upload a smaller file before analyzing."
+                    )
+                }],
+                "status": "error",
+            }
+
+        # Soft warning: file is large but within the hard limit — analysis will
+        # proceed, but we prepend a note so the model can relay it to the user.
+        _size_warning = ""
+        if file_size > FILE_SIZE_WARN_BYTES:
+            size_mb = file_size / (1024 * 1024)
+            _size_warning = (
+                f"⚠️ '{filename}' is {size_mb:.1f} MB — analysis may be slow. "
+                "Consider filtering to a smaller date range or column subset.\n\n"
+            )
+
+        # 4. Download from S3
         try:
             file_bytes = _download_file(file_info)
         except Exception as e:
@@ -503,11 +535,12 @@ wb.close()
 
             # 7. Download chart if requested
             success_text = _truncate_output(execution_output) or "✅ Code executed successfully (no output)."
+            if _size_warning:
+                success_text = _size_warning + success_text
             if schema_preview:
                 success_text = f"{success_text}\n\n---\nDataset: {schema_preview.splitlines()[0] if schema_preview else ''}"
             if multi_sheet_note:
                 success_text = f"{success_text}\n{multi_sheet_note}"
-
             if output_filename and output_filename.endswith(".png"):
                 try:
                     dl_response = code_interpreter.invoke("readFiles", {"paths": [output_filename]})
