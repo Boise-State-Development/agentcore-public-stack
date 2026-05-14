@@ -134,57 +134,10 @@ async def _sync_user_background(sync_service, user: User) -> None:
         # Log but don't fail - sync should never break authentication
         logger.warning(f"Failed to sync user {user.user_id}: {e}")
 
-# Lazy-initialized Cognito validator singleton
-_cognito_validator = None
-
-
-def _get_cognito_validator():
-    """
-    Get the CognitoJWTValidator singleton instance.
-
-    Reads Cognito configuration from environment variables:
-    - COGNITO_USER_POOL_ID: The Cognito User Pool ID
-    - COGNITO_APP_CLIENT_ID: The Cognito App Client ID
-    - COGNITO_REGION or AWS_REGION: The AWS region
-
-    Returns None if required environment variables are not set.
-    """
-    global _cognito_validator
-    if _cognito_validator is not None:
-        return _cognito_validator
-
-    try:
-        from .cognito_jwt_validator import CognitoJWTValidator
-
-        user_pool_id = os.environ.get("COGNITO_USER_POOL_ID")
-        app_client_id = os.environ.get("COGNITO_APP_CLIENT_ID")
-        region = os.environ.get("COGNITO_REGION") or os.environ.get("AWS_REGION")
-
-        if not user_pool_id or not app_client_id or not region:
-            logger.warning(
-                "Cognito environment variables not fully configured. "
-                "Required: COGNITO_USER_POOL_ID, COGNITO_APP_CLIENT_ID, "
-                "COGNITO_REGION (or AWS_REGION)"
-            )
-            return None
-
-        _cognito_validator = CognitoJWTValidator(
-            user_pool_id=user_pool_id,
-            app_client_id=app_client_id,
-            region=region,
-        )
-        logger.info("CognitoJWTValidator initialized for Cognito auth")
-    except Exception as e:
-        logger.error(f"Failed to initialize CognitoJWTValidator: {e}", exc_info=True)
-
-    return _cognito_validator
-
-
-# Separate validator for the BFF confidential client. Phase 1 CDK provisions
-# COGNITO_BFF_APP_CLIENT_ID alongside the SPA's COGNITO_APP_CLIENT_ID, and the
-# refresh exchange in `sessions_bff.refresh` issues against the BFF client —
-# so tokens carry `client_id = COGNITO_BFF_APP_CLIENT_ID` and would be rejected
-# by the SPA validator's client_id check.
+# Cognito JWT validator for tokens minted by the BFF confidential client.
+# The SPA-public PKCE client was decommissioned in Phase 7; all browser-facing
+# auth now flows through the BFF, which issues tokens carrying
+# `client_id = COGNITO_BFF_APP_CLIENT_ID`.
 _bff_cognito_validator = None
 
 
@@ -250,85 +203,20 @@ def _skip_auth_user() -> Optional[User]:
     )
 
 
-async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-) -> User:
-    """
-    FastAPI dependency to get the current authenticated user.
-
-    Validates the JWT token using the CognitoJWTValidator against
-    the configured Cognito User Pool.
-
-    Args:
-        credentials: HTTP Bearer token credentials (None if missing)
-
-    Returns:
-        User object with authenticated user information
-
-    Raises:
-        HTTPException:
-            - 401 if token is missing or invalid
-            - 500 if no JWT validator is available
-    """
-    if (fake := _skip_auth_user()) is not None:
-        return fake
-
-    # Check if credentials are missing
-    if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please provide a valid Bearer token in the Authorization header.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token = credentials.credentials
-
-    validator = _get_cognito_validator()
-    if validator:
-        try:
-            user = validator.validate_token(token)
-            user.raw_token = token
-
-            # Enrich with stored profile (email, name) when using access tokens
-            await _enrich_user_from_store(user)
-
-            # Fire-and-forget sync to Users table
-            sync_service = _get_user_sync_service()
-            if sync_service and sync_service.enabled:
-                asyncio.create_task(_sync_user_background(sync_service, user))
-
-            return user
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Token validation failed: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication failed."
-            )
-
-    # No validator available - Cognito not configured
-    logger.error("No JWT validator available. Ensure Cognito environment variables are configured.")
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Authentication service not configured. Cognito environment variables are missing."
-    )
-
-
 async def get_current_user_from_session(request: Request) -> User:
     """FastAPI dependency to authenticate via the BFF session cookie.
 
     `SessionRefreshMiddleware` is responsible for unsealing the cookie,
     looking up the session row, refreshing the access token if needed, and
     attaching the resulting `SessionRecord` to `request.state.bff_session`.
-    This dependency just consumes that and reuses the existing Cognito JWT
-    validator + profile-enrichment pipeline so RBAC, user-profile cache,
-    and the fire-and-forget user-sync background task all behave identically
-    to the Bearer path.
+    This dependency consumes that and runs the access token through the BFF
+    Cognito validator + profile-enrichment pipeline so RBAC, the user-profile
+    cache, and the fire-and-forget user-sync background task all behave
+    consistently with the rest of the auth surface.
 
-    Phase 2 ships this dependency dormant — no router consumes it yet. Phase
-    6 cuts each router over from `get_current_user` to this one as part of
-    the per-environment cutover.
+    This is the only user-facing auth dependency in `app_api/`. External
+    Bearer callers were retired in the BFF migration (API keys and voice
+    handle their own auth).
 
     Raises:
         HTTPException 401 if no session was resolved by the upstream
@@ -408,9 +296,10 @@ async def get_current_user_trusted(
     skips expensive signature verification and simply extracts standard
     Cognito/OIDC claims from the token.
 
-    Security: Only use this in services where the JWT validation
-    is guaranteed. IE AgentCore Runtime with Inbound Auth. For services without pre-validation, use
-    get_current_user() instead.
+    Security: Only use this in services where JWT validation is
+    guaranteed at the network layer (e.g. AgentCore Runtime with Inbound
+    Auth). For cookie-authenticated user-facing routes use
+    `get_current_user_from_session` instead.
 
     Args:
         credentials: HTTP Bearer token credentials (None if missing)

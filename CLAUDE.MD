@@ -87,6 +87,14 @@ The `inference-api` runs inside an AgentCore Runtime container. The runtime data
 
 If you're tempted to add to inference-api because of an existing route there (`converse_router`, `voice_router`), don't use them as templates without confirming their access path — they predate this rule and may rely on bypasses (API key, WebSocket upgrade, direct container reach in environments where the runtime isn't the only path).
 
+### Auth dependency on app_api routes
+
+The SPA sends an httpOnly session cookie — not `Authorization: Bearer`. A route that declares a bare Bearer-only dependency on the SPA-facing surface causes a 401 → centralized redirect loop the moment the SPA hits it.
+
+**Rule:** New routes under `apis/app_api/` use `Depends(get_current_user_from_session)` from `apis.shared.auth.dependencies` for user authentication. Admin routes use `Depends(require_admin)` (which chains through the same cookie dependency). The only exceptions are the API-key feature (`auth/api_keys/`, uses `X-API-Key`) and voice mode (`voice/`, uses a voice-ticket cookie) — both handle auth on their own terms and should not be used as templates for ordinary user routes.
+
+Do not reintroduce a Bearer-only `Depends(...)` on any user-facing route. If you find one in older code, migrate it to `get_current_user_from_session`.
+
 ## Debugging Quick Reference
 
 - **Tool not appearing:** Check `__init__.py` export, RBAC permissions, `enabled_tools`, ToolRegistry

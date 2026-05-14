@@ -35,7 +35,6 @@ from apis.shared.models.managed_models import (
     update_managed_model,
     delete_managed_model,
 )
-from apis.shared.rbac.system_admin import require_system_admin
 
 logger = logging.getLogger(__name__)
 
@@ -612,7 +611,7 @@ async def delete_managed_model_endpoint(
 @router.post("/managed-models/{model_id}/sync-roles", response_model=ManagedModel)
 async def sync_model_roles(
     model_id: str,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ):
     """
     Sync a model's allowedAppRoles with the AppRole system.

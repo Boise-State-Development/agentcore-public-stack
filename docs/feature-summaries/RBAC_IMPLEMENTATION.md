@@ -116,10 +116,10 @@ async def critical_endpoint(user: User = Depends(require_all_roles("Admin", "Sec
 ### Conditional Features
 
 ```python
-from apis.shared.auth import get_current_user, has_any_role
+from apis.shared.auth import get_current_user_from_session, has_any_role
 
 @router.get("/dashboard")
-async def dashboard(user: User = Depends(get_current_user)):
+async def dashboard(user: User = Depends(get_current_user_from_session)):
     """All authenticated users can access, but admins see extra data."""
     response = {"user": user.email}
 
@@ -303,7 +303,7 @@ The dependency automatically:
 
 1. **Always use dependencies** - Never manually check roles
 2. **Log admin actions** - Audit trail for compliance
-3. **Use specific roles** - Prefer `require_admin` over `get_current_user` for sensitive operations
+3. **Use specific roles** - Prefer `require_admin` over `get_current_user_from_session` for sensitive operations
 4. **Never disable auth in production** - `ENABLE_AUTHENTICATION=false` is for development only
 5. **Validate on every request** - Stateless authentication, no sessions
 6. **Use HTTPS in production** - Protect tokens in transit

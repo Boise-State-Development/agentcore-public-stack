@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter
 from fastapi.testclient import TestClient
 
 from apis.shared.auth.models import User
-from apis.shared.rbac.system_admin import require_system_admin
+from apis.shared.auth import require_admin
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def _create_app(admin_user: User) -> FastAPI:
     admin_router = APIRouter(prefix="/admin")
     admin_router.include_router(router)
     app.include_router(admin_router)
-    app.dependency_overrides[require_system_admin] = lambda: admin_user
+    app.dependency_overrides[require_admin] = lambda: admin_user
     return app
 
 

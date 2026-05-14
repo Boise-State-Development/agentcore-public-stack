@@ -18,7 +18,6 @@ from fastapi import HTTPException
 
 from apis.shared.auth.dependencies import (
     _skip_auth_user,
-    get_current_user,
     get_current_user_from_session,
     get_current_user_trusted,
 )
@@ -91,18 +90,6 @@ class TestDependencyBypass:
     """Tests that the bypass short-circuits each auth dependency."""
 
     @pytest.mark.asyncio
-    async def test_get_current_user_bypassed(self, clean_skip_auth_env, monkeypatch):
-        monkeypatch.setenv("SKIP_AUTH", "true")
-        # Patch the validator to assert it's never consulted.
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator"
-        ) as mock_get:
-            user = await get_current_user(credentials=None)
-            assert mock_get.call_count == 0
-        assert user.user_id == "local-dev"
-        assert user.roles == ["admin"]
-
-    @pytest.mark.asyncio
     async def test_get_current_user_from_session_bypassed(
         self, clean_skip_auth_env, monkeypatch
     ):
@@ -125,12 +112,14 @@ class TestDependencyBypass:
         assert user.user_id == "local-dev"
 
     @pytest.mark.asyncio
-    async def test_get_current_user_still_401_when_disabled(
+    async def test_get_current_user_from_session_still_401_when_disabled(
         self, clean_skip_auth_env
     ):
-        """Sanity check: with SKIP_AUTH unset, missing credentials still 401."""
+        """Sanity check: with SKIP_AUTH unset, missing session still 401."""
+        request = MagicMock()
+        request.state = MagicMock(spec=[])  # no bff_session attr
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(credentials=None)
+            await get_current_user_from_session(request)
         assert exc.value.status_code == 401
 
 

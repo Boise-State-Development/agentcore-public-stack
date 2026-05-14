@@ -332,10 +332,8 @@ export class AppApiStack extends cdk.Stack {
     );
     // Phase 7 retired the public PKCE SPA client; the BFF confidential
     // client is the only one left. `COGNITO_APP_CLIENT_ID` is still wired
-    // because `get_current_user` (Bearer auth on `/chat/agent-stream`)
-    // needs *some* client_id to validate against — point it at the BFF
-    // client so any Bearer token minted via the BFF token-exchange path
-    // is accepted there too. The cookie-auth dependency uses
+    // because `CognitoIdentityProviderService` (federated OIDC IdP
+    // management) reads it. The cookie-auth dependency uses
     // `COGNITO_BFF_APP_CLIENT_ID` (same value) via its own validator.
     const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
       this,

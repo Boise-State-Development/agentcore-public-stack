@@ -356,8 +356,8 @@ async def complete_consent(
 
     Returns `ok: true` on success; errors from AgentCore bubble up as 502.
 
-    Authorization: the inbound JWT (`current_user`) is verified by
-    `get_current_user`, and we pass that user's id as `userIdentifier` to
+    Authorization: the inbound session (`current_user`) is verified by
+    `get_current_user_from_session`, and we pass that user's id as `userIdentifier` to
     AgentCore. AgentCore's own binding rejects a completion attempt whose
     `userIdentifier` doesn't match the identity that initiated the session,
     so a leaked `session_uri` cannot be redeemed under a different user.

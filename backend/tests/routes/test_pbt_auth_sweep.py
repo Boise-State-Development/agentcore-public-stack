@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
-from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.auth.rbac import require_admin
 
@@ -157,16 +157,13 @@ class TestNonAdminRoleRejection:
         app = FastAPI()
         app.include_router(admin_router)
 
-        # Override get_current_user to return a user with the generated roles
+        # Override the session dependency to return a user with the generated roles
         user = User(
             email="prop4@example.com",
             user_id="prop4-user",
             name="Property 4 User",
             roles=roles,
         )
-        # `require_admin` is cookie-only since Phase 7; the Bearer override
-        # is kept too for any test that still relies on it.
-        app.dependency_overrides[get_current_user] = lambda: user
         app.dependency_overrides[get_current_user_from_session] = lambda: user
 
         # Mock AppRoleService to return no admin AppRoles (simulates
@@ -231,7 +228,7 @@ class TestAuthEnforcementSweep:
         )
 
         # Clean up the override so it doesn't leak to other tests
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_user_from_session, None)
 
     def test_health_endpoint_accessible_without_auth(self):
         """Requirement 17.3: Health endpoint remains accessible without auth.
@@ -240,7 +237,7 @@ class TestAuthEnforcementSweep:
         """
         app = _FULL_APP
         # Ensure no auth override is set
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_user_from_session, None)
 
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/health")

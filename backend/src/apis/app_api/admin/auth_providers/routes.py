@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from apis.shared.auth import User
+from apis.shared.auth import User, require_admin
 from apis.shared.auth_providers.models import (
     AuthProviderCreate,
     AuthProviderListResponse,
@@ -18,7 +18,6 @@ from apis.shared.auth_providers.models import (
     OIDCDiscoveryResponse,
 )
 from apis.shared.auth_providers.service import get_auth_provider_service
-from apis.shared.rbac.system_admin import require_system_admin
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ router = APIRouter(prefix="/auth-providers", tags=["admin-auth-providers"])
 )
 async def list_auth_providers(
     enabled_only: bool = Query(False, description="Filter to enabled providers only"),
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> AuthProviderListResponse:
     """List all configured OIDC authentication providers."""
     logger.info("Admin listing auth providers")
@@ -51,7 +50,7 @@ async def list_auth_providers(
     summary="Get current runtime container image tag",
 )
 async def get_runtime_image_tag(
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> dict:
     """
     Get the current container image tag used for AgentCore runtimes.
@@ -94,7 +93,7 @@ async def get_runtime_image_tag(
     summary="Get the Cognito IdP-response redirect URI",
 )
 async def get_cognito_redirect_uri(
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> dict:
     """Return the Cognito Hosted UI URL admins must register on an external IdP.
 
@@ -121,7 +120,7 @@ async def get_cognito_redirect_uri(
 )
 async def discover_oidc_endpoints(
     request: OIDCDiscoveryRequest,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> OIDCDiscoveryResponse:
     """
     Discover OIDC endpoints from an issuer URL.
@@ -142,7 +141,7 @@ async def discover_oidc_endpoints(
 )
 async def get_auth_provider(
     provider_id: str,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> AuthProviderResponse:
     """Get a specific authentication provider by ID."""
     logger.info("Admin requesting auth provider")
@@ -167,7 +166,7 @@ async def get_auth_provider(
 )
 async def create_auth_provider(
     data: AuthProviderCreate,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> AuthProviderResponse:
     """
     Create a new OIDC authentication provider.
@@ -196,7 +195,7 @@ async def create_auth_provider(
 async def update_auth_provider(
     provider_id: str,
     updates: AuthProviderUpdate,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> AuthProviderResponse:
     """
     Update an authentication provider.
@@ -231,7 +230,7 @@ async def update_auth_provider(
 )
 async def delete_auth_provider(
     provider_id: str,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> None:
     """Delete an authentication provider and its client secret."""
     logger.info("Admin deleting auth provider")
@@ -252,7 +251,7 @@ async def delete_auth_provider(
 )
 async def test_auth_provider(
     provider_id: str,
-    admin_user: User = Depends(require_system_admin),
+    admin_user: User = Depends(require_admin),
 ) -> dict:
     """
     Test provider connectivity by verifying JWKS, discovery, and

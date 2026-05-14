@@ -1,22 +1,18 @@
 """Tests for FastAPI auth dependencies.
 
 Covers:
-- get_current_user: Bearer token validation via CognitoJWTValidator
 - get_current_user_trusted: JWT decode without signature verification
 - get_current_user_id: convenience wrapper returning user_id string
 
 Requirements: 10.5, 10.6
 """
 
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import jwt as pyjwt
 import pytest
 from fastapi import HTTPException
 
 from apis.shared.auth.dependencies import (
-    get_current_user,
     get_current_user_id,
     get_current_user_trusted,
 )
@@ -32,107 +28,6 @@ def _bearer(token: str):
     creds = MagicMock()
     creds.credentials = token
     return creds
-
-
-# ---------------------------------------------------------------------------
-# get_current_user tests
-# ---------------------------------------------------------------------------
-
-
-class TestGetCurrentUser:
-    """Tests for the get_current_user dependency (Cognito-based)."""
-
-    @pytest.mark.asyncio
-    async def test_valid_bearer_token(self, make_jwt, make_user):
-        """Req 10.5: valid Bearer token validated by CognitoJWTValidator, returns User with raw_token."""
-        token = make_jwt()
-        expected_user = make_user(raw_token=None)
-
-        mock_validator = MagicMock()
-        mock_validator.validate_token = MagicMock(return_value=expected_user)
-
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator",
-            return_value=mock_validator,
-        ), patch(
-            "apis.shared.auth.dependencies._get_user_sync_service",
-            return_value=None,
-        ):
-            user = await get_current_user(credentials=_bearer(token))
-
-        assert isinstance(user, User)
-        assert user.raw_token == token
-        assert user.user_id == expected_user.user_id
-        mock_validator.validate_token.assert_called_once_with(token)
-
-    @pytest.mark.asyncio
-    async def test_no_credentials_401(self):
-        """Req 10.5: None credentials raises 401 with WWW-Authenticate header."""
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(credentials=None)
-
-        assert exc_info.value.status_code == 401
-        assert "WWW-Authenticate" in (exc_info.value.headers or {})
-
-    @pytest.mark.asyncio
-    async def test_failed_validation_401(self, make_jwt):
-        """Req 10.5: token that fails Cognito validation raises 401."""
-        token = make_jwt()
-
-        mock_validator = MagicMock()
-        mock_validator.validate_token = MagicMock(
-            side_effect=HTTPException(status_code=401, detail="Invalid token signature.")
-        )
-
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator",
-            return_value=mock_validator,
-        ), patch(
-            "apis.shared.auth.dependencies._get_user_sync_service",
-            return_value=None,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_current_user(credentials=_bearer(token))
-
-        assert exc_info.value.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_no_validator_500(self, make_jwt):
-        """Req 10.6: no Cognito validator available raises 500."""
-        token = make_jwt()
-
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator",
-            return_value=None,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_current_user(credentials=_bearer(token))
-
-        assert exc_info.value.status_code == 500
-        assert "Authentication service not configured" in exc_info.value.detail
-
-    @pytest.mark.asyncio
-    async def test_unexpected_exception_401(self, make_jwt):
-        """Unexpected exception during validation raises 401."""
-        token = make_jwt()
-
-        mock_validator = MagicMock()
-        mock_validator.validate_token = MagicMock(
-            side_effect=RuntimeError("unexpected")
-        )
-
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator",
-            return_value=mock_validator,
-        ), patch(
-            "apis.shared.auth.dependencies._get_user_sync_service",
-            return_value=None,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await get_current_user(credentials=_bearer(token))
-
-        assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Authentication failed."
 
 
 # ---------------------------------------------------------------------------
@@ -260,24 +155,11 @@ class TestGetCurrentUserId:
     """Tests for the get_current_user_id dependency."""
 
     @pytest.mark.asyncio
-    async def test_returns_string(self, make_jwt, make_user):
-        """get_current_user_id returns the user_id string."""
-        token = make_jwt()
+    async def test_returns_string(self, make_user):
+        """get_current_user_id returns the resolved user's user_id."""
         expected_user = make_user(user_id="uid-42")
 
-        mock_validator = MagicMock()
-        mock_validator.validate_token = MagicMock(return_value=expected_user)
-
-        with patch(
-            "apis.shared.auth.dependencies._get_cognito_validator",
-            return_value=mock_validator,
-        ), patch(
-            "apis.shared.auth.dependencies._get_user_sync_service",
-            return_value=None,
-        ):
-            user_id = await get_current_user_id(
-                user=await get_current_user(credentials=_bearer(token))
-            )
+        user_id = await get_current_user_id(user=expected_user)
 
         assert user_id == "uid-42"
         assert isinstance(user_id, str)

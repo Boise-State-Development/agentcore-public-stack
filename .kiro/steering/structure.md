@@ -238,7 +238,7 @@ scripts/
 
 - **Files**: snake_case (e.g., `turn_based_session_manager.py`)
 - **Classes**: PascalCase (e.g., `TurnBasedSessionManager`)
-- **Functions**: snake_case (e.g., `get_current_user`)
+- **Functions**: snake_case (e.g., `get_current_user_from_session`)
 - **Constants**: UPPER_SNAKE_CASE (e.g., `MAX_FILE_SIZE`)
 - **Private**: Leading underscore (e.g., `_internal_method`)
 
@@ -266,7 +266,7 @@ All modules are properly packaged and can be imported directly:
 
 ```python
 # Shared utilities (canonical location for cross-service code)
-from apis.shared.auth import get_current_user, User
+from apis.shared.auth import get_current_user_from_session, User
 from apis.shared.rbac import RBACService
 from apis.shared.costs.calculator import CostCalculator
 from apis.shared.tools.models import ToolDefinition

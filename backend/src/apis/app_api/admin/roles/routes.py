@@ -12,7 +12,6 @@ from apis.shared.rbac.models import (
     AppRoleListResponse,
     CacheStatsResponse,
 )
-from apis.shared.rbac.system_admin import require_system_admin
 from apis.shared.rbac.admin_service import get_app_role_admin_service
 from apis.shared.rbac.cache import get_app_role_cache
 
@@ -88,7 +87,7 @@ async def get_role(
 @router.post("/", response_model=AppRoleResponse, status_code=status.HTTP_201_CREATED)
 async def create_role(
     role_data: AppRoleCreate,
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Create a new application role.
@@ -124,7 +123,7 @@ async def create_role(
 async def update_role(
     role_id: str,
     updates: AppRoleUpdate,
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Update an application role.
@@ -170,7 +169,7 @@ async def update_role(
 @router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_role(
     role_id: str,
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Delete an application role.
@@ -210,7 +209,7 @@ async def delete_role(
 @router.post("/{role_id}/sync", response_model=AppRoleResponse)
 async def sync_role_permissions(
     role_id: str,
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Force recomputation of effective permissions for a role.
@@ -245,7 +244,7 @@ async def sync_role_permissions(
 
 @router.get("/cache/stats", response_model=CacheStatsResponse)
 async def get_cache_stats(
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Get cache statistics.
@@ -268,7 +267,7 @@ async def get_cache_stats(
 
 @router.post("/cache/invalidate", status_code=status.HTTP_204_NO_CONTENT)
 async def invalidate_cache(
-    admin: User = Depends(require_system_admin),
+    admin: User = Depends(require_admin),
 ):
     """
     Force invalidation of all role caches.

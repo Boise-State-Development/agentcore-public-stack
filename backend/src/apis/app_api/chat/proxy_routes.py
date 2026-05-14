@@ -1,7 +1,7 @@
 """BFF chat proxy — forwards browser SSE chat requests to inference-api.
 
-`POST /chat/stream` is the cookie-authenticated counterpart to the SPA's
-current direct-to-inference-api chat call. The flow:
+`POST /chat/stream` is the cookie-authenticated chat path for the SPA.
+The flow:
 
   Browser  → CloudFront `/api/*`  → app-api  → inference-api `/invocations`
            (httpOnly session cookie)         (Authorization: Bearer <token>)
@@ -9,13 +9,8 @@ current direct-to-inference-api chat call. The flow:
 `SessionRefreshMiddleware` resolves the cookie and, if the stored Cognito
 access token is near expiry, refreshes it before this handler runs. The
 handler then forwards `current_user.raw_token` — the freshly-validated
-access token — to inference-api, which already accepts Cognito Bearer
-tokens via `get_current_user_trusted` on `/invocations`. No inference-api
-changes needed (architecture decision #4 in the BFF migration plan).
-
-The legacy in-process Bearer agent route that previously owned `/chat/stream`
-was renamed to `/chat/agent-stream` in the Phase 6 cutover. The Phase 4
-`/chat/proxy-stream` rolling-deploy alias was deleted in Phase 7.
+access token — to inference-api, which accepts Cognito Bearer tokens via
+`get_current_user_trusted` on `/invocations`.
 """
 
 from __future__ import annotations
