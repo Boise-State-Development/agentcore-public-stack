@@ -1209,6 +1209,35 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // User Menu Links Table
+    // Admin-managed links rendered in the SPA user menu.
+    // Fixed PK ``USER_MENU_LINKS``, SK ``LINK#<uuid>``.
+    // ============================================================
+    const userMenuLinksTable = new dynamodb.Table(this, "UserMenuLinksTable", {
+      tableName: getResourceName(config, "user-menu-links"),
+      partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "UserMenuLinksTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/admin/user-menu-links-table-name`,
+      stringValue: userMenuLinksTable.tableName,
+      description: "User-menu links DynamoDB table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "UserMenuLinksTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/admin/user-menu-links-table-arn`,
+      stringValue: userMenuLinksTable.tableArn,
+      description: "User-menu links DynamoDB table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // AuthProviders Table - OIDC authentication provider configuration
     const authProvidersTable = new dynamodb.Table(this, "AuthProvidersTable", {
       tableName: getResourceName(config, "auth-providers"),

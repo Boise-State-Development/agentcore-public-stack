@@ -3,6 +3,7 @@ import { Component, input, output, ChangeDetectionStrategy, computed, inject } f
 import { RouterLink } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
+import { Dialog } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroChevronUpDown,
@@ -16,9 +17,17 @@ import {
   heroDocument,
   heroBriefcase,
   heroCog6Tooth,
+  heroArrowTopRightOnSquare,
+  heroDocumentText,
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
 import { VERSION } from '../../../../version';
+import { UserMenuLinksService } from '../../../admin/manage-user-menu-links/services/user-menu-links.service';
+import { UserMenuLink } from '../../../admin/manage-user-menu-links/models/user-menu-link.model';
+import {
+  UserMenuLinkModalComponent,
+  UserMenuLinkModalData,
+} from './user-menu-link-modal/user-menu-link-modal.component';
 
 export interface User {
   firstName: string;
@@ -45,6 +54,8 @@ export interface User {
       heroChatBubbleLeftRight,
       heroDocument,
       heroCog6Tooth,
+      heroArrowTopRightOnSquare,
+      heroDocumentText,
     })
   ],
   template: `
@@ -135,6 +146,44 @@ export interface User {
               </a>
             </div>
 
+            <!-- Admin-managed custom links -->
+            @if (customLinks().length > 0) {
+              <div class="border-t border-gray-200 py-1 dark:border-gray-700">
+                @for (link of customLinks(); track link.link_id) {
+                  @if (link.kind === 'external') {
+                    <a
+                      cdkMenuItem
+                      [href]="link.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden"
+                      role="menuitem"
+                    >
+                      <ng-icon
+                        name="heroArrowTopRightOnSquare"
+                        class="size-5 text-gray-400 dark:text-gray-500"
+                      />
+                      <span class="flex-1 truncate">{{ link.label }}</span>
+                    </a>
+                  } @else {
+                    <button
+                      cdkMenuItem
+                      type="button"
+                      (click)="openLinkModal(link)"
+                      class="flex w-full items-center gap-3 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700 rounded-xs outline-hidden text-left"
+                      role="menuitem"
+                    >
+                      <ng-icon
+                        name="heroDocumentText"
+                        class="size-5 text-gray-400 dark:text-gray-500"
+                      />
+                      <span class="flex-1 truncate">{{ link.label }}</span>
+                    </button>
+                  }
+                }
+              </div>
+            }
+
             <!-- Logout section -->
             <div class="border-t border-gray-200 py-1 dark:border-gray-700">
               <button
@@ -198,10 +247,28 @@ export interface User {
 })
 export class UserDropdownComponent {
   private readonly themeService = inject(ThemeService);
+  private readonly userMenuLinksService = inject(UserMenuLinksService);
+  private readonly dialog = inject(Dialog);
 
   // Inputs
   user = input.required<User>();
   isAdmin = input.required<boolean>();
+
+  // Admin-managed custom links (already enabled-filtered + ordered by backend).
+  protected readonly customLinks = computed<UserMenuLink[]>(
+    () => this.userMenuLinksService.enabledLinksResource.value()?.links ?? [],
+  );
+
+  protected openLinkModal(link: UserMenuLink): void {
+    this.dialog.open<void, UserMenuLinkModalData>(UserMenuLinkModalComponent, {
+      data: {
+        label: link.label,
+        bodyMarkdown: link.body_markdown ?? '',
+      },
+      hasBackdrop: false, // dialog component owns its own backdrop
+      panelClass: 'user-menu-link-modal-panel',
+    });
+  }
 
   // Outputs
   logout = output<void>();

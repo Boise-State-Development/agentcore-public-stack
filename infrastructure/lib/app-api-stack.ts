@@ -314,6 +314,14 @@ export class AppApiStack extends cdk.Stack {
       this,
       `/${config.projectPrefix}/auth/auth-providers-table-arn`
     );
+    const userMenuLinksTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/admin/user-menu-links-table-name`
+    );
+    const userMenuLinksTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/admin/user-menu-links-table-arn`
+    );
     const authProviderSecretsArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/auth/auth-provider-secrets-arn`
@@ -524,6 +532,7 @@ export class AppApiStack extends cdk.Stack {
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
+        DYNAMODB_USER_MENU_LINKS_TABLE_NAME: userMenuLinksTableName,
         // Cognito configuration (imported from Infrastructure Stack)
         COGNITO_USER_POOL_ID: cognitoUserPoolId,
         COGNITO_APP_CLIENT_ID: cognitoAppClientId,
@@ -1250,6 +1259,22 @@ export class AppApiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue', 'secretsmanager:DescribeSecret'],
         resources: [`${authProviderSecretsArn}*`], // Wildcard for random suffix
+      })
+    );
+
+    // Grant CRUD on the user-menu links table (admin-managed)
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'UserMenuLinksTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+        ],
+        resources: [userMenuLinksTableArn],
       })
     );
 

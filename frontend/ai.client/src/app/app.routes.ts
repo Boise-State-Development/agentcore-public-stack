@@ -64,6 +64,21 @@ export const routes: Routes = [
         canActivate: [adminGuard],
     },
     {
+        path: 'admin/manage-user-menu-links',
+        loadComponent: () => import('./admin/manage-user-menu-links/manage-user-menu-links.page').then(m => m.ManageUserMenuLinksPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/manage-user-menu-links/new',
+        loadComponent: () => import('./admin/manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/manage-user-menu-links/edit/:id',
+        loadComponent: () => import('./admin/manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
+        canActivate: [adminGuard],
+    },
+    {
         path: 'assistants/new',
         loadComponent: () => import('./assistants/assistant-form/assistant-form.page').then(m => m.AssistantFormPage),
         canActivate: [authGuard],

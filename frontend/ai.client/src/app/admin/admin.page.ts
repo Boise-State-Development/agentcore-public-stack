@@ -116,6 +116,12 @@ export class AdminPage {
       route: '/admin/connectors',
     },
     {
+      title: 'User Menu Links',
+      description: 'Manage links shown in the user menu. External URLs open in a new tab; modal links show rich Markdown content in-app.',
+      icon: 'heroLink',
+      route: '/admin/manage-user-menu-links',
+    },
+    {
       title: 'Fine-Tuning Access',
       description: 'Manage which users can access fine-tuning. Grant or revoke access, set monthly compute hour quotas, and monitor usage.',
       icon: 'heroAcademicCap',

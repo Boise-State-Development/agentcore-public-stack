@@ -1,0 +1,88 @@
+import { Injectable, inject, computed, resource } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
+import { ConfigService } from '../../../services/config.service';
+import {
+  UserMenuLink,
+  UserMenuLinkFormData,
+  UserMenuLinksListResponse,
+} from '../models/user-menu-link.model';
+
+/**
+ * Service for admin-managed user-menu links.
+ *
+ * Two API surfaces:
+ *  - Admin: `/admin/user-menu-links` (CRUD, includes disabled links)
+ *  - Public: `/user-menu-links` (enabled-only, used by `enabledLinksResource`)
+ *
+ * The public resource is what the user-dropdown component consumes. It is
+ * lazy by design: callers must call `.reload()` after auth lands (the
+ * dropdown does this in an effect that watches the user signal).
+ */
+@Injectable({ providedIn: 'root' })
+export class UserMenuLinksService {
+  private http = inject(HttpClient);
+  private config = inject(ConfigService);
+
+  private readonly adminBaseUrl = computed(
+    () => `${this.config.appApiUrl()}/admin/user-menu-links`,
+  );
+  private readonly publicBaseUrl = computed(
+    () => `${this.config.appApiUrl()}/user-menu-links`,
+  );
+
+  readonly adminLinksResource = resource({
+    loader: async () => this.fetchAdminLinks(),
+  });
+
+  readonly enabledLinksResource = resource({
+    loader: async () => this.fetchEnabledLinks(),
+  });
+
+  async fetchAdminLinks(): Promise<UserMenuLinksListResponse> {
+    return await firstValueFrom(
+      this.http.get<UserMenuLinksListResponse>(`${this.adminBaseUrl()}/`),
+    );
+  }
+
+  async fetchEnabledLinks(): Promise<UserMenuLinksListResponse> {
+    return await firstValueFrom(
+      this.http.get<UserMenuLinksListResponse>(`${this.publicBaseUrl()}/`),
+    );
+  }
+
+  async getLink(linkId: string): Promise<UserMenuLink> {
+    return await firstValueFrom(
+      this.http.get<UserMenuLink>(`${this.adminBaseUrl()}/${linkId}`),
+    );
+  }
+
+  async createLink(data: UserMenuLinkFormData): Promise<UserMenuLink> {
+    const created = await firstValueFrom(
+      this.http.post<UserMenuLink>(`${this.adminBaseUrl()}/`, data),
+    );
+    this.adminLinksResource.reload();
+    this.enabledLinksResource.reload();
+    return created;
+  }
+
+  async updateLink(
+    linkId: string,
+    updates: Partial<UserMenuLinkFormData>,
+  ): Promise<UserMenuLink> {
+    const updated = await firstValueFrom(
+      this.http.patch<UserMenuLink>(`${this.adminBaseUrl()}/${linkId}`, updates),
+    );
+    this.adminLinksResource.reload();
+    this.enabledLinksResource.reload();
+    return updated;
+  }
+
+  async deleteLink(linkId: string): Promise<void> {
+    await firstValueFrom(
+      this.http.delete<void>(`${this.adminBaseUrl()}/${linkId}`),
+    );
+    this.adminLinksResource.reload();
+    this.enabledLinksResource.reload();
+  }
+}
