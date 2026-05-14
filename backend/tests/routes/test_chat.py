@@ -3,10 +3,9 @@
 Endpoints under test:
 - POST /chat/generate-title  → 200 with generated title
 - POST /chat/generate-title  → 401 for unauthenticated request
-- POST /chat/agent-stream           → streaming response with text/event-stream
-- POST /chat/multimodal       → streaming response
+- POST /chat/agent-stream    → streaming response with text/event-stream
 
-Requirements: 5.1, 5.2, 5.3, 5.4
+Requirements: 5.1, 5.2, 5.3
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -158,58 +157,3 @@ class TestChatStream:
         assert resp.status_code == 401
 
 
-# ---------------------------------------------------------------------------
-# Requirement 5.4: POST /chat/multimodal returns streaming response
-# ---------------------------------------------------------------------------
-
-
-class TestChatMultimodal:
-    """POST /chat/multimodal returns a streaming response."""
-
-    def test_returns_streaming_response(self, app, make_user, authenticated_client):
-        """Req 5.4: Should return streaming response for multimodal input."""
-        user = make_user()
-        client = authenticated_client(app, user)
-
-        resp = client.post(
-            "/chat/multimodal",
-            json={
-                "session_id": "sess-001",
-                "message": "Describe this image",
-                "files": [
-                    {
-                        "filename": "test.png",
-                        "content_type": "image/png",
-                        "bytes": "aGVsbG8=",
-                    }
-                ],
-            },
-        )
-
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-
-    def test_returns_streaming_response_without_files(self, app, make_user, authenticated_client):
-        """Req 5.4: Should return streaming response even without files."""
-        user = make_user()
-        client = authenticated_client(app, user)
-
-        resp = client.post(
-            "/chat/multimodal",
-            json={
-                "session_id": "sess-001",
-                "message": "Just a text message",
-            },
-        )
-
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-
-    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
-        """Req 5.4: Should return 401 when no auth is provided."""
-        client = unauthenticated_client(app)
-        resp = client.post(
-            "/chat/multimodal",
-            json={"session_id": "sess-001", "message": "Hello"},
-        )
-        assert resp.status_code == 401

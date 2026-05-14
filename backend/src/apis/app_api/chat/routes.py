@@ -4,7 +4,6 @@ Application-specific chat endpoints moved from inference_api to keep
 AgentCore Runtime API clean. These endpoints handle:
 - Conversation title generation
 - In-process agent streaming (`POST /chat/agent-stream`, Bearer auth)
-- Multimodal chat input
 
 `/chat/agent-stream` was named `/chat/stream` until the Phase 6 BFF
 cutover, which reclaimed that path for the cookie-authenticated proxy
@@ -30,7 +29,7 @@ from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
 
 # Import models and services from inference_api (shared code)
-from apis.inference_api.chat.models import ChatEvent, ChatRequest, FileContent, GenerateTitleRequest, GenerateTitleResponse
+from apis.inference_api.chat.models import ChatRequest, FileContent, GenerateTitleRequest, GenerateTitleResponse
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import generate_conversation_title, get_agent
 from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
@@ -584,52 +583,3 @@ async def chat_agent_stream(request: ChatRequest, current_user: User = Depends(g
         )
 
 
-@router.post("/multimodal")
-async def chat_multimodal(request: ChatRequest, current_user: User = Depends(get_current_user)):
-    """
-    Stream chat response with multimodal input (files)
-
-    For now, just echoes the message and mentions files.
-    Will be replaced with actual Strands Agent execution.
-    Uses the authenticated user's ID from the JWT token.
-    """
-    user_id = current_user.user_id
-    logger.info(f"Multimodal chat request - Session: {request.session_id}, User: {user_id}")
-    logger.info(f"Message: {request.message[:50]}...")
-    if request.files:
-        logger.info(f"Files: {len(request.files)} uploaded")
-        for file in request.files:
-            logger.info(f"  - {file.filename} ({file.content_type})")
-
-    async def event_generator():
-        try:
-            # Send init event
-            event = ChatEvent(
-                type="init",
-                content="Processing multimodal input",
-                metadata={"session_id": request.session_id, "file_count": len(request.files or [])},
-            )
-            yield f"data: {event.to_json()}\n\n"
-            await asyncio.sleep(0.2)
-
-            # Echo message
-            response_text = f"Received message: '{request.message}'"
-            if request.files:
-                response_text += f" and {len(request.files)} file(s): "
-                response_text += ", ".join([f.filename for f in request.files])
-
-            for word in response_text.split():
-                event = ChatEvent(type="text", content=word + " ")
-                yield f"data: {event.to_json()}\n\n"
-                await asyncio.sleep(0.05)
-
-            # Complete
-            event = ChatEvent(type="complete", content="Multimodal processing complete")
-            yield f"data: {event.to_json()}\n\n"
-
-        except Exception as e:
-            logger.error(f"Error in multimodal event_generator: {e}")
-            error_event = ChatEvent(type="error", content=str(e))
-            yield f"data: {error_event.to_json()}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
