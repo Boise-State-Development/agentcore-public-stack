@@ -85,6 +85,29 @@ class TestCreateValidation:
         with pytest.raises(ValidationError):
             UserMenuLinkCreate(label="X", kind="external", url="https://x.example", order=10_001)
 
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "//example.com/x",
+            "example.com/x",
+        ],
+    )
+    def test_external_rejects_non_http_url(self, bad_url):
+        with pytest.raises(ValidationError):
+            UserMenuLinkCreate(label="X", kind="external", url=bad_url)
+
+    def test_external_accepts_http_and_https(self):
+        UserMenuLinkCreate(label="X", kind="external", url="http://x.example")
+        UserMenuLinkCreate(label="X", kind="external", url="HTTPS://X.example")
+
+    def test_update_rejects_non_http_url(self):
+        with pytest.raises(ValidationError):
+            UserMenuLinkUpdate(url="javascript:alert(1)")
+
 
 # ----------------------------------------------------------------------
 # Repository
@@ -165,6 +188,25 @@ class TestRepository:
     async def test_delete_missing_returns_false(self, repo):
         assert await repo.delete_link("nope") is False
 
+    @pytest.mark.asyncio
+    async def test_update_rejects_non_http_url_on_merge(self, repo):
+        """Defense-in-depth: even if a bypass somehow stored a bad URL,
+        an update that merges it back through the repo must reject it.
+        We bypass Pydantic by mutating the existing record directly."""
+        created = await repo.create_link(_external())
+        # Force a bad URL into the persisted item to simulate corruption /
+        # an out-of-band write.
+        repo._table.update_item(
+            Key={"PK": "USER_MENU_LINKS", "SK": f"LINK#{created.link_id}"},
+            UpdateExpression="SET #u = :u",
+            ExpressionAttributeNames={"#u": "url"},
+            ExpressionAttributeValues={":u": "javascript:alert(1)"},
+        )
+        with pytest.raises(ValueError, match="url must start with"):
+            await repo.update_link(
+                created.link_id, UserMenuLinkUpdate(label="Renamed")
+            )
+
 
 # ----------------------------------------------------------------------
 # Service
@@ -200,9 +242,18 @@ class TestDynamoRoundTrip:
             kind="modal",
             enabled=True,
             order=5,
-            icon="heroDocumentText",
             body_markdown="# Hi",
+            created_at="2026-05-14T00:00:00Z",
+            updated_at="2026-05-14T00:00:00Z",
         )
         item = original.to_dynamo_item()
         round_tripped = UserMenuLink.from_dynamo_item(item)
         assert round_tripped == original
+
+    def test_from_dynamo_item_requires_timestamps(self):
+        # Corrupted records (missing createdAt/updatedAt) should raise rather
+        # than silently substituting "now".
+        with pytest.raises(ValueError, match="missing required timestamp"):
+            UserMenuLink.from_dynamo_item(
+                {"linkId": "x", "label": "x", "kind": "external", "url": "https://x.example"}
+            )

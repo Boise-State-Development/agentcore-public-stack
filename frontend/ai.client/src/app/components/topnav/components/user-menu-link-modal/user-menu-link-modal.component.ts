@@ -92,7 +92,7 @@ export interface UserMenuLinkModalData {
 export class UserMenuLinkModalComponent {
   private dialogRef = inject(DialogRef<void>);
   protected data = inject<UserMenuLinkModalData>(DIALOG_DATA);
-  protected readonly titleId = `user-menu-link-modal-title-${Math.random().toString(36).slice(2, 8)}`;
+  protected readonly titleId = `user-menu-link-modal-title-${crypto.randomUUID()}`;
 
   protected onClose(): void {
     this.dialogRef.close();

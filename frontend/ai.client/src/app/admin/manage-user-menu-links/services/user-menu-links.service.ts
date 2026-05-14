@@ -15,9 +15,10 @@ import {
  *  - Admin: `/admin/user-menu-links` (CRUD, includes disabled links)
  *  - Public: `/user-menu-links` (enabled-only, used by `enabledLinksResource`)
  *
- * The public resource is what the user-dropdown component consumes. It is
- * lazy by design: callers must call `.reload()` after auth lands (the
- * dropdown does this in an effect that watches the user signal).
+ * The public resource is what the user-dropdown component consumes. The
+ * dropdown takes a `User` as a required input and is only rendered by the
+ * topnav once the session bootstrap has resolved, so the resource's loader
+ * fires post-auth on first read — no explicit reload needed.
  */
 @Injectable({ providedIn: 'root' })
 export class UserMenuLinksService {

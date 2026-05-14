@@ -101,7 +101,6 @@ class UserMenuLinksRepository:
             kind=data.kind,
             enabled=data.enabled,
             order=data.order,
-            icon=data.icon,
             url=data.url,
             body_markdown=data.body_markdown,
             created_at=now,
@@ -141,6 +140,10 @@ class UserMenuLinksRepository:
             raise ValueError("external links require url")
         if existing.kind == "modal" and not existing.body_markdown:
             raise ValueError("modal links require body_markdown")
+        if existing.url:
+            lowered = existing.url.strip().lower()
+            if not (lowered.startswith("http://") or lowered.startswith("https://")):
+                raise ValueError("url must start with http:// or https://")
 
         try:
             self._table.put_item(Item=existing.to_dynamo_item())

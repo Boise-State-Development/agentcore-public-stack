@@ -6,7 +6,6 @@ export interface UserMenuLink {
   kind: UserMenuLinkKind;
   enabled: boolean;
   order: number;
-  icon?: string | null;
   url?: string | null;
   body_markdown?: string | null;
   created_at: string;

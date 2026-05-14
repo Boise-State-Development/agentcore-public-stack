@@ -13,13 +13,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LinkKind = Literal["external", "modal"]
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat() + "Z"
+
+
+def _validate_http_url(value: Optional[str]) -> Optional[str]:
+    """Reject non-http(s) URLs. Defense-in-depth — Angular's DomSanitizer
+    also strips ``javascript:`` URLs from ``[href]``, but anyone hitting the
+    API directly (curl, scripts, a malicious admin) bypasses the SPA form."""
+    if value is None or value == "":
+        return value
+    lowered = value.strip().lower()
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        raise ValueError("url must start with http:// or https://")
+    return value
 
 
 @dataclass
@@ -29,13 +41,12 @@ class UserMenuLink:
     link_id: str
     label: str
     kind: LinkKind
+    created_at: str
+    updated_at: str
     enabled: bool = True
     order: int = 0
-    icon: Optional[str] = None
     url: Optional[str] = None  # external kind only
     body_markdown: Optional[str] = None  # modal kind only
-    created_at: str = field(default_factory=_utc_now)
-    updated_at: str = field(default_factory=_utc_now)
     created_by: Optional[str] = None
 
     def to_dynamo_item(self) -> Dict[str, Any]:
@@ -50,8 +61,6 @@ class UserMenuLink:
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
-        if self.icon:
-            item["icon"] = self.icon
         if self.url:
             item["url"] = self.url
         if self.body_markdown:
@@ -62,17 +71,24 @@ class UserMenuLink:
 
     @classmethod
     def from_dynamo_item(cls, item: Dict[str, Any]) -> "UserMenuLink":
+        try:
+            created_at = item["createdAt"]
+            updated_at = item["updatedAt"]
+        except KeyError as e:
+            raise ValueError(
+                f"User-menu link item {item.get('SK', '?')} is missing required "
+                f"timestamp field: {e.args[0]}"
+            ) from e
         return cls(
             link_id=item["linkId"],
             label=item["label"],
             kind=item["kind"],
             enabled=item.get("enabled", True),
             order=int(item.get("order", 0)),
-            icon=item.get("icon"),
             url=item.get("url"),
             body_markdown=item.get("bodyMarkdown"),
-            created_at=item.get("createdAt", _utc_now()),
-            updated_at=item.get("updatedAt", _utc_now()),
+            created_at=created_at,
+            updated_at=updated_at,
             created_by=item.get("createdBy"),
         )
 
@@ -104,11 +120,13 @@ class UserMenuLinkCreate(_LinkFieldsMixin):
     kind: LinkKind
     enabled: bool = True
     order: int = Field(default=0, ge=0, le=10_000)
-    icon: Optional[str] = Field(
-        None, max_length=64, description="ng-icons name (e.g., 'heroDocumentText')"
-    )
     url: Optional[str] = Field(None, max_length=2048)
     body_markdown: Optional[str] = Field(None, max_length=50_000)
+
+    @field_validator("url")
+    @classmethod
+    def _check_url_scheme(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_http_url(v)
 
 
 class UserMenuLinkUpdate(BaseModel):
@@ -118,9 +136,13 @@ class UserMenuLinkUpdate(BaseModel):
     kind: Optional[LinkKind] = None
     enabled: Optional[bool] = None
     order: Optional[int] = Field(None, ge=0, le=10_000)
-    icon: Optional[str] = Field(None, max_length=64)
     url: Optional[str] = Field(None, max_length=2048)
     body_markdown: Optional[str] = Field(None, max_length=50_000)
+
+    @field_validator("url")
+    @classmethod
+    def _check_url_scheme(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_http_url(v)
 
 
 class UserMenuLinkResponse(BaseModel):
@@ -131,7 +153,6 @@ class UserMenuLinkResponse(BaseModel):
     kind: LinkKind
     enabled: bool
     order: int
-    icon: Optional[str] = None
     url: Optional[str] = None
     body_markdown: Optional[str] = None
     created_at: str
@@ -146,7 +167,6 @@ class UserMenuLinkResponse(BaseModel):
             kind=link.kind,
             enabled=link.enabled,
             order=link.order,
-            icon=link.icon,
             url=link.url,
             body_markdown=link.body_markdown,
             created_at=link.created_at,
