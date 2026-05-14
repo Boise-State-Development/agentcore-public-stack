@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { MarkdownComponent } from 'ngx-markdown';
+import { CodeBlockClipboardButtonComponent } from './code-block-clipboard-button.component';
 
 /**
  * StreamingTextComponent provides smooth character-by-character typing animation
@@ -27,7 +28,8 @@ import { MarkdownComponent } from 'ngx-markdown';
   template: `
     <markdown
       class="min-w-0 max-w-full overflow-hidden"
-      clipboard
+      [clipboard]="!isStreaming()"
+      [clipboardButtonComponent]="ClipboardButton"
       mermaid
       katex
       [data]="displayedText()"
@@ -42,6 +44,8 @@ import { MarkdownComponent } from 'ngx-markdown';
 export class StreamingTextComponent implements OnDestroy {
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
+
+  protected readonly ClipboardButton = CodeBlockClipboardButtonComponent;
 
   /** The full text content to display */
   text = input.required<string>();
