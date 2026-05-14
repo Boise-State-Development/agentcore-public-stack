@@ -38,6 +38,7 @@ from apis.shared.quota import (
 
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
@@ -96,6 +97,37 @@ async def _find_managed_model(model_id: str | None):
         # CRLF / control chars from forging extra log lines.
         logger.warning("Failed to look up managed model %s", _sanitize_log(model_id))
     return None
+
+
+async def _resolve_user_default_model(user_id: str | None) -> tuple[str | None, str | None]:
+    """Look up the user's persisted defaultModelId and resolve its provider.
+
+    Returns ``(model_id, provider)``. When the request does not specify
+    ``model_id``, callers fall back to the user's saved preference; if that
+    is also unset (or the saved id no longer exists in managed models), the
+    callers in turn fall back to the agent factory's hardcoded default.
+
+    The lookup is best-effort: any failure (no table, DynamoDB error, or
+    deleted model) returns ``(None, None)`` so the chat turn proceeds on
+    the system default rather than being blocked.
+    """
+    if not user_id:
+        return None, None
+    try:
+        repo = UserSettingsRepository()
+        if not repo.enabled:
+            return None, None
+        settings = await repo.get_settings(user_id)
+        saved_id = settings.get("defaultModelId")
+    except Exception:
+        logger.warning("Failed to load user settings for default model lookup", exc_info=True)
+        return None, None
+    if not saved_id:
+        return None, None
+
+    managed = await _find_managed_model(saved_id)
+    provider = managed.provider if managed else None
+    return saved_id, provider
 
 
 def _merge_inference_params(
@@ -359,7 +391,7 @@ def _build_attachment_guidance(
     return "\n\n".join(parts)
 
 
-def _build_tabular_inventory(
+async def _build_tabular_inventory(
     session_id: str,
     assistant_id: str | None,
     enabled_tools: list | None,
@@ -403,8 +435,8 @@ def _build_tabular_inventory(
     files: list[dict] = []
     try:
         if assistant_id:
-            files.extend(_get_kb_files(assistant_id))
-        files.extend(_get_session_files(session_id))
+            files.extend(await _get_kb_files(assistant_id))
+        files.extend(await _get_session_files(session_id))
     except Exception:
         logger.warning("Failed to enumerate tabular files for inventory", exc_info=True)
         return ""
@@ -997,10 +1029,34 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if input_data.max_tokens is not None:
                 request_inference_params.setdefault("max_tokens", input_data.max_tokens)
 
+            # Resolve the user's persisted default when the request does
+            # not pin a model. Without this, a "no default selected" client
+            # always lands on the hardcoded factory default and the user's
+            # saved preference is silently ignored at chat time (#161).
+            effective_model_id = input_data.model_id
+            effective_provider = input_data.provider
+            if not effective_model_id:
+                user_default_id, user_default_provider = await _resolve_user_default_model(user_id)
+                if user_default_id:
+                    # Re-check model access against the resolved id. The
+                    # earlier guard only ran on `input_data.model_id`, so a
+                    # stale saved default the user no longer has rights to
+                    # would otherwise sneak past RBAC here.
+                    app_role_service = get_app_role_service()
+                    if await app_role_service.can_access_model(current_user, user_default_id):
+                        effective_model_id = user_default_id
+                        if not effective_provider and user_default_provider:
+                            effective_provider = user_default_provider
+                        logger.info("Applied user default model from settings")
+                    else:
+                        logger.info(
+                            "User default model exists but RBAC denies access; falling back to system default"
+                        )
+
             # Single registry lookup resolves caching + inference params,
             # merging admin defaults with request overrides.
             caching_enabled, inference_params = await _resolve_model_settings(
-                model_id=input_data.model_id,
+                model_id=effective_model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
             )
@@ -1030,10 +1086,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 user_id=user_id,
                 auth_token=auth_token,
                 enabled_tools=input_data.enabled_tools,
-                model_id=input_data.model_id,
+                model_id=effective_model_id,
                 system_prompt=system_prompt,  # Use assistant's instructions if available
                 caching_enabled=caching_enabled,
-                provider=input_data.provider,
+                provider=effective_provider,
                 inference_params=inference_params,
                 agent_type=input_data.agent_type,
                 extra_tools=extra_tools,
@@ -1106,7 +1162,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
             # silently picking whichever file the vector search ranked first.
-            tabular_inventory = _build_tabular_inventory(
+            tabular_inventory = await _build_tabular_inventory(
                 session_id=input_data.session_id,
                 assistant_id=input_data.rag_assistant_id,
                 enabled_tools=input_data.enabled_tools,

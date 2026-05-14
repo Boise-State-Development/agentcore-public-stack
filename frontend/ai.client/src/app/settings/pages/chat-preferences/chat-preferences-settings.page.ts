@@ -48,12 +48,26 @@ import { LocalSettingsService } from '../../../services/local-settings.service';
               <select
                 class="block w-full rounded-sm border-0 bg-white py-1.5 pl-3 pr-10 text-sm/6 text-gray-900 shadow-xs ring-1 ring-gray-300 focus:ring-2 focus:ring-blue-600 dark:bg-white/5 dark:text-white dark:ring-white/10 dark:focus:ring-blue-500"
                 aria-label="Default model"
-                [value]="currentDefaultModelId()"
                 (change)="onModelChange($event)"
               >
-                <option value="">No default (use first available)</option>
+                <!--
+                  We bind [selected] on each <option> rather than [value] on
+                  the <select>. Native <select>.value is a one-time DOM
+                  property write: if Angular evaluates it before @for has
+                  rendered the matching <option> (same change-detection
+                  tick), the browser silently resets the select to the
+                  first option and never resyncs when options arrive. With
+                  [selected], the binding fires as each option mounts, so
+                  the saved modelId reliably wins regardless of which
+                  data source — settings or model list — resolves first
+                  (#161).
+                -->
+                <option value="" [selected]="currentDefaultModelId() === ''">No default (use first available)</option>
                 @for (model of modelService.availableModels(); track model.id) {
-                  <option [value]="model.modelId">{{ model.modelName }} ({{ model.providerName }})</option>
+                  <option
+                    [value]="model.modelId"
+                    [selected]="model.modelId === currentDefaultModelId()"
+                  >{{ model.modelName }} ({{ model.providerName }})</option>
                 }
               </select>
             }
@@ -185,7 +199,14 @@ export class ChatPreferencesSettingsPage {
 
   readonly currentDefaultModelId = computed(() => {
     const settings = this.userSettingsService.settingsResource.value();
-    return settings?.defaultModelId ?? '';
+    const models = this.modelService.availableModels();
+    // Wait for both data sources before binding the dropdown value. If we
+    // emit the saved modelId before the @for loop has rendered the matching
+    // <option>, the browser silently resets the <select> to the first
+    // option and Angular won't re-apply [value] when options arrive later
+    // because the computed input hasn't changed.
+    if (!settings || models.length === 0) return '';
+    return settings.defaultModelId ?? '';
   });
 
   async onModelChange(event: Event): Promise<void> {

@@ -19,8 +19,159 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_CHARS = 10000  # ~2500 tokens — safe margin under context limits
 MAX_ERROR_CHARS = 600  # cleaned traceback budget — full pandas tracebacks are noise
 
+# Defensive caps for multi-sheet XLSX conversion. The outer upload limit
+# (FILE_UPLOAD_MAX_SIZE_BYTES, default 4 MB) catches naive abuse, but XLSX
+# is a zip of XML and can pack thousands of nearly-empty sheets into a few
+# megabytes. We cap both sheet count and per-sheet row count to keep turn
+# latency bounded; anything excluded is surfaced to the model with a
+# warning so the user learns about the cap rather than getting silently
+# wrong results.
+MAX_SHEETS_TO_CONVERT = int(os.environ.get("ANALYZE_MAX_SHEETS", 25))
+MAX_ROWS_PER_SHEET = int(os.environ.get("ANALYZE_MAX_ROWS_PER_SHEET", 500_000))
+
 _SCHEMA_MARKER = "[__SCHEMA__]"
 _SHEETS_MARKER = "[__SHEETS__]"
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    """Make a sheet name filesystem-safe.
+
+    Sheet names can contain spaces, slashes, unicode — pick a deterministic
+    filename-safe transform so the model can predict the output filename
+    from the sheet name. Lowercase for cross-platform stability, replace
+    anything non-alphanumeric with underscore, collapse repeats, trim.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower()
+    return cleaned or "sheet"
+
+
+def _parse_sheet_inventory(bootstrap_stdout: str) -> Dict[str, Any]:
+    """Extract the sheet inventory emitted by the XLSX bootstrap.
+
+    The bootstrap prints a pipe-delimited record per converted sheet
+    (``sheet|<name>|<path>|<rows>|<truncated_flag>|<primary_alias>``),
+    bracketed by ``_SHEETS_MARKER``. We parse that into a structured dict
+    the tool can reason about without re-evaluating Python literals from
+    untrusted-ish interpreter stdout.
+
+    Returns a dict with:
+        - ``total`` (int): total sheets in workbook
+        - ``converted`` (int): sheets actually written to CSV
+        - ``skipped`` (int): sheets excluded by MAX_SHEETS_TO_CONVERT
+        - ``skipped_preview`` (list[str]): first few skipped sheet names
+        - ``sheets`` (list[dict]): per-sheet records with name, path,
+          rows, truncated
+        - ``has_primary_alias`` (bool): whether the <stem>.csv fast-path
+          alias was written for the first sheet
+    """
+    result: Dict[str, Any] = {
+        "total": 0,
+        "converted": 0,
+        "skipped": 0,
+        "skipped_preview": [],
+        "sheets": [],
+        "has_primary_alias": False,
+    }
+    if _SHEETS_MARKER not in bootstrap_stdout:
+        return result
+    try:
+        block = bootstrap_stdout.split(_SHEETS_MARKER)[1].strip()
+    except IndexError:
+        return result
+
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("total:"):
+            result["total"] = _safe_int(stripped.split(":", 1)[1])
+        elif stripped.startswith("converted:"):
+            result["converted"] = _safe_int(stripped.split(":", 1)[1])
+        elif stripped.startswith("skipped:"):
+            result["skipped"] = _safe_int(stripped.split(":", 1)[1])
+        elif stripped.startswith("skipped_names:"):
+            # Stored as a Python list literal — safe to ast.literal_eval
+            # because the content is quoted strings from sheetnames.
+            import ast as _ast
+            try:
+                names = _ast.literal_eval(stripped.split(":", 1)[1].strip())
+                if isinstance(names, list):
+                    result["skipped_preview"] = [str(n) for n in names]
+            except (ValueError, SyntaxError):
+                pass
+        elif stripped.startswith("sheet|"):
+            parts = stripped.split("|")
+            # sheet | name | path | rows | truncated | alias
+            if len(parts) < 6:
+                continue
+            _, name, path, rows, trunc, alias = parts[:6]
+            result["sheets"].append({
+                "name": name,
+                "path": path,
+                "rows": _safe_int(rows),
+                "truncated": trunc == "1",
+                "primary_alias": alias or None,
+            })
+            if alias:
+                result["has_primary_alias"] = True
+    return result
+
+
+def _safe_int(raw: str) -> int:
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_sheet_note(inventory: Dict[str, Any]) -> str:
+    """Turn a parsed sheet inventory into a markdown footer for the tool
+    response. Empty string when the workbook has a single sheet that was
+    fully converted (no-op path — nothing interesting to report).
+    """
+    total = inventory.get("total", 0)
+    sheets = inventory.get("sheets", [])
+    skipped = inventory.get("skipped", 0)
+    truncated_sheets = [s for s in sheets if s.get("truncated")]
+
+    if total <= 1 and not truncated_sheets:
+        return ""
+
+    lines: list[str] = []
+
+    if total > 1:
+        converted = inventory.get("converted", len(sheets))
+        if skipped:
+            preview = inventory.get("skipped_preview", [])
+            shown = ", ".join(preview)
+            more = f" (+{skipped - len(preview)} more)" if skipped > len(preview) else ""
+            lines.append(
+                f"⚠ Workbook has {total} sheets; converted the first {converted}. "
+                f"Skipped: {shown}{more}. "
+                f"Split the file or export specific tabs as CSV to analyze the rest."
+            )
+        else:
+            lines.append(
+                f"Workbook has {total} sheets; all converted. Use the "
+                f"per-sheet filenames below to read or combine them."
+            )
+        lines.append("")
+        lines.append("**Available sheets (load via `pd.read_csv`):**")
+        for s in sheets:
+            trunc_tag = ""
+            if s.get("truncated"):
+                trunc_tag = f" — ⚠ truncated at {MAX_ROWS_PER_SHEET:,} rows"
+            lines.append(f"- `{s['name']}` → `{s['path']}` ({s['rows']:,} rows{trunc_tag})")
+
+    elif truncated_sheets:
+        # Single-sheet workbook but hit the row cap.
+        s = truncated_sheets[0]
+        lines.append(
+            f"⚠ Sheet `{s['name']}` was truncated at {MAX_ROWS_PER_SHEET:,} rows "
+            f"due to the analysis size cap; full row count not reported."
+        )
+
+    return "\n".join(lines)
 
 
 def _truncate_output(text: str) -> str:
@@ -119,7 +270,11 @@ def _clean_stderr(stderr: str) -> str:
         cleaned = "\n".join(filtered[-8:]).strip()
 
     if len(cleaned) > MAX_ERROR_CHARS:
-        cleaned = cleaned[:MAX_ERROR_CHARS] + " ..."
+        # Leave room for the ellipsis tail so the final string respects
+        # the budget strictly — callers rely on ``len(output) <=
+        # MAX_ERROR_CHARS``.
+        ellipsis = " ..."
+        cleaned = cleaned[:MAX_ERROR_CHARS - len(ellipsis)] + ellipsis
     return cleaned
 
 
@@ -140,10 +295,25 @@ def _build_preview_code(csv_filename: str) -> str:
 
     Output is bracketed with _SCHEMA_MARKER so it can be reliably extracted
     from the interpreter's stdout stream even if user code prints other things.
+
+    Filenames with quotes or other f-string-breaking characters are handled
+    by stashing the filename as a top-of-script local variable (``_FNAME``)
+    via ``repr()`` once. The rest of the template references ``_FNAME`` as
+    an ordinary string, so we never re-interpolate the raw filename into
+    nested f-string contexts. Before this indirection, a filename like
+    ``"O'Brien data.csv"`` would generate invalid Python because ``repr``
+    emits double quotes when the string contains a single quote, conflicting
+    with the outer f-string's own quoting.
     """
+    # repr() always produces a valid Python string literal; storing that
+    # literal once means the generated code can refer to the filename by
+    # name, without any further escaping.
+    fname_literal = repr(csv_filename)
     return f"""
 import warnings, pandas as pd
 warnings.filterwarnings('ignore')
+
+_FNAME = {fname_literal}
 
 def _score(cols):
     # Higher is better. Punishes Unnamed columns and duplicates.
@@ -156,7 +326,7 @@ def _score(cols):
     return named - (unnamed * 5) - dup_penalty - blank_penalty
 
 try:
-    with open({csv_filename!r}, 'r') as _fh:
+    with open(_FNAME, 'r') as _fh:
         _total_rows = sum(1 for _ in _fh)
 
     # Score skiprows=0..8, keep the winner and remember the baseline.
@@ -164,7 +334,7 @@ try:
     _best_skip, _best_score, _best_cols = 0, -float('inf'), []
     for _sk in range(9):
         try:
-            _cols = pd.read_csv({csv_filename!r}, nrows=0, skiprows=_sk, low_memory=False).columns.tolist()
+            _cols = pd.read_csv(_FNAME, nrows=0, skiprows=_sk, low_memory=False).columns.tolist()
         except Exception:
             continue
         _sc = _score(_cols)
@@ -203,21 +373,21 @@ try:
         _col_preview += f' ... (+{{len(_report_cols) - 20}} more)'
 
     try:
-        _head = pd.read_csv({csv_filename!r}, skiprows=_report_skip, nrows=1, low_memory=False)
+        _head = pd.read_csv(_FNAME, skiprows=_report_skip, nrows=1, low_memory=False)
         _first_row = _head.iloc[0].to_dict() if len(_head) else {{}}
         _first_row = {{k: (str(v)[:40] + '...' if len(str(v)) > 40 else v) for k, v in _first_row.items()}}
     except Exception:
         _first_row = {{}}
 
     if _prescribe:
-        _load = f"pd.read_csv({csv_filename!r}, skiprows={{_report_skip}}, low_memory=False)"
+        _load = f"pd.read_csv({{_FNAME!r}}, skiprows={{_report_skip}}, low_memory=False)"
         _note = f"  # {{_report_skip}} metadata row(s) detected before header"
     else:
-        _load = f"pd.read_csv({csv_filename!r}, low_memory=False)"
+        _load = f"pd.read_csv({{_FNAME!r}}, low_memory=False)"
         _note = ""
 
     print({_SCHEMA_MARKER!r})
-    print(f'file: {csv_filename} ({{_data_rows}} rows x {{len(_report_cols)}} cols)')
+    print(f'file: {{_FNAME}} ({{_data_rows}} rows x {{len(_report_cols)}} cols)')
     print(f'load: {{_load}}{{_note}}')
     print(f'columns: {{_col_preview}}')
     print(f'first_row: {{_first_row}}')
@@ -273,7 +443,7 @@ def make_analyze_tool(
     """Create an analyze_spreadsheet tool bound to the given context."""
 
     @tool
-    def analyze_spreadsheet(
+    async def analyze_spreadsheet(
         filename: str,
         python_code: str,
         output_filename: Optional[str] = None,
@@ -290,7 +460,21 @@ def make_analyze_tool(
         ``"FY_27_Ledger.xlsx"``).
 
         In the sandbox, XLSX files are pre-converted to CSV:
-            ``FY_27_Ledger.xlsx`` → loadable as ``FY_27_Ledger.csv``
+
+        • Single-sheet workbooks → loadable as ``<stem>.csv``
+          ``FY_27_Ledger.xlsx`` → ``FY_27_Ledger.csv``
+
+        • Multi-sheet workbooks → one CSV per sheet, plus a primary alias
+          for the first sheet:
+            ``Budget.xlsx`` → ``Budget.summary.csv``,
+                              ``Budget.transactions.csv``,
+                              ``Budget.notes.csv``,
+                              ``Budget.csv`` (alias of the first sheet)
+
+          The tool response's "Available sheets" footer lists the exact
+          ``pd.read_csv`` target for every sheet. **Use those names
+          verbatim.** For cross-sheet aggregation, read multiple and
+          combine with ``pd.concat``.
 
         So ``python_code`` must read the CSV form, even for an XLSX source:
 
@@ -309,6 +493,13 @@ def make_analyze_tool(
         **On any retry, use that exact load line verbatim** instead of
         guessing ``skiprows``.
 
+        Safety limits
+        -------------
+        Multi-sheet workbooks convert at most the first 25 sheets; each
+        sheet is truncated at 500,000 rows. When a cap triggers, the
+        response footer tells you what was excluded so you can relay it
+        to the user instead of presenting a partial answer as complete.
+
         Best for: aggregations, filtering, trends, comparisons, statistics,
         charts. For simple factual lookups, use knowledge base search.
 
@@ -316,9 +507,9 @@ def make_analyze_tool(
             filename: Source filename from list_spreadsheets results. Use
                 the original name (``.xlsx`` or ``.csv``), not the sandbox
                 form.
-            python_code: Python to execute. Load XLSX sources via
-                ``pd.read_csv('<stem>.csv', ...)``. Available libraries:
-                pandas, numpy, matplotlib, seaborn, openpyxl.
+            python_code: Python to execute. For XLSX sources, use the exact
+                CSV names from the "Available sheets" footer. Available
+                libraries: pandas, numpy, matplotlib, seaborn, openpyxl.
             output_filename: Optional PNG filename if generating a chart.
                 Must end with ``.png``. Example: ``"chart.png"``.
 
@@ -334,7 +525,7 @@ def make_analyze_tool(
             return {"content": [{"text": "❌ Code Interpreter is not configured. Contact your administrator."}], "status": "error"}
 
         # 2. Find the file in accessible sources
-        file_info = _find_file(filename, assistant_id, session_id)
+        file_info = await _find_file(filename, assistant_id, session_id)
         if not file_info:
             return {"content": [{"text": f"❌ File '{filename}' not found or not accessible. Use list_spreadsheets to see available files."}], "status": "error"}
 
@@ -355,42 +546,122 @@ def make_analyze_tool(
             code_interpreter.start(identifier=ci_id)
 
             if is_xlsx:
-                # Push XLSX as base64, decode in sandbox. Only the first sheet
-                # is converted; if the workbook has multiple sheets we surface
-                # a warning so the model can tell the user rather than silently
-                # analyzing the wrong tab.
+                # Push XLSX as base64, decode in sandbox, then convert every
+                # sheet to its own CSV (subject to defensive caps below).
+                # Model gets a full sheet inventory in the schema footer so
+                # cross-sheet aggregation works in a single analyze call.
                 import base64
                 b64_content = base64.b64encode(file_bytes).decode("ascii")
-                csv_filename = os.path.splitext(filename)[0] + ".csv"
+                stem = os.path.splitext(filename)[0]
+                # Back-compat alias: single-sheet workbooks still expose
+                # <stem>.csv so the one-file, one-sheet fast path keeps
+                # its existing filename contract. Multi-sheet workbooks
+                # use <stem>.<sanitized_sheet>.csv per sheet.
+                primary_csv_filename = f"{stem}.csv"
 
                 code_interpreter.invoke("writeFiles", {"content": [
                     {"path": "_encoded.b64", "text": b64_content},
                 ]})
+                # Bootstrap: iterate every sheet (capped), write a CSV per
+                # sheet, emit an inventory the outer tool can parse. Uses
+                # read_only + values_only to avoid loading full styles/
+                # formulas into memory — important for large workbooks.
                 bootstrap_code = f"""
-import base64, io, csv
+import base64, io, csv, re
 from openpyxl import load_workbook
+
+MAX_SHEETS = {MAX_SHEETS_TO_CONVERT}
+MAX_ROWS = {MAX_ROWS_PER_SHEET}
+STEM = {stem!r}
+PRIMARY_CSV = {primary_csv_filename!r}
+
+def _sanitize(name):
+    cleaned = re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').lower()
+    return cleaned or 'sheet'
 
 with open('_encoded.b64', 'r') as f:
     raw = base64.b64decode(f.read())
 
 wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-_active_sheet = wb.sheetnames[0]
-ws = wb[_active_sheet]
-with open('{csv_filename}', 'w', newline='') as out:
-    writer = csv.writer(out)
-    for row in ws.iter_rows(values_only=True):
-        if all(cell is None for cell in row):
-            continue
-        writer.writerow([str(cell) if cell is not None else '' for cell in row])
+all_sheets = wb.sheetnames
+total_sheets = len(all_sheets)
+sheets_to_convert = all_sheets[:MAX_SHEETS]
+skipped_sheets = all_sheets[MAX_SHEETS:]
 
-# Emit the sheet inventory so the caller can warn about multi-sheet workbooks.
+# Track which sanitized names we've used — de-duplicate if two sheet
+# names sanitize to the same token (e.g. "Q1 2026" and "q1_2026").
+used_names = set()
+def _unique(base):
+    candidate, n = base, 2
+    while candidate in used_names:
+        candidate = f"{{base}}_{{n}}"
+        n += 1
+    used_names.add(candidate)
+    return candidate
+
+# Single-sheet workbook: keep the legacy <stem>.csv filename for
+# back-compat with existing prompts/docstring examples. Multi-sheet
+# workbooks get <stem>.<sheet>.csv per sheet. The primary alias is
+# always the first sheet.
+sheet_records = []
+for idx, sheet_name in enumerate(sheets_to_convert):
+    if total_sheets == 1:
+        out_path = PRIMARY_CSV
+    else:
+        safe = _unique(_sanitize(sheet_name))
+        out_path = f"{{STEM}}.{{safe}}.csv"
+
+    ws = wb[sheet_name]
+    rows_written = 0
+    truncated = False
+    with open(out_path, 'w', newline='') as out:
+        writer = csv.writer(out)
+        for row in ws.iter_rows(values_only=True):
+            if all(cell is None for cell in row):
+                continue
+            if rows_written >= MAX_ROWS:
+                truncated = True
+                break
+            writer.writerow([str(cell) if cell is not None else '' for cell in row])
+            rows_written += 1
+
+    # Alias the first sheet of a multi-sheet workbook to the legacy
+    # <stem>.csv path too, so the single-sheet fast path and the
+    # XLSX→CSV docstring example keep working for picking "the main
+    # sheet" without needing to know its name.
+    primary_alias = None
+    if total_sheets > 1 and idx == 0:
+        try:
+            with open(out_path, 'r') as src, open(PRIMARY_CSV, 'w') as dst:
+                dst.write(src.read())
+            primary_alias = PRIMARY_CSV
+        except Exception:
+            pass
+
+    sheet_records.append({{
+        'name': sheet_name,
+        'path': out_path,
+        'rows': rows_written,
+        'truncated': truncated,
+        'primary_alias': primary_alias,
+    }})
+
 print({_SHEETS_MARKER!r})
-print(f'active: {{_active_sheet}}')
-print(f'all: {{wb.sheetnames}}')
+print(f'total: {{total_sheets}}')
+print(f'converted: {{len(sheet_records)}}')
+print(f'skipped: {{len(skipped_sheets)}}')
+if skipped_sheets:
+    _preview = skipped_sheets[:5]
+    print(f'skipped_names: {{_preview}}')
+for rec in sheet_records:
+    # Emit one record per line, pipe-delimited, so the outer parser
+    # doesn't have to evaluate arbitrary Python literals.
+    trunc = '1' if rec['truncated'] else '0'
+    alias = rec['primary_alias'] or ''
+    print(f"sheet|{{rec['name']}}|{{rec['path']}}|{{rec['rows']}}|{{trunc}}|{{alias}}")
 print({_SHEETS_MARKER!r})
 wb.close()
 """
-                multi_sheet_note = ""
                 resp = code_interpreter.invoke("executeCode", {"code": bootstrap_code, "language": "python", "clearContext": False})
                 bootstrap_stdout = ""
                 for event in resp.get("stream", []):
@@ -400,31 +671,24 @@ wb.close()
                         return {"content": [{"text": f"❌ Failed to convert XLSX in sandbox:\n```\n{error_msg}\n```"}], "status": "error"}
                     bootstrap_stdout += result.get("structuredContent", {}).get("stdout", "")
 
-                # Parse the sheet inventory emitted by the bootstrap.
-                if _SHEETS_MARKER in bootstrap_stdout:
-                    try:
-                        block = bootstrap_stdout.split(_SHEETS_MARKER)[1].strip()
-                        active = ""
-                        all_sheets: list[str] = []
-                        for line in block.splitlines():
-                            if line.startswith("active:"):
-                                active = line.split(":", 1)[1].strip()
-                            elif line.startswith("all:"):
-                                # Parse the Python list literal ("['a', 'b']").
-                                import ast
-                                try:
-                                    all_sheets = ast.literal_eval(line.split(":", 1)[1].strip())
-                                except (ValueError, SyntaxError):
-                                    all_sheets = []
-                        if len(all_sheets) > 1:
-                            others = [s for s in all_sheets if s != active]
-                            multi_sheet_note = (
-                                f"⚠ Workbook has {len(all_sheets)} sheets; analyzing only '{active}'. "
-                                f"Other sheets not loaded: {', '.join(others[:5])}"
-                                + (f" (+{len(others) - 5} more)" if len(others) > 5 else "")
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to parse XLSX sheet inventory: {e}")
+                sheet_inventory = _parse_sheet_inventory(bootstrap_stdout)
+                if not sheet_inventory["sheets"]:
+                    return {
+                        "content": [{"text": "❌ XLSX bootstrap produced no readable sheets."}],
+                        "status": "error",
+                    }
+
+                # csv_filename is the canonical name the rest of the code
+                # path uses to probe schema and emit "load:" hints. For
+                # single-sheet or the primary alias on multi-sheet, that's
+                # <stem>.csv. For multi-sheet with no primary alias (write
+                # failure), fall back to the first converted sheet's path.
+                csv_filename = (
+                    primary_csv_filename
+                    if sheet_inventory["has_primary_alias"] or len(sheet_inventory["sheets"]) == 1
+                    else sheet_inventory["sheets"][0]["path"]
+                )
+                multi_sheet_note = _format_sheet_note(sheet_inventory)
             else:
                 # CSV — push directly as text
                 csv_filename = filename if filename.lower().endswith(".csv") else os.path.splitext(filename)[0] + ".csv"
@@ -550,7 +814,7 @@ wb.close()
     return analyze_spreadsheet
 
 
-def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
+async def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> Optional[Dict[str, Any]]:
     """Find a file by name in accessible sources. Returns file info or None.
 
     Matches are tolerant to XLSX ↔ CSV aliasing: if the model asks for
@@ -562,8 +826,8 @@ def _find_file(filename: str, assistant_id: Optional[str], session_id: str) -> O
     """
     candidates: list[Dict[str, Any]] = []
     if assistant_id:
-        candidates.extend(_get_kb_files(assistant_id))
-    candidates.extend(_get_session_files(session_id))
+        candidates.extend(await _get_kb_files(assistant_id))
+    candidates.extend(await _get_session_files(session_id))
 
     target_lower = filename.lower()
     target_stem, _ = os.path.splitext(target_lower)

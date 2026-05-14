@@ -54,6 +54,23 @@ async def update_settings(
         except Exception as e:
             logger.warning(f"Could not validate model ID: {e}")
 
+    # Surface the missing-table case as a real 503 instead of silently
+    # echoing the requested values back to the client. Previously the route
+    # returned 200 with the new payload while persisting nothing, so the
+    # SPA's "Saving..." indicator cleared and the user assumed success —
+    # then the next page load showed defaultModelId=null because the GET
+    # path falls through to the same disabled repo and returns defaults
+    # (#161). Failing loud here lets the frontend show the user that the
+    # backend is misconfigured rather than silently dropping their choice.
+    if not repo.enabled:
+        logger.error(
+            "User settings update rejected: DYNAMODB_USER_SETTINGS_TABLE_NAME is not configured"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="User settings storage is not configured on this server.",
+        )
+
     try:
         updated = await repo.update_settings(current_user.user_id, update_data)
         return UserSettings(**updated)

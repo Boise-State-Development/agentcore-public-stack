@@ -3,12 +3,14 @@ import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { ModelService } from './model.service';
 import { ConfigService } from '../../../services/config.service';
+import { UserSettingsService } from '../../../services/user-settings.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
 import { signal } from '@angular/core';
 
 describe('ModelService', () => {
   let service: ModelService;
   let httpMock: HttpTestingController;
+  let mockUserSettings: { fetchSettings: ReturnType<typeof vi.fn> };
 
   const mockModels: ManagedModel[] = [
     { id: 'm1', modelId: 'claude-haiku', modelName: 'Claude Haiku', provider: 'bedrock', providerName: 'Anthropic', inputModalities: ['TEXT'], outputModalities: ['TEXT'], maxInputTokens: 200000, maxOutputTokens: 4096, allowedAppRoles: [], availableToRoles: [], enabled: true, inputPricePerMillionTokens: 0.25, outputPricePerMillionTokens: 1.25, knowledgeCutoffDate: null, supportsCaching: true, isDefault: false },
@@ -27,11 +29,16 @@ describe('ModelService', () => {
       removeItem: vi.fn((k: string) => { delete sessionStore[k]; }),
     });
 
+    mockUserSettings = {
+      fetchSettings: vi.fn().mockResolvedValue({ defaultModelId: null }),
+    };
+
     TestBed.configureTestingModule({
       imports: [HttpClientTestingModule],
       providers: [
         ModelService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+        { provide: UserSettingsService, useValue: mockUserSettings },
       ],
     });
 
@@ -79,6 +86,55 @@ describe('ModelService', () => {
       });
       await promise;
       expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
+
+    it('should apply user persisted defaultModelId when no session selection exists', async () => {
+      // Drop in-memory + sessionStorage so the user-default branch runs.
+      service['_selectedModel'].set(null);
+      service['usingDefaultModel'].set(true);
+      delete sessionStore['selectedModelId'];
+      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: 'claude-haiku' });
+
+      const promise = service.loadModels();
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      await promise;
+
+      // claude-haiku wins even though claude-sonnet has isDefault=true,
+      // because the user's persisted preference is consulted first.
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+      expect(mockUserSettings.fetchSettings).toHaveBeenCalled();
+    });
+
+    it('should fall back to admin default when user setting is null', async () => {
+      service['_selectedModel'].set(null);
+      service['usingDefaultModel'].set(true);
+      delete sessionStore['selectedModelId'];
+      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: null });
+
+      const promise = service.loadModels();
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      await promise;
+
+      expect(service.selectedModel().modelId).toBe('claude-sonnet'); // isDefault: true
+    });
+
+    it('should fall back to admin default when user setting points to a missing model', async () => {
+      service['_selectedModel'].set(null);
+      service['usingDefaultModel'].set(true);
+      delete sessionStore['selectedModelId'];
+      mockUserSettings.fetchSettings.mockResolvedValueOnce({ defaultModelId: 'no-longer-here' });
+
+      const promise = service.loadModels();
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      await promise;
+
+      expect(service.selectedModel().modelId).toBe('claude-sonnet');
     });
   });
 

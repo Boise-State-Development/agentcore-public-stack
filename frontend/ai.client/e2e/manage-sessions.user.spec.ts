@@ -64,12 +64,18 @@ test.describe('Manage Sessions Page (user)', () => {
 
   test('should show the delete selected button disabled when nothing is selected', async ({ page }) => {
     await page.goto('/manage-sessions');
-    await expect(page.getByText('Loading conversations...')).toBeHidden({ timeout: 15_000 });
 
+    // Wait for the page to fully render before checking anything
+    await expect(
+      page.getByRole('heading', { name: 'Manage Conversations' }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Wait for loading to finish
+    await expect(page.getByText('Loading conversations...')).toBeHidden({ timeout: 30_000 });
+
+    // The Delete Selected button is always rendered (not conditional on sessions existing)
     const deleteButton = page.getByRole('button', { name: /Delete Selected/i });
-    const hasButton = (await deleteButton.count()) > 0;
-    test.skip(!hasButton, 'No sessions available — delete button not rendered');
-
+    await expect(deleteButton).toBeVisible({ timeout: 5_000 });
     await expect(deleteButton).toBeDisabled();
   });
 });

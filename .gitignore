@@ -126,3 +126,11 @@ coverage/
 
 # Local dev scripts
 start.sh
+refresh-aws-sso.ps1
+start.ps1
+test-api-key.py
+.kiro/steering/github.md
+backend/start_app_api.ps1
+backend/start_inference_api.ps1
+scripts/stack-bootstrap/install.sh
+test-accounts
