@@ -1,4 +1,8 @@
 version: 2
+# Version-update PRs are disabled across all ecosystems
+# (open-pull-requests-limit: 0). We handle dependency upgrades manually on a
+# weekly cadence. Security updates are unaffected and will still be raised by
+# Dependabot when a CVE is published against a dependency.
 updates:
   # ── Python backend ──
   - package-ecosystem: "pip"
@@ -9,7 +13,7 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "America/Boise"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     versioning-strategy: "increase-if-necessary"
     commit-message:
       prefix: "chore(deps)"
@@ -33,7 +37,7 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "America/Boise"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     versioning-strategy: "increase-if-necessary"
     commit-message:
       prefix: "chore(deps)"
@@ -58,7 +62,7 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "America/Boise"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     versioning-strategy: "increase-if-necessary"
     commit-message:
       prefix: "chore(deps)"
@@ -83,7 +87,7 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "America/Boise"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps)"
       include: "scope"

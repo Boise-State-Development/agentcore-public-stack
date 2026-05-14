@@ -378,7 +378,7 @@ async def chat_agent_stream(request: ChatRequest, current_user: User = Depends(g
         # Use assistant's system prompt if provided
 
         # Create context-bound spreadsheet analysis tools if enabled
-        from apis.inference_api.chat.routes import _build_spreadsheet_tools
+        from apis.inference_api.chat.routes import _build_spreadsheet_tools, _resolve_user_default_model
         extra_tools = _build_spreadsheet_tools(
             enabled_tools=authorized_tools,
             assistant_id=assistant_id_to_use,
@@ -386,11 +386,31 @@ async def chat_agent_stream(request: ChatRequest, current_user: User = Depends(g
             user_id=user_id,
         )
 
+        # Apply the user's persisted default model when the request did not
+        # specify one. ChatRequest on this Bearer route does not carry a
+        # model_id field at all, so without this lookup the agent always
+        # falls back to the hardcoded factory default and the user's saved
+        # preference is silently ignored at chat time (#161). RBAC is
+        # enforced before applying the default so a deleted-permission
+        # model can't sneak through.
+        effective_model_id, effective_provider = await _resolve_user_default_model(user_id)
+        if effective_model_id:
+            from apis.shared.rbac.service import get_app_role_service
+            app_role_service = get_app_role_service()
+            if not await app_role_service.can_access_model(current_user, effective_model_id):
+                logger.info(
+                    "User default model exists but RBAC denies access; falling back to system default"
+                )
+                effective_model_id = None
+                effective_provider = None
+
         agent = await get_agent(
             session_id=request.session_id,
             user_id=user_id,
             enabled_tools=authorized_tools,  # Filtered by RBAC (may be None for all allowed)
             system_prompt=system_prompt,  # Assistant instructions if assistant is attached
+            model_id=effective_model_id,
+            provider=effective_provider,
             extra_tools=extra_tools,
         )
 

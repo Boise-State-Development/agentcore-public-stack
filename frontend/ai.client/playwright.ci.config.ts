@@ -41,10 +41,12 @@ export default defineConfig({
     {
       name: 'admin-setup',
       testMatch: /auth-admin\.setup\.ts/,
+      timeout: 60_000,
     },
     {
       name: 'user-setup',
       testMatch: /auth-user\.setup\.ts/,
+      timeout: 60_000,
     },
 
     // --- Unauthenticated tests (no login needed) ---

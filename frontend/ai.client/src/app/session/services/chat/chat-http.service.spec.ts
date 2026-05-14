@@ -28,7 +28,7 @@ describe('ChatHttpService', () => {
         // Phase 6c: chat-http now reads CSRF from the BFF SessionService
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.
-        { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}) } },
+        { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
         { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn() } },
         { provide: StreamParserService, useValue: {} },
         { provide: ChatStateService, useValue: { isStreaming: signal(false), streamingSessionId: signal(null), abortCurrentRequest: vi.fn(), setChatLoading: vi.fn(), resetState: vi.fn(), getAbortController: vi.fn().mockReturnValue(new AbortController()) } },

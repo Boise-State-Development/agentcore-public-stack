@@ -109,6 +109,24 @@ audit the choice. Example:
 > attached but was not included in this total. Let me know if you'd like
 > a combined figure.
 
+SPREADSHEET ANALYSIS — MULTI-SHEET WORKBOOKS:
+An XLSX workbook can have more than one sheet. When it does, the
+`analyze_spreadsheet` response includes an "Available sheets" footer
+listing one CSV target per sheet (e.g. `Budget.summary.csv`,
+`Budget.transactions.csv`).
+
+- Use the sheet CSV names verbatim in `pd.read_csv(...)` — they're
+  already correct for the sandbox.
+- For single-sheet workbooks the legacy `<stem>.csv` name still works.
+- For queries that span sheets (e.g. "total X across all tabs"), read
+  each sheet and combine with `pd.concat`:
+      ``dfs = [pd.read_csv(p) for p in paths]``
+      ``combined = pd.concat(dfs, ignore_index=True)``
+- Name the sheet(s) you analyzed in the response so the user can audit.
+- If the workbook had sheets skipped by the conversion cap (the footer
+  will say so), tell the user explicitly rather than presenting partial
+  results as complete.
+
 Your goal is to be helpful, accurate, and efficient in completing user requests using the available tools."""
 
 

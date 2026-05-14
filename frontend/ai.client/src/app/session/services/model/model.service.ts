@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
+import { UserSettingsService } from '../../../services/user-settings.service';
 
 interface ManagedModelsListResponse {
   models: ManagedModel[];
@@ -15,6 +16,7 @@ interface ManagedModelsListResponse {
 export class ModelService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  private userSettings = inject(UserSettingsService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/models`);
 
   // Session storage key for persisting model selection
@@ -141,10 +143,20 @@ export class ModelService {
           this._selectedModel.set(savedModel);
           this.usingDefaultModel.set(false);
         } else {
-          // Find admin-configured default model, or fall back to first available
-          const defaultModel = enabledModels.find(m => m.isDefault);
-          this._selectedModel.set(defaultModel || enabledModels[0]);
-          this.usingDefaultModel.set(false);
+          // Check the user's persisted default from settings API before
+          // falling back to the admin-configured default. Settings live in
+          // DynamoDB and survive across sessions / browsers, where session
+          // storage above is tab-scoped only.
+          const userDefaultModel = await this.findUserDefaultModel(enabledModels);
+          if (userDefaultModel) {
+            this._selectedModel.set(userDefaultModel);
+            this.usingDefaultModel.set(false);
+          } else {
+            // Find admin-configured default model, or fall back to first available
+            const defaultModel = enabledModels.find(m => m.isDefault);
+            this._selectedModel.set(defaultModel || enabledModels[0]);
+            this.usingDefaultModel.set(false);
+          }
         }
       } else {
         // No models available, use system default
@@ -243,6 +255,25 @@ export class ModelService {
     } catch (e) {
       // SessionStorage may be unavailable in some contexts
       console.warn('Could not read model selection from sessionStorage:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Look up the user's persisted defaultModelId from the settings API and
+   * resolve it to a model in the supplied enabled list. Returns null when
+   * the user has no default set, the saved model is no longer available,
+   * or the settings call fails. Failures are swallowed because the caller
+   * has a hardcoded fallback (admin default, then first available).
+   */
+  private async findUserDefaultModel(enabledModels: ManagedModel[]): Promise<ManagedModel | null> {
+    try {
+      const settings = await this.userSettings.fetchSettings();
+      const id = settings?.defaultModelId;
+      if (!id) return null;
+      return enabledModels.find(m => m.modelId === id) ?? null;
+    } catch (e) {
+      console.warn('Could not load user settings to apply default model:', e);
       return null;
     }
   }

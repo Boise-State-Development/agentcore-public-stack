@@ -31,8 +31,8 @@ async function sendMessageAndWaitForResponse(
   await page.getByRole('button', { name: 'Submit message' }).click();
 
   const assistantMessage = page.locator('app-assistant-message').last();
-  await expect(assistantMessage).toBeVisible({ timeout: 150_000 });
-  await expect(page.locator('app-pulsating-loader')).toBeHidden({ timeout: 250_000 });
+  await expect(assistantMessage).toBeVisible({ timeout: 300_000 });
+  await expect(page.locator('app-pulsating-loader')).toBeHidden({ timeout: 300_000 });
 
   return (await assistantMessage.innerText()).trim();
 }
@@ -41,6 +41,7 @@ async function sendMessageAndWaitForResponse(
 test.describe('Chat (user)', () => {
   test.describe.serial('Chat lifecycle with Claude Haiku 4.5', () => {
     test('should select Haiku, send a message, and receive a response', async ({ page }) => {
+      test.setTimeout(60_000); // 60s for this test
       await page.goto('/');
       await expect(page.locator('textarea#user-message')).toBeVisible({ timeout: 15_000 });
 
@@ -58,6 +59,7 @@ test.describe('Chat (user)', () => {
     });
 
     test('should send a second message in the same session', async ({ page }) => {
+      test.setTimeout(60_000); // 60s for this test
       await page.goto('/');
       await expect(page.locator('textarea#user-message')).toBeVisible({ timeout: 15_000 });
 

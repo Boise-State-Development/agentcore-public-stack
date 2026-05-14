@@ -17,6 +17,8 @@ async function cognitoLogin(
 ) {
   await page.goto('/auth/login');
   await page.getByRole('button', { name: 'Sign in with Cognito' }).click();
+
+  // Wait for Cognito managed login page
   await page.getByRole('textbox', { name: 'Username' }).waitFor({ timeout: 15_000 });
   await page.getByRole('textbox', { name: 'Username' }).fill(username);
   await page.getByRole('textbox', { name: 'Password' }).fill(password);
@@ -31,7 +33,36 @@ async function cognitoLogin(
     );
   }
 
-  await page.waitForURL('**/', { timeout: 30_000 });
+  // Wait for the browser to leave Cognito and return to our app.
+  // After Cognito submit, the redirect chain is:
+  //   Cognito → /api/auth/callback → BFF token exchange → 302 to /
+  // If the BFF callback fails, it redirects to /?auth_error=... or /auth/login
+  // If cookies land on the wrong domain (ALB instead of CloudFront), the
+  // APP_INITIALIZER gets 401 and redirects back to /auth/login.
+
+  // Track the callback to diagnose cookie-domain issues
+  let callbackResponseUrl = '';
+  page.on('response', async (response) => {
+    if (response.url().includes('/auth/callback')) {
+      callbackResponseUrl = response.url();
+    }
+  });
+
+  try {
+    await page.waitForURL('**/', { timeout: 45_000 });
+  } catch {
+    const finalUrl = page.url();
+    const cookies = await page.context().cookies();
+    const bffCookies = cookies.filter(c => c.name.startsWith('__Host-bff'));
+    const cookieDetails = bffCookies.map(c => `${c.name}(domain=${c.domain},path=${c.path},secure=${c.secure})`).join('; ');
+    throw new Error(
+      `OAuth redirect chain failed. Final URL: ${finalUrl} | ` +
+      `Callback response URL: ${callbackResponseUrl || 'NEVER HIT'} | ` +
+      `BFF cookies: ${cookieDetails || 'NONE'} | ` +
+      `All cookie domains: ${[...new Set(cookies.map(c => c.domain))].join(', ')}`,
+    );
+  }
+
   await expect(page.locator('textarea#user-message')).toBeVisible({ timeout: 10_000 });
   await page.context().storageState({ path: storageStatePath });
 }

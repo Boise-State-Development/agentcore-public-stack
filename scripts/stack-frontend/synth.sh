@@ -45,6 +45,7 @@ cdk synth FrontendStack \
     --context vpcCidr="${CDK_VPC_CIDR}" \
     --context infrastructureHostedZoneDomain="${CDK_HOSTED_ZONE_DOMAIN}" \
     --context domainName="${CDK_DOMAIN_NAME}" \
+    --context certificateArn="${CDK_CERTIFICATE_ARN:-}" \
     --context frontend.certificateArn="${CDK_FRONTEND_CERTIFICATE_ARN}" \
     --context frontend.bucketName="${CDK_FRONTEND_BUCKET_NAME}" \
     --context frontend.enabled="${CDK_FRONTEND_ENABLED}" \

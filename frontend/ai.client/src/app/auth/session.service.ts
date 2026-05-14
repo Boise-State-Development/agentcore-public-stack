@@ -35,6 +35,12 @@ export class SessionService {
   private readonly _csrfToken = signal<string | null>(null);
   private readonly _bootstrapped = signal(false);
 
+  /**
+   * Latch flipped the first time we trigger a 401 redirect, so concurrent
+   * 401s from in-flight requests don't queue multiple navigations.
+   */
+  private redirecting = false;
+
   /** Current BFF session user, or null when no session is active. */
   readonly user = this._user.asReadonly();
 
@@ -55,11 +61,28 @@ export class SessionService {
    * to the SPA's `/auth/login` page (unless we're already there) so the
    * user can pick a provider before we hand off to Cognito Hosted UI.
    *
+   * Fast path: the JS-readable `__Host-bff_csrf` cookie shares its
+   * lifetime with the httpOnly session cookie (BFF sets and clears them
+   * together). If it's gone, the session is gone too — skip the round-trip
+   * and bounce straight to login.
+   *
    * Network errors leave the service in a clean unauthenticated state
    * without redirecting — a transient failure shouldn't kick the user
    * out.
    */
   async bootstrap(): Promise<void> {
+    if (!this.hasSessionCookie()) {
+      this._user.set(null);
+      this._csrfToken.set(null);
+      if (this.handleUnauthorized()) {
+        // Hang so APP_INITIALIZER blocks the SPA from rendering a route
+        // before the queued navigation tears the page down.
+        await new Promise<never>(() => {});
+      }
+      this._bootstrapped.set(true);
+      return;
+    }
+
     const url = `${this.baseUrl()}/auth/session`;
     try {
       const response = await firstValueFrom(
@@ -72,22 +95,86 @@ export class SessionService {
       this._user.set(null);
       this._csrfToken.set(null);
       if (error instanceof HttpErrorResponse && error.status === 401) {
-        if (window.location.pathname === '/auth/login') {
-          // Already on the SPA login page — let it render so the user
-          // can pick a provider.
-          return;
+        if (this.handleUnauthorized()) {
+          await new Promise<never>(() => {});
         }
-        const returnUrl = `${window.location.pathname}${window.location.search}`;
-        const params = new URLSearchParams({ returnUrl });
-        window.location.href = `/auth/login?${params.toString()}`;
-        // window.location.href only queues the navigation. Hang the promise
-        // so APP_INITIALIZER blocks the SPA from rendering a route before
-        // the browser tears the page down.
-        await new Promise<never>(() => {});
       }
     } finally {
       this._bootstrapped.set(true);
     }
+  }
+
+  /**
+   * Centralized 401 handler. Clears local session state and navigates the
+   * browser to the SPA's `/auth/login` page with a `returnUrl` so the user
+   * lands back where they were after re-auth.
+   *
+   * Idempotent — a concurrent burst of 401s from in-flight requests only
+   * queues a single navigation. Skipped (returns false) when we're already
+   * on `/auth/login` so the page can render.
+   *
+   * @returns true when a navigation was queued, false otherwise. Bootstrap
+   *   uses the boolean to decide whether to hang APP_INITIALIZER.
+   */
+  handleUnauthorized(): boolean {
+    if (this.redirecting) return false;
+    if (window.location.pathname === '/auth/login') return false;
+    this.redirecting = true;
+    this._user.set(null);
+    this._csrfToken.set(null);
+    const returnUrl = `${window.location.pathname}${window.location.search}`;
+    const params = new URLSearchParams({ returnUrl });
+    window.location.href = `/auth/login?${params.toString()}`;
+    return true;
+  }
+
+  /**
+   * Re-probe the session against the BFF. Called by the app shell on tab
+   * refocus so a session that expired while the tab was backgrounded
+   * surfaces immediately instead of on the next user action.
+   *
+   * Cookie-presence check first — if the JS-readable CSRF cookie is gone,
+   * the session cookie is gone too (they share lifetime), so we redirect
+   * without spending a round-trip. Otherwise hits `/auth/session` which has
+   * no side effects on the BFF (it neither slides nor refreshes).
+   *
+   * Network errors are silent — a transient failure mid-tab-focus is not a
+   * reason to bounce the user.
+   */
+  async recheck(): Promise<void> {
+    if (this.redirecting) return;
+    if (!this._bootstrapped()) return;
+    if (!this.hasSessionCookie()) {
+      this.handleUnauthorized();
+      return;
+    }
+    const url = `${this.baseUrl()}/auth/session`;
+    try {
+      const response = await firstValueFrom(
+        this.http.get<BffSessionResponse>(url, { withCredentials: true }),
+      );
+      const { csrf_token, ...user } = response;
+      this._user.set(user);
+      this._csrfToken.set(csrf_token);
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 401) {
+        this.handleUnauthorized();
+      }
+    }
+  }
+
+  /**
+   * True when the JS-readable `__Host-bff_csrf` cookie is present. The BFF
+   * sets and clears it alongside the httpOnly session cookie with the same
+   * `Max-Age`, so absence ⇒ session is also gone. Presence is a weak
+   * positive — server-side revocation can leave the cookie behind until
+   * its TTL elapses — so callers should still verify with the BFF.
+   */
+  hasSessionCookie(): boolean {
+    if (typeof document === 'undefined') return true;
+    return document.cookie
+      .split(';')
+      .some((entry) => entry.trim().startsWith('__Host-bff_csrf='));
   }
 
   /**
