@@ -12,6 +12,7 @@ Deploy a production-ready multi-agent AI platform to your AWS account in about 4
 |-----------|-------------|
 | **VPC + ALB + ECS** | Networking, load balancer, and container orchestration |
 | **Fine-Tuning** *(optional)* | SageMaker training/inference infrastructure, S3 artifact storage, DynamoDB job tracking |
+| **Artifacts** *(optional)* | Iframe-isolated artifact rendering (DDB metadata, S3 content, CloudFront at `artifacts.{domain}`, Lambda render service) |
 | **RAG Ingestion** | Document ingestion pipeline for retrieval-augmented generation |
 | **Inference API** | Strands Agent runtime powered by AWS Bedrock AgentCore |
 | **App API** | Backend REST API for chat, sessions, admin, and auth |

@@ -204,6 +204,7 @@ The fastest path to production is the **GitHub Actions pipeline**, which automat
 |-----------|-------------|---------|
 | Networking | VPC, ALB, Security Groups | Isolated network with load balancing |
 | Fine-Tuning *(optional)* | SageMaker, S3, DynamoDB | Model training, batch inference, artifact storage |
+| Artifacts *(optional)* | DynamoDB, S3, CloudFront, Lambda | Iframe-isolated rendering for agent-generated HTML/code artifacts |
 | RAG Ingestion | Lambda, S3 | Document ingestion for retrieval-augmented generation |
 | Inference API | Bedrock Agentcore | Agent orchestration with Bedrock |
 | App API | ECS Fargate | Authentication, admin, session management |
@@ -248,7 +249,8 @@ agentcore-public-stack/
 │       └── services/               # State management
 ├── infrastructure/                  # AWS CDK stacks
 │   └── lib/                         # Infra, App API, Inference API, Frontend,
-│                                    # Gateway, RAG Ingestion, SageMaker Fine-Tuning
+│                                    # Gateway, RAG Ingestion, SageMaker Fine-Tuning,
+│                                    # Artifacts
 └── .github/
     ├── workflows/                   # CI/CD pipelines
     └── docs/deploy/                 # Deployment guides

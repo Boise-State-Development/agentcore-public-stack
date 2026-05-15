@@ -296,6 +296,7 @@ jobs:
       ENV_INFERENCE_API_LOG_LEVEL: ${{ vars.ENV_INFERENCE_API_LOG_LEVEL }}
       CDK_INFERENCE_API_CORS_ORIGINS: ${{ vars.CDK_INFERENCE_API_CORS_ORIGINS }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_ARTIFACTS_ENABLED: ${{ vars.CDK_ARTIFACTS_ENABLED }}
       CDK_APP_VERSION: ${{ needs.build-docker.outputs.app-version }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

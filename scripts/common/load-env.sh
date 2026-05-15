@@ -206,6 +206,17 @@ build_cdk_context_params() {
         context_params="${context_params} --context fineTuning.enabled=\"${CDK_FINE_TUNING_ENABLED}\""
     fi
 
+    # Artifacts optional parameters
+    if [ -n "${CDK_ARTIFACTS_ENABLED:-}" ]; then
+        context_params="${context_params} --context artifacts.enabled=\"${CDK_ARTIFACTS_ENABLED}\""
+    fi
+    if [ -n "${CDK_ARTIFACTS_CERTIFICATE_ARN:-}" ]; then
+        context_params="${context_params} --context artifacts.certificateArn=\"${CDK_ARTIFACTS_CERTIFICATE_ARN}\""
+    fi
+    if [ -n "${CDK_ARTIFACTS_RETENTION_DAYS:-}" ]; then
+        context_params="${context_params} --context artifacts.retentionDays=\"${CDK_ARTIFACTS_RETENTION_DAYS}\""
+    fi
+
     echo "${context_params}"
 }
 
@@ -271,6 +282,11 @@ export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIn
 
 # SageMaker Fine-Tuning configuration
 export CDK_FINE_TUNING_ENABLED="${CDK_FINE_TUNING_ENABLED:-$(get_json_value "fineTuning.enabled" "${CONTEXT_FILE}")}"
+
+# Artifacts configuration
+export CDK_ARTIFACTS_ENABLED="${CDK_ARTIFACTS_ENABLED:-$(get_json_value "artifacts.enabled" "${CONTEXT_FILE}")}"
+export CDK_ARTIFACTS_CERTIFICATE_ARN="${CDK_ARTIFACTS_CERTIFICATE_ARN:-$(get_json_value "artifacts.certificateArn" "${CONTEXT_FILE}")}"
+export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_value "artifacts.retentionDays" "${CONTEXT_FILE}")}"
 
 # Cognito configuration (optional — defaults to projectPrefix for domain prefix)
 export CDK_COGNITO_DOMAIN_PREFIX="${CDK_COGNITO_DOMAIN_PREFIX:-$(get_json_value "cognito.domainPrefix" "${CONTEXT_FILE}")}"

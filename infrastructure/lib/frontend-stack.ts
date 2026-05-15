@@ -138,7 +138,19 @@ export class FrontendStack extends cdk.Stack {
       enableAcceptEncodingBrotli: true,
     });
 
-    // Response headers policy for security
+    // Response headers policy for security.
+    //
+    // When artifacts are enabled, allow the SPA to embed iframes from the
+    // artifact origin. `frame-src` is the only CSP directive we set —
+    // without `default-src`, the browser does not restrict any other
+    // resource types, so this addition cannot break existing functionality
+    // (scripts, styles, fonts, etc. remain unrestricted by CSP). The other
+    // resource types are still defended by the existing X-Content-Type-
+    // Options, Referrer-Policy, and HSTS headers below.
+    const artifactsOrigin = config.artifacts.enabled && config.domainName
+      ? `https://artifacts.${config.domainName}`
+      : undefined;
+
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
       this,
       'FrontendResponseHeadersPolicy',
@@ -165,6 +177,14 @@ export class FrontendStack extends cdk.Stack {
             modeBlock: true,
             override: true,
           },
+          ...(artifactsOrigin
+            ? {
+                contentSecurityPolicy: {
+                  contentSecurityPolicy: `frame-src 'self' ${artifactsOrigin}`,
+                  override: true,
+                },
+              }
+            : {}),
         },
       }
     );

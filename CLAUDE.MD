@@ -32,7 +32,7 @@ npx cdk deploy --all
 
 ## Key Conventions
 
-- **Deploy order:** Infrastructure → Gateway → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API)
+- **Deploy order:** Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts — parallel-safe) → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API; Inference API + App API + Frontend conditionally consume `/{prefix}/artifacts/*` SSM params when `CDK_ARTIFACTS_ENABLED=true`)
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
@@ -76,7 +76,8 @@ npx cdk deploy --all
 | New admin endpoint | `backend/src/apis/app_api/admin/<domain>/` |
 | New agent tool | `backend/src/agents/main_agent/tools/` + register in `__init__.py` |
 | New Angular page | `frontend/ai.client/src/app/<feature>/` |
-| New CDK stack | `infrastructure/lib/<stack-name>-stack.ts` |
+| New CDK stack | `infrastructure/lib/<stack-name>-stack.ts` (also: register in `test/stack-dependencies.test.ts` with a tier, add scripts in `scripts/stack-<name>/`, add a workflow in `.github/workflows/`, update `step-04-deploy.md`) |
+| New Lambda for an infra stack | `backend/src/lambdas/<lambda-name>/` (one folder per Lambda; not part of the `apis/` import boundary) |
 | Shared backend code | `backend/src/apis/shared/<domain>/` |
 
 ### Inference API boundary

@@ -77,6 +77,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
       defaultQuotaHours: 0,
     },
+    artifacts: {
+      enabled: false,
+      retentionDays: 90,
+    },
     cognito: {
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,
@@ -112,6 +116,9 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
     'network/vpc-cidr',
     'network/private-subnet-ids',
     'network/availability-zones',
+  ],
+  ArtifactsStack: [
+    'artifacts/render-token-key-arn',
   ],
   InferenceApiStack: [
     'inference-api/image-tag',

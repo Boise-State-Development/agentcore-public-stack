@@ -41,6 +41,7 @@ Now for the fun part. You'll trigger up to 8 GitHub Actions workflows in order. 
 | 1 | **Deploy Infrastructure** | VPC, subnets, ALB, ECS cluster, DynamoDB tables, S3 buckets |
 | 2 | **Deploy RAG Ingestion** | Document ingestion pipeline for retrieval-augmented generation |
 | 2 | **Deploy SageMaker Fine-Tuning** *(optional)* | SageMaker training/inference resources, S3 bucket, DynamoDB tables. Requires `CDK_FINE_TUNING_ENABLED=true` ([Step 3](./step-03-github-config.md#optional-features)). |
+| 2 | **Deploy Artifacts** *(optional)* | DynamoDB metadata + S3 content + CloudFront at `artifacts.{domain}` + Lambda render service. Requires `CDK_ARTIFACTS_ENABLED=true` and `CDK_ARTIFACTS_CERTIFICATE_ARN` (cert MUST be in `us-east-1`). |
 | 3 | **Deploy Inference API** | Strands Agent runtime container on ECS (Bedrock AgentCore) |
 | 4 | **Deploy App API** | Backend REST API container on ECS |
 | 5 | **Deploy Frontend** | Angular app to S3 + CloudFront distribution |
@@ -59,6 +60,7 @@ You can monitor the current state of each workflow:
 | Deploy Infrastructure | [![1.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/infrastructure.yml) |
 | Deploy RAG Ingestion | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml) |
 | Deploy SageMaker Fine-Tuning *(optional)* | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml) |
+| Deploy Artifacts *(optional)* | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/artifacts.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/artifacts.yml) |
 | Deploy Inference API | [![3.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml) |
 | Deploy App API | [![4.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml) |
 | Deploy Frontend | [![5.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml) |
@@ -67,6 +69,22 @@ You can monitor the current state of each workflow:
 
 > [!NOTE]
 > All workflows default to the **production** environment when triggered manually.
+
+---
+
+## First-time deploy of a new optional stack
+
+> [!IMPORTANT]
+> When you flip a previously-disabled stack on for the first time (e.g. setting `CDK_FINE_TUNING_ENABLED=true` or `CDK_ARTIFACTS_ENABLED=true`), the PR that enables it will modify multiple stacks at once — the new stack itself, plus any consumer stacks that read its SSM exports. If you simply merge to `develop`, every affected workflow fires in parallel and the consumers will fail with `Parameter not found` because the new stack hasn't written its SSM keys yet. Subsequent normal pushes don't hit this — the race only happens on the very first deploy of new cross-stack SSM dependencies.
+
+**Recommended sequence — deploy in tier order via `workflow_dispatch` against the feature branch, then merge:**
+
+1. Push your feature branch. Do **not** merge yet.
+2. Open the **Actions** tab, pick the **Infrastructure** workflow, click **Run workflow**, and select your feature branch. Wait for it to go green. This publishes any new foundation SSM keys (e.g. the JWT signing secret for artifacts).
+3. Run the new stack's workflow (e.g. **Artifacts** or **SageMaker Fine-Tuning**) the same way. Wait for green. This publishes the new stack's SSM exports.
+4. Merge the PR. The consumer workflows (Inference API, App API, Frontend) re-deploy automatically on push to `develop` and find every SSM key they need on the first try.
+
+If you skip steps 2–3 and merge directly, the failing consumer workflows aren't broken — just click **Re-run** in the Actions tab after the foundation + new stack have completed, and they'll succeed. The pre-merge sequence above just spares you the retry dance and keeps your Actions history clean.
 
 ---
 
@@ -106,6 +124,28 @@ Creates:
 - Security group for SageMaker training jobs (outbound HTTPS only)
 
 After deployment, grant fine-tuning access to users via the admin dashboard.
+
+</details>
+
+<details>
+<summary>2. Deploy Artifacts (Optional)</summary>
+
+Provisions iframe-isolated artifact rendering — versioned, sandboxed HTML/code artifacts the agent can generate and the user can render inline. Skip if you don't need this capability; the rest of the stack works without it.
+
+Creates:
+- DynamoDB table for artifact metadata + version log
+- S3 bucket for artifact content blobs (private, no CORS)
+- CloudFront distribution serving `artifacts.{CDK_DOMAIN_NAME}`
+- Route 53 A record for the artifacts subdomain
+- Python render Lambda that wraps content in a strict CSP shell
+
+To enable, set these GitHub environment variables before running:
+
+- `CDK_ARTIFACTS_ENABLED=true`
+- `CDK_ARTIFACTS_CERTIFICATE_ARN` — ACM cert ARN that covers `artifacts.{domain}`. **Must be in `us-east-1`** (CloudFront requirement). If you followed [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates) and issued the CloudFront cert with a `*.example.com` SAN, reuse the same value as `CDK_FRONTEND_CERTIFICATE_ARN` — no third certificate is needed.
+- `CDK_ARTIFACTS_RETENTION_DAYS` *(optional, default 90)* — how long soft-deleted artifacts linger before lifecycle expiry.
+
+The artifact origin is intentionally a sibling subdomain (not the SPA origin) so artifact JS runs cross-origin and cannot access the `__Host-` session cookies, `localStorage`, or the app API. Defense in depth via strict CSP (`connect-src 'none'`, pinned `frame-ancestors`) is enforced both at the Lambda response and at the CloudFront response-headers policy.
 
 </details>
 

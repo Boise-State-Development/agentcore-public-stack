@@ -447,6 +447,52 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // Artifacts: the agent's create_artifact / update_artifact tools write
+    // new versions to the artifact bucket and append rows to the artifacts
+    // DDB table. Read-back is handled by app-api (for listings) and the
+    // render Lambda (for iframe rendering), not by the agent runtime.
+    //
+    // Gated on `config.artifacts.enabled` — if artifacts isn't deployed,
+    // we don't issue SSM reads against parameters that don't exist (which
+    // would fail `cdk synth` token resolution at deploy time).
+    if (config.artifacts.enabled) {
+      const artifactsBucketArn = ssm.StringParameter.valueForStringParameter(
+        this,
+        `/${config.projectPrefix}/artifacts/bucket-arn`
+      );
+      const artifactsTableArn = ssm.StringParameter.valueForStringParameter(
+        this,
+        `/${config.projectPrefix}/artifacts/table-arn`
+      );
+
+      runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'ArtifactsBucketWrite',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          's3:PutObject',
+          's3:PutObjectTagging',
+          // No DeleteObject — soft-delete is implemented via tagging plus
+          // the bucket lifecycle rule (`lifecycle-class=deleted` expiry).
+        ],
+        resources: [`${artifactsBucketArn}/*`],
+      }));
+
+      runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'ArtifactsTableWrite',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:Query',
+        ],
+        resources: [
+          artifactsTableArn,
+          `${artifactsTableArn}/index/*`,
+        ],
+      }));
+    }
+
     // S3 Vectors permissions for RAG (READ-ONLY for queries)
     const assistantsVectorBucketName = ssm.StringParameter.valueForStringParameter(
       this,

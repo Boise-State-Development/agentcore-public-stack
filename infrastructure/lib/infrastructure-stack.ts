@@ -740,6 +740,49 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // Artifact Render Token Signing Key
+    // ============================================================
+    // HMAC-SHA256 key shared between app-api (minter) and the artifact
+    // render Lambda (verifier). The app-api hands the SPA a short-lived
+    // JWT scoped to one (artifact_id, version); the SPA embeds it as
+    // ?t=... on the iframe src; the render Lambda validates the JWT,
+    // fetches content from S3/DDB, and returns HTML with a strict CSP.
+    //
+    // Lives here (not in ArtifactsStack) so app-api and the render Lambda
+    // both read it symmetrically from a foundation neither owns — which
+    // keeps ArtifactsStack a leaf producer with no back-edges into
+    // InfrastructureStack. If this moved into ArtifactsStack, app-api
+    // would gain a deploy-order dependency on ArtifactsStack.
+    //
+    // Provisioned unconditionally on `config.artifacts.enabled` only; if
+    // artifacts is off, the secret is not created and no SSM parameter
+    // is published (consumers gate their lookups on the same flag).
+    if (config.artifacts.enabled) {
+      const artifactRenderTokenSecret = new secretsmanager.Secret(this, "ArtifactRenderTokenSecret", {
+        secretName: getResourceName(config, "artifact-render-token-key"),
+        description:
+          "HMAC-SHA256 key for signing artifact iframe render tokens. " +
+          "Used by app-api to mint short-lived JWTs and by the artifact " +
+          "render Lambda to verify them.",
+        generateSecretString: {
+          // 44 chars from the 62-char alphanumeric alphabet ≈ 261 bits of
+          // entropy — same shape as the BFF cookie data key above.
+          passwordLength: 44,
+          excludePunctuation: true,
+          includeSpace: false,
+        },
+        removalPolicy: getRemovalPolicy(config),
+      });
+
+      new ssm.StringParameter(this, "ArtifactRenderTokenSecretArnParameter", {
+        parameterName: `/${config.projectPrefix}/artifacts/render-token-key-arn`,
+        stringValue: artifactRenderTokenSecret.secretArn,
+        description: "Secrets Manager ARN for the artifact render token signing key",
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
+
     // OAuth Providers Table - Admin-configured OAuth provider settings
     const oauthProvidersTable = new dynamodb.Table(this, "OAuthProvidersTable", {
       tableName: getResourceName(config, "oauth-providers"),

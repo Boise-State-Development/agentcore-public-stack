@@ -133,6 +133,9 @@ This allows the certificate to cover subdomains like `api.example.com` and `app.
 - `ALB Certificate ARN` (e.g. `arn:aws:acm:us-west-2:123456789012:certificate/abc-123`)
 - `CloudFront Certificate ARN` (e.g. `arn:aws:acm:us-east-1:123456789012:certificate/def-456`)
 
+> [!TIP]
+> The `*.example.com` SAN on the CloudFront certificate also covers `artifacts.example.com`, so the optional **Artifacts** stack reuses the same cert ARN — no third certificate needed.
+
 <details>
 <summary>My certificate is stuck in "Pending validation"</summary>
 

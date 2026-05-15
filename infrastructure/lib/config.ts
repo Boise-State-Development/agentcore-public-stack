@@ -33,8 +33,19 @@ export interface AppConfig {
   fileUpload: FileUploadConfig;
   ragIngestion: RagIngestionConfig;
   fineTuning: FineTuningConfig;
+  artifacts: ArtifactsConfig;
   appVersion: string;
   tags: { [key: string]: string };
+}
+
+export interface ArtifactsConfig {
+  enabled: boolean;
+  // ACM certificate ARN for the artifact iframe origin (artifacts.{domainName}).
+  // MUST be in us-east-1 — CloudFront requires its certs there. Validation
+  // surfaces a clear error if the arn is in another region.
+  certificateArn?: string;
+  // Soft-delete retention window for objects tagged `lifecycle-class=deleted`.
+  retentionDays: number;
 }
 
 export interface FrontendConfig {
@@ -261,6 +272,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
       defaultQuotaHours: parseIntEnv(process.env.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS) ?? scope.node.tryGetContext('fineTuning')?.defaultQuotaHours ?? 0,
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
     },
+    artifacts: {
+      enabled: parseBooleanEnv(process.env.CDK_ARTIFACTS_ENABLED) ?? scope.node.tryGetContext('artifacts')?.enabled ?? false,
+      certificateArn: process.env.CDK_ARTIFACTS_CERTIFICATE_ARN || scope.node.tryGetContext('artifacts')?.certificateArn,
+      retentionDays: parseIntEnv(process.env.CDK_ARTIFACTS_RETENTION_DAYS) ?? scope.node.tryGetContext('artifacts')?.retentionDays ?? 90,
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -277,6 +293,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Inference API Enabled: ${config.inferenceApi.enabled}`);
   console.log(`   Gateway Enabled: ${config.gateway.enabled}`);
   console.log(`   Fine-Tuning Enabled: ${config.fineTuning.enabled}`);
+  console.log(`   Artifacts Enabled: ${config.artifacts.enabled}`);
   console.log(`   App Version: ${config.appVersion}`);
 
   // Validate configuration
@@ -505,6 +522,40 @@ function validateConfig(config: AppConfig): void {
     }
     if (!config.gateway.throttleBurstLimit) {
       throw new Error('Gateway stack requires "throttleBurstLimit" to be set.');
+    }
+  }
+
+  if (config.artifacts.enabled) {
+    if (!config.domainName) {
+      throw new Error(
+        'Artifacts stack requires CDK_DOMAIN_NAME to be set — the artifact origin ' +
+        'is derived as artifacts.{CDK_DOMAIN_NAME}.'
+      );
+    }
+    if (!config.infrastructureHostedZoneDomain) {
+      throw new Error(
+        'Artifacts stack requires CDK_HOSTED_ZONE_DOMAIN to be set — used to look ' +
+        'up the Route53 zone where the artifacts subdomain record is created.'
+      );
+    }
+    if (!config.artifacts.certificateArn) {
+      throw new Error(
+        'Artifacts stack requires CDK_ARTIFACTS_CERTIFICATE_ARN — an ACM cert ' +
+        'in us-east-1 for the artifacts.{domain} CloudFront distribution.'
+      );
+    }
+    // CloudFront requires the viewer cert in us-east-1. Catch the most common
+    // misconfiguration up front rather than letting CloudFormation reject it.
+    if (!/^arn:aws:acm:us-east-1:/.test(config.artifacts.certificateArn)) {
+      throw new Error(
+        `Artifacts certificate must be in us-east-1 (CloudFront requirement). ` +
+        `Got: ${config.artifacts.certificateArn}`
+      );
+    }
+    if (config.artifacts.retentionDays < 1 || config.artifacts.retentionDays > 3650) {
+      throw new Error(
+        `Artifacts retentionDays must be between 1 and 3650. Got: ${config.artifacts.retentionDays}`
+      );
     }
   }
 }

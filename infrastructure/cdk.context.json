@@ -64,6 +64,11 @@
   "fineTuning": {
     "enabled": false
   },
+  "artifacts": {
+    "enabled": false,
+    "certificateArn": "",
+    "retentionDays": 90
+  },
   "tags": {
     "ManagedBy": "CDK"
   },

@@ -29,6 +29,9 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_APP_API_ENABLED | Variable | No | `true` | App API | Enable/disable App API stack deployment |
 | CDK_APP_API_MAX_CAPACITY | Variable | No | `10` | Infrastructure, App API | Maximum App API tasks for auto-scaling |
 | CDK_APP_API_MEMORY | Variable | No | `1024` | Infrastructure, App API | Memory (MB) for App API ECS task (512, 1024, 2048, 4096, 8192) |
+| CDK_ARTIFACTS_CERTIFICATE_ARN | Variable | No | None | Artifacts | ACM certificate ARN that covers `artifacts.{CDK_DOMAIN_NAME}`. **Must be in `us-east-1`** regardless of deployment region. Required when `CDK_ARTIFACTS_ENABLED=true`. **Typical setups reuse `CDK_FRONTEND_CERTIFICATE_ARN`** since the standard install issues that cert with a `*.{domain}` SAN, which already covers the artifacts subdomain. |
+| CDK_ARTIFACTS_ENABLED | Variable | No | `false` | Artifacts, Infrastructure, App API, Inference API, Frontend | Enable iframe-isolated artifact rendering. Toggling on provisions a DDB metadata table, S3 content bucket, CloudFront + Lambda render service, and the supporting IAM grants / env vars on the consumer stacks. |
+| CDK_ARTIFACTS_RETENTION_DAYS | Variable | No | `90` | Artifacts | Days after which soft-deleted artifacts (objects tagged `lifecycle-class=deleted`) are reaped by the S3 lifecycle rule. |
 | CDK_ASSISTANTS_CORS_ORIGINS | Variable | No | None | Infrastructure | Additional CORS origins for the assistants module only (appended to global CORS origins) |
 | CDK_AWS_ACCOUNT | Variable | Yes | None | All | 12-digit AWS account ID for CDK deployment |
 | CDK_CERTIFICATE_ARN | Variable | No | None | Infrastructure | ACM certificate ARN for HTTPS on ALB |

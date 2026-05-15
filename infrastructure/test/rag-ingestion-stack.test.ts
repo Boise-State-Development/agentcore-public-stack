@@ -83,6 +83,10 @@ describe('RagIngestionStack', () => {
         enabled: false,
         defaultQuotaHours: 0,
       },
+      artifacts: {
+        enabled: false,
+        retentionDays: 90,
+      },
       cognito: {
         domainPrefix: 'test-project',
         passwordMinLength: 8,
