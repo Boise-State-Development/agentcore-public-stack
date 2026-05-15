@@ -4,6 +4,43 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ## Open
 
+### [2026-05-15] Bump `bedrock-agentcore` 1.6.4 → 1.9.1 (re-prioritized — lag widened 3 → 4)
+- **Source**: research/2026-05-15.md ▸ Top 5 #1. Re-surfacing of the 2026-05-10 queue item — lag widened and Dependabot version-updates were disabled in #293 (May 13), so this won't get there on its own.
+- **Surface**: backend (`backend/pyproject.toml`, `backend/uv.lock`)
+- **Effort × Impact**: L × M-H
+- **Subtracts**: no — pure dep bump (justified: 4 versions of upstream fixes, latest 2026-05-12; sets up adoption of PR #478 `async_mode` once 1.10.0 ships)
+- **Status**: open (supersedes the 2026-05-10 queue entry — that one can be closed during review)
+
+### [2026-05-15] Audit and fix `/ping` to emit `time_of_last_update` (AgentCore SDK issue #471)
+- **Source**: research/2026-05-15.md ▸ Top 5 #2 — https://github.com/aws/bedrock-agentcore-sdk-python/issues/471
+- **Surface**: backend (`backend/src/apis/inference_api/` `/ping` handler — one of the two routes the AgentCore Runtime data plane actually serves)
+- **Effort × Impact**: L × M-H
+- **Subtracts**: no — defensive against silent microVM reaping on long generations
+- **Status**: open
+
+### [2026-05-15] Strands 1.39 → 1.40 bump, gated on `use_native_token_count` audit + proactive-compression double-fire check
+- **Source**: research/2026-05-15.md ▸ Top 5 #3 — Strands v1.40.0 release notes + breaking PR #2284
+- **Surface**: backend (`backend/pyproject.toml`, `apis/shared/` token-metric reads, `agents/main_agent/streaming/`, `TurnBasedSessionManager`)
+- **Effort × Impact**: M × M-H
+- **Subtracts**: **yes — library-native subtraction.** Strands' proactive context compression (PR #2239) reduces the surface area of our custom session-manager compaction logic.
+- **Status**: open
+
+### [2026-05-15] Defensive A2A AgentCard `capabilities={"streaming": True}` check
+- **Source**: research/2026-05-15.md ▸ Top 5 #4 — aws-samples/sample-strands-agent-with-agentcore commit `50c9112`
+- **Surface**: backend (A2A AgentCard construction sites)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — defensive against silent 40-min A2A-client timeouts
+- **Status**: open
+
+### [2026-05-15] Wire per-tool `duration_ms` into `tool_result` SSE
+- **Source**: research/2026-05-15.md ▸ Top 5 #5 — Claude Code 2.1.141 hook pattern
+- **Surface**: backend (Strands `AfterToolCall` hook) + frontend (`<tool-result>` component — inline timing badge for `> 250ms`)
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: partial — single hook-driven field replaces any ad-hoc per-tool timing; pre-paves the planned context-attribution prototype
+- **Unlocks**:
+  - Per-tool timing visibility in the UI (which slow tool is the bottleneck on this turn?)
+  - Data substrate for the planned context-attribution prototype — separates tool latency from token cost
+
 ### [2026-05-10] Scope AgentCore Runtime BYO filesystem (S3 Files / EFS) for persistent agent workspaces
 - **Source**: research/2026-05-10.md ▸ AWS Bedrock / AgentCore (re-evaluated 2026-05-10 via strategic-lens follow-up — original framing under-weighted the capability-unlock angle)
 - **Surface**: backend (`inference-api` invocation handler reads/writes mount) + infrastructure (VPC config, IAM mount permissions, S3 Files or EFS access points, per-user prefix/access-point layout for RBAC); ADR-worthy
