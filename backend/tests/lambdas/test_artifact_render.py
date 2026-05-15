@@ -150,6 +150,22 @@ def test_missing_exp_rejected(_injected_key: None) -> None:
         handler._verify_token(_mint(claims))
 
 
+def test_missing_iat_rejected(_injected_key: None) -> None:
+    # `iat` is mandatory — without it the lifetime cap can't be enforced.
+    claims = _valid_claims()
+    del claims["iat"]
+    with pytest.raises(handler._TokenError):
+        handler._verify_token(_mint(claims))
+
+
+@pytest.mark.parametrize("bad_iat", ["123", True])
+def test_non_numeric_iat_rejected(_injected_key: None, bad_iat: Any) -> None:
+    # A string or bool `iat` must not slip past the numeric guard
+    # (bool is an int subclass).
+    with pytest.raises(handler._TokenError):
+        handler._verify_token(_mint(_valid_claims(iat=bad_iat)))
+
+
 @pytest.mark.parametrize("bad_ver", [0, -1, True, "1", 1.0])
 def test_invalid_version_rejected(_injected_key: None, bad_ver: Any) -> None:
     with pytest.raises(handler._TokenError):

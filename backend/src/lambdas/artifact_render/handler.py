@@ -66,7 +66,7 @@ _EXPECTED_AUD = "artifact-render"
 _LEEWAY_SECONDS = 5
 # Upper bound on token lifetime. The minter issues ~60–120s tokens; a
 # token claiming a far-future exp is a minter bug or a forgery attempt,
-# so cap the blast radius. Only enforced when `iat` is present.
+# so cap the blast radius. `iat` is mandatory, so this always applies.
 _MAX_TOKEN_LIFETIME_SECONDS = 600
 # Cap content size to stay within the Lambda's 5s / 512MB envelope and
 # to keep a single response bounded. Oversized blobs are a writer bug.
@@ -235,12 +235,18 @@ def _verify_token(token: str) -> dict[str, Any]:
     if now > exp + _LEEWAY_SECONDS:
         raise _TokenError("token expired")
 
+    # `iat` is mandatory: the lifetime cap is the blast-radius control for
+    # a minter bug, and it can only be enforced relative to `iat`. The
+    # cross-PR contract requires the minter to send it, so a missing `iat`
+    # is itself a contract violation — reject rather than skip the cap.
+    # `bool` is an `int` subclass — exclude it explicitly.
     iat = claims.get("iat")
-    if isinstance(iat, (int, float)):
-        if iat > now + _LEEWAY_SECONDS:
-            raise _TokenError("token issued in the future")
-        if exp - iat > _MAX_TOKEN_LIFETIME_SECONDS:
-            raise _TokenError("token lifetime too long")
+    if not isinstance(iat, (int, float)) or isinstance(iat, bool):
+        raise _TokenError("missing iat")
+    if iat > now + _LEEWAY_SECONDS:
+        raise _TokenError("token issued in the future")
+    if exp - iat > _MAX_TOKEN_LIFETIME_SECONDS:
+        raise _TokenError("token lifetime too long")
 
     sub = claims.get("sub")
     aid = claims.get("aid")
