@@ -52,7 +52,7 @@ export interface UserMenuLinkModalData {
         </div>
 
         <div class="max-h-[70vh] overflow-y-auto px-6 py-5">
-          <div class="prose prose-sm max-w-none dark:prose-invert">
+          <div class="markdown-body prose prose-sm max-w-none dark:prose-invert">
             <markdown [data]="data.bodyMarkdown" />
           </div>
         </div>
@@ -86,6 +86,26 @@ export interface UserMenuLinkModalData {
     @keyframes dialog-fade-in-up {
       from { opacity: 0; transform: translateY(1rem) scale(0.98); }
       to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .markdown-body ::ng-deep a {
+      color: var(--color-primary-500);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .markdown-body ::ng-deep a:hover {
+      color: var(--color-primary-700);
+    }
+    .markdown-body ::ng-deep a:focus-visible {
+      outline: 2px solid var(--color-primary-500);
+      outline-offset: 2px;
+      border-radius: 0.125rem;
+    }
+    :host-context(.dark) .markdown-body ::ng-deep a {
+      color: var(--color-primary-400);
+    }
+    :host-context(.dark) .markdown-body ::ng-deep a:hover {
+      color: var(--color-primary-300);
     }
   `,
 })

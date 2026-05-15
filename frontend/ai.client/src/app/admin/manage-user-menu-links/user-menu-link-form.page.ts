@@ -143,7 +143,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
                 ></textarea>
                 <div class="rounded-sm border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
                   <p class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Preview</p>
-                  <div class="prose prose-sm max-w-none dark:prose-invert">
+                  <div class="markdown-body prose prose-sm max-w-none dark:prose-invert">
                     <markdown [data]="previewMarkdown()" />
                   </div>
                 </div>
@@ -181,6 +181,30 @@ const URL_PATTERN = /^https?:\/\/.+/i;
         </form>
       </div>
     </div>
+  `,
+  styles: `
+    @import "tailwindcss";
+    @custom-variant dark (&:where(.dark, .dark *));
+
+    .markdown-body ::ng-deep a {
+      color: var(--color-primary-500);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .markdown-body ::ng-deep a:hover {
+      color: var(--color-primary-700);
+    }
+    .markdown-body ::ng-deep a:focus-visible {
+      outline: 2px solid var(--color-primary-500);
+      outline-offset: 2px;
+      border-radius: 0.125rem;
+    }
+    :host-context(.dark) .markdown-body ::ng-deep a {
+      color: var(--color-primary-400);
+    }
+    :host-context(.dark) .markdown-body ::ng-deep a:hover {
+      color: var(--color-primary-300);
+    }
   `,
 })
 export class UserMenuLinkFormPage implements OnInit {
