@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../../services/config.service';
-import { AuthService } from '../../../../auth/auth.service';
 import { UserCostSummary } from '../models/cost-summary.model';
 
 /**
@@ -17,7 +16,6 @@ import { UserCostSummary } from '../models/cost-summary.model';
 })
 export class CostService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/costs`);
 
@@ -30,8 +28,6 @@ export class CostService {
   readonly currentMonthSummary = resource({
     loader: async () => {
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       // Fetch current month summary (no period specified = current month)
       return this.fetchCostSummary();
     }

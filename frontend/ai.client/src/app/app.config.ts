@@ -1,47 +1,60 @@
-import { ApplicationConfig, provideBrowserGlobalErrorListeners, APP_INITIALIZER } from '@angular/core';
+import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
-import { authInterceptor } from './auth/auth.interceptor';
+import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
-import { provideMarkdown } from 'ngx-markdown';
-import { ConfigService } from './services/config.service';
+import { withCredentialsInterceptor } from './auth/with-credentials.interceptor';
+import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
+import { SessionService } from './auth/session.service';
+import { ThemeService } from './components/topnav/components/theme-toggle/theme.service';
 
-/**
- * Application initialization factory
- * 
- * Loads runtime configuration from /config.json before the app starts.
- * This ensures all services have access to configuration values when they initialize.
- * 
- * The initialization:
- * - Fetches config.json from the server
- * - Validates the configuration structure
- * - Falls back to environment.ts if fetch fails
- * - Allows the app to continue even if config loading fails
- * 
- * @param configService - The ConfigService instance
- * @returns Factory function that returns a Promise
- */
-function initializeApp(configService: ConfigService) {
-  return () => configService.loadConfig();
+function markedOptionsFactory(): MarkedOptions {
+  const renderer = new MarkedRenderer();
+  const renderLink = renderer.link;
+
+  renderer.link = function (link) {
+    const html = renderLink.call(this, link);
+    return html.replace(/^<a /, '<a target="_blank" rel="noopener noreferrer" ');
+  };
+
+  return { renderer };
 }
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(
-      withInterceptors([authInterceptor, errorInterceptor]),
+      // withCredentialsInterceptor flips the cookie-attaching flag on app-api
+      // requests (cross-origin in local dev; no-op same-origin in prod).
+      // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
+      // requests; errorInterceptor stays last so it sees the final response.
+      withInterceptors([withCredentialsInterceptor, csrfInterceptor, errorInterceptor]),
     ),
-    provideMarkdown(),
+    provideMarkdown({
+      markedOptions: {
+        provide: MARKED_OPTIONS,
+        useFactory: markedOptionsFactory,
+      },
+    }),
     provideRouter(routes, withComponentInputBinding()),
-    
-    // Load runtime configuration before app starts
-    {
-      provide: APP_INITIALIZER,
-      useFactory: initializeApp,
-      deps: [ConfigService],
-      multi: true
-    }
+
+    // Bootstrap the BFF cookie session before the first component renders.
+    // GET ${appApiUrl}/auth/session — on 401, SessionService sends the browser
+    // to the SPA's /auth/login page (with a returnUrl) and hangs the promise
+    // so no protected route renders before the page tears down. If we're
+    // already on /auth/login the bootstrap resolves and the page renders so
+    // the user can pick a provider. Transport errors leave the SPA in a clean
+    // unauthenticated state without redirecting.
+    provideAppInitializer(() => inject(SessionService).bootstrap()),
+
+    // ThemeService applies the persisted/system theme to <html> in its
+    // constructor. It's providedIn:'root' but only injected by the topnav
+    // and authed pages, so on a cold load to /auth/login or /auth/first-boot
+    // it would never run and the dark-mode CSS on those screens would sit
+    // dormant. Inject it at bootstrap so the lava-lamp backdrop honors the
+    // user's preference (and prefers-color-scheme) on every route.
+    provideAppInitializer(() => { inject(ThemeService); }),
   ]
 };

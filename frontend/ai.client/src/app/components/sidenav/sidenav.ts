@@ -3,7 +3,7 @@ import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
-import { AuthService } from '../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../auth/session.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
@@ -17,7 +17,7 @@ import { TooltipDirective } from '../tooltip/tooltip.directive';
 export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
-  private authService = inject(AuthService);
+  private bffSession = inject(BffSessionService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -51,7 +51,11 @@ export class Sidenav {
     this.sidenavService.toggleCollapsed();
   }
 
-  handleLogout() {
-    this.authService.logout();
+  async handleLogout(): Promise<void> {
+    // BFF logout clears cookies and bounces through the Cognito Hosted UI
+    // logout URL (handled inside bffSession.logout). We also push the user
+    // to /auth/login defensively in case the navigation is short-circuited.
+    await this.bffSession.logout();
+    this.router.navigate(['/auth/login']);
   }
 }

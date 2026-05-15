@@ -33,6 +33,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import logging
 
+from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -117,6 +119,12 @@ app.add_middleware(
 )
 logger.info("Added GZip middleware for response compression")
 
+# Bridge AgentCore Runtime headers (WorkloadAccessToken, OAuth2CallbackUrl,
+# session ID) into BedrockAgentCoreContext so downstream code can look up
+# per-user OAuth tokens via AgentCore Identity.
+app.add_middleware(AgentCoreContextMiddleware)
+logger.info("Added AgentCore Runtime context middleware")
+
 # Add CORS middleware - origins from CDK-provided CORS_ORIGINS env var
 _cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
 app.add_middleware(
@@ -131,10 +139,15 @@ app.add_middleware(
 #from health.health import router as health_router
 from apis.inference_api.chat.routes import router as agentcore_router
 from apis.inference_api.chat.converse_routes import router as converse_router
+from apis.inference_api.chat.voice_routes import router as voice_router
 # Include routers
 #app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
 app.include_router(converse_router)  # API-key authenticated converse endpoint
+app.include_router(voice_router)  # WebSocket voice streaming endpoint
+# Connector consent flows live on app-api now: the AgentCore Runtime data plane
+# only proxies /invocations and /ping, so user-facing /connectors/* paths can't
+# be reached through this service. See apis/app_api/connectors/routes.py.
 
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
@@ -158,10 +171,15 @@ if os.path.exists(generated_images_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    # Watch the full backend/src tree so edits to shared modules (agents/,
+    # apis/shared/) trigger reload. Without this uvicorn defaults to cwd,
+    # which hides changes outside inference_api/.
+    src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     uvicorn.run(
         "apis.inference_api.main:app",
         host="0.0.0.0",
         port=8001,
         reload=True,
+        reload_dirs=[src_root],
         log_level="info"
     )

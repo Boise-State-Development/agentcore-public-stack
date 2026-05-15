@@ -14,6 +14,7 @@ import { ModelSettings } from '../components/model-settings/model-settings';
 import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
+import { CompactionSummaryService } from './services/chat/compaction-summary.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
@@ -22,6 +23,7 @@ import {
   ShareAssistantDialogComponent,
   ShareAssistantDialogData,
 } from '../assistants/components/share-assistant-dialog.component';
+import { VoiceChatService } from './services/voice';
 
 @Component({
   selector: 'app-session-page',
@@ -41,12 +43,15 @@ export class ConversationPage implements OnDestroy {
   private userService = inject(UserService);
   private chatHttpService = inject(ChatHttpService);
   private streamParserService = inject(StreamParserService);
+  private compactionSummary = inject(CompactionSummaryService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
   private dialog = inject(Dialog);
+  private voiceChatService = inject(VoiceChatService);
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
+
   assistant = signal<Assistant | null>(null);
   assistantError = signal<string | null>(null);
   isLoadingAssistant = signal(false);
@@ -72,8 +77,14 @@ export class ConversationPage implements OnDestroy {
   // Writable signal that holds the current messages signal reference
   private messagesSignal = signal<Signal<Message[]>>(signal([]));
 
-  // Computed that unwraps the current messages signal
-  readonly messages = computed(() => this.messagesSignal()());
+  // Computed that unwraps the current messages signal, merging in
+  // real-time voice messages. Voice messages are cleared on voice close
+  // after being persisted to the map, so there's no double-counting.
+  readonly messages = computed(() => {
+    const base = this.messagesSignal()();
+    const voice = this.voiceChatService.voiceMessages();
+    return voice.length > 0 ? [...base, ...voice] : base;
+  });
 
   // Get user's first name from the user service
   private firstName = computed(() => {
@@ -162,47 +173,117 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Priority-based assistant loading: URL query param first, then session preferences
+    // Seed the session cost + context aggregates from session metadata so
+    // the badge shows totals immediately on revisit. Cleared first on route
+    // change (below) to avoid briefly showing stale numbers from a previous
+    // session.
+    effect(() => {
+      const session = this.sessionConversation();
+      if (!session) return;
+      this.chatStateService.seedSessionAggregates({
+        totalCost: session.totalCost,
+        lastContextTokens: session.lastContextTokens,
+        contextWindow: session.contextWindow,
+      });
+    });
+
+    // Hydrate the compaction summary indicator from persisted session
+    // metadata. `seedFromHydration` is idempotent and won't clobber live
+    // increments, so re-runs of this effect (e.g. when other fields on
+    // currentSession update) are harmless. The route subscription resets
+    // the service before triggering the metadata fetch, so cross-session
+    // bleed is impossible.
+    effect(() => {
+      const session = this.sessionConversation();
+      if (!session?.sessionId || session.sessionId !== this.sessionId()) return;
+      const total = session.totalSummarizedTurns ?? 0;
+      if (total > 0) {
+        this.compactionSummary.seedFromHydration(total);
+      }
+    });
+
+    // Single source of truth: the URL's `assistantId` query parameter.
+    //
+    // The URL is authoritative for which assistant is attached to the
+    // current view. Session preferences on the backend still record the
+    // attached assistant (so we can rebuild the URL after a user lands on
+    // a bare `/s/:id` URL from a bookmark or legacy link), but that
+    // rebuild is handled by a dedicated self-heal redirect below — not by
+    // reading preferences here. Keeping this effect URL-only removes an
+    // entire class of races around metadata fetch timing and component
+    // recreation (see #205).
     effect(() => {
       const queryAssistantId = this.assistantIdFromQuery();
-      const session = this.sessionConversation();
-      const sessionAssistantId = session?.preferences?.assistantId;
-      const currentSessionId = this.sessionId();
-      
-      // Priority 1: URL query parameter (highest priority)
+      const loadedAssistant = this.assistant();
+
       if (queryAssistantId) {
-        // Validate: Can only attach to new sessions (no messages)
-        if (currentSessionId && this.hasMessages()) {
-          this.assistantError.set('Assistants can only be attached to new sessions');
-          this.assistant.set(null);
-          this.clearAssistantIdFromUrl();
+        // Already loaded — avoid a redundant fetch and the transient null
+        // state while the fetch would resolve.
+        if (loadedAssistant?.assistantId === queryAssistantId) {
           return;
         }
-        // Load from query param (existence check only, no access validation)
-        this.loadAssistant(queryAssistantId, false).catch(error => {
+        // Existence check only; access is validated on the backend when
+        // the next message is sent.
+        this.loadAssistant(queryAssistantId).catch(error => {
           console.error('Failed to load assistant from query param:', error);
         });
         return;
       }
-      
-      // Priority 2: Session preferences (fallback for existing sessions)
-      if (sessionAssistantId && currentSessionId) {
-        // Load from preferences - allow even if session has messages (persisted assistant)
-        this.loadAssistant(sessionAssistantId, true).catch(error => {
-          console.error('Failed to load assistant from session preferences:', error);
-        });
-        return;
+
+      // No assistant in the URL — clear any stale state from a prior load.
+      if (loadedAssistant || this.assistantError()) {
+        this.assistant.set(null);
+        this.assistantError.set(null);
       }
-      
-      // No assistant to load
-      this.assistant.set(null);
-      this.assistantError.set(null);
+    });
+
+    // Self-heal effect: when the user lands on `/s/:id` without an
+    // `assistantId` query param but the session's stored preferences carry
+    // one (bookmarks, legacy URLs, shared session links), redirect to the
+    // same session with the param filled in. From that point on, the URL
+    // is the sole source of truth for the assistant-loading effect above.
+    //
+    // Intentionally narrow: we only redirect when the URL is empty. If the
+    // URL already carries an `assistantId`, we trust it — including when
+    // it differs from preferences (the backend will reject a conflict on
+    // the next message).
+    effect(() => {
+      const session = this.sessionConversation();
+      const sessionAssistantId = session?.preferences?.assistantId;
+      const currentSessionId = this.sessionId();
+      const queryAssistantId = this.assistantIdFromQuery();
+
+      if (
+        currentSessionId &&
+        session?.sessionId === currentSessionId &&
+        sessionAssistantId &&
+        !queryAssistantId
+      ) {
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { assistantId: sessionAssistantId },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+      }
     });
 
     // Subscribe to route parameter changes
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
       this.sessionId.set(id);
+
+      // Clear stale cost/context badge state BEFORE the new session's
+      // metadata loads — otherwise the previous session's totals briefly
+      // flash on the badge while the new metadata is in flight.
+      this.chatStateService.seedSessionAggregates({});
+
+      // Compaction summary is session-scoped — clear before loading the
+      // next session's metadata so the previous session's totals don't
+      // bleed in. The hydration effect above will reseed from
+      // currentSession.totalSummarizedTurns once the metadata fetch lands.
+      this.compactionSummary.reset();
+
       if (id) {
         // Update the messages signal reference (this triggers reactivity)
         this.messagesSignal.set(this.messageMapService.getMessagesForSession(id));
@@ -241,10 +322,15 @@ export class ConversationPage implements OnDestroy {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
-    // Get assistantId from query param (priority 1) or session preferences (priority 2)
-    const queryAssistantId = this.assistantIdFromQuery();
-    const sessionAssistantId = this.sessionConversation()?.preferences?.assistantId;
-    const assistantIdToUse = queryAssistantId || sessionAssistantId || undefined;
+    // The URL's `assistantId` query param is the sole source of truth. It's
+    // set on initial navigation (assistant card, share link) and kept in
+    // sync by the self-heal redirect in the constructor for existing
+    // sessions opened without one. Falling back to the in-memory
+    // `assistant()` signal guards the brief window during the `/` → `/s/:id`
+    // route transition where the component is recreated and the query
+    // param hasn't yet propagated to the new instance.
+    const assistantIdToUse =
+      this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
 
     // Set loading state before submitting
     this.chatStateService.setChatLoading(true);
@@ -287,6 +373,72 @@ export class ConversationPage implements OnDestroy {
     this.chatHttpService.cancelChatRequest();
   }
 
+  /**
+   * Called when the voice overlay closes.
+   *
+   * By this point, disconnect() has already set isVoiceActive = false,
+   * so the messages computed stops merging voiceMessages. We persist
+   * those messages into the message map (so they survive navigation)
+   * and update the URL.
+   */
+  onVoiceClosed() {
+    const voiceMsgs = this.voiceChatService.voiceMessages();
+    if (voiceMsgs.length === 0) return;
+
+    const sessionId = this.voiceChatService.getSessionId();
+    if (!sessionId) return;
+
+    // Persist voice messages into the message map so they survive
+    // page navigation and show up when the overlay is gone.
+    // Filter out any messages with no text (e.g. interrupted before first delta).
+    this.messagesSignal.set(this.messageMapService.getMessagesForSession(sessionId));
+    for (const msg of voiceMsgs) {
+      const textBlock = msg.content.find(b => b.type === 'text');
+      const text = textBlock?.text || '';
+      if (!text) continue;
+      this.messageMapService.addVoiceMessage(
+        sessionId,
+        msg.role as 'user' | 'assistant',
+        text,
+        msg.metadata ?? undefined,
+      );
+    }
+
+    // Clear voice messages now that they're in the map — prevents any
+    // change detection cycle from seeing both sources simultaneously.
+    this.voiceChatService.clearVoiceMessages();
+
+    // If there's no route session yet, navigate (fire-and-forget).
+    // addSessionToCache MUST happen before navigation so the route
+    // subscription recognises this as new and skips the API fetch
+    // (same sequencing as ChatRequestService.navigateToSession).
+    if (!this.effectiveSessionId()) {
+      const user = this.userService.currentUser();
+      const userId = user?.user_id || 'anonymous';
+      this.sessionService.addSessionToCache(sessionId, userId);
+      // Carry the assistant id forward if one is attached to this view —
+      // keeps the URL the single source of truth after voice ends.
+      const assistantId = this.assistantIdFromQuery() || this.assistant()?.assistantId;
+      this.router.navigate(['s', sessionId], {
+        replaceUrl: true,
+        queryParams: assistantId ? { assistantId } : {},
+      });
+    }
+
+    // Generate title for new voice sessions (fire and forget)
+    const firstUserMsg = voiceMsgs.find(m => m.role === 'user');
+    const firstUserText = firstUserMsg?.content[0]?.text;
+    if (firstUserText && this.sessionService.isNewSession(sessionId)) {
+      this.chatHttpService.generateTitle(sessionId, firstUserText)
+        .then((response) => {
+          this.sessionService.updateSessionTitleInCache(sessionId, response.title);
+        })
+        .catch((err) => {
+          console.warn('Failed to generate voice session title:', err);
+        });
+    }
+  }
+
   toggleSettings() {
     this.isSettingsOpen.update(open => !open);
   }
@@ -296,22 +448,16 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Load assistant by ID - only checks existence, not access
-   * Access validation happens on backend when message is sent
-   * @param assistantId - Assistant ID to load
-   * @param fromPreferences - If true, this is from session preferences (skip message check)
+   * Load assistant by ID - only checks existence, not access.
+   * Access and mid-session conflicts are validated on the backend when the
+   * next message is sent (the inference-api compares the request's
+   * rag_assistant_id against the session's stored assistant and rejects
+   * mismatches). Doing the same check here is unreliable because the
+   * component is recreated on the `/` → `/s/:id` route transition, so any
+   * "session has messages" guard fires on the normal first-turn flow and
+   * clears the assistant that the user just opened (#205).
    */
-  private async loadAssistant(assistantId: string, fromPreferences: boolean = false): Promise<void> {
-    // Validation: Only check messages for new attachments (not from preferences)
-    if (!fromPreferences) {
-      const sessionId = this.sessionId();
-      if (sessionId && this.hasMessages()) {
-        this.assistantError.set('Assistants can only be attached to new sessions');
-        this.assistant.set(null);
-        return;
-      }
-    }
-
+  private async loadAssistant(assistantId: string): Promise<void> {
     try {
       this.assistantError.set(null);
       this.isLoadingAssistant.set(true);
@@ -324,10 +470,6 @@ export class ConversationPage implements OnDestroy {
       // Only handle existence errors (404) - access errors (403) will be handled on backend
       if (error?.status === 404) {
         this.assistantError.set('Assistant not found');
-        // If from preferences and assistant doesn't exist, optionally clear it
-        if (fromPreferences) {
-          // TODO: Optionally clear assistantId from session preferences via API
-        }
       } else {
         // Other errors (network, etc.) - show generic error but don't block
         this.assistantError.set('Failed to load assistant');

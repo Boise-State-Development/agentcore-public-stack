@@ -5,8 +5,6 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { DocumentService, DocumentUploadError } from './document.service';
 import { ConfigService } from '../../services/config.service';
-import { AuthService } from '../../auth/auth.service';
-
 describe('DocumentService', () => {
   let service: DocumentService;
   let httpMock: HttpTestingController;
@@ -17,7 +15,6 @@ describe('DocumentService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         DocumentService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

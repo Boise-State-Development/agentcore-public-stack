@@ -7,6 +7,7 @@ Implements AgentCore Runtime required endpoints:
 These endpoints are at the root level to comply with AWS Bedrock AgentCore Runtime requirements.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from typing import AsyncGenerator, Union
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
@@ -35,9 +37,11 @@ from apis.shared.quota import (
 )
 
 from apis.shared.rbac.service import get_app_role_service
+from apis.shared.sessions.metadata import ensure_session_metadata_exists
+from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .models import FileContent, InvocationRequest
-from .service import get_agent
+from .service import generate_conversation_title, get_agent
 
 logger = logging.getLogger(__name__)
 
@@ -61,45 +65,422 @@ def is_preview_session(session_id: str) -> bool:
     return session_id.startswith(PREVIEW_SESSION_PREFIX)
 
 
-async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
+def _sanitize_log(value: object) -> str:
+    """Return a log-safe representation of untrusted values.
+
+    Remove line breaks and replace other ASCII control characters so user
+    input cannot forge additional log entries or inject terminal controls.
     """
-    Resolve whether caching should be enabled for a request.
+    if value is None:
+        return "?"
+    text = str(value).replace("\r", "").replace("\n", "")
+    control_map = {
+        i: "?"
+        for i in range(32)
+        if i not in (9,)  # keep horizontal tab for readability
+    }
+    control_map[127] = "?"
+    return text.translate(control_map)
 
-    Priority:
-    1. If explicitly set in request, use that value
-    2. If model_id provided, look up the managed model's supports_caching field
-    3. Otherwise return None (let agent use default)
 
-    Args:
-        model_id: The model ID from the request
-        explicit_caching_enabled: Explicit caching setting from request
-
-    Returns:
-        bool or None: Whether caching should be enabled
-    """
-    # If explicitly set in request, use that value
-    if explicit_caching_enabled is not None:
-        return explicit_caching_enabled
-
-    # If no model_id, let agent use default
+async def _find_managed_model(model_id: str | None):
+    """Best-effort lookup of a managed-model record by external model ID."""
     if not model_id:
         return None
-
-    # Look up the managed model to check supports_caching
     try:
         managed_models = await list_managed_models()
         for model in managed_models:
             if model.model_id == model_id:
-                logger.debug("Found managed model, checking supports_caching")
-                return model.supports_caching
+                return model
+    except Exception:
+        # model_id is request-controlled; sanitize before logging to keep
+        # CRLF / control chars from forging extra log lines.
+        logger.warning("Failed to look up managed model %s", _sanitize_log(model_id))
+    return None
 
-        # Model not found in managed models - use default
-        logger.debug("Model not found in managed models, using default caching behavior")
-        return None
 
-    except Exception as e:
-        logger.warning("Failed to look up managed model for caching")
-        return None
+async def _resolve_user_default_model(user_id: str | None) -> tuple[str | None, str | None]:
+    """Look up the user's persisted defaultModelId and resolve its provider.
+
+    Returns ``(model_id, provider)``. When the request does not specify
+    ``model_id``, callers fall back to the user's saved preference; if that
+    is also unset (or the saved id no longer exists in managed models), the
+    callers in turn fall back to the agent factory's hardcoded default.
+
+    The lookup is best-effort: any failure (no table, DynamoDB error, or
+    deleted model) returns ``(None, None)`` so the chat turn proceeds on
+    the system default rather than being blocked.
+    """
+    if not user_id:
+        return None, None
+    try:
+        repo = UserSettingsRepository()
+        if not repo.enabled:
+            return None, None
+        settings = await repo.get_settings(user_id)
+        saved_id = settings.get("defaultModelId")
+    except Exception:
+        logger.warning("Failed to load user settings for default model lookup", exc_info=True)
+        return None, None
+    if not saved_id:
+        return None, None
+
+    managed = await _find_managed_model(saved_id)
+    provider = managed.provider if managed else None
+    return saved_id, provider
+
+
+def _merge_inference_params(
+    managed_model,
+    request_params: dict,
+) -> dict:
+    """Merge admin-configured defaults with request-supplied inference params.
+
+    For each canonical param the managed model declares:
+      * unsupported -> drop the request value (logged) and don't set a default
+      * supported with admin default -> use the default unless the request
+        provides a value within bounds; out-of-bounds values are clamped.
+
+    Request keys for params the managed model says nothing about pass through
+    untouched — the per-provider translation table will drop unknowns.
+    """
+    merged: dict = {}
+    spec_map = {}
+    if managed_model and managed_model.supported_params:
+        spec_map = managed_model.supported_params.params or {}
+
+    seen_keys: set[str] = set()
+    for name, spec in spec_map.items():
+        seen_keys.add(name)
+        if not spec.supported:
+            if name in request_params:
+                # `name` is a registry-defined canonical key; managed_model.model_id
+                # comes from DDB but ultimately traces back to a user-supplied
+                # value on create. Sanitize defensively so CodeQL's log-injection
+                # check is satisfied uniformly across log sites.
+                logger.info(
+                    "Dropping unsupported inference param '%s' for model %s",
+                    _sanitize_log(name),
+                    _sanitize_log(getattr(managed_model, "model_id", "?")),
+                )
+            continue
+
+        # Locked params always use the admin default — user overrides are
+        # dropped without error. Lets admins pin e.g. `temperature` for
+        # reproducibility while leaving `max_tokens` user-tunable.
+        if spec.locked:
+            if spec.default is not None:
+                merged[name] = spec.default
+            continue
+
+        if name in request_params and request_params[name] is not None:
+            value = request_params[name]
+            if isinstance(value, (int, float)):
+                if spec.min is not None and value < spec.min:
+                    value = spec.min
+                if spec.max is not None and value > spec.max:
+                    value = spec.max
+            merged[name] = value
+        elif spec.default is not None:
+            merged[name] = spec.default
+
+    # Pass through request keys the admin spec doesn't mention, but only when
+    # they're in the canonical allow-list. Without this gate, a user could
+    # submit a future canonical key (or one a future provider mapping starts
+    # forwarding) and bypass the admin's per-model bounds entirely. Unknown
+    # keys are dropped here; the provider translation table is the second
+    # line of defense for ones it doesn't understand.
+    for name, value in request_params.items():
+        if name in seen_keys or value is None:
+            continue
+        if name not in KNOWN_CANONICAL_PARAMS:
+            logger.info(
+                "Dropping unrecognized inference param '%s' for model %s",
+                _sanitize_log(name),
+                _sanitize_log(getattr(managed_model, "model_id", "?")),
+            )
+            continue
+        merged[name] = value
+
+    # Final cross-param safety check. Anthropic rejects requests where
+    # `thinking.budget_tokens >= max_tokens`, and the per-param clamping
+    # above can't catch it (each param is bounded independently). When
+    # both are set and inconsistent, drop `thinking` so the response still
+    # streams instead of erroring out — the user just doesn't get a
+    # reasoning trace this turn. Logged so the gap is visible in metrics.
+    thinking = merged.get("thinking")
+    max_tokens = merged.get("max_tokens")
+    if (
+        isinstance(thinking, int)
+        and not isinstance(thinking, bool)
+        and isinstance(max_tokens, int)
+        and not isinstance(max_tokens, bool)
+        and thinking >= max_tokens
+    ):
+        logger.warning(
+            "Dropping thinking budget %d for model %s — not less than max_tokens %d",
+            thinking,
+            _sanitize_log(getattr(managed_model, "model_id", "?")),
+            max_tokens,
+        )
+        merged.pop("thinking", None)
+
+    return merged
+
+
+async def _resolve_model_settings(
+    model_id: str | None,
+    explicit_caching_enabled: bool | None,
+    request_inference_params: dict | None,
+) -> tuple[bool | None, dict]:
+    """Resolve runtime model knobs from the managed-model registry.
+
+    Returns ``(caching_enabled, inference_params)``. A single registry lookup
+    drives both, replacing the prior per-concern lookups.
+    """
+    request_params = dict(request_inference_params or {})
+
+    if not model_id:
+        return explicit_caching_enabled, request_params
+
+    managed_model = await _find_managed_model(model_id)
+
+    if explicit_caching_enabled is not None:
+        caching = explicit_caching_enabled
+    elif managed_model is not None:
+        caching = managed_model.supports_caching
+    else:
+        caching = None
+
+    inference_params = _merge_inference_params(managed_model, request_params)
+    return caching, inference_params
+
+
+async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
+    """Backward-compat wrapper around :func:`_resolve_model_settings`."""
+    caching, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
+    return caching
+
+
+# ============================================================
+# Spreadsheet Analysis Tool Injection
+# ============================================================
+
+SPREADSHEET_TOOL_IDS = {"list_spreadsheets", "analyze_spreadsheet"}
+
+
+def _build_spreadsheet_tools(
+    enabled_tools: list | None,
+    assistant_id: str | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound spreadsheet analysis tools if enabled by the user."""
+    if not enabled_tools:
+        return []
+
+    requested = SPREADSHEET_TOOL_IDS.intersection(enabled_tools)
+    if not requested:
+        return []
+
+    from agents.builtin_tools.spreadsheet_analysis import make_list_spreadsheets_tool, make_analyze_tool
+
+    tools = []
+    if "list_spreadsheets" in requested:
+        tools.append(make_list_spreadsheets_tool(assistant_id, session_id, user_id))
+    if "analyze_spreadsheet" in requested:
+        tools.append(make_analyze_tool(assistant_id, session_id, user_id))
+
+    logger.info(f"Created {len(tools)} spreadsheet analysis tools (assistant={assistant_id})")
+    return tools
+
+
+# ============================================================
+# Attachment Partitioning (#206)
+# ============================================================
+
+def _estimate_decoded_size(file: "FileContent") -> int:
+    """Estimate decoded byte size of a base64-encoded FileContent payload.
+
+    Base64 inflates bytes by ~4/3, so decoded size ≈ len(b64) * 3 / 4.
+    This avoids allocating the full bytes just to check a threshold.
+    """
+    try:
+        # Account for base64 padding: strip "=" padding before estimating.
+        stripped = (file.bytes or "").rstrip("=")
+        return (len(stripped) * 3) // 4
+    except Exception:
+        return 0
+
+
+def _partition_attachments(
+    all_files: list,
+) -> tuple[list, list, list]:
+    """Split attachments into (inline_for_bedrock, tabular, oversized_non_tabular).
+
+    - Tabular files (csv/xlsx) are never sent inline — they route through
+      the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
+      from exploding on XLSX files that expand during internal parsing.
+    - Non-tabular files larger than INLINE_DOCUMENT_MAX_BYTES are dropped
+      from the inline set with a user-facing note, to prevent mid-stream
+      ValidationException on the raw AWS error path.
+    - Everything else rides along as a regular document/image content block.
+    """
+    from apis.shared.files.models import INLINE_DOCUMENT_MAX_BYTES, is_tabular_file
+
+    inline: list = []
+    tabular: list = []
+    oversized: list = []
+
+    for file in all_files:
+        if is_tabular_file(file.filename, file.content_type):
+            tabular.append(file)
+            continue
+        # Only size-gate non-image documents. Images have their own Bedrock
+        # limits (much larger) and the prompt builder reroutes them as
+        # image blocks, which are not affected by the document-size cap.
+        content_type = (file.content_type or "").lower()
+        is_image = content_type.startswith("image/")
+        if not is_image and _estimate_decoded_size(file) > INLINE_DOCUMENT_MAX_BYTES:
+            oversized.append(file)
+            continue
+        inline.append(file)
+
+    return inline, tabular, oversized
+
+
+def _build_attachment_guidance(
+    diverted_tabular: list,
+    oversized_inline: list,
+    enabled_tools: list | None,
+) -> str:
+    """Return a short markdown addendum describing how attachments will be
+    handled, to append to the user's message so the agent (and the user)
+    both understand why a file isn't inline.
+    """
+    parts: list[str] = []
+
+    if diverted_tabular:
+        names = ", ".join(f"`{f.filename}`" for f in diverted_tabular)
+        tool_is_enabled = bool(enabled_tools) and (
+            "analyze_spreadsheet" in enabled_tools or "list_spreadsheets" in enabled_tools
+        )
+        if tool_is_enabled:
+            parts.append(
+                f"_Attached spreadsheet(s) {names} are available through the "
+                f"Spreadsheet Analysis tool rather than inline — use "
+                f"`list_spreadsheets` to see them and `analyze_spreadsheet` "
+                f"to run aggregations or lookups._"
+            )
+        else:
+            parts.append(
+                f"_Attached spreadsheet(s) {names} can't be read inline at "
+                f"this size. To analyze them, enable **Spreadsheet Analysis** "
+                f"in the Tools section of the settings panel (gear icon next "
+                f"to the message input), then re-send your message._"
+            )
+
+    if oversized_inline:
+        names = ", ".join(f"`{f.filename}`" for f in oversized_inline)
+        parts.append(
+            f"_Attached file(s) {names} exceed the inline document size limit "
+            f"and were skipped. Try a smaller file, or convert to CSV/XLSX "
+            f"and use the Spreadsheet Analysis tool._"
+        )
+
+    return "\n\n".join(parts)
+
+
+async def _build_tabular_inventory(
+    session_id: str,
+    assistant_id: str | None,
+    enabled_tools: list | None,
+) -> str:
+    """Inventory every tabular file visible to the agent this turn, and
+    prepend it to the user message when more than one exists.
+
+    Motivation: when the vector search returns chunks from multiple source
+    files with identical schemas (e.g. two monthly FY ledgers), the model
+    has no way to tell there's more than one spreadsheet at all — RAG
+    surfaces chunk content but not a full file inventory. The model picks
+    whichever file yielded the first high-ranked chunk and silently runs
+    analyze_spreadsheet against just that one. The user's "total" is
+    wrong by exactly the other file(s).
+
+    We ship the file list inline so the agent sees the full set at turn
+    start and can call list_spreadsheets / pick deliberately / ask the
+    user / aggregate across files. Only emitted when the analysis tools
+    are enabled (otherwise the agent can't act on it anyway) and when at
+    least two tabular files exist (one file isn't ambiguous).
+    """
+    if not enabled_tools:
+        return ""
+    tool_is_enabled = (
+        "analyze_spreadsheet" in enabled_tools
+        or "list_spreadsheets" in enabled_tools
+    )
+    if not tool_is_enabled:
+        return ""
+
+    # Lazy imports to avoid pulling the agent layer into module-load time
+    # on cold starts where this code path isn't exercised.
+    try:
+        from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
+            _get_kb_files,
+            _get_session_files,
+        )
+    except Exception:
+        return ""
+
+    files: list[dict] = []
+    try:
+        if assistant_id:
+            files.extend(await _get_kb_files(assistant_id))
+        files.extend(await _get_session_files(session_id))
+    except Exception:
+        logger.warning("Failed to enumerate tabular files for inventory", exc_info=True)
+        return ""
+
+    # De-duplicate by (filename, source) — a single file shouldn't be
+    # listed twice if our lookups overlap.
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for f in files:
+        key = (f.get("filename", ""), f.get("source", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(f)
+
+    if len(unique) < 2:
+        # Single file: no ambiguity, and list_spreadsheets covers discovery
+        # for the agent if it ever needs it.
+        return ""
+
+    def _fmt_size(n: int) -> str:
+        if n >= 1024 * 1024:
+            return f"{n / (1024 * 1024):.1f} MB"
+        if n >= 1024:
+            return f"{n // 1024} KB"
+        return f"{n} B"
+
+    lines = []
+    for f in unique:
+        name = f.get("filename", "")
+        source = "knowledge base" if f.get("source") == "knowledge_base" else "chat attachment"
+        size = _fmt_size(int(f.get("size_bytes") or 0))
+        lines.append(f"- `{name}` ({source}, {size})")
+
+    listing = "\n".join(lines)
+    return (
+        f"_Multiple spreadsheet files are attached. Before running "
+        f"`analyze_spreadsheet`, decide which file(s) the user's request "
+        f"refers to — if it's ambiguous or spans multiple files, call "
+        f"`list_spreadsheets` and/or ask the user rather than picking one "
+        f"silently. State which file(s) you analyzed in your response._\n\n"
+        f"**Available spreadsheets:**\n{listing}"
+    )
+
 
 
 # ============================================================
@@ -209,7 +590,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
-    logger.info("Invocation request received")
+    # Resume requests reuse the cached agent and its paused interrupt state;
+    # they bypass quota, file resolution, and RAG augmentation because those
+    # already ran on the original turn that got paused.
+    is_resume = bool(input_data.interrupt_responses)
+    logger.info(
+        "Invocation request received (resume=%s)" % is_resume
+    )
     logger.info("Message received")
 
     if input_data.enabled_tools:
@@ -223,8 +610,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.file_upload_ids:
         logger.info(f"File upload IDs: {len(input_data.file_upload_ids)} IDs to resolve")
 
-    # Resolve file upload IDs to FileContent objects
-    files_to_send = list(input_data.files) if input_data.files else []
+    # Resolve file upload IDs to FileContent objects, then partition:
+    #   - inline_files: images + non-tabular documents that Bedrock can
+    #     ingest directly as document content blocks
+    #   - tabular_files: csv/xlsx, which we intentionally NEVER send inline
+    #     because XLSX in particular inflates dramatically inside Bedrock
+    #     (1.4MB zipped → >4.5MB internal, triggering ValidationException).
+    #     They remain available to the agent via list_spreadsheets /
+    #     analyze_spreadsheet, which run pandas on the real file. See #206.
+    #   - oversized_files: non-tabular docs that exceed our inline size
+    #     budget; we skip them inline and surface a note instead of
+    #     letting Bedrock reject the turn.
+    all_files = list(input_data.files) if input_data.files else []
 
     if input_data.file_upload_ids:
         try:
@@ -234,18 +631,62 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 upload_ids=input_data.file_upload_ids,
                 max_files=5,  # Bedrock document limit
             )
-            # Convert ResolvedFileContent to FileContent
             for rf in resolved_files:
-                files_to_send.append(FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes))
+                all_files.append(
+                    FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
+                )
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
-        except Exception as e:
-            logger.warning("Failed to resolve file upload IDs")
+        except Exception:
+            logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request
+
+    files_to_send, diverted_tabular, oversized_inline = _partition_attachments(all_files)
+    if diverted_tabular:
+        logger.info(
+            f"Diverted {len(diverted_tabular)} tabular file(s) from inline document blocks; "
+            f"available via spreadsheet tools: {[f.filename for f in diverted_tabular]}"
+        )
+    if oversized_inline:
+        logger.warning(
+            f"Skipped {len(oversized_inline)} oversized file(s) (> inline limit): "
+            f"{[(f.filename, _estimate_decoded_size(f)) for f in oversized_inline]}"
+        )
+
+    # Pre-create session metadata so OAuth interrupts and other state can
+    # attach to the session row from turn one. Best-effort; on failure the
+    # post-stream lazy-create in StreamCoordinator still covers it.
+    #
+    # Also clear any stale paused_turn snapshot at the start of a fresh turn.
+    # If the user abandoned a paused turn and started a new one, the prior
+    # snapshot is no longer authorized — letting it survive would let a
+    # later (mistaken) resume request pick up against a turn the user
+    # already moved past.
+    is_new_session = False
+    if not is_resume:
+        is_new_session = await ensure_session_metadata_exists(input_data.session_id, user_id)
+        try:
+            from apis.shared.sessions.metadata import clear_paused_turn
+            await clear_paused_turn(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to clear stale paused_turn on new turn: %s", e, exc_info=True)
+
+    # First turn → kick off title generation concurrently with the stream.
+    # Runs as a background task so it doesn't add latency to TTFT. The
+    # targeted UpdateExpression in update_session_title is race-safe with
+    # the post-stream _update_session_metadata write.
+    if is_new_session and input_data.message:
+        asyncio.create_task(
+            generate_conversation_title(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                user_input=input_data.message,
+            )
+        )
 
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_exceeded_event = None
-    if is_quota_enforcement_enabled():
+    if is_quota_enforcement_enabled() and not is_resume:
         try:
             quota_checker = get_quota_checker()
             quota_result = await quota_checker.check_quota(user=current_user, session_id=input_data.session_id)
@@ -304,7 +745,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request - processing with assistant context"
     )
 
-    if input_data.rag_assistant_id:
+    if input_data.rag_assistant_id and not is_resume:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
@@ -472,11 +913,25 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             try:
                 existing_metadata = await get_session_metadata(input_data.session_id, user_id)
                 if existing_metadata:
-                    # Update existing metadata with assistant_id in preferences
-                    prefs_dict = existing_metadata.preferences.model_dump(by_alias=False) if existing_metadata.preferences else {}
+                    # Update existing metadata: merge assistant_id into the
+                    # preferences sub-model. The top-level SessionMetadata has
+                    # no assistant_id field, so applying the update there
+                    # (previous behavior) silently did nothing under
+                    # extra="allow" and left preferences.assistant_id=None.
+                    # That broke the mid-session validation above on turn 2+
+                    # because the check relies on preferences.assistant_id to
+                    # recognize an already-attached assistant (#205).
+                    prefs_dict = (
+                        existing_metadata.preferences.model_dump(by_alias=False)
+                        if existing_metadata.preferences
+                        else {}
+                    )
                     prefs_dict["assistant_id"] = input_data.rag_assistant_id
+                    merged_preferences = SessionPreferences(**prefs_dict)
 
-                    updated_metadata = existing_metadata.model_copy(update={"assistant_id": input_data.rag_assistant_id})
+                    updated_metadata = existing_metadata.model_copy(
+                        update={"preferences": merged_preferences}
+                    )
 
                 else:
                     # Create new metadata with assistant_id in preferences
@@ -509,29 +964,160 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.info("Preview session - skipping assistant_id persistence")
 
     try:
-        # Resolve caching_enabled based on managed model configuration
-        # This allows admins to disable caching for models that don't support it
-        caching_enabled = await _resolve_caching_enabled(model_id=input_data.model_id, explicit_caching_enabled=input_data.caching_enabled)
+        # Resume requests rebuild the agent from the persisted PausedTurnSnapshot
+        # so a refresh / cache eviction / pod restart between pause and resume
+        # still lands on the same MainAgent shape (matching tool registry,
+        # model, prompt). Strands' SessionManager separately restores
+        # `_interrupt_state` from AgentCore Memory, so the paused tool call
+        # picks up where it left off. Non-resume requests use the request
+        # body as before.
+        if is_resume:
+            from datetime import datetime, timezone
+            from apis.shared.sessions.metadata import clear_paused_turn, get_paused_turn
 
-        if caching_enabled is False:
-            logger.info("Prompt caching disabled for model")
+            snapshot = await get_paused_turn(input_data.session_id, user_id)
+            if not snapshot:
+                logger.warning("Resume rejected: no paused_turn snapshot found")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No paused turn for this session; restart the turn.",
+                )
+            try:
+                expires_at = datetime.fromisoformat(snapshot.expires_at)
+            except ValueError:
+                expires_at = None
+            if expires_at and datetime.now(timezone.utc) > expires_at:
+                logger.warning("Resume rejected: paused_turn snapshot expired")
+                await clear_paused_turn(input_data.session_id, user_id)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Paused turn expired; restart the turn.",
+                )
 
-        # Get agent instance with user-specific configuration
-        # AgentCore Memory tracks preferences across sessions per user_id
-        # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
-        # Use augmented message and assistant system prompt if assistant RAG was applied
-        agent = get_agent(
-            session_id=input_data.session_id,
-            user_id=user_id,
-            auth_token=auth_token,
-            enabled_tools=input_data.enabled_tools,
-            model_id=input_data.model_id,
-            temperature=input_data.temperature,
-            system_prompt=system_prompt,  # Use assistant's instructions if available
-            caching_enabled=caching_enabled,
-            provider=input_data.provider,
-            max_tokens=input_data.max_tokens,
-        )
+            caching_enabled = snapshot.caching_enabled
+            # Snapshot wins on resume so an authorized turn finishes against the
+            # exact param shape it was authorized for, even if admin defaults
+            # have since changed. Fall back to the legacy fields for snapshots
+            # written before inference_params was added.
+            resume_inference_params = snapshot.inference_params or {}
+            if not resume_inference_params:
+                if snapshot.temperature is not None:
+                    resume_inference_params["temperature"] = snapshot.temperature
+                if snapshot.max_tokens is not None:
+                    resume_inference_params["max_tokens"] = snapshot.max_tokens
+            agent = await get_agent(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                auth_token=auth_token,
+                enabled_tools=snapshot.enabled_tools,
+                model_id=snapshot.model_id,
+                system_prompt=snapshot.system_prompt,
+                caching_enabled=snapshot.caching_enabled,
+                provider=snapshot.provider,
+                inference_params=resume_inference_params,
+                agent_type=snapshot.agent_type,
+                is_resume=True,
+            )
+        else:
+            # Build the canonical request inference-params dict. The frontend
+            # sends ``inference_params`` directly; legacy ``temperature`` /
+            # ``max_tokens`` fields are folded in for older clients and
+            # treated as defaults that lose to anything in ``inference_params``.
+            request_inference_params: dict = dict(input_data.inference_params or {})
+            if input_data.temperature is not None:
+                request_inference_params.setdefault("temperature", input_data.temperature)
+            if input_data.max_tokens is not None:
+                request_inference_params.setdefault("max_tokens", input_data.max_tokens)
+
+            # Resolve the user's persisted default when the request does
+            # not pin a model. Without this, a "no default selected" client
+            # always lands on the hardcoded factory default and the user's
+            # saved preference is silently ignored at chat time (#161).
+            effective_model_id = input_data.model_id
+            effective_provider = input_data.provider
+            if not effective_model_id:
+                user_default_id, user_default_provider = await _resolve_user_default_model(user_id)
+                if user_default_id:
+                    # Re-check model access against the resolved id. The
+                    # earlier guard only ran on `input_data.model_id`, so a
+                    # stale saved default the user no longer has rights to
+                    # would otherwise sneak past RBAC here.
+                    app_role_service = get_app_role_service()
+                    if await app_role_service.can_access_model(current_user, user_default_id):
+                        effective_model_id = user_default_id
+                        if not effective_provider and user_default_provider:
+                            effective_provider = user_default_provider
+                        logger.info("Applied user default model from settings")
+                    else:
+                        logger.info(
+                            "User default model exists but RBAC denies access; falling back to system default"
+                        )
+
+            # Single registry lookup resolves caching + inference params,
+            # merging admin defaults with request overrides.
+            caching_enabled, inference_params = await _resolve_model_settings(
+                model_id=effective_model_id,
+                explicit_caching_enabled=input_data.caching_enabled,
+                request_inference_params=request_inference_params,
+            )
+
+            if caching_enabled is False:
+                logger.info("Prompt caching disabled for model")
+
+            # Get agent instance with user-specific configuration
+            # AgentCore Memory tracks preferences across sessions per user_id
+            # Supports multiple LLM providers: AWS Bedrock, OpenAI, and Google Gemini
+            # Use augmented message and assistant system prompt if assistant RAG was applied
+
+            # Spreadsheet tools scoped to the assistant's document corpus,
+            # when an assistant is attached to this request. The frontend
+            # keeps the assistant id in the URL for the whole session's
+            # lifetime, so we can trust `input_data.rag_assistant_id`
+            # directly; no preferences fallback needed.
+            extra_tools = _build_spreadsheet_tools(
+                enabled_tools=input_data.enabled_tools,
+                assistant_id=input_data.rag_assistant_id,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            )
+
+            agent = await get_agent(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                auth_token=auth_token,
+                enabled_tools=input_data.enabled_tools,
+                model_id=effective_model_id,
+                system_prompt=system_prompt,  # Use assistant's instructions if available
+                caching_enabled=caching_enabled,
+                provider=effective_provider,
+                inference_params=inference_params,
+                agent_type=input_data.agent_type,
+                extra_tools=extra_tools,
+                is_resume=False,
+            )
+
+        # Resume requests must target interrupts that the cached agent
+        # actually has paused. Cache eviction, a process restart, or a
+        # forged request will otherwise be silently accepted by Strands
+        # and drop the client's response. Reject up front so the client
+        # sees a 400 and can restart the turn cleanly.
+        if is_resume:
+            strands_agent = getattr(agent, "agent", None)
+            interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
+            known_ids: set[str] = set()
+            if interrupt_state and getattr(interrupt_state, "activated", False):
+                interrupts = getattr(interrupt_state, "interrupts", None) or {}
+                known_ids = set(interrupts.keys())
+            submitted_ids = [entry.interruptId for entry in (input_data.interrupt_responses or [])]
+            unknown_ids = [iid for iid in submitted_ids if iid not in known_ids]
+            if unknown_ids:
+                logger.warning(
+                    "Resume rejected: submitted interrupt ids not in paused state"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unknown or expired interrupt ids; restart the turn.",
+                )
 
         # Build citations list for persistence (convert context chunks to citation format)
         citations_for_storage = []
@@ -567,20 +1153,97 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # will be modified before reaching the model. This happens when:
             #   1. RAG augmentation prepends context chunks to the message
             #   2. File attachments cause PromptBuilder to rewrite into ContentBlocks
+            #   3. Attachment guidance is appended (tabular routed to tools, etc.)
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
-            message_will_be_modified = (
-                augmented_message != input_data.message  # RAG augmentation
-                or bool(files_to_send)                   # File attachments
+            attachment_guidance = _build_attachment_guidance(
+                diverted_tabular, oversized_inline, input_data.enabled_tools
             )
+            # When multiple spreadsheets are visible, ship the full inventory
+            # up front so the agent can disambiguate intentionally instead of
+            # silently picking whichever file the vector search ranked first.
+            tabular_inventory = await _build_tabular_inventory(
+                session_id=input_data.session_id,
+                assistant_id=input_data.rag_assistant_id,
+                enabled_tools=input_data.enabled_tools,
+            )
+            # Bind to a new local so we don't trip Python's local-scope rules
+            # inside this generator closure (augmented_message is defined in
+            # the outer function; reassigning it here would make the whole
+            # name local and UnboundLocalError before the assignment runs).
+            final_message = augmented_message
+            if attachment_guidance:
+                final_message = f"{final_message}\n\n{attachment_guidance}"
+            if tabular_inventory:
+                final_message = f"{final_message}\n\n{tabular_inventory}"
+
+            message_will_be_modified = (
+                final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
+                or bool(files_to_send)               # File attachments
+            )
+            # Strands' resume protocol wants each entry wrapped as
+            # {"interruptResponse": {...}}. The InvocationRequest schema
+            # accepts the inner shape so callers don't have to think about
+            # the SDK's content-block convention.
+            interrupt_responses_payload = (
+                [{"interruptResponse": entry.model_dump()} for entry in input_data.interrupt_responses]
+                if input_data.interrupt_responses
+                else None
+            )
+
             async for event in agent.stream_async(
-                augmented_message,
+                final_message,
                 session_id=input_data.session_id,
                 files=files_to_send if files_to_send else None,
                 citations=citations_for_storage if citations_for_storage else None,
                 original_message=input_data.message if message_will_be_modified else None,
+                interrupt_responses=interrupt_responses_payload,
             ):
                 yield event
+
+            # Resume bookkeeping: any interrupt that was submitted in this
+            # request and is no longer present in the agent's interrupt state
+            # has been resolved — drop the persisted breadcrumb so a refresh
+            # doesn't redisplay a stale prompt. Interrupts that re-paused
+            # (same provider, new url) are left in place; the next event
+            # extractor will refresh them.
+            #
+            # When the agent's interrupt state is no longer activated after
+            # streaming, the turn fully completed — clear ``paused_turn`` too
+            # so a stale snapshot doesn't authorize a phantom resume against
+            # an already-finished turn. If interrupts re-paused, the snapshot
+            # was overwritten by ``_extract_oauth_required_events`` for the
+            # next pause, so leave it alone.
+            if is_resume and input_data.interrupt_responses:
+                try:
+                    strands_agent = getattr(agent, "agent", None)
+                    interrupt_state = getattr(strands_agent, "_interrupt_state", None) if strands_agent else None
+                    still_paused: set[str] = set()
+                    state_activated = bool(
+                        interrupt_state and getattr(interrupt_state, "activated", False)
+                    )
+                    if state_activated:
+                        still_paused = set((getattr(interrupt_state, "interrupts", None) or {}).keys())
+                    resolved_ids = [
+                        entry.interruptId
+                        for entry in input_data.interrupt_responses
+                        if entry.interruptId not in still_paused
+                    ]
+                    if resolved_ids:
+                        from apis.shared.sessions.metadata import remove_pending_interrupts
+                        await remove_pending_interrupts(
+                            session_id=input_data.session_id,
+                            user_id=user_id,
+                            interrupt_ids=resolved_ids,
+                        )
+                    if not state_activated:
+                        from apis.shared.sessions.metadata import clear_paused_turn
+                        await clear_paused_turn(
+                            session_id=input_data.session_id,
+                            user_id=user_id,
+                        )
+                except Exception as cleanup_err:
+                    logger.error("Failed to clear resolved pending_interrupts: %s", cleanup_err, exc_info=True)
 
         # Stream response from agent as SSE (with optional files)
         # Note: Compression is handled by GZipMiddleware if configured in main.py

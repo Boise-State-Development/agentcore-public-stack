@@ -2,7 +2,6 @@ import { Injectable, inject, resource, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   AdminTool,
   AdminToolListResponse,
@@ -10,7 +9,8 @@ import {
   ToolUpdateRequest,
   ToolRolesResponse,
   ToolRoleAssignment,
-  SyncResult,
+  MCPDiscoverRequest,
+  MCPDiscoverResponse,
 } from '../models/admin-tool.model';
 
 /**
@@ -23,7 +23,6 @@ import {
 })
 export class AdminToolService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/tools`);
@@ -40,7 +39,7 @@ export class AdminToolService {
    */
   readonly toolsResource = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchTools();
     }
   });
@@ -200,33 +199,18 @@ export class AdminToolService {
   }
 
   /**
-   * Sync catalog from code registry.
-   */
-  async syncFromRegistry(dryRun: boolean = true): Promise<SyncResult> {
-    this._loading.set(true);
-    this._error.set(null);
-
-    try {
-      const response = await firstValueFrom(
-        this.http.post<SyncResult>(`${this.baseUrl()}/sync?dry_run=${dryRun}`, {})
-      );
-      if (!dryRun) {
-        this.toolsResource.reload();
-      }
-      return response;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to sync catalog';
-      this._error.set(message);
-      throw err;
-    } finally {
-      this._loading.set(false);
-    }
-  }
-
-  /**
    * Reload the tools resource.
    */
   reload(): void {
     this.toolsResource.reload();
+  }
+
+  /**
+   * Connect to an MCP server with the given config and return its tool list.
+   */
+  async discoverMCPTools(request: MCPDiscoverRequest): Promise<MCPDiscoverResponse> {
+    return firstValueFrom(
+      this.http.post<MCPDiscoverResponse>(`${this.baseUrl()}/discover`, request)
+    );
   }
 }

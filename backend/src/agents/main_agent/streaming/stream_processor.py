@@ -300,18 +300,79 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     if event.get("force_stop", False):
         reason = event.get("force_stop_reason", "unknown reason")
 
-        # Create structured error event
+        error_message, recoverable = _format_force_stop_message(reason)
+
         error_event = StreamErrorEvent(
-            error=f"Agent force-stopped: {reason}",
+            error=error_message,
             code=ErrorCode.AGENT_ERROR,
             detail=str(reason) if reason != "unknown reason" else None,
-            recoverable=False
+            recoverable=recoverable,
         )
         # Convert to event dict format
         events.append(_create_event("error", error_event.model_dump(exclude_none=True)))
         should_break = True
 
     return events, should_break
+
+
+def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
+    """Translate raw Bedrock errors in ``force_stop_reason`` into user-facing
+    markdown. Returns (message, recoverable).
+
+    We detect a small handful of high-signal patterns (document size limit,
+    throttling, access denied) and surface actionable guidance. Anything
+    else falls through to a generic "Agent force-stopped" with the raw
+    error for transparency.
+    """
+    reason_str = str(reason or "")
+    reason_lower = reason_str.lower()
+
+    # Bedrock ConverseStream rejects document content blocks over ~4.5 MB
+    # internal size. Triggered most often by XLSX files that inflate
+    # significantly during parsing. The fix-forward is to route tabular
+    # files through the spreadsheet analysis tools, but a turn with a
+    # non-tabular file this large (or history that accumulated past the
+    # limit) still needs a friendlier message than the raw AWS error. See
+    # issue #206.
+    if "maximum document size" in reason_lower or (
+        "validationexception" in reason_lower and "document" in reason_lower
+    ):
+        return (
+            "⚠️ One of the attached files is too large for the model to read "
+            "directly.\n\n"
+            "Bedrock limits inline documents to 4.5 MB of internal content, "
+            "and spreadsheets (especially XLSX) often expand past that when "
+            "parsed. To work with large data files, enable **Spreadsheet "
+            "Analysis** in the Tools section of the settings panel (gear "
+            "icon next to the message input) and re-attach the file — the "
+            "tool runs pandas on the real file and isn't limited by the "
+            "document size cap.\n\n"
+            "For large PDFs or docs, split them into smaller sections or "
+            "convert to plain text.",
+            True,
+        )
+
+    if "throttl" in reason_lower or "too many requests" in reason_lower:
+        return (
+            "⚠️ The model is receiving too many requests right now.\n\n"
+            "> " + reason_str + "\n\n"
+            "Please wait a moment and try again.",
+            True,
+        )
+
+    if "accessdenied" in reason_lower or "access denied" in reason_lower:
+        return (
+            "⚠️ I don't have access to complete this request.\n\n"
+            "> " + reason_str + "\n\n"
+            "Try a different model, or check that the required permissions "
+            "are configured for this workspace.",
+            False,
+        )
+
+    # Default: preserve prior behavior so operators can still read the raw
+    # error in logs and the UI, but flag it recoverable since most transient
+    # issues (network blips, tool timeouts) benefit from a retry.
+    return (f"Agent force-stopped: {reason_str}", False)
 
 
 def _handle_content_block_events(event: RawEvent, current_block_index: Dict[str, int]) -> List[ProcessedEvent]:
@@ -1031,7 +1092,16 @@ def _handle_metadata_events(event: RawEvent) -> List[ProcessedEvent]:
                     metadata_data["metrics"] = metrics_data
             
             if metadata_data:
-                metadata_event = _create_event("metadata", metadata_data)
+                # Emit on the turn-summary track, NOT the per-message track.
+                # `result.metrics.accumulated_usage` is summed across every
+                # LLM call in the turn (Strands' EventLoopMetrics). If we
+                # emitted this as a `metadata` event, the stream coordinator
+                # would route it into per_message_metadata[last] and clobber
+                # that message's per-call usage — pricing each entry would
+                # then double-count earlier messages' input tokens. The
+                # main loop also accumulates `metadata_summary` events
+                # (see below), so the final summary stays cumulative.
+                metadata_event = _create_event("metadata_summary", metadata_data)
                 events.append(metadata_event)
 
     # Check for metadata in nested event structure (like content blocks)
@@ -1233,9 +1303,6 @@ async def process_agent_stream(
     current_block_index: Dict[str, int] = {"index": 0}
 
     try:
-        # Track if we've seen result to know when it's safe to break on complete
-        result_seen = False
-
         # Iterate through each raw event from the agent stream
         # The agent stream is an async generator that yields events as they occur
         async for event in agent_stream:
@@ -1253,8 +1320,14 @@ async def process_agent_stream(
             # NOTE: timeToFirstByteMs from provider will be stored in metrics
             # and the coordinator can use it as a fallback if first_token_time is not set
             for processed_event in _handle_metadata_events(event):
-                # Accumulate metadata for summary
-                if processed_event.get("type") == "metadata":
+                # Accumulate metadata for the final summary. Both per-call
+                # `metadata` events (each LLM call's usage) and the
+                # turn-cumulative `metadata_summary` event (extracted from
+                # AgentResult.metrics.accumulated_usage) feed this dict —
+                # the cumulative event arrives last and `update()` makes it
+                # last-write-wins, so accumulated_metadata ends the turn
+                # carrying true totals.
+                if processed_event.get("type") in ("metadata", "metadata_summary"):
                     event_data = processed_event.get("data", {})
                     if "usage" in event_data:
                         accumulated_metadata["usage"].update(event_data["usage"])
@@ -1278,8 +1351,11 @@ async def process_agent_stream(
                 # Check one more time for metadata in case result came with complete
                 metadata_events_after_complete = _handle_metadata_events(event)
                 for processed_event in metadata_events_after_complete:
-                    # Accumulate metadata for summary
-                    if processed_event.get("type") == "metadata":
+                    # Accumulate metadata for summary — see note on the main
+                    # loop's accumulator above. Both `metadata` (per-call)
+                    # and `metadata_summary` (turn-cumulative from result)
+                    # feed accumulated_metadata so the final emit is total.
+                    if processed_event.get("type") in ("metadata", "metadata_summary"):
                         event_data = processed_event.get("data", {})
                         if "usage" in event_data:
                             accumulated_metadata["usage"].update(event_data["usage"])

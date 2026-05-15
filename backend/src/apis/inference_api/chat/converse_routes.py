@@ -26,8 +26,8 @@ from fastapi.responses import StreamingResponse
 from apis.shared.auth.models import User
 from apis.shared import quota as shared_quota
 from apis.shared.rbac.service import get_app_role_service
-from apis.app_api.costs.calculator import CostCalculator
-from apis.app_api.costs.pricing_config import create_pricing_snapshot
+from apis.shared.costs.calculator import CostCalculator
+from apis.shared.costs.pricing_config import create_pricing_snapshot
 from apis.shared.sessions.metadata import store_message_metadata
 from apis.shared.sessions.models import (
     MessageMetadata,
@@ -49,7 +49,7 @@ router = APIRouter(prefix="/chat", tags=["api-converse"])
 
 async def _validate_api_key(api_key: str):
     """Validate the raw API key and return the ValidatedApiKey, or raise 401."""
-    from apis.app_api.auth.api_keys.service import get_api_key_service
+    from apis.shared.auth.api_keys.service import get_api_key_service
 
     service = get_api_key_service()
     validated = await service.validate_key(api_key)

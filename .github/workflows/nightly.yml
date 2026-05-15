@@ -5,10 +5,11 @@
 #   test-backend-<branch>              Run backend tests against <branch>
 #   test-frontend-<branch>             Run frontend tests against <branch>
 #   deploy-<branch>                    Deploy full stack from <branch>
+#   e2e-<branch>                       Deploy full stack, run Playwright E2E tests, teardown
 #   merge-validation:<base>:<overlay>  Deploy <base>, then overlay <overlay>
 #   scan-images-<branch>               Scan Docker images from <branch> for vulnerabilities
 #   all                                Run all tracks with default branches
-#                                      (tests + deploy on develop, MV main→develop)
+#                                      (tests + deploy + e2e on develop, MV main→develop)
 #
 # Examples:
 #   test-backend-develop
@@ -79,6 +80,8 @@ jobs:
       mv_overlay_ref: ${{ steps.resolve.outputs.mv_overlay_ref }}
       run_scan_images: ${{ steps.resolve.outputs.run_scan_images }}
       scan_images_ref: ${{ steps.resolve.outputs.scan_images_ref }}
+      run_e2e: ${{ steps.resolve.outputs.run_e2e }}
+      e2e_ref: ${{ steps.resolve.outputs.e2e_ref }}
       any_track: ${{ steps.resolve.outputs.any_track }}
     steps:
       - name: Parse tracks
@@ -103,6 +106,8 @@ jobs:
           mv_overlay_ref=""
           run_scan_images=false
           scan_images_ref=""
+          run_e2e=false
+          e2e_ref=""
 
           # Empty tracks = nothing runs (fork-safe default)
           if [ -z "$TRACKS" ]; then
@@ -125,6 +130,8 @@ jobs:
                   mv_overlay_ref="develop"
                   run_scan_images=true
                   scan_images_ref="develop"
+                  run_e2e=true
+                  e2e_ref="develop"
                   ;;
                 test-backend-*)
                   run_test_backend=true
@@ -147,6 +154,10 @@ jobs:
                   run_scan_images=true
                   scan_images_ref="${token#scan-images-}"
                   ;;
+                e2e-*)
+                  run_e2e=true
+                  e2e_ref="${token#e2e-}"
+                  ;;
                 *)
                   echo "::warning::Unknown track token: $token"
                   ;;
@@ -158,7 +169,7 @@ jobs:
           any_track=false
           if [ "$run_test_backend" = "true" ] || [ "$run_test_frontend" = "true" ] || \
              [ "$run_deploy" = "true" ] || [ "$run_mv" = "true" ] || \
-             [ "$run_scan_images" = "true" ]; then
+             [ "$run_scan_images" = "true" ] || [ "$run_e2e" = "true" ]; then
             any_track=true
           fi
 
@@ -175,6 +186,8 @@ jobs:
             echo "mv_overlay_ref=$mv_overlay_ref"
             echo "run_scan_images=$run_scan_images"
             echo "scan_images_ref=$scan_images_ref"
+            echo "run_e2e=$run_e2e"
+            echo "e2e_ref=$e2e_ref"
             echo "any_track=$any_track"
           } >> "$GITHUB_OUTPUT"
 
@@ -185,6 +198,7 @@ jobs:
           echo "  deploy:        $run_deploy (ref: $deploy_ref)"
           echo "  mv:            $run_mv (base: $mv_base_ref, overlay: $mv_overlay_ref)"
           echo "  scan-images:   $run_scan_images (ref: $scan_images_ref)"
+          echo "  e2e:           $run_e2e (ref: $e2e_ref)"
           echo "  any_track:     $any_track"
 
   # ── Test Tracks ───────────────────────────────────────────────────────────
@@ -207,7 +221,7 @@ jobs:
 
       - name: Restore Python packages cache
         id: cache-backend
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cache/uv
@@ -224,7 +238,7 @@ jobs:
 
       - name: Save Python packages cache
         if: steps.cache-backend.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cache/uv
@@ -244,7 +258,7 @@ jobs:
 
       - name: Restore frontend node_modules cache
         id: cache-frontend
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
@@ -259,7 +273,7 @@ jobs:
 
       - name: Save frontend node_modules cache
         if: steps.cache-frontend.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
@@ -284,7 +298,7 @@ jobs:
           python-version: '3.13'
 
       - name: Restore Python packages cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cache/uv
@@ -296,7 +310,7 @@ jobs:
         run: bash scripts/stack-app-api/test.sh
 
       - name: Upload backend coverage artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: backend-coverage
           path: |
@@ -327,7 +341,7 @@ jobs:
           ref: ${{ needs.resolve-tracks.outputs.test_frontend_ref }}
 
       - name: Restore frontend node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: frontend/ai.client/node_modules
           key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
@@ -337,7 +351,7 @@ jobs:
         run: bash scripts/stack-frontend/test.sh
 
       - name: Upload frontend coverage artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: frontend-coverage
           path: frontend/ai.client/coverage/
@@ -396,7 +410,7 @@ jobs:
         run: python3 scripts/nightly/compare-coverage.py
 
       - name: Upload coverage comparison report
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-comparison
           path: coverage-comparison.json
@@ -471,6 +485,27 @@ jobs:
       label: deploy-${{ needs.resolve-tracks.outputs.deploy_ref }}
     secrets: inherit
 
+  # ── E2E Test Track ────────────────────────────────────────────────────────
+  # Deploys the full stack and runs Playwright E2E tests against it.
+  # Uses the deploy pipeline with run-e2e enabled. Separate from the deploy
+  # track so you can deploy without E2E or run E2E independently.
+
+  e2e:
+    needs: resolve-tracks
+    if: needs.resolve-tracks.outputs.run_e2e == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/nightly-deploy-pipeline.yml
+    with:
+      ref: ${{ needs.resolve-tracks.outputs.e2e_ref }}
+      project-prefix: nightly-e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}
+      alb-subdomain: nightly-e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}-api
+      skip-teardown: ${{ github.event.inputs.skip_teardown || 'false' }}
+      label: e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}
+      run-e2e: 'true'
+    secrets: inherit
+
   # ── Merge Validation Track ────────────────────────────────────────────────
   # Deploys base branch first, then overlays the overlay branch on top —
   # simulating a real merge to catch CDK/infra incompatibilities.
@@ -535,7 +570,7 @@ jobs:
         run: docker build -f backend/Dockerfile.rag-ingestion -t rag-ingestion:scan .
 
       - name: Trivy scan app-api
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'app-api:scan'
           format: 'table'
@@ -544,7 +579,7 @@ jobs:
           output: trivy-app-api.txt
 
       - name: Trivy scan inference-api
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'inference-api:scan'
           format: 'table'
@@ -553,7 +588,7 @@ jobs:
           output: trivy-inference-api.txt
 
       - name: Trivy scan rag-ingestion
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'rag-ingestion:scan'
           format: 'table'
@@ -563,7 +598,7 @@ jobs:
 
       - name: Upload scan reports
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-scan-reports
           path: trivy-*.txt
@@ -593,7 +628,7 @@ jobs:
   summary:
     name: Nightly Summary
     runs-on: ubuntu-24.04
-    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, mv-base, mv-overlay, scan-images]
+    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, e2e, mv-base, mv-overlay, scan-images]
     if: always() && needs.resolve-tracks.outputs.any_track == 'true'
     steps:
       - name: Checkout code
@@ -606,9 +641,11 @@ jobs:
           RUN_TEST_BACKEND: ${{ needs.resolve-tracks.outputs.run_test_backend }}
           RUN_TEST_FRONTEND: ${{ needs.resolve-tracks.outputs.run_test_frontend }}
           RUN_DEPLOY: ${{ needs.resolve-tracks.outputs.run_deploy }}
+          RUN_E2E: ${{ needs.resolve-tracks.outputs.run_e2e }}
           RUN_MV: ${{ needs.resolve-tracks.outputs.run_mv }}
           RUN_SCAN_IMAGES: ${{ needs.resolve-tracks.outputs.run_scan_images }}
           DEPLOY_REF: ${{ needs.resolve-tracks.outputs.deploy_ref }}
+          E2E_REF: ${{ needs.resolve-tracks.outputs.e2e_ref }}
           MV_BASE_REF: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
           MV_OVERLAY_REF: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
         run: |
@@ -655,6 +692,13 @@ jobs:
             status="$(map_status "${{ needs.deploy.result }}")"
             ROWS+=("Deploy Pipeline (${DEPLOY_REF})|${status}|0")
             [ "$status" = "failure" ] && AGGREGATE="failure"
+          fi
+
+          # E2E track (reusable workflow — informational, does not fail aggregate)
+          if [ "$RUN_E2E" = "true" ]; then
+            status="$(map_status "${{ needs.e2e.result }}")"
+            ROWS+=("E2E Tests (${E2E_REF})|${status}|0")
+            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 
           # MV tracks

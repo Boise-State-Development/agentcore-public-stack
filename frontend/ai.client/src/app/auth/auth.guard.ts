@@ -1,42 +1,27 @@
 import { inject } from '@angular/core';
 import { Router, CanActivateFn } from '@angular/router';
-import { AuthService } from './auth.service';
+import { SessionService } from './session.service';
 import { SystemService } from '../services/system.service';
 
 /**
  * Route guard that protects routes requiring authentication.
- * 
- * Checks if the user is authenticated. If not authenticated:
- * - Attempts to refresh token if expired
- * - Checks system status to redirect to first-boot or login
- * 
- * @returns True if user is authenticated, false otherwise (triggers redirect)
+ *
+ * The BFF session is bootstrapped at app init (`APP_INITIALIZER` chain
+ * in `app.config.ts`), so by the time a route resolves
+ * `SessionService.bootstrapped()` is already true. Authenticated users
+ * pass; everyone else gets routed to first-boot or `/auth/login`, with
+ * the deep-link path forwarded as `?returnUrl=` so the BFF callback
+ * can land them back where they started.
  */
 export const authGuard: CanActivateFn = async (route, state) => {
-  const authService = inject(AuthService);
+  const sessionService = inject(SessionService);
   const systemService = inject(SystemService);
   const router = inject(Router);
 
-  // Check if user is authenticated
-  if (authService.isAuthenticated()) {
+  if (sessionService.isAuthenticated()) {
     return true;
   }
 
-  // If not authenticated, try to refresh token if expired
-  const token = authService.getAccessToken();
-  if (token && authService.isTokenExpired()) {
-    try {
-      await authService.refreshAccessToken();
-      // Verify authentication after refresh
-      if (authService.isAuthenticated()) {
-        return true;
-      }
-    } catch (error) {
-      // Refresh failed — fall through to redirect logic
-    }
-  }
-
-  // Check if first-boot is needed before redirecting
   try {
     const firstBootCompleted = await systemService.checkStatus();
     if (!firstBootCompleted) {
@@ -44,13 +29,11 @@ export const authGuard: CanActivateFn = async (route, state) => {
       return false;
     }
   } catch {
-    // If status check fails, fall through to login
+    // If status check fails, fall through to login.
   }
 
-  // First-boot done (or check failed), redirect to login
-  router.navigate(['/auth/login'], { 
-    queryParams: { returnUrl: state.url } 
+  router.navigate(['/auth/login'], {
+    queryParams: { returnUrl: state.url },
   });
   return false;
 };
-

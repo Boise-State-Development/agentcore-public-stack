@@ -24,7 +24,6 @@ describe('ModelSettings', () => {
     enabled: true,
     inputPricePerMillionTokens: 1,
     outputPricePerMillionTokens: 2,
-    isReasoningModel: false,
     knowledgeCutoffDate: null,
     supportsCaching: true,
     isDefault: false,

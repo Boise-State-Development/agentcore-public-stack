@@ -43,7 +43,13 @@ class TestCompactionStateToDict:
             updated_at="2024-01-01T00:00:00Z",
         )
         d = state.to_dict()
-        assert set(d.keys()) == {"checkpoint", "summary", "lastInputTokens", "updatedAt"}
+        assert set(d.keys()) == {
+            "checkpoint",
+            "summary",
+            "lastInputTokens",
+            "updatedAt",
+            "totalSummarizedTurns",
+        }
 
     def test_to_dict_values_match(self):
         state = CompactionState(

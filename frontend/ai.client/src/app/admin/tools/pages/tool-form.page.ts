@@ -8,7 +8,7 @@ import {
   effect,
 } from '@angular/core';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
-import { FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
+import { FormArray, FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -17,9 +17,11 @@ import {
   heroUserGroup,
   heroLink,
   heroShieldCheck,
+  heroPlus,
+  heroTrash,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
-import { OAuthProvidersService } from '../../oauth-providers/services/oauth-providers.service';
+import { ConnectorsService } from '../../connectors/services/connectors.service';
 import {
   TOOL_CATEGORIES,
   TOOL_PROTOCOLS,
@@ -28,6 +30,7 @@ import {
   MCP_AUTH_TYPES,
   A2A_AUTH_TYPES,
   MCPServerConfig,
+  MCPToolEntry,
   A2AAgentConfig,
   ToolProtocol,
 } from '../models/admin-tool.model';
@@ -36,7 +39,7 @@ import {
   selector: 'app-tool-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, ReactiveFormsModule, NgIcon],
-  providers: [provideIcons({ heroArrowLeft, heroCheck, heroServer, heroUserGroup, heroLink, heroShieldCheck })],
+  providers: [provideIcons({ heroArrowLeft, heroCheck, heroServer, heroUserGroup, heroLink, heroShieldCheck, heroPlus, heroTrash })],
   host: {
     class: 'block p-6',
   },
@@ -269,19 +272,75 @@ import {
               }
 
               <!-- MCP Tools -->
-              <div class="mb-4">
-                <label for="mcpTools" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Available Tools
-                </label>
-                <textarea
-                  id="mcpTools"
-                  formControlName="mcpTools"
-                  rows="3"
-                  class="w-full px-3 py-2 border border-gray-300 rounded-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-600 font-mono text-sm"
-                  placeholder="search_policies&#10;get_policy_by_number&#10;list_policy_categories"
-                ></textarea>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  One tool name per line. Leave empty to discover tools at runtime.
+              <div class="mb-4" formArrayName="mcpTools">
+                <div class="flex items-center justify-between mb-2">
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Available Tools
+                  </label>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      (click)="discoverMcpTools()"
+                      [disabled]="discovering() || !form.get('mcpServerUrl')?.value"
+                      class="inline-flex items-center gap-1 px-2 py-1 text-sm text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {{ discovering() ? 'Discovering…' : 'Discover from server' }}
+                    </button>
+                    <button
+                      type="button"
+                      (click)="addMcpTool()"
+                      class="inline-flex items-center gap-1 px-2 py-1 text-sm text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                    >
+                      <ng-icon name="heroPlus" class="size-4" />
+                      Add Tool
+                    </button>
+                  </div>
+                </div>
+                @if (discoverError()) {
+                  <p class="mb-2 text-sm text-red-600 dark:text-red-400">
+                    {{ discoverError() }}
+                  </p>
+                }
+
+                @if (mcpToolsArray.length === 0) {
+                  <p class="text-xs text-gray-500 dark:text-gray-400 italic">
+                    No tools listed. Leave empty to discover tools at runtime — per-tool approval flags will not apply.
+                  </p>
+                } @else {
+                  <div class="space-y-2">
+                    @for (row of mcpToolsArray.controls; track $index) {
+                      <div [formGroupName]="$index" class="flex items-start gap-2 p-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-sm">
+                        <div class="flex-1">
+                          <input
+                            type="text"
+                            formControlName="name"
+                            class="w-full px-2 py-1 text-sm font-mono border border-gray-300 rounded-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-600"
+                            placeholder="tool_name"
+                            [attr.aria-label]="'Tool name ' + ($index + 1)"
+                          />
+                        </div>
+                        <label class="flex items-center gap-1.5 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap pt-1.5">
+                          <input
+                            type="checkbox"
+                            formControlName="needsApproval"
+                            class="size-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                          />
+                          <span>Needs approval</span>
+                        </label>
+                        <button
+                          type="button"
+                          (click)="removeMcpTool($index)"
+                          class="p-1 text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+                          [attr.aria-label]="'Remove tool ' + ($index + 1)"
+                        >
+                          <ng-icon name="heroTrash" class="size-4" />
+                        </button>
+                      </div>
+                    }
+                  </div>
+                }
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Tools flagged "Needs approval" will pause the agent for user confirmation before invocation.
                 </p>
               </div>
 
@@ -340,7 +399,7 @@ import {
             <div class="border border-emerald-200 dark:border-emerald-800 rounded-lg p-4 bg-emerald-50/50 dark:bg-emerald-900/20">
               <div class="flex items-center gap-2 mb-4">
                 <ng-icon name="heroLink" class="size-5 text-emerald-600 dark:text-emerald-400" />
-                <h3 class="text-lg font-semibold text-emerald-900 dark:text-emerald-100">User OAuth Connection</h3>
+                <h3 class="text-lg font-semibold text-emerald-900 dark:text-emerald-100">User OAuth Connector</h3>
               </div>
               <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
                 If this tool requires access to a user's external account (e.g., Google Workspace, Microsoft 365),
@@ -361,8 +420,8 @@ import {
                   }
                 </select>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Users must connect this provider before using the tool. Manage providers in
-                  <a routerLink="/admin/oauth-providers" class="text-emerald-600 hover:underline">OAuth Settings</a>.
+                  Users must connect this connector before using the tool. Manage connectors in
+                  <a routerLink="/admin/connectors" class="text-emerald-600 hover:underline">Connectors</a>.
                 </p>
               </div>
             </div>
@@ -568,7 +627,7 @@ export class ToolFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private adminToolService = inject(AdminToolService);
-  private oauthProvidersService = inject(OAuthProvidersService);
+  private connectorsService = inject(ConnectorsService);
 
   readonly categories = TOOL_CATEGORIES;
   readonly protocols = TOOL_PROTOCOLS;
@@ -581,12 +640,14 @@ export class ToolFormPage implements OnInit {
   saving = signal(false);
   error = signal<string | null>(null);
   toolId = signal<string | null>(null);
+  discovering = signal(false);
+  discoverError = signal<string | null>(null);
 
   readonly isEditMode = computed(() => !!this.toolId());
   readonly selectedProtocol = signal<ToolProtocol>('local');
 
-  /** Available OAuth providers for dropdown */
-  readonly oauthProviders = computed(() => this.oauthProvidersService.getEnabledProviders());
+  /** Available connectors for dropdown */
+  readonly oauthProviders = computed(() => this.connectorsService.getEnabledConnectors());
 
   form: FormGroup = this.fb.group({
     toolId: ['', [Validators.required, Validators.pattern(/^[a-z][a-z0-9_]{2,49}$/)]],
@@ -606,7 +667,7 @@ export class ToolFormPage implements OnInit {
     mcpAwsRegion: [''],
     mcpApiKeyHeader: [''],
     mcpSecretArn: [''],
-    mcpTools: [''],
+    mcpTools: this.fb.array([] as FormGroup[]),
     mcpHealthCheckEnabled: [false],
     // A2A Agent configuration
     a2aAgentUrl: [''],
@@ -633,6 +694,77 @@ export class ToolFormPage implements OnInit {
     if (!protocol) return '';
     const found = this.protocols.find(p => p.value === protocol);
     return found?.description || '';
+  }
+
+  get mcpToolsArray(): FormArray<FormGroup> {
+    return this.form.get('mcpTools') as FormArray<FormGroup>;
+  }
+
+  private buildMcpToolRow(entry?: MCPToolEntry): FormGroup {
+    return this.fb.group({
+      name: [entry?.name ?? '', [Validators.required]],
+      needsApproval: [entry?.needsApproval ?? false],
+      description: [entry?.description ?? ''],
+    });
+  }
+
+  addMcpTool(): void {
+    this.mcpToolsArray.push(this.buildMcpToolRow());
+  }
+
+  removeMcpTool(index: number): void {
+    this.mcpToolsArray.removeAt(index);
+  }
+
+  async discoverMcpTools(): Promise<void> {
+    const formValue = this.form.getRawValue();
+    if (!formValue.mcpServerUrl) {
+      return;
+    }
+
+    this.discovering.set(true);
+    this.discoverError.set(null);
+    try {
+      const response = await this.adminToolService.discoverMCPTools({
+        serverUrl: formValue.mcpServerUrl,
+        transport: formValue.mcpTransport,
+        authType: formValue.mcpAuthType,
+        awsRegion: formValue.mcpAwsRegion || null,
+        apiKeyHeader: formValue.mcpApiKeyHeader || null,
+        secretArn: formValue.mcpSecretArn || null,
+      });
+
+      // Merge: keep existing rows (and their needsApproval flag), append any
+      // newly-discovered names. Update descriptions on existing rows when the
+      // server returned one and the row is empty.
+      const existingByName = new Map<string, FormGroup>();
+      for (const ctrl of this.mcpToolsArray.controls) {
+        const name = (ctrl.get('name')?.value ?? '').trim();
+        if (name) {
+          existingByName.set(name, ctrl);
+        }
+      }
+
+      for (const tool of response.tools) {
+        const existing = existingByName.get(tool.name);
+        if (existing) {
+          if (tool.description && !existing.get('description')?.value) {
+            existing.get('description')?.setValue(tool.description);
+          }
+        } else {
+          this.mcpToolsArray.push(this.buildMcpToolRow({
+            name: tool.name,
+            needsApproval: false,
+            description: tool.description ?? null,
+          }));
+        }
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Discovery failed.';
+      this.discoverError.set(message);
+    } finally {
+      this.discovering.set(false);
+    }
   }
 
   async ngOnInit(): Promise<void> {
@@ -691,9 +823,12 @@ export class ToolFormPage implements OnInit {
           mcpAwsRegion: tool.mcpConfig.awsRegion || '',
           mcpApiKeyHeader: tool.mcpConfig.apiKeyHeader || '',
           mcpSecretArn: tool.mcpConfig.secretArn || '',
-          mcpTools: tool.mcpConfig.tools.join('\n'),
           mcpHealthCheckEnabled: tool.mcpConfig.healthCheckEnabled,
         });
+        this.mcpToolsArray.clear();
+        for (const entry of tool.mcpConfig.tools) {
+          this.mcpToolsArray.push(this.buildMcpToolRow(entry));
+        }
       }
 
       // A2A configuration
@@ -732,6 +867,14 @@ export class ToolFormPage implements OnInit {
       // Build MCP config if protocol is mcp_external
       let mcpConfig: MCPServerConfig | undefined;
       if (formValue.protocol === 'mcp_external' && formValue.mcpServerUrl) {
+        const mcpTools: MCPToolEntry[] = (formValue.mcpTools ?? [])
+          .map((row: { name?: string; needsApproval?: boolean; description?: string | null }) => ({
+            name: (row.name ?? '').trim(),
+            needsApproval: !!row.needsApproval,
+            description: row.description?.trim() || null,
+          }))
+          .filter((row: MCPToolEntry) => row.name.length > 0);
+
         mcpConfig = {
           serverUrl: formValue.mcpServerUrl,
           transport: formValue.mcpTransport,
@@ -739,7 +882,7 @@ export class ToolFormPage implements OnInit {
           awsRegion: formValue.mcpAwsRegion || null,
           apiKeyHeader: formValue.mcpApiKeyHeader || null,
           secretArn: formValue.mcpSecretArn || null,
-          tools: formValue.mcpTools ? formValue.mcpTools.split('\n').map((t: string) => t.trim()).filter((t: string) => t) : [],
+          tools: mcpTools,
           healthCheckEnabled: formValue.mcpHealthCheckEnabled,
           healthCheckIntervalSeconds: 300,
         };

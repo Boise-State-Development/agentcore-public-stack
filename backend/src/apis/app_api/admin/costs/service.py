@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
-from apis.app_api.storage.dynamodb_storage import DynamoDBStorage
+from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 from .models import (
     TopUserCost,
     SystemCostSummary,
@@ -248,7 +248,7 @@ class AdminCostService:
         Returns:
             List of TierUsageSummary (currently empty, placeholder).
         """
-        _period = period or self._get_current_period()  # TODO: use once tier aggregation is implemented
+        _ = period or self._get_current_period()  # TODO: use once tier aggregation is implemented
         logger.info("Getting tier usage for period")
 
         # TODO: Implement tier usage aggregation

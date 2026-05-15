@@ -1,10 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
@@ -167,6 +169,42 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/secret-name`,
       stringValue: this.authSecret.secretName,
       description: 'Authentication Secret Name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // ============================================================
+    // AgentCore Identity - Shared Platform Workload
+    // ============================================================
+    // AgentCore Runtimes auto-create their own workload identity, but it is
+    // service-linked: only the runtime container itself can mint tokens
+    // against it via GetWorkloadAccessTokenForUserId. App-api lives outside
+    // the runtime gateway and was failing 500 with `WorkloadIdentity is
+    // linked to a service and cannot retrieve an access token by the caller`.
+    //
+    // We create our own workload identity here so both APIs can mint against
+    // it. The OAuth token vault is keyed by (workload identity, user,
+    // provider), so sharing one identity is what lets the settings-page
+    // consent flow and the runtime agent loop see the same vaulted tokens —
+    // a user consents once and both code paths find the token.
+    //
+    // The runtime's auto-created identity is left in place (we can't tell
+    // CreateAgentRuntime to use a pre-existing one) but is no longer used
+    // for vault calls — see `_resolve_workload_token` in the backend.
+    const platformWorkloadIdentity = new bedrock.CfnWorkloadIdentity(this, 'PlatformWorkloadIdentity', {
+      name: getResourceName(config, 'platform-workload'),
+    });
+
+    new ssm.StringParameter(this, 'PlatformWorkloadIdentityNameParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/platform-workload-identity-name`,
+      stringValue: platformWorkloadIdentity.name,
+      description: 'Shared AgentCore workload identity used by both inference-api and app-api for OAuth vault calls',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'PlatformWorkloadIdentityArnParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/platform-workload-identity-arn`,
+      stringValue: platformWorkloadIdentity.attrWorkloadIdentityArn,
+      description: 'Shared AgentCore workload identity ARN',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -352,6 +390,97 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/oidc-state-table-arn`,
       stringValue: oidcStateTable.tableArn,
       description: "OIDC state table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Sessions Table - BFF token-handler sessions (httpOnly cookie -> Cognito tokens)
+    // Stores per-session Cognito access/refresh/id tokens server-side so the
+    // browser only sees an opaque session id in an httpOnly cookie. TTL on the
+    // table enforces absolute session lifetime (default 8h, configurable on app-api).
+    const bffSessionsTable = new dynamodb.Table(this, "BFFSessionsTable", {
+      tableName: getResourceName(config, "bff-sessions"),
+      partitionKey: {
+        name: "PK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "SK",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "BFFSessionsTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-sessions-table-name`,
+      stringValue: bffSessionsTable.tableName,
+      description: "BFF sessions table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "BFFSessionsTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-sessions-table-arn`,
+      stringValue: bffSessionsTable.tableArn,
+      description: "BFF sessions table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Voice Ticket Replay Table - single-use jti tracking for the WS-upgrade
+    // ticket exchanged between SPA and app-api before proxying voice traffic
+    // upstream to the AgentCore Runtime. The ticket lives entirely within
+    // app-api (issuer == verifier), so this table is owned by app-api alone.
+    // jti is the partition key; TTL on `ttl` reaps consumed rows ~1 minute
+    // after expiry. Conditional puts on the jti enforce single-use.
+    const voiceTicketReplayTable = new dynamodb.Table(this, "VoiceTicketReplayTable", {
+      tableName: getResourceName(config, "voice-ticket-replay"),
+      partitionKey: {
+        name: "jti",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "ttl",
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketReplayTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-replay-table-name`,
+      stringValue: voiceTicketReplayTable.tableName,
+      description: "Voice ticket replay table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketReplayTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-replay-table-arn`,
+      stringValue: voiceTicketReplayTable.tableArn,
+      description: "Voice ticket replay table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Voice Ticket Signing Secret - HMAC-SHA256 key used by app-api to sign
+    // and verify short-lived (~60s) WebSocket-upgrade tickets. Sourced once
+    // at startup and cached in process memory. Mirrors the AuthenticationSecret
+    // pattern; rotated by replacing the secret value.
+    const voiceTicketSigningSecret = new secretsmanager.Secret(this, "VoiceTicketSigningSecret", {
+      secretName: getResourceName(config, "voice-ticket-signing-key"),
+      description: "HMAC signing key for voice WebSocket-upgrade tickets",
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ description: "Voice ticket signing key" }),
+        generateStringKey: "secret",
+        excludePunctuation: true,
+        includeSpace: false,
+        passwordLength: 64,
+      },
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "VoiceTicketSigningSecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/voice/ticket-signing-secret-arn`,
+      stringValue: voiceTicketSigningSecret.secretArn,
+      description: "Voice ticket signing secret ARN",
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -565,6 +694,70 @@ export class InfrastructureStack extends cdk.Stack {
       description: "KMS key for encrypting OAuth user tokens at rest",
       enableKeyRotation: true,
       removalPolicy: getRemovalPolicy(config),
+    });
+
+    // KMS Key for sealing BFF session cookies (AES-GCM via GenerateDataKey).
+    // App-api fetches a data key once at startup and caches the plaintext
+    // in process memory; the cookie value is the AES-GCM-sealed session id.
+    const bffCookieSigningKey = new kms.Key(this, "BFFCookieSigningKey", {
+      alias: getResourceName(config, "bff-cookie-signing-key"),
+      description: "KMS key for sealing BFF session cookies (data-key wrapping)",
+      enableKeyRotation: true,
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "BFFCookieSigningKeyArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-cookie-signing-key-arn`,
+      stringValue: bffCookieSigningKey.keyArn,
+      description: "KMS key ARN for BFF session cookie sealing",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // High-entropy random secret used to derive the AES-256 cookie-sealing
+    // key. Generated once at stack create by Secrets Manager itself
+    // (`generateSecretString`), so every app-api task — across desiredCount > 1
+    // and across rolling deploys where two task revisions briefly coexist —
+    // derives the same plaintext key. Without this, each task's CookieCodec
+    // singleton would mint its own random AES key and any cookie sealed by
+    // Task A would fail `bad seal` on Task B (a 401 storm under the
+    // desiredCount: 2 deployment shape).
+    //
+    // The runtime hashes the secret string with SHA-256 to produce the
+    // 32-byte AES-256 key — a single-shot KDF that's secure when the input
+    // already has ≥256 bits of entropy (a 44-char alphanumeric secret has
+    // ~261 bits). This avoids the AwsCustomResource binary-payload
+    // serialization bug that broke the prior KMS-wrap bootstrap design
+    // (the framework Lambda JSON-stringifies Uint8Array as `{"0":233,...}`,
+    // which exceeded the 4 KB CloudFormation response limit).
+    //
+    // The secret is encrypted at rest with `bffCookieSigningKey`; access
+    // requires both `secretsmanager:GetSecretValue` on this secret AND
+    // `kms:Decrypt` on the CMK (Secrets Manager invokes Decrypt on the
+    // caller's behalf using the secret-ARN encryption context).
+    const bffCookieDataKeySecret = new secretsmanager.Secret(this, "BFFCookieDataKeySecret", {
+      secretName: getResourceName(config, "bff-cookie-data-key"),
+      description:
+        "High-entropy random secret used to derive the AES-256 BFF cookie " +
+        "sealing key (SHA-256). Generated once at deploy time; rotation " +
+        "invalidates active cookies (no kid versioning yet).",
+      encryptionKey: bffCookieSigningKey,
+      generateSecretString: {
+        // 44 chars from the 62-char alphanumeric alphabet ≈ 261 bits of
+        // entropy — comfortably above the 256-bit AES-256 target after
+        // SHA-256 derivation. Punctuation/space excluded so the value
+        // round-trips cleanly through env-var-style consumers.
+        passwordLength: 44,
+        excludePunctuation: true,
+        includeSpace: false,
+      },
+      removalPolicy: getRemovalPolicy(config),
+    });
+
+    new ssm.StringParameter(this, "BFFCookieDataKeySecretArnParameter", {
+      parameterName: `/${config.projectPrefix}/auth/bff-cookie-data-key-secret-arn`,
+      stringValue: bffCookieDataKeySecret.secretArn,
+      description: "Secrets Manager ARN for the BFF cookie data-key secret",
+      tier: ssm.ParameterTier.STANDARD,
     });
 
     // OAuth Providers Table - Admin-configured OAuth provider settings
@@ -1126,26 +1319,43 @@ export class InfrastructureStack extends cdk.Stack {
       removalPolicy: getRemovalPolicy(config),
     });
 
-    // App Client — SPA, no client secret, authorization code grant with PKCE
-    const callbackUrls = config.domainName
-      ? [`https://${config.domainName}/auth/callback`]
-      : ['http://localhost:4200/auth/callback'];
-    const logoutUrls = config.domainName
+    // BFF App Client — confidential client used by app-api for the
+    // server-side OAuth token exchange in the Token Handler BFF flow.
+    // The client secret authenticates the /oauth2/token call from app-api;
+    // the secret never leaves the server. The public PKCE SPA client
+    // that previously sat alongside this one was retired in Phase 7
+    // when the SPA cut over fully to cookie auth.
+    const bffCallbackUrls = config.domainName
+      ? [`https://${config.domainName}/api/auth/callback`]
+      : ['http://localhost:8000/auth/callback'];
+    const bffLogoutUrls = config.domainName
       ? [`https://${config.domainName}`]
       : ['http://localhost:4200'];
 
-    // Append any additional callback/logout URLs from config
+    // Append any additional callback/logout URLs from config — these
+    // used to feed the public SPA client too; with that gone, they
+    // extend the BFF client's allowlists instead.
     if (config.cognito.callbackUrls) {
-      callbackUrls.push(...config.cognito.callbackUrls);
+      bffCallbackUrls.push(...config.cognito.callbackUrls);
     }
     if (config.cognito.logoutUrls) {
-      logoutUrls.push(...config.cognito.logoutUrls);
+      bffLogoutUrls.push(...config.cognito.logoutUrls);
     }
 
-    const appClient = userPool.addClient('CognitoAppClient', {
-      userPoolClientName: getResourceName(config, 'app-client'),
-      generateSecret: false,
-      authFlows: { userSrp: true, custom: true },
+    // Federated IdPs (Entra, Google, etc.) are configured on the user pool
+    // out-of-band today and listed here by ProviderName. COGNITO is always
+    // included so username/password sign-in keeps working alongside SSO.
+    const bffSupportedIdentityProviders: cognito.UserPoolClientIdentityProvider[] = [
+      cognito.UserPoolClientIdentityProvider.COGNITO,
+      ...(config.cognito.supportedIdentityProviders ?? [])
+        .filter((name) => name !== 'COGNITO')
+        .map((name) => cognito.UserPoolClientIdentityProvider.custom(name)),
+    ];
+
+    const bffAppClient = userPool.addClient('CognitoBFFAppClient', {
+      userPoolClientName: getResourceName(config, 'bff-app-client'),
+      generateSecret: true,
+      authFlows: { userSrp: false, custom: false },
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [
@@ -1153,13 +1363,20 @@ export class InfrastructureStack extends cdk.Stack {
           cognito.OAuthScope.PROFILE,
           cognito.OAuthScope.EMAIL,
         ],
-        callbackUrls,
-        logoutUrls,
+        callbackUrls: bffCallbackUrls,
+        logoutUrls: bffLogoutUrls,
       },
       preventUserExistenceErrors: true,
-      supportedIdentityProviders: [
-        cognito.UserPoolClientIdentityProvider.COGNITO,
-      ],
+      supportedIdentityProviders: bffSupportedIdentityProviders,
+    });
+
+    // Persist the generated client secret in Secrets Manager so app-api can
+    // read it via secretsmanager:GetSecretValue (auditable, rotatable).
+    const bffAppClientSecret = new secretsmanager.Secret(this, 'CognitoBFFAppClientSecret', {
+      secretName: getResourceName(config, 'cognito-bff-app-client-secret'),
+      description: 'Client secret for the Cognito BFF app client (Token Handler flow)',
+      secretStringValue: bffAppClient.userPoolClientSecret,
+      removalPolicy: getRemovalPolicy(config),
     });
 
     // Cognito Domain — prefix-based using project prefix or override
@@ -1184,13 +1401,6 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
-    new ssm.StringParameter(this, 'CognitoAppClientIdParameter', {
-      parameterName: `/${config.projectPrefix}/auth/cognito/app-client-id`,
-      stringValue: appClient.userPoolClientId,
-      description: 'Cognito App Client ID',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
     new ssm.StringParameter(this, 'CognitoDomainUrlParameter', {
       parameterName: `/${config.projectPrefix}/auth/cognito/domain-url`,
       stringValue: cognitoDomain.baseUrl(),
@@ -1202,6 +1412,20 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/auth/cognito/issuer-url`,
       stringValue: `https://cognito-idp.${config.awsRegion}.amazonaws.com/${userPool.userPoolId}`,
       description: 'Cognito OIDC issuer URL',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'CognitoBFFAppClientIdParameter', {
+      parameterName: `/${config.projectPrefix}/auth/cognito/bff-app-client-id`,
+      stringValue: bffAppClient.userPoolClientId,
+      description: 'Cognito BFF (confidential) app client ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'CognitoBFFAppClientSecretArnParameter', {
+      parameterName: `/${config.projectPrefix}/auth/cognito/bff-app-client-secret-arn`,
+      stringValue: bffAppClientSecret.secretArn,
+      description: 'Secrets Manager ARN for the Cognito BFF app client secret',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -1467,19 +1691,6 @@ export class InfrastructureStack extends cdk.Stack {
       parameterName: `/${config.projectPrefix}/network/alb-url`,
       stringValue: albUrl,
       description: albUrlDescription,
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Construct OAuth callback URL
-    const oauthCallbackUrl = config.domainName
-      ? `https://${config.domainName}/auth/callback`
-      : `${albUrl}/auth/callback`;
-
-    // Export OAuth callback URL for runtime provisioner
-    new ssm.StringParameter(this, 'OAuthCallbackUrlParameter', {
-      parameterName: `/${config.projectPrefix}/oauth/callback-url`,
-      stringValue: oauthCallbackUrl,
-      description: 'OAuth callback URL for authentication provider configuration',
       tier: ssm.ParameterTier.STANDARD,
     });
 

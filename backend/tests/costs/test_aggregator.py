@@ -5,8 +5,8 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock
 
-from apis.app_api.costs.aggregator import CostAggregator
-from apis.app_api.costs.models import UserCostSummary, ModelCostSummary, CostBreakdown
+from apis.shared.costs.aggregator import CostAggregator
+from apis.shared.costs.models import UserCostSummary, ModelCostSummary, CostBreakdown
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@ from apis.app_api.costs.models import UserCostSummary, ModelCostSummary, CostBre
 def aggregator(mock_storage):
     """Create a CostAggregator with mocked storage and fast cache expiry."""
     with patch(
-        "apis.app_api.costs.aggregator.get_metadata_storage",
+        "apis.shared.costs.aggregator.get_metadata_storage",
         return_value=mock_storage,
     ):
         agg = CostAggregator(cache_ttl_seconds=1)

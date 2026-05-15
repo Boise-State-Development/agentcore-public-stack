@@ -1,13 +1,17 @@
 {
   "name": "ai.client",
-  "version": "1.0.0-beta.22",
+  "version": "1.0.0-beta.26",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
+    "prebuild": "node scripts/gen-version.js",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "test:ci": "ng test --watch=false"
+    "test:ci": "ng test --watch=false",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed"
   },
   "prettier": {
     "printWidth": 100,
@@ -24,45 +28,57 @@
   "private": true,
   "packageManager": "npm@11.2.0",
   "dependencies": {
-    "@angular/cdk": "21.2.5",
-    "@angular/common": "21.2.7",
-    "@angular/compiler": "21.2.7",
-    "@angular/core": "21.2.7",
-    "@angular/forms": "21.2.7",
-    "@angular/platform-browser": "21.2.7",
-    "@angular/router": "21.2.7",
+    "@angular/cdk": "21.2.9",
+    "@angular/common": "21.2.11",
+    "@angular/compiler": "21.2.11",
+    "@angular/core": "21.2.11",
+    "@angular/forms": "21.2.11",
+    "@angular/platform-browser": "21.2.11",
+    "@angular/router": "21.2.11",
     "@ctrl/ngx-emoji-mart": "9.3.0",
     "@microsoft/fetch-event-source": "2.0.1",
-    "@ng-icons/core": "33.2.0",
-    "@ng-icons/heroicons": "33.2.0",
+    "@ng-icons/core": "33.2.2",
+    "@ng-icons/heroicons": "33.2.2",
     "chart.js": "4.5.1",
+    "clipboard": "2.0.11",
     "katex": "0.16.45",
     "marked": "17.0.6",
     "mermaid": "11.14.0",
     "ng2-charts": "10.0.0",
-    "ngx-markdown": "21.1.0",
+    "ngx-markdown": "21.2.0",
     "prismjs": "1.30.0",
     "rxjs": "7.8.2",
     "tslib": "2.8.1",
-    "uuid": "13.0.0"
+    "uuid": "14.0.0"
   },
   "devDependencies": {
-    "@analogjs/vite-plugin-angular": "3.0.0-alpha.26",
-    "@analogjs/vitest-angular": "3.0.0-alpha.26",
-    "@angular/build": "21.2.6",
-    "@angular/cli": "21.2.6",
-    "@angular/compiler-cli": "21.2.7",
-    "@tailwindcss/postcss": "4.2.2",
-    "@vitest/coverage-v8": "4.1.2",
-    "fast-check": "4.6.0",
-    "jsdom": "29.0.1",
-    "postcss": "8.5.8",
-    "tailwindcss": "4.2.2",
+    "@analogjs/vite-plugin-angular": "3.0.0-alpha.53",
+    "@analogjs/vitest-angular": "3.0.0-alpha.30",
+    "@angular/build": "21.2.9",
+    "@angular/cli": "21.2.9",
+    "@angular/compiler-cli": "21.2.11",
+    "@playwright/test": "1.59.1",
+    "@tailwindcss/postcss": "4.2.4",
+    "@types/node": "25.6.0",
+    "@vitest/coverage-v8": "4.1.5",
+    "dotenv": "17.4.2",
+    "fast-check": "4.7.0",
+    "jsdom": "29.1.0",
+    "postcss": "8.5.12",
+    "tailwindcss": "4.2.4",
     "typescript": "5.9.3",
-    "vitest": "4.1.2"
+    "vitest": "4.1.5"
   },
   "overrides": {
-    "undici": ">=7.24.0",
-    "picomatch": ">=4.0.4"
+    "undici": ">=7.25.0 <8.0.0",
+    "picomatch": ">=4.0.4",
+    "vite": ">=7.3.2",
+    "dompurify": ">=3.4.0",
+    "lodash-es": ">=4.18.0",
+    "hono": ">=4.12.14",
+    "@hono/node-server": ">=1.19.13",
+    "mermaid": {
+      "uuid": "14.0.0"
+    }
   }
 }

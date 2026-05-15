@@ -9,7 +9,7 @@ from typing import Callable
 from fastapi import Depends, HTTPException, status
 import logging
 
-from .dependencies import get_current_user
+from .dependencies import get_current_user_from_session
 from .models import User
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def require_app_roles(*required_app_roles: str) -> Callable:
     Raises:
         HTTPException: 403 if user lacks all required AppRoles
     """
-    async def checker(user: User = Depends(get_current_user)) -> User:
+    async def checker(user: User = Depends(get_current_user_from_session)) -> User:
         from apis.shared.rbac.service import get_app_role_service
 
         try:

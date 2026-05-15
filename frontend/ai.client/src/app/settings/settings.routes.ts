@@ -22,9 +22,9 @@ export const settingsRoutes: Routes = [
       import('./pages/chat-preferences/chat-preferences-settings.page').then(m => m.ChatPreferencesSettingsPage),
   },
   {
-    path: 'connections',
+    path: 'connectors',
     loadComponent: () =>
-      import('./pages/connections-settings/connections-settings.page').then(m => m.ConnectionsSettingsPage),
+      import('./pages/connectors-settings/connectors-settings.page').then(m => m.ConnectorsSettingsPage),
   },
   {
     path: 'api-keys',

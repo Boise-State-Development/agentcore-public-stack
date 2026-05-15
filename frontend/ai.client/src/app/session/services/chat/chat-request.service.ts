@@ -1,4 +1,4 @@
-import { inject, Injectable } from '@angular/core';
+import { inject, Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
@@ -10,6 +10,14 @@ import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import {
+  ToolApprovalDecision,
+  ToolApprovalService,
+} from '../../../services/tool-approval/tool-approval.service';
+import { ErrorService } from '../../../services/error/error.service';
+import { StreamParserService } from './stream-parser.service';
+import { HttpErrorResponse } from '@angular/common/http';
 
 export interface ContentFile {
   fileName: string;
@@ -21,7 +29,7 @@ export interface ContentFile {
 @Injectable({
   providedIn: 'root',
 })
-export class ChatRequestService {
+export class ChatRequestService implements OnDestroy {
   // private conversationService = inject(ConversationService);
   private chatHttpService = inject(ChatHttpService);
   private chatStateService = inject(ChatStateService);
@@ -31,8 +39,26 @@ export class ChatRequestService {
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
   private fileUploadService = inject(FileUploadService);
+  private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
+  private streamParserService = inject(StreamParserService);
+  private errorService = inject(ErrorService);
   private router = inject(Router);
   // TODO: Inject proper logging service
+
+  constructor() {
+    this.oauthConsentService.setResumeHandler((interruptIds, context) =>
+      this.resumeFromOAuthConsent(interruptIds, context?.sessionId),
+    );
+    this.toolApprovalService.setResumeHandler((interruptId, decision, context) =>
+      this.resumeFromToolApproval(interruptId, decision, context?.sessionId),
+    );
+  }
+
+  ngOnDestroy(): void {
+    this.oauthConsentService.setResumeHandler(null);
+    this.toolApprovalService.setResumeHandler(null);
+  }
 
   async submitChatRequest(
     userInput: string,
@@ -134,6 +160,16 @@ export class ChatRequestService {
       provider: isDefaultModel ? null : selectedModel.provider,
     };
 
+    // Per-model inference param overrides set in the Settings → Advanced
+    // panel. Backend layers these on top of admin defaults and clamps to the
+    // model's bounds; locked params drop the override silently.
+    if (!isDefaultModel) {
+      const overrides = this.modelService.getInferenceParamOverrides();
+      if (Object.keys(overrides).length > 0) {
+        requestObject['inference_params'] = overrides;
+      }
+    }
+
     // Add file upload IDs if present
     if (fileUploadIds && fileUploadIds.length > 0) {
       requestObject['file_upload_ids'] = fileUploadIds;
@@ -147,6 +183,131 @@ export class ChatRequestService {
     }
 
     return requestObject;
+  }
+
+  /**
+   * Resume the paused agent turn by POSTing the interrupt responses. The
+   * backend rebuilds the agent from its persisted ``PausedTurnSnapshot``,
+   * so this request only needs to identify the session and the interrupts —
+   * no model / tools / prompt context is sent or required. Triggered by
+   * OAuthConsentService after the user completes a consent popup.
+   */
+  private async resumeFromOAuthConsent(
+    interruptIds: string[],
+    sessionId?: string,
+  ): Promise<void> {
+    if (interruptIds.length === 0 || !sessionId) {
+      return;
+    }
+
+    // Reset the parser so the resumed stream is treated as a fresh batch
+    // of events. Without this, the parser stays in Completed state from
+    // the prior `done` and ignores everything.
+    this.streamParserService.reset(sessionId);
+    this.messageMapService.startStreaming(sessionId);
+    this.chatStateService.createNewAbortController();
+    this.chatStateService.setChatLoading(true);
+
+    const resumeRequest: Record<string, unknown> = {
+      session_id: sessionId,
+      // The original prompt is already in the agent's interrupt context;
+      // sending an empty string keeps the request valid without
+      // re-augmenting or re-charging quota.
+      message: '',
+      interrupt_responses: interruptIds.map((interruptId) => ({
+        interruptId,
+        // The token is already in AgentCore Identity's vault by the time
+        // we resume; the response payload itself doesn't carry a secret —
+        // it's just the signal that consent completed.
+        response: 'consented',
+      })),
+    };
+
+    try {
+      await this.chatHttpService.sendChatRequest(resumeRequest);
+    } catch (error) {
+      this.chatStateService.setChatLoading(false);
+      this.messageMapService.endStreaming();
+
+      // 400 from the resume route means either the persisted snapshot is
+      // missing/expired, or the agent's `_interrupt_state` doesn't recognize
+      // the submitted ids. Either way the user needs to retry the prompt.
+      if (this.isExpiredInterruptError(error)) {
+        this.errorService.addError(
+          'Authorization expired',
+          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Resume the paused agent turn after the user approves or declines a
+   * flagged MCP tool call. The hook on the backend reads the response
+   * string ("approved" / "declined") and either lets the tool proceed or
+   * cancels it.
+   */
+  private async resumeFromToolApproval(
+    interruptId: string,
+    decision: ToolApprovalDecision,
+    sessionId?: string,
+  ): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    this.streamParserService.reset(sessionId);
+    this.messageMapService.startStreaming(sessionId);
+    this.chatStateService.createNewAbortController();
+    this.chatStateService.setChatLoading(true);
+
+    const resumeRequest: Record<string, unknown> = {
+      session_id: sessionId,
+      message: '',
+      interrupt_responses: [
+        {
+          interruptId,
+          response: decision,
+        },
+      ],
+    };
+
+    try {
+      await this.chatHttpService.sendChatRequest(resumeRequest);
+    } catch (error) {
+      this.chatStateService.setChatLoading(false);
+      this.messageMapService.endStreaming();
+
+      if (this.isExpiredInterruptError(error)) {
+        this.errorService.addError(
+          'Approval expired',
+          'The agent paused too long ago to resume this turn automatically. Please send your message again.',
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /** Detect the 400 the inference-api returns for unknown/expired interrupt
+   *  ids. Both fetch-based and HttpClient-based flows are checked because
+   *  the resume path uses `fetch-event-source`, which surfaces errors as
+   *  plain Error/Response objects rather than HttpErrorResponse. */
+  private isExpiredInterruptError(error: unknown): boolean {
+    if (error instanceof HttpErrorResponse) {
+      return error.status === 400;
+    }
+    if (typeof error === 'object' && error !== null) {
+      const status = (error as { status?: unknown }).status;
+      if (status === 400) return true;
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === 'string' && /expired interrupt/i.test(message)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

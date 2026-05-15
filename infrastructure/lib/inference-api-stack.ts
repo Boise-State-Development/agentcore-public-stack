@@ -199,7 +199,7 @@ export class InferenceApiStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${config.awsRegion}:${config.awsAccount}:parameter/${config.projectPrefix}/*`],
     }));
 
-    // Secrets Manager read permissions for OAuth client secrets (imported from App API Stack)
+    // Secrets Manager read permissions for OAuth client secrets (imported from Infrastructure Stack)
     const oauthClientSecretsArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/oauth/client-secrets-arn`
@@ -218,7 +218,26 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB Users Table permissions (imported from App API Stack)
+    // AgentCore Identity stores each provider's OAuth client secret in a
+    // Secrets Manager secret under `bedrock-agentcore-identity!default/oauth2/*`.
+    // GetResourceOauth2Token (called by the agent loop's tool gating
+    // hooks) reads that secret using the caller's IAM identity. Since the
+    // shared platform workload design (#187) routes inference-api through
+    // the same explicit-mint path as app-api, the runtime now needs the
+    // same permission.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreOAuthSecretRead',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'secretsmanager:GetSecretValue',
+        'secretsmanager:DescribeSecret',
+      ],
+      resources: [
+        `arn:aws:secretsmanager:${config.awsRegion}:${config.awsAccount}:secret:bedrock-agentcore-identity!default/oauth2/*`,
+      ],
+    }));
+
+    // DynamoDB Users Table permissions (imported from Infrastructure Stack)
     const usersTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/users/users-table-arn`
@@ -240,7 +259,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB AppRoles Table permissions (imported from App API Stack)
+    // DynamoDB AppRoles Table permissions (imported from Infrastructure Stack)
     // This table stores both RBAC roles AND tool catalog definitions
     const appRolesTableArn = ssm.StringParameter.valueForStringParameter(
       this,
@@ -262,7 +281,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB OAuth Providers Table permissions (imported from App API Stack)
+    // DynamoDB OAuth Providers Table permissions (imported from Infrastructure Stack)
     const oauthProvidersTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/oauth/providers-table-arn`
@@ -283,7 +302,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB OAuth User Tokens Table permissions (imported from App API Stack)
+    // DynamoDB OAuth User Tokens Table permissions (imported from Infrastructure Stack)
     const oauthUserTokensTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/oauth/user-tokens-table-arn`
@@ -367,9 +386,27 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // S3 Assistants Documents Bucket permissions - NOT NEEDED by inference API
-    // Documents are only accessed during ingestion (Lambda function)
-    // Inference API only queries the vector store, not the raw documents
+    // S3 Assistants Documents Bucket permissions (READ-ONLY).
+    // The agent's spreadsheet_analysis tool downloads tabular KB files
+    // (CSV/XLSX) from this bucket to push into the Code Interpreter sandbox
+    // for analysis. Ingestion still happens via a separate Lambda; the
+    // runtime only needs read access.
+    const assistantsDocumentsBucketArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/rag/documents-bucket-arn`
+    );
+
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AssistantsDocumentsBucketRead',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3:GetObject',
+        's3:GetObjectVersion',
+      ],
+      resources: [
+        `${assistantsDocumentsBucketArn}/*`,
+      ],
+    }));
 
     // DynamoDB User Files Table permissions (imported from Infrastructure Stack)
     const userFilesTableArn = ssm.StringParameter.valueForStringParameter(
@@ -478,11 +515,30 @@ export class InferenceApiStack extends cdk.Stack {
       ],
       resources: [
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
-        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/hosted_agent_*`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
       ],
     }));
 
-    // DynamoDB Quota Tables permissions (imported from App API Stack)
+    // AgentCore Identity OAuth2 token vault access — lets the Runtime fetch
+    // user-federated OAuth tokens for external MCP tools (e.g. Google, Slack)
+    // via IdentityClient.get_token. When the user has not consented, this
+    // call returns an authorization URL instead of a token, which the
+    // inference route surfaces as an `oauth_required` SSE event.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'GetResourceOauth2Token',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:GetResourceOauth2Token',
+      ],
+      resources: [
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/default/*`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default`,
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/default/workload-identity/*`,
+      ],
+    }));
+
+    // DynamoDB Quota Tables permissions (imported from Infrastructure Stack)
     const userQuotasTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/quota/user-quotas-table-arn`
@@ -510,7 +566,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB Cost Tracking Tables permissions (imported from App API Stack)
+    // DynamoDB Cost Tracking Tables permissions (imported from Infrastructure Stack)
     const sessionsMetadataTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/cost-tracking/sessions-metadata-table-arn`
@@ -545,7 +601,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB Managed Models Table permissions (imported from App API Stack)
+    // DynamoDB Managed Models Table permissions (imported from Infrastructure Stack)
     const managedModelsTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/admin/managed-models-table-arn`
@@ -585,7 +641,7 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
-    // DynamoDB Auth Providers Table permissions (imported from App API Stack)
+    // DynamoDB Auth Providers Table permissions (imported from Infrastructure Stack)
     const authProvidersTableArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/auth/auth-providers-table-arn`
@@ -775,13 +831,21 @@ export class InferenceApiStack extends cdk.Stack {
       resources: [this.memory.attrMemoryArn],
     }));
 
-    // Grant Runtime permission to use Code Interpreter
+    // Grant Runtime permission to use the Custom Code Interpreter.
+    // Action list matches AWS's documented policy for Code Interpreter access
+    // (see docs.aws.amazon.com/bedrock-agentcore/latest/devguide/
+    // code-interpreter-getting-started.html). Scoped to this stack's Custom
+    // Code Interpreter only — we don't need account-wide discovery perms.
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'CodeInterpreterAccess',
       effect: iam.Effect.ALLOW,
       actions: [
+        'bedrock-agentcore:StartCodeInterpreterSession',
         'bedrock-agentcore:InvokeCodeInterpreter',
-        'bedrock-agentcore:CreateCodeInterpreterSession',
+        'bedrock-agentcore:StopCodeInterpreterSession',
+        'bedrock-agentcore:GetCodeInterpreter',
+        'bedrock-agentcore:GetCodeInterpreterSession',
+        'bedrock-agentcore:ListCodeInterpreterSessions',
       ],
       resources: [this.codeInterpreter.attrCodeInterpreterArn],
     }));
@@ -803,8 +867,12 @@ export class InferenceApiStack extends cdk.Stack {
     const cognitoUserPoolId = ssm.StringParameter.valueForStringParameter(
       this, `/${config.projectPrefix}/auth/cognito/user-pool-id`
     );
+    // Phase 7 retired the public PKCE SPA client; the BFF confidential
+    // client is the only one left. The runtime authorizer's allowed-clients
+    // list now points at it so tokens minted via the BFF flow are accepted
+    // when the chat proxy on app-api forwards them to /invocations.
     const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
-      this, `/${config.projectPrefix}/auth/cognito/app-client-id`
+      this, `/${config.projectPrefix}/auth/cognito/bff-app-client-id`
     );
 
     // Construct Cognito OIDC discovery URL
@@ -896,6 +964,8 @@ export class InferenceApiStack extends cdk.Stack {
       networkConfiguration: {
         networkMode: 'PUBLIC',
       },
+      // HTTP protocol supports both REST (/invocations) and WebSocket (/ws) endpoints
+      protocolConfiguration: 'HTTP',
       requestHeaderConfiguration: {
         requestHeaderAllowlist: ['Authorization'],
       },
@@ -941,6 +1011,15 @@ export class InferenceApiStack extends cdk.Stack {
         // S3 storage
         S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
         S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,
+        // Assistants KB documents bucket — needed by the agent's spreadsheet
+        // analysis tool to download files from S3 before pushing them into
+        // the Code Interpreter sandbox. Imported from RagIngestionStack via
+        // SSM (same parameter app-api uses). Without this the agent fails
+        // with "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured".
+        S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/rag/documents-bucket-name`
+        ),
 
         // Authentication
         ENABLE_AUTHENTICATION: 'true',
@@ -954,6 +1033,27 @@ export class InferenceApiStack extends cdk.Stack {
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
         CORS_ORIGINS: corsOrigins,
+
+        // OAuth2 callback URL fallback for the agent loop's consent flow.
+        // Frontends send `OAuth2CallbackUrl` on /invocations, but the
+        // AgentCore Runtime gateway strips custom headers before they reach
+        // the container, so `BedrockAgentCoreContext.get_oauth2_callback_url()`
+        // is empty here. `_resolve_callback_url` falls back to this env var —
+        // see apis/shared/oauth/agentcore_identity.py.
+        AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: config.domainName
+          ? `https://${config.domainName}/oauth-complete`
+          : 'http://localhost:4200/oauth-complete',
+
+        // Shared platform workload identity (created in InfrastructureStack).
+        // Both inference-api and app-api mint user-scoped workload tokens
+        // against this identity so they share a single OAuth token vault.
+        // The runtime auto-creates its own service-linked identity, but it
+        // cannot be shared cross-service — see InfrastructureStack and
+        // `_resolve_workload_token` in apis/shared/oauth/agentcore_identity.py.
+        AGENTCORE_RUNTIME_WORKLOAD_NAME: ssm.StringParameter.valueForStringParameter(
+          this,
+          `/${config.projectPrefix}/oauth/platform-workload-identity-name`
+        ),
       },
     });
     this.runtime.node.addDependency(runtimeExecutionRole);
@@ -1216,6 +1316,11 @@ export class InferenceApiStack extends cdk.Stack {
       description: 'AgentCore Runtime ID',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    // The runtime auto-creates its own service-linked workload identity, but
+    // we don't surface it: it's only mintable from inside the runtime
+    // container, so cross-service callers can't use it. Both APIs share the
+    // platform workload identity defined in InfrastructureStack instead.
 
     // Construct the full runtime endpoint URL for frontend consumption
     const runtimeEndpointUrl = cdk.Fn.sub(

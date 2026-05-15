@@ -14,6 +14,14 @@ import {
   QuotaWarning,
   QuotaExceeded,
 } from '../../../services/quota/quota-warning.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { CompactionSummaryService } from './compaction-summary.service';
+import type {
+  OAuthRequiredEvent,
+  ToolApprovalRequiredEvent,
+  CompactionEvent,
+} from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
   createStreamLineParser,
@@ -48,6 +56,9 @@ export class StreamParserService {
   private chatStateService = inject(ChatStateService);
   private errorService = inject(ErrorService);
   private quotaWarningService = inject(QuotaWarningService);
+  private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
+  private compactionSummary = inject(CompactionSummaryService);
 
   // =========================================================================
   // State Signals
@@ -194,8 +205,11 @@ export class StreamParserService {
     }
 
     // Check if we should process this event
-    const isStartOrErrorEvent = event === 'message_start' || event === 'error';
-    if (!isStartOrErrorEvent && !this.shouldProcessEvent()) {
+    // oauth_required arrives after message_stop/done by design (see CLAUDE.md SSE
+    // table) — allow it through even when the stream state is Completed.
+    const isAlwaysAllowedEvent =
+      event === 'message_start' || event === 'error' || event === 'oauth_required';
+    if (!isAlwaysAllowedEvent && !this.shouldProcessEvent()) {
       return;
     }
 
@@ -288,6 +302,50 @@ export class StreamParserService {
 
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
+
+      onOAuthRequired: (data: OAuthRequiredEvent) => {
+        // oauth_required arrives after message_stop, so the triggering
+        // assistant message is normally in completedMessages; fall back
+        // to the in-flight builder for tool_use stop reasons that keep
+        // the message active.
+        const messages = this.allMessages();
+        let lastAssistantId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            lastAssistantId = messages[i].id;
+            break;
+          }
+        }
+        this.oauthConsentService.requestConsent(
+          data.providerId,
+          data.authorizationUrl,
+          data.interruptId,
+          lastAssistantId,
+          this.sessionId ?? undefined,
+        );
+      },
+
+      onCompaction: (data: CompactionEvent) => this.compactionSummary.recordLive(data),
+
+      onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
+        const messages = this.allMessages();
+        let lastAssistantId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            lastAssistantId = messages[i].id;
+            break;
+          }
+        }
+        this.toolApprovalService.requestApproval({
+          interruptId: data.interruptId,
+          toolUseId: data.toolUseId,
+          toolName: data.toolName,
+          toolInput: data.toolInput ?? undefined,
+          message: data.message,
+          messageId: lastAssistantId,
+          sessionId: this.sessionId ?? undefined,
+        });
+      },
 
       onError: (data) => this.handleError(data),
       onStreamError: (data) =>
@@ -611,6 +669,35 @@ export class StreamParserService {
 
     this.metadataSignal.set(data);
     this.updateLastCompletedMessageWithMetadata();
+
+    // Drive the session cost + context badge above the composer.
+    // Cost on the wire may be either a number (legacy) or a CostBreakdown
+    // object — extract the total either way (matches backend's Union shape).
+    const turnCost = typeof data.cost === 'number' ? data.cost : data.cost?.total ?? 0;
+    if (turnCost > 0) {
+      this.chatStateService.addTurnCost(turnCost);
+    }
+
+    // Only update the context badge from the *final* metadata event —
+    // the synthesized one the stream coordinator emits right before
+    // `done`. Strands fires a `metadata` event per LLM call within a
+    // turn; intermediate events carry per-call usage (sometimes with
+    // missing or zero cache fields) that would make the badge collapse
+    // mid-turn. The final event is the only one that carries
+    // `contextWindow`, so we use that as the gate.
+    //
+    // Sum all three usage buckets: `inputTokens` is uncached input
+    // only, `cacheReadInputTokens` is the cached prefix, and
+    // `cacheWriteInputTokens` is freshly-cached content. Together they
+    // represent true context-window occupancy.
+    const usage = data.usage;
+    if (data.contextWindow && usage && typeof usage.inputTokens === 'number') {
+      const totalContext =
+        usage.inputTokens +
+        (usage.cacheReadInputTokens ?? 0) +
+        (usage.cacheWriteInputTokens ?? 0);
+      this.chatStateService.setContext(totalContext, data.contextWindow);
+    }
   }
 
   private handleReasoning(data: { reasoningText?: string }): void {
@@ -718,7 +805,7 @@ export class StreamParserService {
 
     // Check if we need to update
     const existingMetadata = lastMessage.metadata as Record<string, unknown>;
-    const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const existingLatency = existingMetadata['latency'] as { timeToFirstToken?: number | null } | undefined;
     const existingTTFT = existingLatency?.timeToFirstToken;
     const existingCost = existingMetadata['cost'] as number | undefined;
     const existingTokenUsage = existingMetadata['tokenUsage'] as {
@@ -726,7 +813,7 @@ export class StreamParserService {
       cacheWriteInputTokens?: number;
     } | undefined;
 
-    const newLatency = newMetadata['latency'] as { timeToFirstToken?: number } | undefined;
+    const newLatency = newMetadata['latency'] as { timeToFirstToken?: number | null } | undefined;
     const newTTFT = newLatency?.timeToFirstToken;
     const newCost = newMetadata['cost'] as number | undefined;
     const newTokenUsage = newMetadata['tokenUsage'] as {
@@ -814,8 +901,11 @@ export class StreamParserService {
     }
 
     if (metadataEvent.metrics) {
+      // Preserve `null` for unmeasured TTFT instead of coercing to 0 — a
+      // real time-to-first-token can never be 0ms, and the badge below
+      // already hides itself for null/undefined/0 via a truthy check.
       result['latency'] = {
-        timeToFirstToken: metadataEvent.metrics.timeToFirstByteMs ?? 0,
+        timeToFirstToken: metadataEvent.metrics.timeToFirstByteMs ?? null,
         endToEndLatency: metadataEvent.metrics.latencyMs,
       };
     }

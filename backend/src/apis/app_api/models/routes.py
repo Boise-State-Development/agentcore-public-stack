@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 import logging
 
 from apis.app_api.admin.models import ManagedModelsListResponse
-from apis.shared.auth import User, get_current_user
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.app_api.admin.services.model_access import (
     ModelAccessService,
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 @router.get("", response_model=ManagedModelsListResponse)
 async def list_models_for_user(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
     model_access_service: ModelAccessService = Depends(get_model_access_service),
 ):
     """

@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 
 from .models import (
@@ -56,7 +56,7 @@ shared_view_router = APIRouter(prefix="/shared", tags=["shares"])
 async def create_share(
     session_id: str,
     request: CreateShareRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Create a point-in-time share snapshot for a conversation."""
     try:
@@ -84,7 +84,7 @@ async def create_share(
 )
 async def list_shares_for_session(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """List all shares for a session (owner only)."""
     try:
@@ -110,7 +110,7 @@ async def list_shares_for_session(
 async def update_share(
     share_id: str,
     request: UpdateShareRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Update access level or allowed emails on an existing share."""
     try:
@@ -134,7 +134,7 @@ async def update_share(
 @shares_router.delete("/{share_id}", status_code=204)
 async def revoke_share(
     share_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Revoke (delete) a specific share."""
     try:
@@ -155,7 +155,7 @@ async def revoke_share(
 @shares_router.post("/{share_id}/export", status_code=201)
 async def export_shared_conversation(
     share_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Export a shared conversation into a new session for the current user."""
     try:
@@ -187,7 +187,7 @@ async def export_shared_conversation(
 )
 async def get_shared_conversation(
     share_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
 ):
     """Retrieve a shared conversation snapshot (access-controlled)."""
     try:

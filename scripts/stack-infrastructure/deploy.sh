@@ -15,6 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Source common utilities
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
+source "${PROJECT_ROOT}/scripts/common/recover-stack.sh"
 
 # Additional logging function
 log_success() {
@@ -55,6 +56,9 @@ if [ -n "${CDK_EXISTING_VPC_ID:-}" ]; then
 fi
 
 # Deploy the Infrastructure Stack
+# Recover from DELETE_FAILED state if a previous teardown left the stack broken
+recover_delete_failed_stack "${CDK_PROJECT_PREFIX}-InfrastructureStack"
+
 # Check if pre-synthesized template exists (from CI/CD pipeline)
 if [ -d "${PROJECT_ROOT}/infrastructure/cdk.out" ] && [ -f "${PROJECT_ROOT}/infrastructure/cdk.out/InfrastructureStack.template.json" ]; then
     log_info "Using pre-synthesized CloudFormation template from cdk.out/..."

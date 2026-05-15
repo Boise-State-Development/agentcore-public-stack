@@ -1,7 +1,7 @@
 """Unit tests for cost calculator service"""
 
 import pytest
-from apis.app_api.costs.calculator import CostCalculator
+from apis.shared.costs.calculator import CostCalculator
 
 
 class TestCostCalculator:

@@ -20,7 +20,8 @@ class TestGetMessages:
         with patch("apis.shared.sessions.messages.AgentCoreMemorySessionManager", return_value=mock_session_mgr), \
              patch("apis.shared.sessions.messages.AgentCoreMemoryConfig"), \
              patch("apis.shared.sessions.messages.AGENTCORE_MEMORY_AVAILABLE", True), \
-             patch("apis.shared.sessions.metadata.get_all_message_metadata", new_callable=AsyncMock, return_value={}):
+             patch("apis.shared.sessions.metadata.get_all_message_metadata", new_callable=AsyncMock, return_value={}), \
+             patch("apis.shared.sessions.metadata.get_pending_interrupts", new_callable=AsyncMock, return_value=[]):
             from apis.shared.sessions.messages import get_messages_from_cloud
             result = await get_messages_from_cloud("s1", "u1")
             assert len(result.messages) == 2
@@ -38,7 +39,8 @@ class TestGetMessages:
         with patch("apis.shared.sessions.messages.AgentCoreMemorySessionManager", return_value=mock_session_mgr), \
              patch("apis.shared.sessions.messages.AgentCoreMemoryConfig"), \
              patch("apis.shared.sessions.messages.AGENTCORE_MEMORY_AVAILABLE", True), \
-             patch("apis.shared.sessions.metadata.get_all_message_metadata", new_callable=AsyncMock, return_value={}):
+             patch("apis.shared.sessions.metadata.get_all_message_metadata", new_callable=AsyncMock, return_value={}), \
+             patch("apis.shared.sessions.metadata.get_pending_interrupts", new_callable=AsyncMock, return_value=[]):
             from apis.shared.sessions.messages import get_messages_from_cloud
             result = await get_messages_from_cloud("s1", "u1", limit=3)
             assert len(result.messages) == 3

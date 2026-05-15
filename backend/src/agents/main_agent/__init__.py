@@ -18,16 +18,26 @@ Main entry point:
     agent = MainAgent(
         session_id="session-123",
         user_id="user-456",
-        enabled_tools=["calculator", "weather", "gateway_wikipedia"],
+        enabled_tools=["calculator", "fetch_url_content", "gateway_wikipedia"],
         model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         temperature=0.7,
         caching_enabled=True
     )
 
-    async for event in agent.stream_async("What's the weather in Seattle?"):
+    async for event in agent.stream_async("Summarize this page: https://example.com"):
         print(event)
 """
 from .main_agent import MainAgent
+from .base_agent import BaseAgent
+from .chat_agent import ChatAgent
+from .skill_agent import SkillAgent
+from .agent_types import create_agent, register_agent_type, get_available_types
+
+# VoiceAgent is optional (requires strands-agents[bidi])
+try:
+    from .voice_agent import VoiceAgent
+except ImportError:
+    VoiceAgent = None
 from .core import ModelConfig, SystemPromptBuilder
 from .session import SessionFactory
 from .tools import ToolRegistry, ToolFilter, GatewayIntegration, create_default_registry
@@ -50,8 +60,14 @@ from .utils import get_current_date_pacific, get_global_stream_processor
 __version__ = "1.0.0"
 
 __all__ = [
-    # Main agent
+    # Agent types
+    "BaseAgent",
+    "ChatAgent",
     "MainAgent",
+    "SkillAgent",
+    "create_agent",
+    "register_agent_type",
+    "get_available_types",
 
     # Core components
     "ModelConfig",

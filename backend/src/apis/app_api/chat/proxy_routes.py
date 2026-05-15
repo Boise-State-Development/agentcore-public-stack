@@ -1,0 +1,194 @@
+"""BFF chat proxy — forwards browser SSE chat requests to inference-api.
+
+`POST /chat/stream` is the cookie-authenticated counterpart to the SPA's
+current direct-to-inference-api chat call. The flow:
+
+  Browser  → CloudFront `/api/*`  → app-api  → inference-api `/invocations`
+           (httpOnly session cookie)         (Authorization: Bearer <token>)
+
+`SessionRefreshMiddleware` resolves the cookie and, if the stored Cognito
+access token is near expiry, refreshes it before this handler runs. The
+handler then forwards `current_user.raw_token` — the freshly-validated
+access token — to inference-api, which already accepts Cognito Bearer
+tokens via `get_current_user_trusted` on `/invocations`. No inference-api
+changes needed (architecture decision #4 in the BFF migration plan).
+
+The legacy in-process Bearer agent route that previously owned `/chat/stream`
+was renamed to `/chat/agent-stream` in the Phase 6 cutover. The Phase 4
+`/chat/proxy-stream` rolling-deploy alias was deleted in Phase 7.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from urllib.parse import quote, urlsplit
+
+from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.auth.models import User
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/chat", tags=["bff-chat-proxy"])
+
+def _inference_api_url() -> str:
+    return os.environ.get("INFERENCE_API_URL", "http://localhost:8001")
+
+# Long enough to cover a full agent turn (model + tool calls), bounded so a
+# wedged upstream eventually surfaces.
+_PROXY_TIMEOUT_SECONDS = 300.0
+
+
+def _build_invocations_url(base_url: str) -> str:
+    """Resolve the upstream `/invocations` URL from `INFERENCE_API_URL`.
+
+    Cloud: `INFERENCE_API_URL` is the AgentCore Runtime data-plane base
+    (`https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>`),
+    where `<ARN>` is unencoded in SSM. The data-plane route is
+    `POST /runtimes/{agentRuntimeArn}/invocations?qualifier={qualifier}`
+    with `{agentRuntimeArn}` as a single URL-encoded path segment — so the
+    ARN's literal `/` and `:` must be percent-encoded or AWS returns 404.
+    A `qualifier` is also required; we use `DEFAULT`.
+
+    Local dev: `INFERENCE_API_URL` is `http://localhost:8001`, where
+    `/invocations` is a real FastAPI route on inference-api directly. No
+    encoding or qualifier needed.
+    """
+    parts = urlsplit(base_url)
+    prefix = "/runtimes/"
+    if parts.netloc.startswith("bedrock-agentcore.") and parts.path.startswith(prefix):
+        arn = parts.path[len(prefix):]
+        encoded_arn = quote(arn, safe="")
+        return f"{parts.scheme}://{parts.netloc}/runtimes/{encoded_arn}/invocations?qualifier=DEFAULT"
+    return f"{base_url}/invocations"
+
+
+def _build_upstream_client() -> httpx.AsyncClient:
+    """Single seam where the proxy's upstream client is constructed.
+
+    Tests substitute a MockTransport-backed client here without having to
+    monkey-patch the global `httpx.AsyncClient` symbol — which would also
+    intercept any test-side httpx clients running in the same process.
+    """
+    return httpx.AsyncClient(timeout=httpx.Timeout(_PROXY_TIMEOUT_SECONDS))
+
+
+async def chat_stream(
+    request: Request,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Relay the request body verbatim to inference-api `/invocations`.
+
+    The body is opaque bytes — validation lives on inference-api so this
+    handler stays decoupled from the InvocationRequest schema. SSE chunks
+    flow back unmodified; `X-Accel-Buffering: no` defeats proxy buffering
+    so streaming events (notably `oauth_required` after `message_stop`)
+    reach the browser without being held back by an intermediary.
+    """
+    target_url = _build_invocations_url(_inference_api_url())
+    body = await request.body()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {current_user.raw_token}",
+    }
+
+    # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
+    # AgentCoreContextMiddleware reads this header to scope the on-tool
+    # OAuth consent landing URL to the SPA's origin (allowlisted via
+    # CORS_ORIGINS). Without it, MCP-tool consent flows can't redirect
+    # back to the SPA's `/oauth-complete` page and `oauth_required` SSE
+    # events are unusable. Forwarded as-is — the inference-api side
+    # re-validates against its own CORS_ORIGINS allowlist.
+    forwarded_callback = request.headers.get("OAuth2CallbackUrl")
+    if forwarded_callback:
+        headers["OAuth2CallbackUrl"] = forwarded_callback
+
+    # The client lifecycle must outlive this handler — closing it via
+    # `async with` while a stream is in flight makes httpx drain the upstream
+    # response during `__aexit__`, buffering the entire SSE stream before
+    # headers reach the browser. Open the client manually and tie its
+    # cleanup to the streaming generator's `finally` (or to the early-exit
+    # paths below) so headers can flush as soon as the upstream's first
+    # response message arrives.
+    client = _build_upstream_client()
+    try:
+        response = await client.send(
+            client.build_request("POST", target_url, headers=headers, content=body),
+            stream=True,
+        )
+    except httpx.ConnectError:
+        await client.aclose()
+        logger.error(f"Cannot reach Inference API at {target_url}")
+        raise HTTPException(status_code=502, detail="Inference API is unreachable")
+    except httpx.TimeoutException:
+        await client.aclose()
+        logger.error(f"Inference API request timed out: {target_url}")
+        raise HTTPException(status_code=504, detail="Inference API request timed out")
+    except Exception as exc:
+        await client.aclose()
+        logger.error(f"BFF chat proxy error: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="An unexpected error occurred while proxying to the Inference API",
+        )
+
+    if response.status_code >= 400:
+        try:
+            error_body = await response.aread()
+        finally:
+            await response.aclose()
+            await client.aclose()
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=error_body.decode("utf-8", errors="replace"),
+        )
+
+    content_type = response.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        async def stream_relay():
+            try:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            stream_relay(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        response_body = await response.aread()
+    finally:
+        await response.aclose()
+        await client.aclose()
+    return StreamingResponse(
+        iter([response_body]),
+        media_type=content_type or "application/json",
+        status_code=response.status_code,
+    )
+
+
+router.add_api_route(
+    "/stream",
+    chat_stream,
+    methods=["POST"],
+    summary="Cookie-authenticated SSE proxy to inference-api /invocations",
+    operation_id="chat_stream",
+    responses={
+        401: {"description": "No active BFF session"},
+        403: {"description": "CSRF token missing or invalid"},
+        502: {"description": "Inference API unreachable"},
+        504: {"description": "Inference API request timed out"},
+    },
+)

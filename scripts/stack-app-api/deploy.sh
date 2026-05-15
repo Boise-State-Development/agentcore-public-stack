@@ -11,6 +11,7 @@ INFRASTRUCTURE_DIR="${PROJECT_ROOT}/infrastructure"
 
 # Source common utilities
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
+source "${PROJECT_ROOT}/scripts/common/recover-stack.sh"
 
 # Logging functions
 log_info() {
@@ -93,6 +94,9 @@ main() {
     
     # Deploy CDK stack
     log_info "Deploying AppApiStack with CDK..."
+    
+    # Recover from DELETE_FAILED state if a previous teardown left the stack broken
+    recover_delete_failed_stack "${CDK_PROJECT_PREFIX}-AppApiStack"
     
     # Use CDK_REQUIRE_APPROVAL env var with fallback to never
     REQUIRE_APPROVAL="${CDK_REQUIRE_APPROVAL:-never}"

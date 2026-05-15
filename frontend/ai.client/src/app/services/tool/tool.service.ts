@@ -2,8 +2,6 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
-import { AuthService } from '../../auth/auth.service';
-
 /**
  * Tool category enum
  */
@@ -73,7 +71,6 @@ export interface ToolPreferencesRequest {
 })
 export class ToolService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/tools`);
@@ -137,8 +134,6 @@ export class ToolService {
     this._error.set(null);
 
     try {
-      await this.authService.ensureAuthenticated();
-
       const response = await firstValueFrom(
         this.http.get<ToolsResponse>(`${this.baseUrl()}/`)
       );
@@ -212,8 +207,6 @@ export class ToolService {
    * Save multiple tool preferences at once.
    */
   async savePreferences(preferences: Record<string, boolean>): Promise<void> {
-    await this.authService.ensureAuthenticated();
-
     await firstValueFrom(
       this.http.put(`${this.baseUrl()}/preferences`, { preferences })
     );

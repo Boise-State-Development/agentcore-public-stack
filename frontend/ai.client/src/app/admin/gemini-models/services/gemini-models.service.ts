@@ -2,7 +2,6 @@ import { Injectable, inject, signal, resource } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import {
   GeminiModelsResponse,
   ListGeminiModelsParams
@@ -19,7 +18,6 @@ import {
 })
 export class GeminiModelsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   /**
@@ -55,13 +53,9 @@ export class GeminiModelsService {
    */
   readonly modelsResource = resource({
     loader: async () => {
-      // Read params signal to make resource reactive to filter changes
+      // See bedrock-models.service.ts for the rationale on the microtask yield.
+      await Promise.resolve();
       const params = this.modelsParams();
-
-      // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
-      // Fetch models from API
       return this.getGeminiModels(params);
     }
   });

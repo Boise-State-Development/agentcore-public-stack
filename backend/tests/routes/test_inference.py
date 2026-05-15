@@ -151,16 +151,8 @@ class TestInvocationsInvalid:
     """POST /invocations with invalid payload returns 422."""
 
     def test_missing_required_fields_returns_422(self, authed_app, authed_client):
-        """Req 15.3: Missing session_id and message should return 422."""
+        """Req 15.3: Missing session_id should return 422."""
         resp = authed_client.post("/invocations", json={})
-        assert resp.status_code == 422
-
-    def test_missing_message_returns_422(self, authed_app, authed_client):
-        """Req 15.3: Missing message field should return 422."""
-        resp = authed_client.post(
-            "/invocations",
-            json={"session_id": "sess-001"},
-        )
         assert resp.status_code == 422
 
     def test_missing_session_id_returns_422(self, authed_app, authed_client):

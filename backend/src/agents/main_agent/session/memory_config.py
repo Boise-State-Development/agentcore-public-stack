@@ -7,6 +7,8 @@ import os
 import logging
 from dataclasses import dataclass
 
+from agents.main_agent.config.constants import EnvVars, Defaults
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,8 +38,8 @@ def load_memory_config() -> MemoryStorageConfig:
     Raises:
         RuntimeError: If AGENTCORE_MEMORY_ID is not set
     """
-    memory_id = os.environ.get("AGENTCORE_MEMORY_ID") or None
-    region = os.environ.get("AWS_REGION", "us-west-2")
+    memory_id = os.environ.get(EnvVars.MEMORY_ID) or None
+    region = os.environ.get(EnvVars.AWS_REGION, Defaults.AWS_REGION)
 
     if not memory_id:
         raise RuntimeError(

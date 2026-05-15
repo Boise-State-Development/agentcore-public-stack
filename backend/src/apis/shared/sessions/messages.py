@@ -395,7 +395,14 @@ async def get_messages_from_cloud(
         import asyncio
 
         async def fetch_messages():
-            """Fetch messages from AgentCore Memory (runs in thread pool since it's sync)"""
+            """Fetch messages from AgentCore Memory.
+
+            Note: AgentCore Memory's list_events API does not filter by
+            agent_id — it returns ALL messages for the session regardless
+            of which agent stored them.  A single fetch with any agent_id
+            is sufficient; fetching twice (e.g. "default" + "voice") would
+            return identical results and cause duplication.
+            """
             return await asyncio.to_thread(session_manager.list_messages, session_id, "default")
 
         async def fetch_metadata():
@@ -404,40 +411,51 @@ async def get_messages_from_cloud(
 
             return await get_all_message_metadata(session_id, user_id)
 
-        # Run both fetches in parallel
-        messages_raw, metadata_index = await asyncio.gather(fetch_messages(), fetch_metadata())
+        async def fetch_pending_interrupts():
+            """Fetch pending OAuth consent interrupts from session metadata.
 
-        logger.info(f"AgentCore Memory returned {len(messages_raw) if messages_raw else 0} raw messages")
+            Returns an empty list when the session has none — the only signal
+            the frontend needs to know whether a refresh-restored conversation
+            still has a paused turn awaiting consent.
+            """
+            from .metadata import get_pending_interrupts
+
+            return await get_pending_interrupts(session_id, user_id)
+
+        # Run fetches in parallel
+        messages_raw, metadata_index, pending_interrupts = await asyncio.gather(
+            fetch_messages(), fetch_metadata(), fetch_pending_interrupts()
+        )
+
+        messages_raw = list(messages_raw or [])
+
+        logger.info(f"AgentCore Memory returned {len(messages_raw)} raw messages")
         logger.info(f"Metadata index contains {len(metadata_index)} entries")
         logger.info(f"🔑 Metadata index keys: {sorted(metadata_index.keys())}")
 
         # Convert to our Message model
         messages = []
-        if messages_raw:
-            # DO NOT SORT - AgentCore Memory returns messages in chronological order
-            # The enumerated index matches the stored sequence number (message_id)
-            for idx, msg in enumerate(messages_raw):
-                try:
-                    # Metadata join: use index as message_id (0-based sequence)
-                    metadata = metadata_index.get(str(idx))
+        for idx, msg in enumerate(messages_raw):
+            try:
+                # Look up metadata: try plain index first (text chat),
+                # then "voice:<idx>" prefix (voice chat metadata).
+                metadata = metadata_index.get(str(idx))
+                if metadata is None:
+                    metadata = metadata_index.get(f"voice:{idx}")
 
-                    # Determine message role for logging
-                    # Cost metadata only exists for assistant messages (LLM API calls)
-                    msg_role = _get_message_role(msg)
+                msg_role = _get_message_role(msg)
 
-                    if metadata:
-                        logger.debug(f"🔗 Joined metadata for message {idx} ({msg_role})")
-                    elif msg_role == "user":
-                        # User messages don't have cost metadata - this is expected
-                        logger.debug(f"📝 User message {idx} - no cost metadata (expected)")
-                    else:
-                        # Assistant message without metadata is unexpected
-                        logger.warning(f"⚠️ No metadata found for assistant message {idx}")
+                if metadata:
+                    logger.debug(f"🔗 Joined metadata for message {idx} ({msg_role})")
+                elif msg_role == "user":
+                    logger.debug(f"📝 User message {idx} - no cost metadata (expected)")
+                else:
+                    logger.warning(f"⚠️ No metadata found for assistant message {idx}")
 
-                    messages.append(_convert_message(msg, metadata=metadata))
-                except Exception as e:
-                    logger.error(f"Error converting message {idx}: {e}", exc_info=True)
-                    continue
+                messages.append(_convert_message(msg, metadata=metadata))
+            except Exception as e:
+                logger.error(f"Error converting message {idx}: {e}", exc_info=True)
+                continue
 
         logger.info(f"Retrieved {len(messages)} messages from AgentCore Memory with metadata")
 
@@ -455,7 +473,11 @@ async def get_messages_from_cloud(
 
         message_responses = [_convert_message_to_response(msg, session_id, start_seq + idx) for idx, msg in enumerate(paginated_messages)]
 
-        return MessagesListResponse(messages=message_responses, next_token=next_page_token)
+        return MessagesListResponse(
+            messages=message_responses,
+            next_token=next_page_token,
+            pending_interrupts=pending_interrupts,
+        )
 
     except Exception as e:
         logger.error(f"Error retrieving messages from AgentCore Memory: {e}")

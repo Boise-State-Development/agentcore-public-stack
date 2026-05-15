@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.app_api.costs.routes import router
-from apis.app_api.costs.models import UserCostSummary
+from apis.shared.costs.models import UserCostSummary
 from tests.routes.conftest import mock_auth_user, mock_no_auth
 
 ROUTES_MODULE = "apis.app_api.costs.routes"

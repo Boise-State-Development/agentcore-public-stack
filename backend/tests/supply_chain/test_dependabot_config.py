@@ -1,6 +1,6 @@
 """Property tests for Dependabot configuration.
 
-Feature: supply-chain-hardening, Property 8: Dependabot entries target develop with grouped updates
+Feature: supply-chain-hardening, Property 8: Dependabot entries target main with grouped updates
 Validates: Requirements 9.2, 9.3
 """
 
@@ -22,8 +22,8 @@ def _load_dependabot_config() -> dict:
         return yaml.safe_load(f)
 
 
-def test_all_ecosystems_target_develop():
-    """Property 8a: All Dependabot ecosystem entries target the develop branch.
+def test_all_ecosystems_target_main():
+    """Property 8a: All Dependabot ecosystem entries target the main branch.
 
     **Validates: Requirement 9.2**
     """
@@ -37,14 +37,14 @@ def test_all_ecosystems_target_develop():
         directory = entry.get("directory", "/")
         target = entry.get("target-branch")
 
-        if target != "develop":
+        if target != "main":
             violations.append(
                 f"  {ecosystem} ({directory}): target-branch = '{target}' "
-                f"(expected: 'develop')"
+                f"(expected: 'main')"
             )
 
     assert not violations, (
-        f"Found {len(violations)} ecosystem(s) not targeting develop:\n"
+        f"Found {len(violations)} ecosystem(s) not targeting main:\n"
         + "\n".join(violations)
     )
 

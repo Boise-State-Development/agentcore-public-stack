@@ -175,10 +175,42 @@ def seed_default_quota_assignment(
     return result
 
 
+# Sensible inference-param defaults for general-purpose Claude chat models.
+# Temperature 0.7 mirrors the previous always-on default and gives admins a
+# starting point they can tighten per-model. Bounds match Anthropic's accepted
+# range. max_tokens is supported but left at no-default — the model's own cap
+# applies unless an admin explicitly sets one.
+CLAUDE_CHAT_SUPPORTED_PARAMS: dict[str, Any] = {
+    "params": {
+        "temperature": {
+            "supported": True,
+            "min": Decimal("0"),
+            "max": Decimal("1"),
+            "default": Decimal("0.7"),
+            "locked": False,
+        },
+        "top_p": {
+            "supported": True,
+            "min": Decimal("0"),
+            "max": Decimal("1"),
+            "default": None,
+            "locked": False,
+        },
+        "max_tokens": {
+            "supported": True,
+            "min": Decimal("1"),
+            "max": None,
+            "default": None,
+            "locked": False,
+        },
+    }
+}
+
+
 # Default Bedrock models to seed
 DEFAULT_MODELS: list[dict[str, Any]] = [
     {
-        "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "modelName": "Claude Haiku 4.5",
         "provider": "bedrock",
         "providerName": "Anthropic",
@@ -190,12 +222,12 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "outputPricePerMillionTokens": Decimal("5.00"),
         "cacheWritePricePerMillionTokens": Decimal("1.25"),
         "cacheReadPricePerMillionTokens": Decimal("0.10"),
-        "isReasoningModel": False,
         "supportsCaching": True,
         "isDefault": True,
+        "supportedParams": CLAUDE_CHAT_SUPPORTED_PARAMS,
     },
     {
-        "modelId": "global.anthropic.claude-sonnet-4-6",
+        "modelId": "us.anthropic.claude-sonnet-4-6",
         "modelName": "Claude Sonnet 4.6",
         "provider": "bedrock",
         "providerName": "Anthropic",
@@ -207,9 +239,28 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "outputPricePerMillionTokens": Decimal("15.00"),
         "cacheWritePricePerMillionTokens": Decimal("3.75"),
         "cacheReadPricePerMillionTokens": Decimal("0.30"),
-        "isReasoningModel": False,
         "supportsCaching": True,
         "isDefault": False,
+        "supportedParams": CLAUDE_CHAT_SUPPORTED_PARAMS,
+    },
+    {
+        "modelId": "amazon.nova-2-sonic-v1:0",
+        "modelName": "Nova 2 Sonic",
+        "provider": "bedrock",
+        "providerName": "Amazon",
+        "inputModalities": ["TEXT", "SPEECH"],
+        "outputModalities": ["TEXT", "SPEECH"],
+        "maxInputTokens": 200000,
+        "maxOutputTokens": 4096,
+        "inputPricePerMillionTokens": Decimal("3.00"),
+        "outputPricePerMillionTokens": Decimal("12.00"),
+        "cacheWritePricePerMillionTokens": Decimal("0"),
+        "cacheReadPricePerMillionTokens": Decimal("0"),
+        "supportsCaching": False,
+        "isDefault": False,
+        # Voice/bidi model: param shape differs from chat models. Leave
+        # supportedParams unset so the runtime passes through to whatever
+        # the BidiAgent path negotiates.
     },
 ]
 
@@ -272,12 +323,16 @@ def seed_default_models(
             "outputPricePerMillionTokens": model_def["outputPricePerMillionTokens"],
             "cacheWritePricePerMillionTokens": model_def["cacheWritePricePerMillionTokens"],
             "cacheReadPricePerMillionTokens": model_def["cacheReadPricePerMillionTokens"],
-            "isReasoningModel": model_def["isReasoningModel"],
             "supportsCaching": model_def["supportsCaching"],
             "isDefault": model_def["isDefault"],
             "createdAt": now,
             "updatedAt": now,
         }
+
+        # Optional: per-model inference parameter capabilities. Stored as a
+        # nested map; absence means "passthrough" at runtime.
+        if "supportedParams" in model_def and model_def["supportedParams"] is not None:
+            item["supportedParams"] = model_def["supportedParams"]
 
         try:
             table.put_item(Item=item)
@@ -310,6 +365,26 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "displayName": "Charts & Graphs",
         "description": "Create interactive bar, line, and pie charts from data.",
         "category": "data",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "calculator",
+        "displayName": "Calculator",
+        "description": "Perform mathematical calculations and evaluations.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "generate_diagram_and_validate",
+        "displayName": "Code Interpreter",
+        "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
+        "category": "code",
         "protocol": "local",
         "enabledByDefault": False,
         "isPublic": False,
@@ -465,6 +540,104 @@ def seed_system_admin_role(
     return result
 
 
+def seed_default_role(
+    table_name: str,
+    region: str,
+) -> SeedResult:
+    """Seed the default role with DEFINITION, MODEL_GRANT#*, and TOOL_GRANT#*.
+
+    The default role is the fallback for users who have no JWT role mappings.
+    Without it, regular users (e.g. Cognito users with no groups) get empty
+    permissions and cannot see any models or tools.
+    """
+    result = SeedResult(category="default_role")
+    session = boto3.Session(region_name=region)
+    dynamodb = session.resource("dynamodb")
+    table = dynamodb.Table(table_name)
+
+    role_id = "default"
+    pk = f"ROLE#{role_id}"
+
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": "DEFINITION"})
+        if "Item" in existing:
+            msg = "default role already exists — skipped"
+            logger.info(msg)
+            result.skipped = 1
+            result.details.append(msg)
+            return result
+    except ClientError as e:
+        msg = f"Failed to check existing default role: {e}"
+        logger.error(msg)
+        result.failed = 1
+        result.details.append(msg)
+        return result
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    definition_item: dict[str, Any] = {
+        "PK": pk,
+        "SK": "DEFINITION",
+        "roleId": role_id,
+        "displayName": "Default",
+        "description": "Default role for all users. Grants access to all models and tools.",
+        "jwtRoleMappings": [],
+        "inheritsFrom": [],
+        "grantedTools": ["*"],
+        "grantedModels": ["*"],
+        "effectivePermissions": {
+            "tools": ["*"],
+            "models": ["*"],
+            "quotaTier": "default",
+        },
+        "priority": 1,
+        "isSystemRole": True,
+        "enabled": True,
+        "createdAt": now,
+        "updatedAt": now,
+        "createdBy": "bootstrap-seed",
+    }
+
+    tool_grant_item = {
+        "PK": pk,
+        "SK": "TOOL_GRANT#*",
+        "GSI2PK": "TOOL#*",
+        "GSI2SK": pk,
+        "roleId": role_id,
+        "displayName": "Default",
+        "enabled": True,
+    }
+
+    model_grant_item = {
+        "PK": pk,
+        "SK": "MODEL_GRANT#*",
+        "GSI3PK": "MODEL#*",
+        "GSI3SK": pk,
+        "roleId": role_id,
+        "displayName": "Default",
+        "enabled": True,
+    }
+
+    try:
+        client = session.client("dynamodb")
+        client.transact_write_items(
+            TransactItems=[
+                {"Put": {"TableName": table_name, "Item": _serialize(definition_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(tool_grant_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(model_grant_item)}},
+            ]
+        )
+        result.created = 1
+        result.details.append("default role created with TOOL_GRANT#* and MODEL_GRANT#*")
+    except ClientError as e:
+        msg = f"Failed to create default role: {e}"
+        logger.error(msg)
+        result.failed = 1
+        result.details.append(msg)
+
+    return result
+
+
 def seed_default_tools(
     table_name: str,
     region: str,
@@ -585,6 +758,9 @@ def main() -> None:
 
     # --- System admin role seeding ---
     results.append(seed_system_admin_role(table_name=app_roles_table, region=region))
+
+    # --- Default role seeding ---
+    results.append(seed_default_role(table_name=app_roles_table, region=region))
 
     # --- Tool seeding ---
     results.append(seed_default_tools(table_name=app_roles_table, region=region))

@@ -1,5 +1,6 @@
 """Admin API routes for tool catalog management."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
 from apis.app_api.tools.service import get_tool_catalog_service
-from apis.app_api.tools.models import (
+from apis.shared.tools.models import (
     ToolCreateRequest,
     ToolUpdateRequest,
     ToolRolesResponse,
@@ -15,8 +16,11 @@ from apis.app_api.tools.models import (
     AddRemoveRolesRequest,
     AdminToolResponse,
     AdminToolListResponse,
-    SyncResult,
     ToolDefinition,
+    MCPDiscoverRequest,
+    MCPDiscoverResponse,
+    DiscoveredMCPTool,
+    MCPAuthType,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,9 +134,15 @@ async def admin_create_tool(
 
     try:
         created = await service.create_tool(tool, admin)
-        return AdminToolResponse.from_tool_definition(created)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Drop the all-tool-ids snapshot so the new tool is recognized by
+    # ToolAccessService on the very next chat turn in this process.
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(created.tool_id)
+
+    return AdminToolResponse.from_tool_definition(created)
 
 
 @router.put("/{tool_id}", response_model=AdminToolResponse)
@@ -177,6 +187,13 @@ async def admin_update_tool(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
 
+    # Invalidate the freshness TTL entry so the next chat turn in this
+    # process sees the new updated_at immediately (no wait for the TTL
+    # to lapse). Other processes pick the change up within one TTL
+    # window via their own freshness reads.
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(tool_id)
+
     return AdminToolResponse.from_tool_definition(updated)
 
 
@@ -210,8 +227,92 @@ async def admin_delete_tool(
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
 
+    from apis.shared.tools.freshness import invalidate as invalidate_freshness
+    invalidate_freshness(tool_id)
+
     action = "deleted" if hard else "disabled"
     return {"message": f"Tool '{tool_id}' {action} successfully"}
+
+
+# =============================================================================
+# MCP Server Discovery
+# =============================================================================
+
+
+@router.post("/discover", response_model=MCPDiscoverResponse)
+async def admin_discover_mcp_tools(
+    request: MCPDiscoverRequest,
+    admin: User = Depends(require_admin),
+):
+    """Connect to an MCP server with the given config and return its tool list.
+
+    Used by the admin tool form to populate the per-tool entries instead of
+    asking admins to type each name. OAuth-gated servers are not supported —
+    the admin's session can't supply an end-user token.
+
+    Trust boundary: this endpoint deliberately accepts an arbitrary
+    ``server_url`` from an authenticated admin and connects to it from the
+    backend's network position. That's the same trust we already extend
+    when the admin saves an MCP tool configuration (the agent loop will
+    connect to whatever URL is in the catalog), so we don't add an
+    SSRF allowlist here. Admins are expected to be able to reach internal
+    MCP servers — that's the deployment shape. If a future change exposes
+    this beyond admins, add an allowlist (scheme + host) before shipping.
+
+    Args:
+        request: MCP server connection details (URL, transport, auth)
+        admin: Authenticated admin user (injected)
+
+    Returns:
+        MCPDiscoverResponse with the discovered tools and their descriptions
+    """
+    from agents.main_agent.integrations.external_mcp_client import (
+        create_external_mcp_client,
+    )
+
+    if request.auth_type in (MCPAuthType.OAUTH2.value, MCPAuthType.OAUTH2):
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth-gated MCP servers can't be discovered server-side; "
+            "list the tool names manually.",
+        )
+
+    client = create_external_mcp_client(config=request.to_config())
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not build an MCP client for the supplied config — "
+            "check the server URL and transport.",
+        )
+
+    def _list_tools():
+        # MCPClient is a sync context manager that opens a session on enter;
+        # `list_tools_sync` performs the MCP `tools/list` call. We push it to
+        # a thread so the async event loop stays responsive during connect.
+        with client:
+            return list(client.list_tools_sync())
+
+    try:
+        tools = await asyncio.to_thread(_list_tools)
+    except Exception as exc:
+        logger.exception("MCP discovery failed for %s", request.server_url)
+        raise HTTPException(
+            status_code=502,
+            detail=f"MCP server did not respond to tools/list: {exc}",
+        )
+
+    discovered: list[DiscoveredMCPTool] = []
+    for tool in tools:
+        # Strands wraps each MCP tool as an MCPAgentTool; spec details live on
+        # `mcp_tool` (mirrors the wire-format `Tool` from the MCP SDK).
+        spec = getattr(tool, "mcp_tool", None)
+        name = getattr(spec, "name", None) or getattr(tool, "tool_name", None)
+        description = getattr(spec, "description", None)
+        if not name:
+            continue
+        discovered.append(DiscoveredMCPTool(name=name, description=description))
+
+    return MCPDiscoverResponse(tools=discovered)
 
 
 # =============================================================================
@@ -343,35 +444,3 @@ async def remove_roles_from_tool(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# =============================================================================
-# Sync Endpoints
-# =============================================================================
-
-
-@router.post("/sync", response_model=SyncResult)
-async def sync_from_registry(
-    dry_run: bool = Query(True, description="If true, only report what would happen"),
-    admin: User = Depends(require_admin),
-):
-    """
-    Sync catalog from code registry.
-
-    Discovers tools from the backend tool registry and updates the catalog:
-    - Creates entries for new tools
-    - Marks orphaned tools as deprecated
-
-    Requires admin access.
-
-    Args:
-        dry_run: If true, only report changes without applying
-        admin: Authenticated admin user (injected)
-
-    Returns:
-        SyncResult with discovered, orphaned, and unchanged tools
-    """
-    logger.info("Admin syncing tool catalog")
-
-    service = get_tool_catalog_service()
-    result = await service.sync_catalog_from_registry(admin, dry_run=dry_run)
-
-    return result

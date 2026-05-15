@@ -2,8 +2,10 @@
 import { Injectable, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
 import { ContentBlock, FileAttachmentData, Message } from '../models/message.model';
 import { StreamParserService } from '../chat/stream-parser.service';
-import { SessionService } from './session.service';
+import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -42,6 +44,8 @@ export class MessageMapService {
   private streamParser = inject(StreamParserService);
   private sessionService = inject(SessionService);
   private fileUploadService = inject(FileUploadService);
+  private oauthConsentService = inject(OAuthConsentService);
+  private toolApprovalService = inject(ToolApprovalService);
 
   constructor() {
     // Reactive effect: automatically sync streaming messages to the message map
@@ -167,6 +171,40 @@ export class MessageMapService {
   }
 
   /**
+   * Add a voice transcript message (from VoiceChatService) to the session.
+   * Used when the voice agent completes a response and the transcript is finalized.
+   *
+   * @param sessionId - The session ID to add the message to
+   * @param role - Message role (user or assistant)
+   * @param text - Message text content
+   * @param metadata - Optional metadata (token usage, cost) for badge display
+   */
+  addVoiceMessage(sessionId: string, role: 'user' | 'assistant', text: string, metadata?: Record<string, unknown>): Message {
+    const currentMessages = this.messageMap()[sessionId]?.() ?? [];
+    const messageIndex = currentMessages.length;
+    const messageId = `msg-${sessionId}-${messageIndex}`;
+
+    const message: Message = {
+      id: messageId,
+      role,
+      content: [{ type: 'text', text }],
+      ...(metadata ? { metadata } : {}),
+    };
+
+    this.messageMap.update(map => {
+      const updated = { ...map };
+      if (!updated[sessionId]) {
+        updated[sessionId] = signal([message]);
+      } else {
+        updated[sessionId].update(msgs => [...msgs, message]);
+      }
+      return updated;
+    });
+
+    return message;
+  }
+
+  /**
    * Sync streaming messages to the message map.
    * Handles the case where we're appending to existing messages.
    * Preserves all previous complete messages and only replaces the currently streaming assistant response.
@@ -244,12 +282,84 @@ export class MessageMapService {
 
         return updated;
       });
+
+      // Hydrate OAuth consent service from any persisted pending interrupts
+      // so a reload restores the consent prompt anchored to the right turn.
+      // Anchor falls back to the most recent assistant message in history,
+      // matching how the live SSE flow already attaches prompts. Authorization
+      // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
+      this.hydratePendingInterrupts(sessionId, messagesResponse.pendingInterrupts, processedMessages);
     } catch (error) {
       console.error('Failed to load messages for session:', sessionId, error);
       throw error;
     } finally {
       // Clear loading state
       this._isLoadingSession.set(null);
+    }
+  }
+
+  /**
+   * Replay persisted pending interrupts into the matching service so the
+   * inline prompt re-renders. Branches on `kind` (defaults to "oauth" for
+   * legacy rows written before per-tool approval shipped). If the backend
+   * recorded a triggering message id we use it directly; otherwise we
+   * anchor to the most recent assistant message, mirroring the live-stream
+   * behavior in stream-parser.service.ts.
+   */
+  private hydratePendingInterrupts(
+    sessionId: string,
+    interrupts: PendingInterrupt[] | undefined,
+    messages: Message[],
+  ): void {
+    if (!interrupts || interrupts.length === 0) {
+      return;
+    }
+    let lastAssistantId: string | undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        lastAssistantId = messages[i].id;
+        break;
+      }
+    }
+    for (const interrupt of interrupts) {
+      const messageId = interrupt.triggeringMessageId ?? lastAssistantId;
+      const kind = interrupt.kind ?? 'oauth';
+
+      if (kind === 'tool_approval') {
+        if (!interrupt.toolName) {
+          console.warn(
+            'Skipping tool_approval interrupt with no toolName',
+            interrupt.interruptId,
+          );
+          continue;
+        }
+        this.toolApprovalService.requestApproval({
+          interruptId: interrupt.interruptId,
+          toolUseId: interrupt.toolUseId ?? '',
+          toolName: interrupt.toolName,
+          toolInput: interrupt.toolInput ?? undefined,
+          message: interrupt.message ?? '',
+          messageId,
+          sessionId,
+        });
+        continue;
+      }
+
+      // OAuth (default for legacy rows without `kind`)
+      if (!interrupt.providerId) {
+        console.warn(
+          'Skipping oauth interrupt with no providerId',
+          interrupt.interruptId,
+        );
+        continue;
+      }
+      this.oauthConsentService.requestConsent(
+        interrupt.providerId,
+        undefined, // URL is fetched lazily on Connect — stored URLs go stale
+        interrupt.interruptId,
+        messageId,
+        sessionId,
+      );
     }
   }
 

@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
-import { AuthService } from '../auth.service';
+import { SessionService } from '../session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
@@ -25,8 +25,26 @@ interface AuthProviderPublicListResponse {
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="fixed inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-900 overflow-y-auto">
-      <div class="w-full max-w-md px-4 py-12">
+    <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
+      <!-- Decorative background: lava-lamp blobs across three depth tiers
+           (far/mid/near) for parallax — size, blur, speed, and travel
+           distance all scale with depth. -->
+      <div class="login-bg" aria-hidden="true">
+        <div class="login-lava">
+          <!-- Far layer: huge, slow, heavily blurred -->
+          <div class="login-blob login-blob--a"></div>
+          <div class="login-blob login-blob--b"></div>
+          <!-- Mid layer -->
+          <div class="login-blob login-blob--c"></div>
+          <div class="login-blob login-blob--d"></div>
+          <!-- Near layer: small, fast, sharper -->
+          <div class="login-blob login-blob--e"></div>
+          <div class="login-blob login-blob--f"></div>
+        </div>
+        <div class="login-grid"></div>
+      </div>
+
+      <div class="relative w-full max-w-md px-4 py-12">
         <!-- Logo -->
         <div class="mb-8 flex justify-center">
           <img
@@ -39,13 +57,13 @@ interface AuthProviderPublicListResponse {
             class="hidden size-16 dark:block">
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-8">
+        <div class="login-card rounded-2xl p-8">
           <div class="flex flex-col items-center gap-6">
             <div class="flex flex-col items-center gap-2">
-              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-50">
                 Sign In
               </h1>
-              <p class="text-base/7 text-gray-600 dark:text-gray-400 text-center">
+              <p class="text-base/7 text-gray-700 dark:text-gray-300 text-center">
                 Sign in to continue
               </p>
             </div>
@@ -70,7 +88,7 @@ interface AuthProviderPublicListResponse {
                 type="button"
                 (click)="handleCognitoLogin()"
                 [disabled]="isLoading()"
-                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
+                class="w-full px-4 py-3 text-white font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-3 bg-primary-500 hover:bg-primary-600 shadow-lg shadow-primary-500/20 disabled:opacity-60"
               >
                 @if (isLoading() && !activeProviderId()) {
                   <div class="size-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -88,10 +106,10 @@ interface AuthProviderPublicListResponse {
                 <!-- Divider -->
                 <div class="relative my-2">
                   <div class="absolute inset-0 flex items-center">
-                    <div class="w-full border-t border-gray-200 dark:border-gray-700"></div>
+                    <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
                   </div>
                   <div class="relative flex justify-center text-xs">
-                    <span class="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">or continue with</span>
+                    <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
                   </div>
                 </div>
 
@@ -131,7 +149,7 @@ interface AuthProviderPublicListResponse {
               }
             </div>
 
-            <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
+            <p class="text-xs text-gray-600 dark:text-gray-400 text-center">
               You will be redirected to complete authentication
             </p>
           </div>
@@ -141,7 +159,7 @@ interface AuthProviderPublicListResponse {
   `
 })
 export class LoginPage implements OnInit, OnDestroy {
-  private authService = inject(AuthService);
+  private sessionService = inject(SessionService);
   private sidenavService = inject(SidenavService);
   private config = inject(ConfigService);
   private http = inject(HttpClient);
@@ -156,6 +174,13 @@ export class LoginPage implements OnInit, OnDestroy {
   activeProviderId = signal<string | null>(null);
 
   ngOnInit(): void {
+    // If the BFF round-tripped an already-authenticated user back to /auth/login
+    // (e.g. return_to defaulted to this path), bounce to the deep-link target
+    // instead of letting them sit here clicking Sign In with valid cookies.
+    if (this.sessionService.isAuthenticated()) {
+      this.router.navigateByUrl(this.resolveReturnUrl() ?? '/');
+      return;
+    }
     this.sidenavService.hide();
     this.checkFirstBootStatus();
     this.loadProviders();
@@ -192,35 +217,23 @@ export class LoginPage implements OnInit, OnDestroy {
     }
   }
 
-  async handleCognitoLogin(): Promise<void> {
+  handleCognitoLogin(): void {
     this.isLoading.set(true);
     this.activeProviderId.set(null);
     this.errorMessage.set(null);
 
-    try {
-      this.storeReturnUrl();
-      await this.authService.login();
-    } catch (error) {
-      this.isLoading.set(false);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
-    }
+    this.sessionService.redirectToLogin({ returnUrl: this.resolveReturnUrl() });
   }
 
-  async handleProviderLogin(provider: AuthProviderPublicInfo): Promise<void> {
+  handleProviderLogin(provider: AuthProviderPublicInfo): void {
     this.isLoading.set(true);
     this.activeProviderId.set(provider.provider_id);
     this.errorMessage.set(null);
 
-    try {
-      this.storeReturnUrl();
-      await this.authService.login(provider.provider_id);
-    } catch (error) {
-      this.isLoading.set(false);
-      this.activeProviderId.set(null);
-      const errorMsg = error instanceof Error ? error.message : 'An error occurred during login';
-      this.errorMessage.set(errorMsg);
-    }
+    this.sessionService.redirectToLogin({
+      providerId: provider.provider_id,
+      returnUrl: this.resolveReturnUrl(),
+    });
   }
 
   /**
@@ -234,31 +247,35 @@ export class LoginPage implements OnInit, OnDestroy {
     return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
   }
 
-  private storeReturnUrl(): void {
-    const returnUrl = this.route.snapshot.queryParams['returnUrl'];
-
-    let finalDestination: string | undefined;
-    if (returnUrl) {
-      finalDestination = returnUrl.startsWith('/') ? returnUrl : `/${returnUrl}`;
-    } else {
-      const referrer = document.referrer;
-      if (referrer) {
-        try {
-          const referrerUrl = new URL(referrer);
-          if (referrerUrl.origin === window.location.origin) {
-            const referrerPath = referrerUrl.pathname + referrerUrl.search;
-            if (referrerPath !== '/auth/login' && referrerPath !== '/auth/callback') {
-              finalDestination = referrerPath;
-            }
-          }
-        } catch (e) {
-          // Invalid referrer URL, ignore
-        }
-      }
+  /**
+   * Resolve the deep-link path to forward to the BFF as `?return_to=`.
+   *
+   * Prefers the explicit `?returnUrl=` query param the auth guard set
+   * when bouncing the user here. Falls back to the document referrer
+   * when it's same-origin and not a login page (covers the user
+   * navigating to /auth/login directly).
+   */
+  private resolveReturnUrl(): string | undefined {
+    const fromQuery = this.route.snapshot.queryParams['returnUrl'];
+    if (fromQuery) {
+      return fromQuery.startsWith('/') ? fromQuery : `/${fromQuery}`;
     }
 
-    if (finalDestination) {
-      sessionStorage.setItem('auth_return_url', finalDestination);
+    const referrer = document.referrer;
+    if (!referrer) return undefined;
+
+    try {
+      const referrerUrl = new URL(referrer);
+      if (referrerUrl.origin !== window.location.origin) {
+        return undefined;
+      }
+      const referrerPath = referrerUrl.pathname + referrerUrl.search;
+      if (referrerPath === '/auth/login') {
+        return undefined;
+      }
+      return referrerPath;
+    } catch {
+      return undefined;
     }
   }
 }

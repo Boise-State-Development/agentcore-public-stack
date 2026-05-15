@@ -4,9 +4,88 @@ These models define the structure for managed models used across
 app API and inference API deployments.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import Any, Dict, List, Optional
 from datetime import datetime
+
+
+class ModelParamSpec(BaseModel):
+    """Capability + bounds for a single inference parameter on a model.
+
+    Stored per-model in the registry. Drives both the admin form (what's
+    tweakable, what bounds to enforce) and the runtime gate (whether to
+    pass the param through to the provider SDK at all).
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    supported: bool = True
+    min: Optional[float] = None
+    max: Optional[float] = None
+    default: Optional[Any] = Field(
+        None,
+        description="Value sent when the user doesn't override. Type depends on the param "
+                    "(number for temperature/top_p, bool for thinking, etc.)."
+    )
+    locked: bool = Field(
+        False,
+        description="If true, the admin default is final and user overrides are ignored. "
+                    "Used by Phase 2 user-tweak surface; ignored today."
+    )
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> "ModelParamSpec":
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("min must be <= max")
+        if isinstance(self.default, (int, float)):
+            if self.min is not None and self.default < self.min:
+                raise ValueError("default must be >= min")
+            if self.max is not None and self.default > self.max:
+                raise ValueError("default must be <= max")
+        return self
+
+
+class SupportedParams(BaseModel):
+    """Per-model inference parameter capability map.
+
+    Open-ended dict keyed by canonical param name (`temperature`, `top_p`,
+    `top_k`, `max_tokens`, `thinking`, `reasoning_effort`, ...). Each
+    provider's `ModelConfig.to_<provider>_config()` translates canonical
+    names into the SDK-specific shape and silently drops unknown keys.
+
+    For ``thinking``, ``ModelParamSpec.default`` carries the budget in
+    tokens (int >= 1024, or 0/None to disable). The provider translator
+    wraps it into the Anthropic ``{type: "enabled", budget_tokens: N}``
+    shape on the way out.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    params: Dict[str, ModelParamSpec] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_thinking_invariants(self) -> "SupportedParams":
+        """Enforce Anthropic's extended-thinking rules at config time.
+
+        Catches the two failure modes that would otherwise only surface as a
+        Bedrock 400 mid-conversation: budget below the 1024 floor, or budget
+        >= max_tokens. Skipped when thinking is unsupported or disabled.
+        """
+        thinking = self.params.get("thinking")
+        if thinking is None or not thinking.supported:
+            return self
+        budget = thinking.default
+        if budget in (None, False, 0):
+            return self
+        # bool is a subclass of int — reject it explicitly so a stale `true`
+        # default from the old toggle schema fails loudly instead of being
+        # interpreted as a 1-token budget.
+        if isinstance(budget, bool) or not isinstance(budget, int):
+            raise ValueError("thinking default must be an int budget (>= 1024) or null/0")
+        if budget < 1024:
+            raise ValueError("thinking budget must be >= 1024")
+        max_tokens = self.params.get("max_tokens")
+        if max_tokens and isinstance(max_tokens.default, int) and budget >= max_tokens.default:
+            raise ValueError("thinking budget must be < max_tokens default")
+        return self
 
 
 class ManagedModelCreate(BaseModel):
@@ -48,7 +127,6 @@ class ManagedModelCreate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: bool = Field(False, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -59,6 +137,12 @@ class ManagedModelCreate(BaseModel):
         False,
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
+    )
+    supported_params: Optional[SupportedParams] = Field(
+        None,
+        alias="supportedParams",
+        description="Per-model inference parameter capabilities (temperature, top_p, etc.). "
+                    "When None, the runtime sends no inference params."
     )
 
 
@@ -100,7 +184,6 @@ class ManagedModelUpdate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: Optional[bool] = Field(None, alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -111,6 +194,11 @@ class ManagedModelUpdate(BaseModel):
         None,
         alias="isDefault",
         description="Whether this is the default model for new sessions."
+    )
+    supported_params: Optional[SupportedParams] = Field(
+        None,
+        alias="supportedParams",
+        description="Per-model inference parameter capabilities."
     )
 
 
@@ -151,7 +239,6 @@ class ManagedModel(BaseModel):
         alias="cacheReadPricePerMillionTokens",
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
-    is_reasoning_model: bool = Field(..., alias="isReasoningModel")
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: bool = Field(
         True,
@@ -162,6 +249,11 @@ class ManagedModel(BaseModel):
         False,
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
+    )
+    supported_params: Optional[SupportedParams] = Field(
+        None,
+        alias="supportedParams",
+        description="Per-model inference parameter capabilities."
     )
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")

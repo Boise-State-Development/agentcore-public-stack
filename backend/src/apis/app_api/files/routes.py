@@ -11,11 +11,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
-from apis.shared.auth import User, get_current_user
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.files.models import (
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
+    PreviewUrlResponse,
+    TextSnippetResponse,
+    ThumbnailResponse,
     FileListResponse,
     QuotaResponse,
     QuotaExceededError as QuotaExceededModel,
@@ -30,6 +33,7 @@ from .service import (
     FileNotFoundError,
     FileUploadError,
 )
+from .thumbnails import ThumbnailRenderError, ThumbnailUnsupportedError
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +48,7 @@ router = APIRouter(prefix="/files", tags=["files"])
 @router.post("/presign", response_model=PresignResponse)
 async def request_presigned_url(
     request: PresignRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -107,7 +111,7 @@ async def request_presigned_url(
 @router.post("/{upload_id}/complete", response_model=CompleteUploadResponse)
 async def complete_upload(
     upload_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -133,6 +137,91 @@ async def complete_upload(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
+        )
+
+
+@router.get("/{upload_id}/preview-url", response_model=PreviewUrlResponse)
+async def get_preview_url(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Generate a short-lived presigned GET URL for an uploaded file.
+
+    Used by the UI to render image previews inline and to open files in a
+    lightbox. The URL is scoped to the file owner and expires after a few
+    minutes.
+    """
+    try:
+        return await service.get_preview_url(user.user_id, upload_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+
+
+@router.get("/{upload_id}/text-snippet", response_model=TextSnippetResponse)
+async def get_text_snippet(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Return a short UTF-8 text excerpt from the start of a file.
+
+    Used by the UI to render a content peek inside the document-style
+    attachment card for text-based files (txt, md, csv, html). Returns an
+    empty snippet for non-text MIME types so the UI can fall back to a
+    skeleton mockup.
+    """
+    try:
+        return await service.get_text_snippet(user.user_id, upload_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+
+
+@router.get("/{upload_id}/thumbnail", response_model=ThumbnailResponse)
+async def get_thumbnail(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Return a presigned URL for a PNG thumbnail of the file's first page.
+
+    Lazy-renders on first request and caches the resulting `_thumb.png`
+    sibling object next to the original. Subsequent calls hit the cache and
+    return immediately.
+
+    Status codes:
+    - 200: Thumbnail available (response body indicates `cached`).
+    - 404: File not found or not owned by the caller.
+    - 415: MIME type has no thumbnail renderer (UI should fall back to its
+           skeleton card).
+    - 422: File present but unrenderable (corrupt, encrypted, empty PDF, ...).
+    """
+    try:
+        return await service.get_or_create_thumbnail(user.user_id, upload_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+    except ThumbnailUnsupportedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(e),
+        )
+    except ThumbnailRenderError as e:
+        logger.warning(f"Thumbnail render failed for {upload_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not render a thumbnail for this file",
         )
 
 
@@ -167,7 +256,7 @@ async def list_files(
     sort_order: SortOrder = Query(
         SortOrder.DESC, alias="sortOrder", description="Sort order: asc or desc"
     ),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -192,7 +281,7 @@ async def list_files(
 @router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(
     upload_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """
@@ -222,7 +311,7 @@ async def delete_file(
 
 @router.get("/quota", response_model=QuotaResponse)
 async def get_quota(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     service: FileUploadService = Depends(get_file_upload_service),
 ):
     """

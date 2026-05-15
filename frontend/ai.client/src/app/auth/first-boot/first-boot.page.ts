@@ -11,8 +11,23 @@ import { SystemService, FirstBootError } from '../../services/system.service';
   styleUrl: './first-boot.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="fixed inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-900 overflow-y-auto">
-      <div class="w-full max-w-md px-4 py-12">
+    <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
+      <!-- Decorative background: lava-lamp blobs across three depth tiers
+           (far/mid/near) for parallax — size, blur, speed, and travel
+           distance all scale with depth. -->
+      <div class="login-bg" aria-hidden="true">
+        <div class="login-lava">
+          <div class="login-blob login-blob--a"></div>
+          <div class="login-blob login-blob--b"></div>
+          <div class="login-blob login-blob--c"></div>
+          <div class="login-blob login-blob--d"></div>
+          <div class="login-blob login-blob--e"></div>
+          <div class="login-blob login-blob--f"></div>
+        </div>
+        <div class="login-grid"></div>
+      </div>
+
+      <div class="relative w-full max-w-md px-4 py-12">
         <!-- Logo -->
         <div class="mb-8 flex justify-center">
           <img
@@ -25,13 +40,13 @@ import { SystemService, FirstBootError } from '../../services/system.service';
             class="hidden size-16 dark:block">
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-8">
+        <div class="login-card rounded-2xl p-8">
           <div class="flex flex-col items-center gap-6">
             <div class="flex flex-col items-center gap-2">
-              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+              <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-50">
                 Welcome
               </h1>
-              <p class="text-base/7 text-gray-600 dark:text-gray-400 text-center">
+              <p class="text-base/7 text-gray-700 dark:text-gray-300 text-center">
                 Create your admin account to get started
               </p>
             </div>

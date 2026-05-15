@@ -1,52 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { UserService } from './user.service';
-import { AuthService } from './auth.service';
+import { SessionService } from './session.service';
 import { ConfigService } from '../services/config.service';
+import { BffSessionUser } from './bff-session.model';
 
 describe('UserService', () => {
   let service: UserService;
-  let mockAuthService: {
-    getAccessToken: ReturnType<typeof vi.fn>;
-    getIdToken: ReturnType<typeof vi.fn>;
+  let userSignal: ReturnType<typeof signal<BffSessionUser | null>>;
+  let isAuthenticatedSignal: ReturnType<typeof signal<boolean>>;
+  let mockSessionService: {
+    user: typeof userSignal;
+    isAuthenticated: typeof isAuthenticatedSignal;
   };
   let mockConfigService: {
     appApiUrl: ReturnType<typeof vi.fn>;
   };
 
-  // Create base64url-encoded JWT token
-  const createJWT = (payload: any) => {
-    const header = { alg: 'none' };
-    const headerB64 = btoa(JSON.stringify(header)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    const payloadB64 = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    return `${headerB64}.${payloadB64}.sig`;
-  };
-
-  // ID token payload (has email, name, cognito:groups)
-  const testPayload = {
-    sub: 'user-123',
+  const sessionUser: BffSessionUser = {
+    user_id: 'user-123',
     email: 'test@example.com',
     name: 'Test User',
-    given_name: 'Test',
-    family_name: 'User',
     roles: ['Admin'],
-    picture: 'https://example.com/pic.jpg'
+    picture: 'https://example.com/pic.jpg',
   };
-
-  const testJWT = createJWT(testPayload);
-
-  /** Helper: set both tokens (simulates a real login where both are stored). */
-  function setTokens(idToken: string | null, accessToken?: string | null) {
-    mockAuthService.getIdToken.mockReturnValue(idToken);
-    mockAuthService.getAccessToken.mockReturnValue(accessToken ?? idToken);
-  }
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    mockAuthService = {
-      getAccessToken: vi.fn(),
-      getIdToken: vi.fn(),
+    userSignal = signal<BffSessionUser | null>(null);
+    isAuthenticatedSignal = signal(false);
+    mockSessionService = {
+      user: userSignal,
+      isAuthenticated: isAuthenticatedSignal,
     };
     mockConfigService = {
       appApiUrl: vi.fn().mockReturnValue('http://localhost:8000'),
@@ -56,7 +43,7 @@ describe('UserService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         UserService,
-        { provide: AuthService, useValue: mockAuthService },
+        { provide: SessionService, useValue: mockSessionService },
         { provide: ConfigService, useValue: mockConfigService },
       ]
     });
@@ -70,16 +57,12 @@ describe('UserService', () => {
   });
 
   describe('getUser', () => {
-    it('should return null when no token', () => {
-      setTokens(null);
-      service.refreshUser();
-
+    it('should return null when no BFF session', () => {
       expect(service.getUser()).toBeNull();
     });
 
-    it('should return User when token exists', () => {
-      setTokens(testJWT);
-      service.refreshUser();
+    it('should map BFF session payload onto the legacy User shape', () => {
+      userSignal.set(sessionUser);
 
       const user = service.getUser();
       expect(user).toEqual({
@@ -90,73 +73,48 @@ describe('UserService', () => {
         fullName: 'Test User',
         roles: ['Admin'],
         picture: 'https://example.com/pic.jpg',
-        providerSub: '',
       });
+    });
+
+    it('should fall back to email when name is empty', () => {
+      userSignal.set({ ...sessionUser, name: null });
+
+      const user = service.getUser();
+      expect(user?.fullName).toBe('test@example.com');
+      expect(user?.firstName).toBe('test@example.com');
+      expect(user?.lastName).toBe('');
     });
   });
 
   describe('hasRole', () => {
-    it('should return false when no user', () => {
-      setTokens(null);
-      service.refreshUser();
-
+    it('returns false when no user', () => {
       expect(service.hasRole('Admin')).toBe(false);
     });
 
-    it('should return true when user has role', () => {
-      setTokens(testJWT);
-      service.refreshUser();
-
+    it('returns true when user has role', () => {
+      userSignal.set(sessionUser);
       expect(service.hasRole('Admin')).toBe(true);
     });
 
-    it('should return false when user does not have role', () => {
-      setTokens(testJWT);
-      service.refreshUser();
-
+    it('returns false when user does not have role', () => {
+      userSignal.set(sessionUser);
       expect(service.hasRole('User')).toBe(false);
     });
   });
 
   describe('hasAnyRole', () => {
-    it('should return false when no user', () => {
-      setTokens(null);
-      service.refreshUser();
-
+    it('returns false when no user', () => {
       expect(service.hasAnyRole(['Admin', 'User'])).toBe(false);
     });
 
-    it('should return true when user has any role', () => {
-      setTokens(testJWT);
-      service.refreshUser();
-
+    it('returns true when user has at least one role', () => {
+      userSignal.set(sessionUser);
       expect(service.hasAnyRole(['Admin', 'User'])).toBe(true);
     });
 
-    it('should return false when user has no matching roles', () => {
-      setTokens(testJWT);
-      service.refreshUser();
-
+    it('returns false when user has no matching roles', () => {
+      userSignal.set(sessionUser);
       expect(service.hasAnyRole(['User', 'Guest'])).toBe(false);
-    });
-  });
-
-  describe('refreshUser', () => {
-    it('should update user when token is available', () => {
-      setTokens(testJWT);
-
-      service.refreshUser();
-
-      expect(service.getUser()).not.toBeNull();
-      expect(service.getUser()?.email).toBe('test@example.com');
-    });
-
-    it('should set user to null when no token', () => {
-      setTokens(null);
-
-      service.refreshUser();
-
-      expect(service.getUser()).toBeNull();
     });
   });
 });

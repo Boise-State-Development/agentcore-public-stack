@@ -100,6 +100,40 @@
               <ng-icon name="heroAdjustmentsHorizontal" class="size-5" aria-hidden="true" />
             </button>
           }
+
+          <!-- Voice Toggle Button -->
+          <button
+            type="button"
+            (click)="toggleVoice()"
+            [class]="voiceButtonClass()"
+            [attr.aria-label]="voiceAriaLabel()"
+            [appTooltip]="voiceTooltip()"
+            appTooltipPosition="top"
+          >
+            @if (voiceStatus() === 'listening') {
+              <!-- Pulsing dot indicator for listening -->
+              <span class="relative flex size-3">
+                <span class="absolute inline-flex size-full animate-ping rounded-full bg-red-400 opacity-75"></span>
+                <span class="relative inline-flex size-3 rounded-full bg-red-500"></span>
+              </span>
+            } @else if (voiceStatus() === 'speaking') {
+              <!-- Wave bars for speaking -->
+              <span class="flex items-center gap-0.5" aria-hidden="true">
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 0ms;"></span>
+                <span class="h-4 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 150ms;"></span>
+                <span class="h-3 w-0.5 animate-bounce rounded-full bg-green-500" style="animation-delay: 300ms;"></span>
+              </span>
+            } @else if (voiceStatus() === 'connecting') {
+              <!-- Spinner for connecting -->
+              <svg class="size-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+            } @else {
+              <!-- Mic icon for idle -->
+              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
+            }
+          </button>
         </div>
 
         <!-- Right Controls -->

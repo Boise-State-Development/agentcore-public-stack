@@ -1,6 +1,6 @@
 """Messages API models"""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,11 +31,22 @@ class MessageContent(BaseModel):
 
 
 class LatencyMetrics(BaseModel):
-    """Latency measurements in milliseconds"""
+    """Latency measurements in milliseconds.
+
+    ``time_to_first_token`` is ``None`` when the provider did not emit
+    ``timeToFirstByteMs`` and we couldn't compute it locally — distinct from
+    a measured value of 0ms (which is physically impossible). Aggregations
+    over TTFT must filter ``None`` so a missing measurement doesn't pull
+    averages toward zero.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    time_to_first_token: int = Field(..., alias="timeToFirstToken", description="Time from request start to first token received (ms)")
+    time_to_first_token: Optional[int] = Field(
+        None,
+        alias="timeToFirstToken",
+        description="Time from request start to first token (ms); None if not measured",
+    )
     end_to_end_latency: int = Field(..., alias="endToEndLatency", description="Total time from request start to completion (ms)")
 
 
@@ -115,7 +126,7 @@ class MessageMetadata(BaseModel):
     token_usage: Optional[TokenUsage] = Field(None, alias="tokenUsage", description="Token usage statistics")
     model_info: Optional[ModelInfo] = Field(None, alias="modelInfo", description="Model information for cost tracking")
     attribution: Optional[Attribution] = Field(None, description="Attribution for cost tracking and billing")
-    cost: Optional[float] = Field(None, description="Total cost in USD for this message (computed from token usage and pricing)")
+    cost: Optional[Union[float, Dict[str, float]]] = Field(None, description="Cost for this message — either a total float (legacy) or a breakdown dict with total, inputCost, outputCost, cacheReadCost, cacheWriteCost")
     citations: Optional[List[Dict[str, str]]] = Field(None, description="RAG citations for this message (stored as dicts for flexible JSON storage)")
     display_text: Optional[str] = Field(None, alias="displayText", description="Original user message text before RAG augmentation (for clean UI display)")
     # Note: Feedback will be added in future implementation

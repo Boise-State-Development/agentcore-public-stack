@@ -1,23 +1,5 @@
-"""Cost tracking and calculation services
+"""Cost tracking routes and aggregation (app_api-specific).
 
-This module handles:
-- Cost calculation from token usage and model info
-- Cost aggregation across messages/sessions/users
-- Pricing configuration management
+Shared cost models, calculator, and pricing config live in apis.shared.costs.
+The aggregator and routes remain here as they are app_api-specific.
 """
-
-from .models import CostBreakdown, ModelCostSummary, UserCostSummary
-from .pricing_config import get_model_pricing, create_pricing_snapshot
-from .calculator import CostCalculator
-
-# TODO: Implement additional services
-# from .aggregator import CostAggregator
-
-__all__ = [
-    "CostBreakdown",
-    "ModelCostSummary",
-    "UserCostSummary",
-    "get_model_pricing",
-    "create_pricing_snapshot",
-    "CostCalculator",
-]

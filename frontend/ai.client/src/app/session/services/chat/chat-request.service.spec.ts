@@ -31,6 +31,7 @@ describe('ChatRequestService', () => {
     mockModelService = {
       getSelectedModel: vi.fn().mockReturnValue({ modelId: 'test-model', provider: 'test' }),
       isUsingDefaultModel: vi.fn().mockReturnValue(false),
+      getInferenceParamOverrides: vi.fn().mockReturnValue({}),
     };
 
     mockToolService = {

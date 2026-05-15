@@ -33,6 +33,9 @@ from .models import (
 from .metadata import (
     store_message_metadata,
     store_session_metadata,
+    ensure_session_metadata_exists,
+    update_session_title,
+    update_session_activity,
     get_session_metadata,
     get_all_message_metadata,
     list_user_sessions,
@@ -69,6 +72,9 @@ __all__ = [
     # Metadata operations
     "store_message_metadata",
     "store_session_metadata",
+    "ensure_session_metadata_exists",
+    "update_session_title",
+    "update_session_activity",
     "get_session_metadata",
     "get_all_message_metadata",
     "list_user_sessions",

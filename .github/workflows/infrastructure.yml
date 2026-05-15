@@ -83,7 +83,7 @@ jobs:
 
       - name: Restore node_modules cache
         id: cache-infrastructure
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -100,7 +100,7 @@ jobs:
 
       - name: Save node_modules cache
         if: steps.cache-infrastructure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -114,7 +114,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -125,7 +125,7 @@ jobs:
           bash scripts/stack-infrastructure/build.sh
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: infrastructure-cdk-build
           path: |
@@ -164,6 +164,9 @@ jobs:
       CDK_FILE_UPLOAD_CORS_ORIGINS: ${{ vars.CDK_FILE_UPLOAD_CORS_ORIGINS }}
       CDK_FILE_UPLOAD_MAX_SIZE_MB: ${{ vars.CDK_FILE_UPLOAD_MAX_SIZE_MB }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
+      CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}
+      CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
+      CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
       # Existing VPC (optional — import a pre-existing VPC instead of creating one)
       CDK_EXISTING_VPC_ID: ${{ vars.CDK_EXISTING_VPC_ID }}
@@ -180,7 +183,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -210,7 +213,7 @@ jobs:
           bash scripts/stack-infrastructure/synth.sh
 
       - name: Upload synthesized templates
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: infrastructure-cdk-synth
           path: infrastructure/cdk.out/
@@ -245,6 +248,9 @@ jobs:
       CDK_FILE_UPLOAD_CORS_ORIGINS: ${{ vars.CDK_FILE_UPLOAD_CORS_ORIGINS }}
       CDK_FILE_UPLOAD_MAX_SIZE_MB: ${{ vars.CDK_FILE_UPLOAD_MAX_SIZE_MB }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
+      CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}
+      CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
+      CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
       # Existing VPC (optional — import a pre-existing VPC instead of creating one)
       CDK_EXISTING_VPC_ID: ${{ vars.CDK_EXISTING_VPC_ID }}
@@ -261,7 +267,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -338,6 +344,9 @@ jobs:
       CDK_INFERENCE_API_CPU: ${{ vars.CDK_INFERENCE_API_CPU }}
       CDK_INFERENCE_API_MEMORY: ${{ vars.CDK_INFERENCE_API_MEMORY }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
+      CDK_COGNITO_CALLBACK_URLS: ${{ vars.CDK_COGNITO_CALLBACK_URLS }}
+      CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
+      CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
       # Existing VPC (optional — import a pre-existing VPC instead of creating one)
       CDK_EXISTING_VPC_ID: ${{ vars.CDK_EXISTING_VPC_ID }}
@@ -354,7 +363,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Restore node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -389,7 +398,7 @@ jobs:
           bash scripts/stack-infrastructure/deploy.sh
 
       - name: Upload stack outputs
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: infrastructure-outputs

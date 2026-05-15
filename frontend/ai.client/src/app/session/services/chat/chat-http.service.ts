@@ -3,8 +3,8 @@ import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-sou
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ConfigService } from '../../../services/config.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { firstValueFrom } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { SessionService } from '../session/session.service';
@@ -20,6 +20,17 @@ class FatalError extends Error {
   constructor(message?: string) {
     super(message);
     this.name = 'FatalError';
+  }
+}
+/**
+ * Thrown by the SSE `onopen` when the BFF returned 401. The session
+ * redirect is already in flight; `onerror` uses this marker to suppress
+ * the toast that would otherwise flash before the page tears down.
+ */
+class UnauthorizedError extends Error {
+  constructor() {
+    super('Session expired');
+    this.name = 'UnauthorizedError';
   }
 }
 
@@ -40,38 +51,64 @@ export class ChatHttpService {
   private streamParserService = inject(StreamParserService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private http = inject(HttpClient);
   private sessionService = inject(SessionService);
+  private bffSession = inject(BffSessionService);
   private errorService = inject(ErrorService);
 
   async sendChatRequest(requestObject: any): Promise<void> {
     const abortController = this.chatStateService.getAbortController();
 
-    const token = await this.getBearerTokenForStreamingResponse();
+    // Phase 6c: stream goes through the app-api BFF proxy at
+    // `${appApiUrl}/chat/stream` (cookie auth) instead of hitting
+    // inference-api `/invocations` directly with a Bearer token. Same
+    // SSE protocol on the wire — the proxy is transparent. Cookies
+    // travel because the SPA and `/api/*` are same-origin via
+    // CloudFront; for local dev the same origin still works because
+    // the SPA is configured to point at `http://localhost:8000` (the
+    // app-api directly) and the BFF dual-auth dep accepts Bearer too.
+    const appApiUrl = this.config.appApiUrl();
+    if (!appApiUrl) {
+      throw new FatalError('App API URL not configured. Please check your configuration.');
+    }
+    const baseUrl = appApiUrl.endsWith('/') ? appApiUrl.slice(0, -1) : appApiUrl;
 
-        // Single runtime endpoint from configuration
-        const runtimeEndpointUrl = this.config.inferenceApiUrl();
-        if (!runtimeEndpointUrl) {
-          throw new FatalError('Inference API URL not configured. Please check your configuration.');
-        }
+    // `fetchEventSource` is outside the HttpClient pipeline, so the
+    // csrfInterceptor never runs against it — attach the X-CSRF-Token
+    // header manually using the same SessionService helper. Returns
+    // an empty object before bootstrap or in the Bearer rollback path.
+    const csrfHeaders = this.bffSession.csrfHeaders();
 
-    // Normalize: strip trailing /invocations if already present to avoid doubling
-    const baseUrl = runtimeEndpointUrl.replace(/\/invocations\/?$/, '');
+    // Capture into a local so `onopen` (a method-shorthand on the config
+    // object, not a closure over `this`) can reach the BFF session.
+    const bffSession = this.bffSession;
 
-    return fetchEventSource(`${baseUrl}/invocations?qualifier=DEFAULT`, {
+    return fetchEventSource(`${baseUrl}/chat/stream`, {
       method: 'POST',
+      // Send the BFF session cookie (`__Host-bff_session`) on cross-origin
+      // dev (localhost:4200 → localhost:8000) and on same-origin prod
+      // (CloudFront). Browsers attach same-origin cookies regardless;
+      // `include` is the explicit form that also works cross-origin
+      // when the backend's CORS allows credentials.
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        Accept: 'text/event-stream',        
+        Accept: 'text/event-stream',
+        OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
+        ...csrfHeaders,
       },
       body: JSON.stringify(requestObject),
       signal: abortController.signal,
       async onopen(response) {
         if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
           return; // everything's good
+        } else if (response.status === 401) {
+          // BFF session is missing or expired. Bounce to /auth/login —
+          // `handleUnauthorized` is idempotent, so a 401 here that races
+          // with one from a parallel request only navigates once.
+          bffSession.handleUnauthorized();
+          throw new UnauthorizedError();
         } else if (response.status === 403) {
           // Handle forbidden (e.g., usage limit exceeded)
           let errorMessage = 'Access forbidden';
@@ -136,25 +173,21 @@ export class ChatHttpService {
         this.messageMapService.endStreaming();
         this.chatStateService.setChatLoading(false);
 
-        // Generate title only for new sessions (fire and forget - don't block on this)
+        // Title is generated server-side concurrently with the stream
+        // (see /invocations). Refresh metadata so the sidebar reflects it.
         if (this.sessionService.isNewSession(requestObject.session_id)) {
-          this.generateTitle(requestObject.session_id, requestObject.message)
-            .then((response) => {
-              // Update the session title in the local cache
-              this.sessionService.updateSessionTitleInCache(
-                requestObject.session_id,
-                response.title,
-              );
-            })
-            .catch((error) => {
-              // Log error but don't block the user experience
-              console.error('Failed to generate session title:', error);
-            });
+          this.refreshTitleFromServer(requestObject.session_id);
         }
       },
       onerror: (err) => {
         this.messageMapService.endStreaming();
         this.chatStateService.setChatLoading(false);
+
+        // 401 already triggered the redirect — skip the toast so it
+        // doesn't flash before the page tears down.
+        if (err instanceof UnauthorizedError) {
+          throw err;
+        }
 
         // Display error message to user using ErrorService
         if (err instanceof FatalError) {
@@ -187,6 +220,29 @@ export class ChatHttpService {
   }
 
   /**
+   * Pull the server-generated title into the local sidebar cache.
+   *
+   * Title generation runs concurrently with the agent stream on the backend.
+   * Nova Micro typically finishes well before the stream does, but on fast
+   * responses we may race past it — so on a "New Conversation" placeholder
+   * we retry once after a short delay before giving up.
+   */
+  private async refreshTitleFromServer(sessionId: string, retried = false): Promise<void> {
+    try {
+      const metadata = await this.sessionService.getSessionMetadata(sessionId);
+      if (metadata.title && metadata.title !== 'New Conversation') {
+        this.sessionService.updateSessionTitleInCache(sessionId, metadata.title);
+        return;
+      }
+      if (!retried) {
+        setTimeout(() => this.refreshTitleFromServer(sessionId, true), 1500);
+      }
+    } catch (error) {
+      console.error('Failed to refresh session title:', error);
+    }
+  }
+
+  /**
    * Generates a title for a session based on the user's input.
    *
    * @param sessionId - The session ID
@@ -214,29 +270,6 @@ export class ChatHttpService {
       // Don't show to user as it's a background operation
       throw error;
     }
-  }
-
-  async getBearerTokenForStreamingResponse(): Promise<string> {
-    // Get token from AuthService, refresh if expired
-    let token = this.authService.getAccessToken();
-    if (!token) {
-      throw new FatalError('No authentication token available. Please login again.');
-    }
-
-    // Check if token needs refresh
-    if (this.authService.isTokenExpired()) {
-      try {
-        await this.authService.refreshAccessToken();
-        token = this.authService.getAccessToken();
-        if (!token) {
-          throw new FatalError('Failed to refresh authentication token. Please login again.');
-        }
-      } catch (error) {
-        throw new FatalError('Failed to refresh authentication token. Please login again.');
-      }
-    }
-
-    return token;
   }
 
 }

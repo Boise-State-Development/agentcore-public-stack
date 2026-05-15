@@ -4,8 +4,6 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { signal } from '@angular/core';
 import { ManagedModelsService } from './managed-models.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
-
 describe('ManagedModelsService', () => {
   let service: ManagedModelsService;
   let httpMock: HttpTestingController;
@@ -16,7 +14,6 @@ describe('ManagedModelsService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         ManagedModelsService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });
@@ -25,7 +22,9 @@ describe('ManagedModelsService', () => {
   });
 
   afterEach(() => {
-    httpMock.match(() => true); // discard pending requests
+    httpMock.match(() => true).forEach(req => {
+      if (!req.cancelled) req.flush({});
+    }); // discard pending requests
     TestBed.resetTestingModule();
   });
 

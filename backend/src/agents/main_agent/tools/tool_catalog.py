@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 
+from agents.main_agent.config.constants import Prefixes
+
 
 class ToolCategory(str, Enum):
     """Categories for organizing tools in the UI."""
@@ -56,13 +58,6 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         icon="link",
     ),
     # --- Local Tools (Data & Visualization) ---
-    "get_current_weather": ToolMetadata(
-        tool_id="get_current_weather",
-        name="Weather",
-        description="Get current weather conditions for US locations using coordinates.",
-        category=ToolCategory.DATA,
-        icon="cloud",
-    ),
     "create_visualization": ToolMetadata(
         tool_id="create_visualization",
         name="Charts & Graphs",
@@ -87,6 +82,22 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         description="Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
         category=ToolCategory.CODE,
         icon="code-bracket",
+    ),
+
+    # --- Built-in Tools (Spreadsheet Analysis) ---
+    "list_spreadsheets": ToolMetadata(
+        tool_id="list_spreadsheets",
+        name="List Spreadsheet Files",
+        description="List spreadsheet files available for analysis from the assistant's knowledge base or conversation attachments.",
+        category=ToolCategory.DATA,
+        icon="folder-open",
+    ),
+    "analyze_spreadsheet": ToolMetadata(
+        tool_id="analyze_spreadsheet",
+        name="Spreadsheet Analysis",
+        description="Analyze spreadsheet data using Python code. Use for aggregations, comparisons, trends, filtering, and chart generation. For simple factual lookups, use the knowledge base search instead.",
+        category=ToolCategory.DATA,
+        icon="table-cells",
     ),
 
     # --- Gateway/MCP Tools ---
@@ -128,7 +139,7 @@ class ToolCatalogService:
 
         Gateway tools are prefixed with 'gateway_' and loaded from MCP servers.
         """
-        if not tool_id.startswith("gateway_"):
+        if not tool_id.startswith(Prefixes.GATEWAY_TOOL):
             tool_id = f"gateway_{tool_id}"
 
         self._catalog[tool_id] = ToolMetadata(

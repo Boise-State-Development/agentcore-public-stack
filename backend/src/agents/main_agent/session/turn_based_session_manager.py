@@ -20,10 +20,12 @@ import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
+from agents.main_agent.config.constants import EnvVars
+
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 
-from .compaction_models import CompactionState, CompactionConfig
+from .compaction_models import CompactionState, CompactionConfig, CompactionResult
 
 if TYPE_CHECKING:
     from strands.agent.agent import Agent
@@ -85,6 +87,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # Compaction state (loaded during initialize)
         self.compaction_state: Optional[CompactionState] = None
 
+        # Whether compaction_state was loaded from DynamoDB. The
+        # AgentCoreMemory path leaves `agent.messages` empty during
+        # `initialize()`, so `_apply_compaction()` (and its load) is skipped
+        # for subsequent turns of an existing session. `update_after_turn`
+        # checks this flag and lazy-loads to avoid clobbering the persisted
+        # `checkpoint` / `total_summarized_turns` with default zeros.
+        self._compaction_state_loaded: bool = False
+
         # Cached data for checkpoint calculation
         self._valid_cutoff_indices: List[int] = []
         self._all_messages_for_summary: List[Dict] = []
@@ -135,8 +145,6 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         2. Let the SDK restore agent state and load messages from AgentCore Memory
         3. Apply compaction (checkpoint + truncation) on the loaded messages
         """
-        is_new_session = self._is_new_session
-
         logger.info(f"TurnBasedSessionManager.initialize() called for agent_id={agent.agent_id}")
 
         # Let the SDK handle all session restore logic:
@@ -154,8 +162,15 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         self._valid_cutoff_indices = []
         self._all_messages_for_summary = []
 
-        # Apply compaction for existing sessions with compaction enabled
-        if is_new_session:
+        # The cutoff cache is also re-derived per turn in `update_after_turn`
+        # so it stays correct even when messages load via hooks after init
+        # (the AgentCoreMemory path leaves `agent.messages` empty here on
+        # subsequent turns of an existing session — `_is_new_session` is True
+        # because `read_session()` doesn't find the SDK's session metadata
+        # event). The init-time pass below is still needed to apply prior
+        # checkpoint state (skip + summary prepend + truncation) to messages
+        # the SDK *did* load.
+        if not agent.messages:
             return
 
         if not self.compaction_config or not self.compaction_config.enabled:
@@ -192,6 +207,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         # Load compaction state from DynamoDB
         self.compaction_state = self._load_compaction_state()
+        self._compaction_state_loaded = True
 
         # Cache valid cutoff indices (user text messages, not tool results)
         self._valid_cutoff_indices = self._find_valid_cutoff_indices(all_messages)
@@ -243,7 +259,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     def _get_dynamodb_table(self):
         """Lazy initialization of DynamoDB table for compaction state."""
         if TurnBasedSessionManager._dynamodb_table is None:
-            table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+            table_name = os.environ.get(EnvVars.DYNAMODB_SESSIONS_METADATA_TABLE)
             if not table_name:
                 logger.warning(
                     "DYNAMODB_SESSIONS_METADATA_TABLE_NAME not configured, "
@@ -463,34 +479,70 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     # Post-Turn Compaction (Stage 2)
     # =========================================================================
 
-    async def update_after_turn(self, input_tokens: int) -> None:
+    async def update_after_turn(
+        self,
+        input_tokens: int,
+        current_messages: Optional[List[Dict]] = None,
+    ) -> Optional[CompactionResult]:
         """
         Update compaction state after a turn completes.
 
         Called by StreamCoordinator with input token count from model response.
         Triggers checkpoint creation when token threshold exceeded.
+
+        Returns a ``CompactionResult`` when the checkpoint advances on this
+        turn so the caller can emit a ``compaction`` SSE event; otherwise
+        returns ``None``.
+
+        ``current_messages`` is the agent's live message list. When provided,
+        the cutoff cache is re-derived from it so compaction works even when
+        AgentCoreMemory loads messages via hooks (skipping the initialize-time
+        prime path).
         """
         if not self.compaction_config or not self.compaction_config.enabled:
-            return
+            return None
 
         if self.compaction_state is None:
             self.compaction_state = CompactionState()
+
+        # Lazy-load persisted state if `initialize()` skipped the load. This
+        # happens on the AgentCoreMemory path for existing sessions, where
+        # `agent.messages` is empty at init time (messages arrive via hooks
+        # after init). Without this, the first `_save_compaction_state` below
+        # would overwrite the persisted `checkpoint` and
+        # `total_summarized_turns` with default zeros.
+        if not self._compaction_state_loaded:
+            self.compaction_state = self._load_compaction_state()
+            self._compaction_state_loaded = True
 
         self.compaction_state.last_input_tokens = input_tokens
 
         if input_tokens <= self.compaction_config.token_threshold:
             self._save_compaction_state(self.compaction_state)
-            return
+            return None
 
         logger.info(
             f"Threshold exceeded: {input_tokens:,} > "
             f"{self.compaction_config.token_threshold:,}"
         )
 
+        # Refresh cutoff cache from the agent's current messages — at this
+        # point in the turn lifecycle the user message + assistant response
+        # have been added, so this is authoritative even if `initialize()`
+        # ran with an empty list.
+        if current_messages:
+            self._valid_cutoff_indices = self._find_valid_cutoff_indices(current_messages)
+            self._all_messages_for_summary = current_messages[:]
+            logger.info(
+                f"Refreshed cutoff cache from current messages: "
+                f"{len(self._valid_cutoff_indices)} valid cutoffs across "
+                f"{len(current_messages)} messages"
+            )
+
         if not self._valid_cutoff_indices:
             logger.info("No valid cutoff points cached, skipping checkpoint update")
             self._save_compaction_state(self.compaction_state)
-            return
+            return None
 
         total_turns = len(self._valid_cutoff_indices)
         protected_turns = self.compaction_config.protected_turns
@@ -501,16 +553,23 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 f"keeping all messages"
             )
             self._save_compaction_state(self.compaction_state)
-            return
+            return None
 
         new_checkpoint = self._valid_cutoff_indices[-protected_turns]
         current_checkpoint = self.compaction_state.checkpoint
 
         if new_checkpoint <= current_checkpoint:
             self._save_compaction_state(self.compaction_state)
-            return
+            return None
 
         logger.info(f"Checkpoint update: {current_checkpoint} -> {new_checkpoint}")
+
+        # Count turns rolled into the summary on THIS event (delta, not
+        # cumulative) — each inline divider stands on its own.
+        summarized_turns = sum(
+            1 for idx in self._valid_cutoff_indices
+            if current_checkpoint < idx <= new_checkpoint
+        )
 
         # Retrieve or generate summary for compacted messages
         summaries = self._retrieve_session_summaries()
@@ -522,35 +581,81 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         self.compaction_state.checkpoint = new_checkpoint
         self.compaction_state.summary = summary
+        # Running total persisted alongside the rest of the compaction state
+        # so a refresh can rehydrate the end-of-conversation summary indicator.
+        self.compaction_state.total_summarized_turns += summarized_turns
         self._save_compaction_state(self.compaction_state)
 
         logger.info(
             f"Compaction checkpoint set: {new_checkpoint}, "
-            f"summary_length={len(summary) if summary else 0}"
+            f"summary_length={len(summary) if summary else 0}, "
+            f"summarized_turns={summarized_turns}, "
+            f"total_summarized_turns={self.compaction_state.total_summarized_turns}"
+        )
+
+        return CompactionResult(
+            previous_checkpoint=current_checkpoint,
+            new_checkpoint=new_checkpoint,
+            summarized_turns=summarized_turns,
+            input_tokens=input_tokens,
         )
 
     # =========================================================================
     # Message Processing Helpers
     # =========================================================================
 
+    # Top-level keys for content blocks Bedrock Converse recognizes.
+    # Mirrors Strands BedrockModel._format_request_message_content
+    # (strands/models/bedrock.py). reasoningContent is critical for
+    # Anthropic extended-thinking + tool-use round-tripping: the block
+    # carries a `signature` field that must be replayed verbatim while a
+    # tool-use cycle is open.
+    _BEDROCK_CONTENT_BLOCK_KEYS = frozenset({
+        "cachePoint",
+        "citationsContent",
+        "document",
+        "guardContent",
+        "image",
+        "reasoningContent",
+        "text",
+        "toolResult",
+        "toolUse",
+        "video",
+    })
+
     @staticmethod
     def _filter_empty_text(message: dict) -> dict:
-        """Filter out empty or invalid content blocks from a message."""
+        """Drop empty text blocks; preserve every other Bedrock-recognized block.
+
+        Empty/whitespace-only ``text`` blocks must be dropped — Bedrock Converse
+        rejects them. Every other recognized content block is passed through
+        unchanged. Blocks whose top-level key is not recognized are dropped and
+        logged so silent stripping (e.g. when Bedrock adds a new block type)
+        is observable.
+        """
         if "content" not in message:
             return message
         content = message.get("content", [])
         if not isinstance(content, list):
             return message
 
-        def is_valid_block(block):
+        filtered = []
+        for block in content:
             if not isinstance(block, dict):
-                return False
+                continue
             if "text" in block:
                 text = block.get("text", "")
-                return isinstance(text, str) and text.strip() != ""
-            return any(key in block for key in ("toolUse", "toolResult", "image", "document"))
-
-        filtered = [block for block in content if is_valid_block(block)]
+                if isinstance(text, str) and text.strip() != "":
+                    filtered.append(block)
+                continue
+            if any(key in block for key in TurnBasedSessionManager._BEDROCK_CONTENT_BLOCK_KEYS):
+                filtered.append(block)
+            else:
+                logger.warning(
+                    "Dropping unrecognized content block (keys=%s) before persistence. "
+                    "If Bedrock has added a new block type, update _BEDROCK_CONTENT_BLOCK_KEYS.",
+                    sorted(block.keys()),
+                )
         return {**message, "content": filtered}
 
     def _has_tool_result(self, message: Dict) -> bool:

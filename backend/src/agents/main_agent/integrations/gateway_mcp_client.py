@@ -9,6 +9,7 @@ import boto3
 from typing import Optional, List, Callable, Any
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
+from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,7 @@ def create_filtered_gateway_client(
 
 
 # Environment variable control
-GATEWAY_ENABLED = os.environ.get('AGENTCORE_GATEWAY_MCP_ENABLED', 'true').lower() == 'true'
+GATEWAY_ENABLED = os.environ.get(EnvVars.GATEWAY_MCP_ENABLED, str(Defaults.GATEWAY_MCP_ENABLED).lower()).lower() == 'true'
 
 def get_gateway_client_if_enabled(
     enabled_tool_ids: Optional[List[str]] = None

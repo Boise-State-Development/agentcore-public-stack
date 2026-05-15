@@ -4,8 +4,6 @@ import { HttpClientTestingModule, HttpTestingController } from '@angular/common/
 import { signal } from '@angular/core';
 import { GeminiModelsService } from './gemini-models.service';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
-
 describe('GeminiModelsService', () => {
   let service: GeminiModelsService;
   let httpMock: HttpTestingController;
@@ -16,7 +14,6 @@ describe('GeminiModelsService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         GeminiModelsService,
-        { provide: AuthService, useValue: { ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });

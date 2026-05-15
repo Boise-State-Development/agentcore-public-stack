@@ -3,18 +3,18 @@
 Contains business logic for chat operations, including agent creation and management.
 """
 
+import json
 import logging
 import hashlib
 import os
-from typing import Optional, List, Tuple
-from datetime import datetime, timezone
+from typing import Any, Dict, Optional, List, Tuple
 
 import boto3
 
 # from agentcore.agent.agent import ChatbotAgent
-from agents.main_agent.main_agent import MainAgent
-from apis.shared.sessions.models import SessionMetadata
-from apis.shared.sessions.metadata import store_session_metadata
+from agents.main_agent.agent_types import create_agent
+from agents.main_agent.base_agent import BaseAgent
+from apis.shared.sessions.metadata import update_session_title
 
 logger = logging.getLogger(__name__)
 
@@ -38,35 +38,34 @@ def _hash_tools(tools: Optional[List[str]]) -> str:
     return hashlib.md5(tools_str.encode()).hexdigest()[:8]
 
 
+def _hash_inference_params(params: Optional[Dict[str, Any]]) -> str:
+    """Stable hash of an inference-params dict for the agent cache key."""
+    if not params:
+        return "none"
+    payload = json.dumps(params, sort_keys=True, default=str)
+    return hashlib.md5(payload.encode()).hexdigest()[:8]
+
+
 def _create_cache_key(
     session_id: str,
     user_id: Optional[str],
     enabled_tools: Optional[List[str]],
     model_id: Optional[str],
-    temperature: Optional[float],
+    inference_params: Optional[Dict[str, Any]],
     system_prompt: Optional[str],
     caching_enabled: Optional[bool],
     provider: Optional[str],
-    max_tokens: Optional[int]
+    freshness_hash: str,
+    agent_type: Optional[str],
 ) -> Tuple:
     """
-    Create a cache key for agent instances
+    Create a cache key for agent instances.
 
-    Args:
-        session_id: Session identifier
-        user_id: User identifier
-        enabled_tools: List of enabled tool names
-        model_id: Model identifier
-        temperature: Model temperature
-        system_prompt: System prompt text
-        caching_enabled: Whether caching is enabled
-        provider: LLM provider
-        max_tokens: Maximum tokens to generate
-
-    Returns:
-        Tuple suitable for use as cache key
+    `freshness_hash` is a short digest of the enabled tools' current
+    `updated_at` values (see `freshness.get_freshness_hash`). When an
+    admin edits a tool's config, the hash changes and the cache misses,
+    so the next turn builds a fresh agent with the new config.
     """
-    # Hash the tools list for stable key
     tools_hash = _hash_tools(enabled_tools)
 
     # Hash system prompt if provided (can be very long)
@@ -79,11 +78,12 @@ def _create_cache_key(
         user_id or session_id,
         tools_hash,
         model_id or "default",
-        temperature or 0.0,
+        _hash_inference_params(inference_params),
         prompt_hash,
         caching_enabled or False,
         provider or "bedrock",
-        max_tokens or 0
+        freshness_hash,
+        agent_type or "chat",
     )
 
 
@@ -94,7 +94,19 @@ _agent_cache: dict = {}
 _CACHE_MAX_SIZE = 100
 
 
-def get_agent(
+def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
+    """Return True if the wrapped Strands agent is mid-interrupt.
+
+    Used by ``get_agent`` to decide whether to evict a stale paused agent
+    from the cache. ``getattr`` chains with defaults can never raise, so
+    no try/except is needed.
+    """
+    inner = getattr(agent, "agent", None)
+    state = getattr(inner, "_interrupt_state", None)
+    return bool(state is not None and getattr(state, "activated", False))
+
+
+async def get_agent(
     session_id: str,
     user_id: Optional[str] = None,
     auth_token: Optional[str] = None,
@@ -104,63 +116,114 @@ def get_agent(
     system_prompt: Optional[str] = None,
     caching_enabled: Optional[bool] = None,
     provider: Optional[str] = None,
-    max_tokens: Optional[int] = None
-) -> MainAgent:
+    max_tokens: Optional[int] = None,
+    agent_type: Optional[str] = None,
+    extra_tools: Optional[list] = None,
+    inference_params: Optional[Dict[str, Any]] = None,
+    is_resume: bool = False,
+) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
 
     Implements LRU caching to reduce agent initialization overhead.
-    Cache key includes all configuration parameters to ensure correct behavior.
-    Session message history is managed by AgentCore Memory automatically.
+    Cache key includes all configuration parameters plus a freshness
+    hash of the enabled tools' `updated_at` values, so admin edits to a
+    tool's config invalidate the cached agent on the next turn.
 
     Args:
         session_id: Session identifier
         user_id: User identifier (defaults to session_id)
         enabled_tools: List of tool IDs to enable
         model_id: Model ID (provider-specific format)
-        temperature: Model temperature
+        temperature: Legacy. Folded into ``inference_params['temperature']``.
         system_prompt: System prompt text
         caching_enabled: Whether to enable prompt caching (Bedrock only)
         provider: LLM provider ("bedrock", "openai", or "gemini")
-        max_tokens: Maximum tokens to generate
+        max_tokens: Legacy. Folded into ``inference_params['max_tokens']``.
+        agent_type: Agent factory variant ("chat" or "skill")
+        inference_params: Canonical-name -> value map for inference params.
+            When provided, supersedes the legacy ``temperature``/``max_tokens``
+            kwargs (the explicit dict wins on key conflicts).
 
     Returns:
-        MainAgent instance (cached or newly created)
+        BaseAgent subclass instance (cached or newly created)
     """
-    # Create cache key from all configuration parameters
+    from apis.shared.tools.freshness import get_freshness_hash
+
+    # Merge legacy temperature/max_tokens into inference_params so the cache
+    # key and BaseAgent see the same canonical dict.
+    merged_params: Dict[str, Any] = dict(inference_params or {})
+    if temperature is not None:
+        merged_params.setdefault("temperature", temperature)
+    if max_tokens is not None:
+        merged_params.setdefault("max_tokens", max_tokens)
+
+    freshness_hash = await get_freshness_hash(enabled_tools or [])
+
     cache_key = _create_cache_key(
         session_id=session_id,
         user_id=user_id,
         enabled_tools=enabled_tools,
         model_id=model_id,
-        temperature=temperature,
+        inference_params=merged_params,
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        freshness_hash=freshness_hash,
+        agent_type=agent_type,
     )
 
-    # Check cache
-    if cache_key in _agent_cache:
-        logger.debug("✅ Agent cache hit")
-        return _agent_cache[cache_key]
+    if not extra_tools and cache_key in _agent_cache:
+        cached = _agent_cache[cache_key]
+        # Defense in depth: a non-resume request should never be served a
+        # paused agent. If we ever desync the cache key between the original
+        # turn and a resume (e.g. snapshot stores a normalized form of one
+        # of the params), the resume rebuilds under a new key while the
+        # paused agent stays in the original slot — and a later non-resume
+        # turn cache-hits to it. Strands then raises "must resume from
+        # interrupt with list of interruptResponse's". Discard and rebuild.
+        if not is_resume and _is_paused_on_interrupt(cached):
+            logger.warning(
+                "Cached agent is paused on an interrupt but request is not a resume; "
+                "evicting and rebuilding (session=%s user=%s)",
+                session_id, user_id,
+            )
+            del _agent_cache[cache_key]
+        else:
+            logger.debug("✅ Agent cache hit")
+            return cached
 
     # Cache miss - create new agent
     logger.debug("⚠️ Agent cache miss - creating new instance")
 
-    # Create agent with multi-provider support
-    agent = MainAgent(
+    # Create agent via the type registry. Default "chat" preserves the
+    # existing MainAgent (= ChatAgent) behavior; "skill" routes through
+    # SkillAgent's progressive skill disclosure.
+    resolved_agent_type = agent_type or "chat"
+    agent = create_agent(
+        agent_type=resolved_agent_type,
         session_id=session_id,
         user_id=user_id,
         auth_token=auth_token,
         enabled_tools=enabled_tools,
         model_id=model_id,
-        temperature=temperature,
         system_prompt=system_prompt,
         caching_enabled=caching_enabled,
         provider=provider,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        extra_tools=extra_tools,
+        inference_params=merged_params,
     )
+
+    # Stamp the type onto the construction snapshot so a paused turn can
+    # resume on the same factory variant after cache eviction.
+    if hasattr(agent, "_construction_snapshot"):
+        agent._construction_snapshot["agent_type"] = resolved_agent_type
+
+    # Don't cache agents with context-bound extra_tools
+    if extra_tools:
+        logger.debug("⏭️ Skipping cache for agent with extra_tools")
+        return agent
 
     # Add to cache with LRU eviction
     if len(_agent_cache) >= _CACHE_MAX_SIZE:
@@ -271,7 +334,7 @@ async def generate_conversation_title(
             }
         }
 
-        logger.info(f"🎯 Generating title for session {session_id} (input length: {len(truncated_input)} chars)")
+        logger.info("🎯 Generating title (input length: %d chars)", len(truncated_input))
 
         # Call Bedrock Nova Micro
         response = bedrock_client.converse(
@@ -287,117 +350,21 @@ async def generate_conversation_title(
         # Enforce 50 character limit (just in case model exceeds)
         if len(title) > 50:
             title = title[:47] + "..."
-            logger.warning(f"Title exceeded 50 chars, truncated to: {title}")
+            logger.warning("Title exceeded 50 chars, truncated")
 
-        logger.info(f"✅ Generated title: '{title}' for session {session_id}")
+        logger.info("✅ Generated title successfully")
 
-        # Update session metadata with the generated title
-        # IMPORTANT: We must read existing metadata first and only update the title field.
-        # The streaming coordinator has already set message_count correctly, and we must
-        # not overwrite it. This function is called async after streaming completes,
-        # so there's a race condition where we could overwrite the correct message_count
-        # with 0 if we don't preserve existing values.
-        from apis.shared.sessions.metadata import get_session_metadata
-
-        logger.info(f"📖 Title generation: Reading existing metadata for session {session_id}")
-        existing_metadata = await get_session_metadata(session_id, user_id)
-
-        if existing_metadata:
-            logger.info(f"📊 Title generation: Found existing metadata with message_count={existing_metadata.message_count}")
-            # Preserve existing metadata, only update title
-            session_metadata = SessionMetadata(
-                session_id=session_id,
-                user_id=user_id,
-                title=title,  # Only update this field
-                status=existing_metadata.status,
-                created_at=existing_metadata.created_at,
-                last_message_at=existing_metadata.last_message_at,
-                message_count=existing_metadata.message_count,  # PRESERVE existing count
-                starred=existing_metadata.starred,
-                tags=existing_metadata.tags,
-                preferences=existing_metadata.preferences
-            )
-        else:
-            logger.warning(f"⚠️ Title generation: No existing metadata found - creating new with message_count=0")
-            # Fallback: If metadata doesn't exist yet (rare edge case), create it
-            # The streaming coordinator will update message_count shortly after
-            now = datetime.now(timezone.utc).isoformat()
-            session_metadata = SessionMetadata(
-                session_id=session_id,
-                user_id=user_id,
-                title=title,
-                status="active",
-                created_at=now,
-                last_message_at=now,
-                message_count=0,  # Safe fallback - will be set by streaming coordinator
-                starred=False,
-                tags=[],
-                preferences=None
-            )
-
-        logger.info(f"📝 Title generation: About to store metadata with message_count={session_metadata.message_count}")
-        await store_session_metadata(
-            session_id=session_id,
-            user_id=user_id,
-            session_metadata=session_metadata
-        )
-
-        logger.info(f"💾 Title generation: Stored session metadata with title for session {session_id}")
+        # Targeted update — only writes the title attribute. The post-stream
+        # update_session_activity write is also targeted and disjoint, so the
+        # two cannot clobber each other on overlapping turns.
+        await update_session_title(session_id=session_id, user_id=user_id, title=title)
 
         return title
 
     except Exception as e:
-        # Log error but don't fail the request
-        # Title generation is nice-to-have, not critical
-        logger.error(f"Failed to generate title for session {session_id}: {e}", exc_info=True)
-
-        # Return fallback title
-        fallback_title = "New Conversation"
-
-        # Still try to store metadata with fallback title
-        # Same as above: preserve existing metadata to avoid race conditions
-        try:
-            from apis.shared.sessions.metadata import get_session_metadata
-
-            existing_metadata = await get_session_metadata(session_id, user_id)
-
-            if existing_metadata:
-                # Preserve existing metadata, only update title
-                session_metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title=fallback_title,
-                    status=existing_metadata.status,
-                    created_at=existing_metadata.created_at,
-                    last_message_at=existing_metadata.last_message_at,
-                    message_count=existing_metadata.message_count,  # PRESERVE
-                    starred=existing_metadata.starred,
-                    tags=existing_metadata.tags,
-                    preferences=existing_metadata.preferences
-                )
-            else:
-                # Fallback: metadata doesn't exist yet
-                now = datetime.now(timezone.utc).isoformat()
-                session_metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title=fallback_title,
-                    status="active",
-                    created_at=now,
-                    last_message_at=now,
-                    message_count=0,
-                    starred=False,
-                    tags=[],
-                    preferences=None
-                )
-
-            await store_session_metadata(
-                session_id=session_id,
-                user_id=user_id,
-                session_metadata=session_metadata
-            )
-        except Exception as metadata_error:
-            logger.error(f"Failed to store fallback metadata: {metadata_error}")
-
-        return fallback_title
+        # Title generation is nice-to-have. Leave the existing "New Conversation"
+        # placeholder in place rather than writing a fallback; the row already
+        # exists from the pre-create.
+        logger.error("Failed to generate title: %s", e, exc_info=True)
+        return "New Conversation"
 

@@ -9,6 +9,36 @@ export type ModelProvider = 'bedrock' | 'openai' | 'gemini';
 export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini'];
 
 /**
+ * Capability + bounds for a single inference parameter.
+ *
+ * Drives the admin form (which knobs are exposed, what bounds to enforce)
+ * and the runtime gate on the backend (whether to send the param to the
+ * provider SDK at all). `default` is what gets sent when the user doesn't
+ * override; `locked` reserves the slot for the future user-tweak surface.
+ */
+export interface ModelParamSpec {
+  supported: boolean;
+  min?: number | null;
+  max?: number | null;
+  default?: number | boolean | string | null;
+  locked?: boolean;
+}
+
+/**
+ * Per-model inference parameter capability map, keyed by canonical name
+ * (e.g. `temperature`, `top_p`, `top_k`, `max_tokens`, `thinking`,
+ * `reasoning_effort`).
+ *
+ * Open-ended on purpose: each provider's translation table on the backend
+ * decides which canonical names map to native SDK fields, and silently
+ * drops the rest. Adding a new well-known param is a frontend catalog
+ * entry plus one backend mapping line — not a schema migration.
+ */
+export interface SupportedParams {
+  params: Record<string, ModelParamSpec>;
+}
+
+/**
  * Represents a managed model in the system.
  * This extends the Bedrock foundation model with additional metadata
  * for role-based access control and pricing.
@@ -50,14 +80,14 @@ export interface ManagedModel {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
-  /** Whether this is a reasoning model (e.g., o1, o3) */
-  isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
   supportsCaching: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /** Per-model inference parameter capabilities (temperature, top_p, etc.) */
+  supportedParams?: SupportedParams | null;
   /** Date the model was added to the system (ISO string from API) */
   createdAt?: string | Date;
   /** Date the model was last updated (ISO string from API) */
@@ -102,15 +132,118 @@ export interface ManagedModelFormData {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
-  /** Whether this is a reasoning model (e.g., o1, o3) */
-  isReasoningModel: boolean;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
   supportsCaching?: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /** Per-model inference parameter capabilities */
+  supportedParams?: SupportedParams | null;
 }
+
+/**
+ * Frontend catalog of well-known canonical inference params.
+ *
+ * Drives the admin form's per-param row: friendly label, input widget, and
+ * suggested bounds. The backend does the actual provider translation via
+ * its own table — names here just need to match what's in the backend's
+ * `_<PROVIDER>_PARAM_MAP`. Add a new param here + on the backend; no
+ * schema migration required.
+ */
+export interface ParamBoundsDefaults {
+  min?: number;
+  max?: number;
+}
+
+export interface KnownParamMeta {
+  key: string;
+  label: string;
+  description: string;
+  /**
+   * `thinkingBudget` is a number input gated by an on/off switch. The
+   * stored value is `null` (off) or an int budget (on). The runtime
+   * translator wraps the int into the provider-native shape.
+   */
+  kind: 'number' | 'integer' | 'toggle' | 'thinkingBudget';
+  /** Catalog-wide fallback range, used when no provider-specific entry applies. */
+  defaultMin?: number;
+  defaultMax?: number;
+  /**
+   * Per-provider seeded bounds. Wins over `defaultMin`/`defaultMax` when the
+   * model's selected provider has an entry. Lets us serve the right range
+   * out of the box (e.g. temperature 0–1 on Bedrock vs 0–2 on OpenAI) without
+   * making the admin look up SDK docs.
+   */
+  defaults?: Partial<Record<ModelProvider, ParamBoundsDefaults>>;
+  /** Providers that translate this canonical name. Used to filter the form. */
+  providers: ModelProvider[];
+  /**
+   * Other canonical params that must be suppressed when this one is enabled
+   * (truthy). Used by the form/runtime to silently drop conflicting values
+   * — e.g. Anthropic rejects `temperature`/`top_p`/`top_k` while extended
+   * thinking is on.
+   */
+  incompatibleWith?: string[];
+}
+
+export const KNOWN_PARAMS: KnownParamMeta[] = [
+  {
+    key: 'temperature',
+    label: 'Temperature',
+    description: 'Sampling randomness. Lower = more deterministic.',
+    kind: 'number',
+    defaults: {
+      bedrock: { min: 0, max: 1 },   // Anthropic/Bedrock cap
+      openai: { min: 0, max: 2 },    // OpenAI accepts 0–2
+      gemini: { min: 0, max: 1 },
+    },
+    providers: ['bedrock', 'openai', 'gemini'],
+  },
+  {
+    key: 'top_p',
+    label: 'Top P',
+    description: 'Nucleus sampling cutoff.',
+    kind: 'number',
+    defaultMin: 0,
+    defaultMax: 1,
+    providers: ['bedrock', 'openai', 'gemini'],
+  },
+  {
+    key: 'top_k',
+    label: 'Top K',
+    description: 'Top-k sampling cutoff. Not supported by OpenAI.',
+    kind: 'integer',
+    defaultMin: 1,
+    providers: ['bedrock', 'gemini'],
+  },
+  {
+    key: 'max_tokens',
+    label: 'Max Output Tokens',
+    description: 'Maximum tokens in the model response.',
+    kind: 'integer',
+    defaultMin: 1,
+    providers: ['bedrock', 'openai', 'gemini'],
+  },
+  {
+    key: 'thinking',
+    label: 'Extended Thinking',
+    description:
+      'Token budget for extended reasoning. Must be ≥ 1024 and < max_tokens. ' +
+      'Disables temperature, top_p, top_k while on (Anthropic constraint).',
+    kind: 'thinkingBudget',
+    defaultMin: 1024,
+    providers: ['bedrock', 'gemini'],
+    incompatibleWith: ['temperature', 'top_p', 'top_k'],
+  },
+  {
+    key: 'reasoning_effort',
+    label: 'Reasoning Effort',
+    description: 'Reasoning depth (OpenAI o-series).',
+    kind: 'number',
+    providers: ['openai'],
+  },
+];
 
 /**
  * @deprecated Use AppRoles from the /admin/roles API instead.

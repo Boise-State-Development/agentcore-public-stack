@@ -18,7 +18,7 @@ import {
   heroCog6Tooth,
 } from '@ng-icons/heroicons/outline';
 import { ThemeService, ThemePreference } from './theme-toggle/theme.service';
-import { ConfigService } from '../../../services/config.service';
+import { VERSION } from '../../../../version';
 
 export interface User {
   firstName: string;
@@ -153,9 +153,9 @@ export interface User {
             </div>
 
             <!-- Version -->
-            @if (displayVersion(); as version) {
+            @if (displayVersion) {
               <div class="border-t border-gray-200 px-3 py-2 dark:border-gray-700">
-                <span class="text-xs text-gray-400 dark:text-gray-500">{{ version }}</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500">{{ displayVersion }}</span>
               </div>
             }
           </div>
@@ -198,7 +198,6 @@ export interface User {
 })
 export class UserDropdownComponent {
   private readonly themeService = inject(ThemeService);
-  private readonly configService = inject(ConfigService);
 
   // Inputs
   user = input.required<User>();
@@ -214,12 +213,11 @@ export class UserDropdownComponent {
   protected readonly currentPreference = this.themeService.preference;
   protected readonly currentTheme = this.themeService.theme;
 
-  // Version
-  protected readonly displayVersion = computed(() => {
-    const version = this.configService.version();
-    if (!version || version === 'unknown') return '';
-    return version === 'dev' ? 'local' : `v${version}`;
-  });
+  // Version (baked at build time by scripts/gen-version.js)
+  protected readonly displayVersion = (() => {
+    if (!VERSION || VERSION === 'unknown') return '';
+    return VERSION === 'dev' ? 'local' : `v${VERSION}`;
+  })();
 
   // Menu positioning - opens upward (for sidenav bottom placement)
   private readonly sidenavPositions: ConnectedPosition[] = [

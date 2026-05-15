@@ -36,6 +36,9 @@ import type {
   QuotaExceededEvent,
   StreamErrorEvent,
   ConversationalStreamErrorEvent,
+  OAuthRequiredEvent,
+  ToolApprovalRequiredEvent,
+  CompactionEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -74,6 +77,15 @@ export interface StreamParserCallbacks {
   // Quota events
   onQuotaWarning?: (data: QuotaWarningEvent) => void;
   onQuotaExceeded?: (data: QuotaExceededEvent) => void;
+
+  // OAuth consent required (external MCP tool needs user authorization)
+  onOAuthRequired?: (data: OAuthRequiredEvent) => void;
+
+  // Tool approval required (catalog flagged this MCP tool needs_approval)
+  onToolApprovalRequired?: (data: ToolApprovalRequiredEvent) => void;
+
+  // Compaction (backend rolled older turns into a summary on this turn)
+  onCompaction?: (data: CompactionEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -319,6 +331,69 @@ export function validateConversationalStreamError(
 }
 
 /**
+ * Validate OAuthRequiredEvent structure
+ */
+export function validateOAuthRequiredEvent(data: unknown): data is OAuthRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<OAuthRequiredEvent>;
+
+  return (
+    event.type === 'oauth_required' &&
+    typeof event.providerId === 'string' &&
+    event.providerId.length > 0 &&
+    typeof event.authorizationUrl === 'string' &&
+    event.authorizationUrl.length > 0 &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0
+  );
+}
+
+/**
+ * Validate ToolApprovalRequiredEvent structure
+ */
+export function validateToolApprovalRequiredEvent(
+  data: unknown,
+): data is ToolApprovalRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ToolApprovalRequiredEvent>;
+
+  return (
+    event.type === 'tool_approval_required' &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0 &&
+    typeof event.toolName === 'string' &&
+    event.toolName.length > 0
+  );
+}
+
+/**
+ * Validate CompactionEvent structure
+ */
+export function validateCompactionEvent(data: unknown): data is CompactionEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<CompactionEvent>;
+
+  return (
+    event.type === 'compaction' &&
+    typeof event.previousCheckpoint === 'number' &&
+    typeof event.newCheckpoint === 'number' &&
+    typeof event.summarizedTurns === 'number' &&
+    event.summarizedTurns >= 0 &&
+    typeof event.inputTokens === 'number' &&
+    event.newCheckpoint > event.previousCheckpoint
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -480,6 +555,30 @@ export function processStreamEvent(
       case 'citation':
         if (validateCitation(data)) {
           callbacks.onCitation?.(data);
+        }
+        break;
+
+      case 'oauth_required':
+        if (validateOAuthRequiredEvent(data)) {
+          callbacks.onOAuthRequired?.(data);
+        } else {
+          callbacks.onParseError?.('oauth_required: invalid data structure');
+        }
+        break;
+
+      case 'tool_approval_required':
+        if (validateToolApprovalRequiredEvent(data)) {
+          callbacks.onToolApprovalRequired?.(data);
+        } else {
+          callbacks.onParseError?.('tool_approval_required: invalid data structure');
+        }
+        break;
+
+      case 'compaction':
+        if (validateCompactionEvent(data)) {
+          callbacks.onCompaction?.(data);
+        } else {
+          callbacks.onParseError?.('compaction: invalid data structure');
         }
         break;
 

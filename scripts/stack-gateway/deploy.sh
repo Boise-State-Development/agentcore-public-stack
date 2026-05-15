@@ -10,6 +10,7 @@ INFRASTRUCTURE_DIR="${PROJECT_ROOT}/infrastructure"
 
 # Source common environment loader
 source "${PROJECT_ROOT}/scripts/common/load-env.sh"
+source "${PROJECT_ROOT}/scripts/common/recover-stack.sh"
 
 log_success() {
     echo -e "\033[0;32m✓ $1\033[0m"
@@ -28,6 +29,9 @@ log_info "Deploying Gateway Stack..."
 cd "${INFRASTRUCTURE_DIR}"
 
 log_info "Deploying GatewayStack..."
+
+# Recover from DELETE_FAILED state if a previous teardown left the stack broken
+recover_delete_failed_stack "${CDK_PROJECT_PREFIX}-GatewayStack"
 
 # Check if pre-synthesized templates exist
 if [ -d "cdk.out" ] && [ -f "cdk.out/GatewayStack.template.json" ]; then

@@ -2,8 +2,6 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
-import { AuthService } from '../../auth/auth.service';
-
 /**
  * File status enum matching backend FileStatus
  */
@@ -78,6 +76,47 @@ export interface CompleteUploadResponse {
   filename: string;
   sizeBytes: number;
 }
+
+/**
+ * Response from GET /files/{uploadId}/preview-url
+ */
+export interface PreviewUrlResponse {
+  uploadId: string;
+  url: string;
+  expiresAt: string;
+  mimeType: string;
+  filename: string;
+}
+
+/**
+ * Response from GET /files/{uploadId}/text-snippet
+ */
+export interface TextSnippetResponse {
+  uploadId: string;
+  snippet: string;
+  truncated: boolean;
+  mimeType: string;
+}
+
+/**
+ * Response from GET /files/{uploadId}/thumbnail
+ */
+export interface ThumbnailResponse {
+  uploadId: string;
+  url: string;
+  expiresAt: string;
+  cached: boolean;
+}
+
+/**
+ * Outcome of a thumbnail fetch — `unsupported` (415) and `unavailable`
+ * (404/422/network) collapse into typed states the UI can switch on
+ * without parsing HTTP errors at the call site.
+ */
+export type ThumbnailFetchResult =
+  | { status: 'ready'; response: ThumbnailResponse }
+  | { status: 'unsupported' }
+  | { status: 'unavailable' };
 
 /**
  * File metadata from list/get operations
@@ -206,7 +245,6 @@ export function getFileExtension(filename: string): string {
 })
 export class FileUploadService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
@@ -302,7 +340,6 @@ export class FileUploadService {
     // Validate
     this.validateFile(file);
 
-    await this.authService.ensureAuthenticated();
     this._error.set(null);
 
     // Step 1: Request pre-signed URL
@@ -450,8 +487,6 @@ export class FileUploadService {
    * Mark an upload as complete.
    */
   async completeUpload(uploadId: string): Promise<CompleteUploadResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       return await firstValueFrom(
         this.http.post<CompleteUploadResponse>(`${this.baseUrl()}/${uploadId}/complete`, {})
@@ -465,8 +500,6 @@ export class FileUploadService {
    * Delete a file.
    */
   async deleteFile(uploadId: string): Promise<void> {
-    await this.authService.ensureAuthenticated();
-
     try {
       await firstValueFrom(
         this.http.delete(`${this.baseUrl()}/${uploadId}`)
@@ -487,8 +520,6 @@ export class FileUploadService {
    * List files for a session.
    */
   async listSessionFiles(sessionId: string): Promise<FileMetadata[]> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<FileListResponse>(`${this.baseUrl()}`, {
@@ -513,8 +544,6 @@ export class FileUploadService {
     sortBy?: 'date' | 'size' | 'type';
     sortOrder?: 'asc' | 'desc';
   }): Promise<FileListResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const params: Record<string, string> = {};
 
@@ -563,11 +592,64 @@ export class FileUploadService {
   }
 
   /**
+   * Fetch a short-lived presigned GET URL for a file.
+   *
+   * Used by the UI to render inline image previews and the lightbox.
+   * The URL expires after a few minutes; refetch on expiry.
+   */
+  async getPreviewUrl(uploadId: string): Promise<PreviewUrlResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<PreviewUrlResponse>(`${this.baseUrl()}/${uploadId}/preview-url`)
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to get preview URL');
+    }
+  }
+
+  /**
+   * Fetch a UTF-8 text snippet from the start of a file.
+   *
+   * Returns an empty snippet for non-text MIME types so the UI can fall
+   * back to a skeleton mockup.
+   */
+  async getTextSnippet(uploadId: string): Promise<TextSnippetResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<TextSnippetResponse>(`${this.baseUrl()}/${uploadId}/text-snippet`)
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to get text snippet');
+    }
+  }
+
+  /**
+   * Fetch a presigned URL for a PNG thumbnail of the file's first page.
+   *
+   * Backend lazy-renders on first call and caches the result, so subsequent
+   * calls return instantly. Distinguishes between "this file type can never
+   * have a thumbnail" (415 → `unsupported`) and "we tried but it didn't
+   * work" (404/422/network → `unavailable`) so the UI can decide whether
+   * to retry or give up.
+   */
+  async getThumbnail(uploadId: string): Promise<ThumbnailFetchResult> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`)
+      );
+      return { status: 'ready', response };
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 415) {
+        return { status: 'unsupported' };
+      }
+      return { status: 'unavailable' };
+    }
+  }
+
+  /**
    * Get user's quota status.
    */
   async loadQuota(): Promise<QuotaResponse> {
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<QuotaResponse>(`${this.baseUrl()}/quota`)

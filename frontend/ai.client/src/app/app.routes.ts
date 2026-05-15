@@ -29,15 +29,6 @@ export const routes: Routes = [
         loadComponent: () => import('./auth/login/login.page').then(m => m.LoginPage),
     },
     {
-        path: 'auth/callback',
-        loadComponent: () => import('./auth/callback/callback.page').then(m => m.CallbackPage),
-    },
-    {
-        path: 'connections',
-        redirectTo: 'settings/connections',
-        pathMatch: 'full',
-    },
-    {
         path: 'admin',
         loadComponent: () => import('./admin/admin.page').then(m => m.AdminPage),
         canActivate: [adminGuard],
@@ -103,8 +94,8 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
-        path: 'settings/oauth/callback',
-        loadComponent: () => import('./settings/oauth-callback/oauth-callback.page').then(m => m.OAuthCallbackPage),
+        path: 'oauth-complete',
+        loadComponent: () => import('./oauth-complete/oauth-complete.page').then(m => m.OAuthCompletePage),
     },
     {
         path: 'settings',
@@ -179,17 +170,32 @@ export const routes: Routes = [
     },
     {
         path: 'admin/oauth-providers',
-        loadComponent: () => import('./admin/oauth-providers/pages/provider-list.page').then(m => m.ProviderListPage),
-        canActivate: [adminGuard],
+        redirectTo: 'admin/connectors',
+        pathMatch: 'full',
     },
     {
         path: 'admin/oauth-providers/new',
-        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
-        canActivate: [adminGuard],
+        redirectTo: 'admin/connectors/new',
+        pathMatch: 'full',
     },
     {
         path: 'admin/oauth-providers/edit/:providerId',
-        loadComponent: () => import('./admin/oauth-providers/pages/provider-form.page').then(m => m.ProviderFormPage),
+        redirectTo: 'admin/connectors/edit/:providerId',
+        pathMatch: 'full',
+    },
+    {
+        path: 'admin/connectors',
+        loadComponent: () => import('./admin/connectors/pages/connector-list.page').then(m => m.ConnectorListPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/connectors/new',
+        loadComponent: () => import('./admin/connectors/pages/connector-form.page').then(m => m.ConnectorFormPage),
+        canActivate: [adminGuard],
+    },
+    {
+        path: 'admin/connectors/edit/:providerId',
+        loadComponent: () => import('./admin/connectors/pages/connector-form.page').then(m => m.ConnectorFormPage),
         canActivate: [adminGuard],
     },
     {
@@ -230,5 +236,6 @@ export const routes: Routes = [
     {
         path: '**',
         loadComponent: () => import('./not-found/not-found.page').then(m => m.NotFoundPage),
+        canActivate: [authGuard],
     }
 ];

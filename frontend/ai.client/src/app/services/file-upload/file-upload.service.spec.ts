@@ -14,20 +14,14 @@ import {
   ALLOWED_EXTENSIONS
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
-import { AuthService } from '../../auth/auth.service';
 
 describe('FileUploadService', () => {
   let service: FileUploadService;
   let httpMock: HttpTestingController;
-  let mockAuthService: any;
   let mockConfigService: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    mockAuthService = {
-      ensureAuthenticated: vi.fn().mockResolvedValue(undefined)
-    };
-
     mockConfigService = {
       appApiUrl: signal('http://localhost:8000')
     };
@@ -35,7 +29,6 @@ describe('FileUploadService', () => {
     TestBed.configureTestingModule({
       imports: [HttpClientTestingModule],
       providers: [
-        { provide: AuthService, useValue: mockAuthService },
         { provide: ConfigService, useValue: mockConfigService }
       ]
     });

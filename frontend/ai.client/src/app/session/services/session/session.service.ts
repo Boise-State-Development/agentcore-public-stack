@@ -2,7 +2,7 @@ import { inject, Injectable, signal, WritableSignal, resource, computed, effect 
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
 
@@ -29,15 +29,49 @@ export interface SessionsListResponse {
 }
 
 /**
+ * Pending OAuth consent interrupt that paused an agent turn for this session.
+ *
+ * Returned from `GET /sessions/{id}/messages` so the frontend can rediscover
+ * pending consents after a browser refresh. `authorization_url` is intentionally
+ * absent — those expire quickly; the frontend re-fetches on Connect.
+ */
+export interface PendingInterrupt {
+  /** Strands interrupt id used to resume the paused turn */
+  interruptId: string;
+  /**
+   * Discriminator: which variant this interrupt represents. Older rows
+   * written before per-tool approval shipped omit this — backend defaults
+   * to "oauth" on read.
+   */
+  kind?: 'oauth' | 'tool_approval';
+  /** Id of the assistant message whose tool call triggered this interrupt, if known */
+  triggeringMessageId?: string | null;
+  /** ISO 8601 timestamp when the interrupt was recorded */
+  createdAt: string;
+  /** (oauth) Connector providerId needing consent */
+  providerId?: string | null;
+  /** (tool_approval) Strands tool-use id of the paused call */
+  toolUseId?: string | null;
+  /** (tool_approval) MCP-server-exposed tool name */
+  toolName?: string | null;
+  /** (tool_approval) JSON-encoded tool input arguments */
+  toolInput?: string | null;
+  /** (tool_approval) Message to display in the approval prompt */
+  message?: string | null;
+}
+
+/**
  * Response model for listing messages with pagination support.
- * 
+ *
  * Matches the MessagesListResponse model from the Python API.
  */
 export interface MessagesListResponse {
   /** List of messages in the session */
   messages: Message[];
   /** Pagination token for retrieving the next page of results */
-  next_token: string | null;
+  nextToken: string | null;
+  /** OAuth consent interrupts that paused agent turns and are awaiting user action */
+  pendingInterrupts?: PendingInterrupt[];
 }
 
 /**
@@ -87,7 +121,7 @@ export interface BulkDeleteSessionsResponse {
 })
 export class SessionService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
+  private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/sessions`);
 
@@ -204,8 +238,6 @@ export class SessionService {
       const params = this.sessionsParams();
 
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       // Fetch sessions from API (without merging cache here)
       return this.getSessions(params);
     }
@@ -327,8 +359,6 @@ export class SessionService {
       }
 
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       return this.getSessionMetadata(sessionId);
     }
   });
@@ -369,7 +399,7 @@ export class SessionService {
    * // Get next page
    * const nextPage = await sessionService.getSessions({
    *   limit: 20,
-   *   next_token: response.next_token
+   *   next_token: response.nextToken
    * });
    * ```
    */
@@ -417,17 +447,17 @@ export class SessionService {
    * // Get next page
    * const nextPage = await sessionService.getMessages(
    *   '8e70ae89-93af-4db7-ba60-f13ea201f4cd',
-   *   { limit: 20, next_token: response.next_token }
+   *   { limit: 20, next_token: response.nextToken }
    * );
    * ```
    */
   async getMessages(sessionId: string, params?: GetMessagesParams): Promise<MessagesListResponse> {
     let httpParams = new HttpParams();
-    
+
     if (params?.limit !== undefined) {
       httpParams = httpParams.set('limit', params.limit.toString());
     }
-    
+
     if (params?.next_token) {
       httpParams = httpParams.set('next_token', params.next_token);
     }
@@ -447,6 +477,19 @@ export class SessionService {
   }
 
   /**
+   * Dismiss a persisted OAuth pending interrupt for a session. Idempotent —
+   * the backend returns 204 even if the entry is already gone.
+   */
+  async dismissPendingInterrupt(sessionId: string, interruptId: string): Promise<void> {
+    // The interrupt id contains a colon (e.g. ``oauth:google-calendar``);
+    // encode it so it survives URL parsing on the path.
+    const encoded = encodeURIComponent(interruptId);
+    await firstValueFrom(
+      this.http.delete<void>(`${this.baseUrl()}/${sessionId}/pending-interrupts/${encoded}`),
+    );
+  }
+
+  /**
    * Fetches metadata for a specific session from the Python API.
    * 
    * @param sessionId - UUID of the session
@@ -462,8 +505,6 @@ export class SessionService {
    */
   async getSessionMetadata(sessionId: string): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.get<SessionMetadata>(
@@ -499,8 +540,6 @@ export class SessionService {
     updates: UpdateSessionMetadataRequest
   ): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.put<SessionMetadata>(
@@ -583,7 +622,6 @@ export class SessionService {
     sessionId: string,
     preferences: {
       lastModel?: string;
-      lastTemperature?: number;
       enabledTools?: string[];
       selectedPromptId?: string;
       customPromptText?: string;
@@ -612,8 +650,6 @@ export class SessionService {
    */
   async deleteSession(sessionId: string): Promise<void> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       await firstValueFrom(
         this.http.delete(`${this.baseUrl()}/${sessionId}`)
@@ -675,8 +711,6 @@ export class SessionService {
    */
   async bulkDeleteSessions(sessionIds: string[]): Promise<BulkDeleteSessionsResponse> {
     // Ensure user is authenticated before making the request
-    await this.authService.ensureAuthenticated();
-
     try {
       const response = await firstValueFrom(
         this.http.post<BulkDeleteSessionsResponse>(
@@ -822,25 +856,25 @@ export class SessionService {
   }
 
   constructor() {
-    // Enable sessions loading if user is already authenticated
-    // This prevents the resource from loading before authentication is ready
-    if (this.authService.isAuthenticated()) {
+    // Eager fetch when this service is instantiated post-bootstrap with an
+    // already-authenticated session — the most common case, since
+    // APP_INITIALIZER awaits BffSessionService.bootstrap() before any
+    // component (including the sidenav that injects us) renders. The effect
+    // below handles the rarer login/logout transitions that happen later.
+    if (this.bffSession.isAuthenticated()) {
       this.enableSessionsLoading();
     }
 
-    // Listen for authentication state changes
-    if (typeof window !== 'undefined') {
-      // Listen for token-stored events (user logged in)
-      window.addEventListener('token-stored', () => {
+    // Track BFF session auth state — toggle the sessions resource on
+    // when the user logs in mid-session, off (and clear cache) on logout.
+    effect(() => {
+      if (this.bffSession.isAuthenticated()) {
         this.enableSessionsLoading();
-      });
-
-      // Listen for token-cleared events (user logged out)
-      window.addEventListener('token-cleared', () => {
+      } else {
         this.disableSessionsLoading();
         this.clearSessionCache();
-      });
-    }
+      }
+    });
 
     // Effect to trigger resource reload when session ID changes
     effect(() => {

@@ -113,11 +113,11 @@ class TestSeedSystemAdminRole:
 
 
 class TestSeedDefaultTools:
-    def test_creates_both_tools(self, dynamodb_table):
-        """Creates fetch_url_content and create_visualization tool entries."""
+    def test_creates_default_tools(self, dynamodb_table):
+        """Creates the default tool entries."""
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 2
+        assert result.created == 4
         assert result.failed == 0
 
         # Verify fetch_url_content
@@ -147,17 +147,37 @@ class TestSeedDefaultTools:
         assert item["GSI1PK"] == "CATEGORY#data"
         assert item["GSI1SK"] == "TOOL#create_visualization"
 
+        # Verify calculator
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#calculator", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "calculator"
+        assert item["displayName"] == "Calculator"
+        assert item["category"] == "utility"
+        assert item["protocol"] == "local"
+
+        # Verify generate_diagram_and_validate
+        resp = dynamodb_table.get_item(
+            Key={"PK": "TOOL#generate_diagram_and_validate", "SK": "METADATA"}
+        )
+        item = resp["Item"]
+        assert item["toolId"] == "generate_diagram_and_validate"
+        assert item["displayName"] == "Code Interpreter"
+        assert item["category"] == "code"
+        assert item["protocol"] == "local"
+
     def test_skips_existing_tools(self, dynamodb_table):
         """Skips tools that already exist."""
         seed_default_tools(TABLE_NAME, REGION)
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.skipped == 2
+        assert result.skipped == 4
         assert result.created == 0
 
     def test_partial_skip(self, dynamodb_table):
-        """Skips only the tool that already exists, creates the other."""
+        """Skips only the tool that already exists, creates the rest."""
         # Pre-create one tool
         dynamodb_table.put_item(Item={
             "PK": "TOOL#fetch_url_content",
@@ -167,5 +187,5 @@ class TestSeedDefaultTools:
 
         result = seed_default_tools(TABLE_NAME, REGION)
 
-        assert result.created == 1
+        assert result.created == 3
         assert result.skipped == 1

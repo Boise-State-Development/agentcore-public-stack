@@ -4,7 +4,7 @@ from typing import Optional
 from datetime import datetime, timezone
 import logging
 from apis.shared.auth.models import User
-from apis.app_api.costs.aggregator import CostAggregator
+from apis.shared.costs.aggregator import CostAggregator
 from .models import QuotaCheckResult
 from .resolver import QuotaResolver
 from .event_recorder import QuotaEventRecorder

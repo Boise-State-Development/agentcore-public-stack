@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageMapService } from './message-map.service';
 import { SessionService } from './session.service';
 import { FileUploadService } from '../../../services/file-upload';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { signal } from '@angular/core';
 
 describe('MessageMapService', () => {
@@ -11,6 +12,7 @@ describe('MessageMapService', () => {
   let httpMock: HttpTestingController;
   let mockSessionService: any;
   let mockFileUploadService: any;
+  let mockOAuthConsentService: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -22,12 +24,16 @@ describe('MessageMapService', () => {
     mockFileUploadService = {
       listSessionFiles: vi.fn().mockResolvedValue([])
     };
+    mockOAuthConsentService = {
+      requestConsent: vi.fn()
+    };
     TestBed.configureTestingModule({
       imports: [HttpClientTestingModule],
       providers: [
         MessageMapService,
         { provide: SessionService, useValue: mockSessionService },
-        { provide: FileUploadService, useValue: mockFileUploadService }
+        { provide: FileUploadService, useValue: mockFileUploadService },
+        { provide: OAuthConsentService, useValue: mockOAuthConsentService }
       ]
     });
     service = TestBed.inject(MessageMapService);
@@ -85,9 +91,46 @@ describe('MessageMapService', () => {
 
     expect(mockSessionService.getMessages).toHaveBeenCalledWith('session-1');
     expect(mockFileUploadService.listSessionFiles).toHaveBeenCalledWith('session-1');
-    
+
     const messagesSignal = service.getMessagesForSession('session-1');
     expect(messagesSignal()).toEqual(mockMessages);
+  });
+
+  it('should hydrate pending OAuth interrupts from camelCase wire response', async () => {
+    // Regression: backend serializes with by_alias=True so the wire payload uses
+    // camelCase (pendingInterrupts, interruptId, providerId, ...). If the consumer
+    // reads snake_case fields, the consent prompt silently fails to re-render
+    // after a refresh.
+    const mockMessages = [
+      { id: 'msg-assistant-7', role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    ];
+    mockSessionService.getMessages.mockResolvedValue({
+      messages: mockMessages,
+      pendingInterrupts: [
+        {
+          interruptId: 'v1:before_tool_call:tooluse_abc:xyz',
+          providerId: 'google-calendar-employee',
+          createdAt: '2026-04-26T01:13:54.543143+00:00',
+        },
+      ],
+    });
+
+    await service.loadMessagesForSession('session-with-interrupt');
+
+    expect(mockOAuthConsentService.requestConsent).toHaveBeenCalledTimes(1);
+    expect(mockOAuthConsentService.requestConsent).toHaveBeenCalledWith(
+      'google-calendar-employee',
+      undefined,
+      'v1:before_tool_call:tooluse_abc:xyz',
+      'msg-assistant-7',
+      'session-with-interrupt',
+    );
+  });
+
+  it('should not call requestConsent when no pending interrupts are returned', async () => {
+    mockSessionService.getMessages.mockResolvedValue({ messages: [] });
+    await service.loadMessagesForSession('session-clean');
+    expect(mockOAuthConsentService.requestConsent).not.toHaveBeenCalled();
   });
 
   it('should set loading session state', () => {

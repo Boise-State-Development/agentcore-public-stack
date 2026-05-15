@@ -1,0 +1,49 @@
+name: "Guard: SKIP_AUTH must not appear in deployed config"
+
+# Refuses any PR or push that lets the local-dev SKIP_AUTH=true bypass
+# leak into deployed configuration. The bypass itself is implemented in
+# backend/src/apis/shared/auth/dependencies.py and gated at boot in
+# backend/src/apis/app_api/main.py — both of those legitimately reference
+# the string and are excluded from the scan. Anywhere else is a leak.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Scan for SKIP_AUTH=true in deployable config
+        run: |
+          set -euo pipefail
+          # Look in CDK, GitHub Actions, Dockerfiles, and any task definitions.
+          # Exclude the two files that legitimately reference the variable
+          # (the bypass implementation + its startup guard) and this workflow.
+          # Catches `SKIP_AUTH=true`, `SKIP_AUTH: true`, `SKIP_AUTH: "true"`, etc.
+          # Covers shell, Dockerfile, YAML, and CDK TypeScript object-literal styles.
+          PATTERN='SKIP_AUTH[[:space:]]*[:=][[:space:]]*["'\'']*true'
+          MATCHES=$(grep -RInE "$PATTERN" \
+            infrastructure/lib \
+            infrastructure/bin \
+            scripts \
+            .github/workflows \
+            backend/Dockerfile.app-api \
+            backend/Dockerfile.inference-api \
+            2>/dev/null \
+            | grep -v '^.github/workflows/skip-auth-guard.yml:' \
+            || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::SKIP_AUTH=true is a local-dev bypass and must never appear in deployed config."
+            echo "Found in:"
+            echo "$MATCHES"
+            exit 1
+          fi
+          echo "OK — no SKIP_AUTH=true in deployable config."

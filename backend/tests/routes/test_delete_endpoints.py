@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.models import Document
-from apis.shared.auth.dependencies import get_current_user_id, get_current_user
+from apis.shared.auth.dependencies import get_current_user_id, get_current_user_from_session
 from apis.shared.auth.models import User
 
 
@@ -144,7 +144,7 @@ class TestAssistantDeleteEndpoint:
     def app(self):
         _app = FastAPI()
         _app.include_router(assistants_router)
-        _app.dependency_overrides[get_current_user] = _make_user
+        _app.dependency_overrides[get_current_user_from_session] = _make_user
         return _app
 
     def test_delete_soft_deletes_all_docs(self, app):

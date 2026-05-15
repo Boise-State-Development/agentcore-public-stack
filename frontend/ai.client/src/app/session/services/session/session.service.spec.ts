@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { SessionService, SessionsListResponse, MessagesListResponse, BulkDeleteSessionsResponse } from './session.service';
-import { AuthService } from '../../../auth/auth.service';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
 import { SessionMetadata } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
@@ -25,7 +25,7 @@ describe('SessionService', () => {
       imports: [HttpClientTestingModule],
       providers: [
         SessionService,
-        { provide: AuthService, useValue: { isAuthenticated: vi.fn().mockReturnValue(false), ensureAuthenticated: vi.fn().mockResolvedValue(undefined) } },
+        { provide: BffSessionService, useValue: { isAuthenticated: signal(false) } },
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],
     });
@@ -55,7 +55,7 @@ describe('SessionService', () => {
 
   describe('getMessages (no ensureAuthenticated)', () => {
     it('should GET messages', async () => {
-      const resp: MessagesListResponse = { messages: [mockMessage], next_token: null };
+      const resp: MessagesListResponse = { messages: [mockMessage], nextToken: null };
       const promise = service.getMessages('s1');
       httpMock.expectOne('http://localhost:8000/sessions/s1/messages').flush(resp);
       expect(await promise).toEqual(resp);
@@ -207,7 +207,7 @@ describe('SessionService', () => {
   describe('updateSessionPreferences', () => {
     it('should delegate to updateSessionMetadata with preferences', async () => {
       const spy = vi.spyOn(service, 'updateSessionMetadata').mockResolvedValue(mockSession);
-      const prefs = { lastModel: 'claude', lastTemperature: 0.7 };
+      const prefs = { lastModel: 'claude' };
       await service.updateSessionPreferences('test-id', prefs);
       expect(spy).toHaveBeenCalledWith('test-id', prefs);
     });

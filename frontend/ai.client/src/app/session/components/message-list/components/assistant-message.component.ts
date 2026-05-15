@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input, computed } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { Message, ContentBlock, ToolUseData } from '../../../services/models/message.model';
 import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
@@ -6,6 +6,11 @@ import { ToolCallGroup, ToolCallDisplay } from './tool-rail/tool-rail.model';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
+import { OAuthConsentPromptComponent } from './oauth-consent-prompt/oauth-consent-prompt.component';
+import {
+  OAuthConsentRequest,
+  OAuthConsentService,
+} from '../../../../services/oauth-consent/oauth-consent.service';
 
 // ──────────────────────────────────────────────────────────────
 // 🔧 MOCK FLAG — set to true to render 10 fake tool calls
@@ -98,7 +103,13 @@ const MOCK_TOOL_GROUP: ToolCallGroup = {
  * promoted visuals and grouped tool rails.
  */
 interface DisplayBlock {
-  type: 'text' | 'tool_group' | 'tool_use_minimized' | 'promoted_visual' | 'reasoningContent';
+  type:
+    | 'text'
+    | 'tool_group'
+    | 'tool_use_minimized'
+    | 'promoted_visual'
+    | 'reasoningContent'
+    | 'oauth_required';
   data?: ContentBlock;
   // For tool groups (inline rail)
   group?: ToolCallGroup;
@@ -106,6 +117,8 @@ interface DisplayBlock {
   uiType?: string;
   payload?: unknown;
   toolUseId?: string;
+  // For inline OAuth consent prompts
+  oauthRequest?: OAuthConsentRequest;
 }
 
 @Component({
@@ -117,6 +130,7 @@ interface DisplayBlock {
     ReasoningContentComponent,
     StreamingTextComponent,
     InlineVisualComponent,
+    OAuthConsentPromptComponent,
   ],
   template: `
     <div class="block-container">
@@ -182,6 +196,14 @@ interface DisplayBlock {
               />
             </div>
           }
+          @case ('oauth_required') {
+            <div
+              class="message-block oauth-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-oauth-consent-prompt [request]="block.oauthRequest!" />
+            </div>
+          }
         }
       }
     </div>
@@ -236,6 +258,8 @@ export class AssistantMessageComponent {
   message = input.required<Message>();
   isStreaming = input<boolean>(false);
 
+  private consentService = inject(OAuthConsentService);
+
   /**
    * Transforms content blocks into display blocks.
    * - Consecutive non-promoted tool-use blocks are grouped into a single ToolCallGroup
@@ -253,6 +277,14 @@ export class AssistantMessageComponent {
     }
 
     const blocks = this.message().content;
+    const messageId = this.message().id;
+    // Pending interrupts anchored to this message. Used to flip the matching
+    // tool_use blocks to ``awaiting_auth`` so the row reads as "paused for
+    // authorization" instead of an indefinite spinner.
+    const pendingInterruptsHere = this.consentService
+      .pending()
+      .filter((req) => req.messageId === messageId);
+    const hasPendingInterruptHere = pendingInterruptsHere.length > 0;
     const result: DisplayBlock[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
 
@@ -307,13 +339,22 @@ export class AssistantMessageComponent {
             toolUseId: toolUse.toolUseId
           });
         } else {
-          // Accumulate into the current tool group
+          // Accumulate into the current tool group. A tool_use with no result
+          // on a message that has a pending OAuth interrupt is the row that
+          // got paused — surface that distinct state instead of a forever-
+          // spinning ``pending``.
+          const baseStatus = toolUse.status || 'pending';
+          const hasNoResult = !toolUse.result;
+          const status: ToolCallDisplay['status'] =
+            hasPendingInterruptHere && hasNoResult && baseStatus === 'pending'
+              ? 'awaiting_auth'
+              : baseStatus;
           pendingToolCalls.push({
             id: toolUse.toolUseId,
             toolName: toolUse.name,
             input: toolUse.input || {},
             result: toolUse.result,
-            status: toolUse.status || 'pending',
+            status,
           });
         }
         continue;
@@ -322,6 +363,13 @@ export class AssistantMessageComponent {
 
     // Flush any remaining tool calls
     flushToolGroup();
+
+    // Append any pending OAuth consent prompts anchored to this message.
+    // Tracking through the consent service signal keeps the synthetic prompt
+    // out of message.content so it is never persisted to the backend.
+    for (const req of pendingInterruptsHere) {
+      result.push({ type: 'oauth_required', oauthRequest: req });
+    }
 
     return result;
   });

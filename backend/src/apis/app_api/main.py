@@ -28,9 +28,58 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Refuse to boot unless SKIP_AUTH is paired with a positive local-dev
+# signal. Allowlist over blocklist: every CORS_ORIGINS entry must be a
+# localhost URL. Any deployed origin (or empty config) trips this — far
+# safer than enumerating every env var a deployed runtime might set, and
+# fails closed for new deploy targets we haven't met yet.
+#
+# Runs from `lifespan()` rather than at import time so tests that import
+# this module (e.g. tests/routes/test_pbt_auth_sweep.py) don't trip the
+# check on environments where SKIP_AUTH=true is set globally.
+_SKIP_AUTH_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _validate_skip_auth_or_raise() -> None:
+    """Raise RuntimeError if SKIP_AUTH=true is paired with non-local CORS_ORIGINS.
+
+    No-op when SKIP_AUTH is unset/false. When set, every CORS_ORIGINS entry
+    must resolve to a localhost host or boot is refused.
+    """
+    if os.environ.get("SKIP_AUTH", "").lower() != "true":
+        return
+
+    from urllib.parse import urlparse
+
+    origins = [
+        o.strip()
+        for o in os.environ.get("CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+
+    def _is_local(origin: str) -> bool:
+        try:
+            return (urlparse(origin).hostname or "") in _SKIP_AUTH_LOCAL_HOSTS
+        except Exception:
+            return False
+
+    if not origins or not all(_is_local(o) for o in origins):
+        raise RuntimeError(
+            "SKIP_AUTH=true requires CORS_ORIGINS to contain only localhost "
+            "origins (localhost, 127.0.0.1, ::1, 0.0.0.0). Refusing to start "
+            "— this bypass is local-dev only."
+        )
+    logger.warning(
+        "SKIP_AUTH=true — auth dependencies will return a fake admin user. "
+        "DO NOT enable this in any deployed environment."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
     logger.info("Agent execution engine initialized")
 
@@ -60,19 +109,59 @@ app = FastAPI(
 )
 
 # Add CORS middleware - origins from CDK-provided CORS_ORIGINS env var
+# NOTE: `allow_credentials=True` is required for the BFF cookie flow when the
+# SPA and BFF are cross-origin (e.g. local dev: SPA on :4200, BFF on :8000).
+# Without it the browser sends the cookie but blocks JS from reading the
+# response, leaving the SPA unable to confirm the session and bouncing the
+# user back to /auth/login. In production the SPA is served same-origin via
+# CloudFront `/api/*`, so CORS doesn't fire and the flag is moot. With
+# credentials enabled the spec forbids `allow_origins=["*"]`, which the CSV
+# already satisfies — every origin is listed explicitly.
 _cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_origins if o.strip()],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Bridge OAuth2CallbackUrl (sent by the frontend on connector calls) onto
+# BedrockAgentCoreContext so IdentityClient can read it during consent flows.
+# WorkloadAccessToken is absent here (no runtime gateway in front of app-api);
+# IdentityClient mints one via AGENTCORE_RUNTIME_WORKLOAD_NAME.
+from apis.shared.middleware.agentcore_context import AgentCoreContextMiddleware
+app.add_middleware(AgentCoreContextMiddleware)
+logger.info("Added AgentCore context middleware")
+
+# BFF Token Handler middlewares (Phase 2 — dormant).
+#
+# These two are added unconditionally so a deploy of the Phase 1 CDK env vars
+# can flip the system on without a code redeploy. When the env vars are
+# absent (local dev, environments before Phase 1 lands), `BFFConfig.is_enabled()`
+# returns False and `SessionRefreshMiddleware` short-circuits before doing any
+# AWS calls; `CSRFMiddleware` only acts when a session has been resolved
+# upstream, so it's effectively a no-op in the dormant state too.
+#
+# Starlette `add_middleware` prepends, so the LAST-added middleware is
+# outermost. Request-side order is therefore the reverse of the call order
+# below:
+#   request:  SessionRefresh → CSRF → AgentCoreContext → CORS → router
+#   response: router → CORS → AgentCoreContext → CSRF → SessionRefresh
+# This is the order we need: SessionRefresh has to populate
+# `state.bff_session` before CSRF reads it.
+from apis.shared.middleware.csrf import CSRFMiddleware
+from apis.shared.middleware.session_refresh import SessionRefreshMiddleware
+
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(SessionRefreshMiddleware)
+logger.info("Added BFF session-refresh + CSRF middlewares (dormant until cookie present)")
 
 
 # Import routers
 from apis.app_api.health import router as health_router
 from apis.app_api.auth.routes import router as auth_router
+from apis.app_api.auth.bff import router as bff_auth_router
 from apis.app_api.auth.api_keys.routes import router as api_keys_router
 from apis.app_api.sessions.routes import router as sessions_router
 from apis.app_api.admin.routes import router as admin_router
@@ -80,6 +169,7 @@ from apis.app_api.models.routes import router as models_router
 from apis.app_api.costs.routes import router as costs_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
+from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
@@ -87,13 +177,15 @@ from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
-from apis.shared.oauth.routes import router as oauth_router
+from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
+from apis.app_api.voice import router as voice_router
 
 # Include routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, dormant until SPA cutover)
 app.include_router(api_keys_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)
@@ -105,14 +197,16 @@ app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # Proxies to Inference API for cost accounting
+app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
-app.include_router(oauth_router)  # OAuth provider connections
+app.include_router(connectors_router)  # User-facing connector catalog + consent flows
 app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)
 app.include_router(shared_view_router)  # Shared conversation read-only view
+app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
 
 # Conditionally register fine-tuning routes
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
@@ -142,11 +236,16 @@ if os.path.exists(generated_images_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    # Watch the full backend/src tree so edits to shared modules outside
+    # app_api/ (apis/shared/, agents/) trigger reload instead of defaulting
+    # to cwd, which only sees this API's own files.
+    src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     # Run with full module path when executing directly
     uvicorn.run(
         "apis.app_api.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
+        reload_dirs=[src_root],
         log_level="info"
     )

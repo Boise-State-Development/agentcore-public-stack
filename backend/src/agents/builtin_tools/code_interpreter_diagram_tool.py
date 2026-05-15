@@ -139,7 +139,6 @@ Please deploy AgentCore Runtime Stack to create Custom Code Interpreter."""
 
         # 4. Check for errors
         execution_success = False
-        execution_output = ""
 
         for event in response.get("stream", []):
             result = event.get("result", {})

@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
+from agents.main_agent.config.constants import EnvVars
 from apis.shared.errors import ErrorCode, StreamErrorEvent, build_conversational_error_event
 
 from .stream_processor import process_agent_stream
@@ -60,8 +61,8 @@ class StreamCoordinator:
             str: SSE formatted events
         """
         # Set environment variables for browser session isolation
-        os.environ["SESSION_ID"] = session_id
-        os.environ["USER_ID"] = user_id
+        os.environ[EnvVars.SESSION_ID] = session_id
+        os.environ[EnvVars.USER_ID] = user_id
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -179,13 +180,26 @@ class StreamCoordinator:
                     if "metrics" in event_data:
                         accumulated_metadata["metrics"].update(event_data["metrics"])
 
-                # Collect metadata_summary event (don't send to client as-is)
+                # Collect metadata_summary event (don't send to client as-is).
+                #
+                # NOTE: metadata_summary carries Strands' EventLoopMetrics
+                # `accumulated_usage`, which sums each LLM call's full
+                # context-size across the turn (and across the agent's
+                # whole lifetime, per Strands' docs). For a 2-call tool
+                # turn with call_1.input=1000 and call_2.input=2500,
+                # accumulated_usage.inputTokens=3500 — but the *current*
+                # context occupancy is 2500, not 3500. We deliberately do
+                # NOT update accumulated_metadata["usage"] / ["metrics"]
+                # from this event: stream_coordinator's accumulated_metadata
+                # drives (a) the final SSE `usage` the frontend uses for
+                # the context-% badge and (b) the compaction trigger —
+                # both want "current context size", which the per-call
+                # `metadata` events already provide via last-write-wins
+                # `.update()`. Per-message cost attribution rides
+                # per_message_metadata (per-call) and is unaffected.
+                # We only keep the first_token_time backstop.
                 if event.get("type") == "metadata_summary":
                     event_data = event.get("data", {})
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
                     if "first_token_time" in event_data:
                         first_token_time = event_data["first_token_time"]
                         # Associate first_token_time with first assistant message if we have one
@@ -193,6 +207,35 @@ class StreamCoordinator:
                             per_message_metadata[0]["first_token_time"] = first_token_time
                     # Don't yield this event to the client (will send final metadata before done)
                     continue
+
+                # If the agent paused on an interrupt, surface one SSE event
+                # per pending interrupt before the stream closes. The frontend
+                # uses these to drive its prompts (OAuth popup, tool-approval
+                # modal) and POSTs the user's response back to resume the turn.
+                # Done before the metadata branch so the events land between
+                # message_stop and the final metadata/done block. The
+                # PausedTurnSnapshot is persisted once per pause regardless of
+                # interrupt flavor, so any extractor's resume path can rebuild
+                # the agent shape after a refresh / cache eviction.
+                if event.get("type") == "done":
+                    await self._persist_paused_turn_snapshot(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                        main_agent_wrapper=main_agent_wrapper,
+                    )
+                    for sse in await self._extract_oauth_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
+                    for sse in await self._extract_tool_approval_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
 
                 # Check if this is the "done" event - send final metadata before it
                 if event.get("type") == "done":
@@ -222,20 +265,68 @@ class StreamCoordinator:
                         # Add end-to-end latency to metrics for consistency
                         final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
 
-                        # Calculate and add cost to metadata if we have usage and agent info
+                        # Cost: sum the FINAL usage of each assistant message in
+                        # this turn and price it. We deliberately price each
+                        # message independently and sum, instead of pricing
+                        # the cumulative usage once, because Strands emits
+                        # multiple metadata events per message (intermediate
+                        # + cumulative) and the cumulative usage on the last
+                        # event already includes prior messages' input
+                        # tokens. Per-message pricing matches what gets
+                        # persisted (one C# record per assistant message).
                         if main_agent_wrapper and hasattr(main_agent_wrapper, "model_config"):
                             model_id = main_agent_wrapper.model_config.model_id
-                            usage_for_cost = accumulated_metadata.get("usage", {})
-                            logger.info(f"💰 Cost calculation: model_id={model_id}, usage={usage_for_cost}")
                             try:
-                                cost = await self._calculate_streaming_cost(model_id=model_id, usage=usage_for_cost)
-                                if cost is not None:
-                                    final_metadata["cost"] = cost
+                                turn_total = 0.0
+                                turn_input_cost = 0.0
+                                turn_output_cost = 0.0
+                                turn_cache_read_cost = 0.0
+                                turn_cache_write_cost = 0.0
+                                for msg_idx, msg_meta in enumerate(per_message_metadata):
+                                    msg_usage = msg_meta.get("usage") or {}
+                                    if not msg_usage:
+                                        continue
+                                    msg_cost = await self._calculate_streaming_cost(
+                                        model_id=model_id,
+                                        usage=msg_usage,
+                                    )
+                                    if msg_cost is None:
+                                        continue
+                                    turn_total += msg_cost.get("total", 0.0)
+                                    turn_input_cost += msg_cost.get("inputCost", 0.0)
+                                    turn_output_cost += msg_cost.get("outputCost", 0.0)
+                                    turn_cache_read_cost += msg_cost.get("cacheReadCost", 0.0)
+                                    turn_cache_write_cost += msg_cost.get("cacheWriteCost", 0.0)
                                     logger.info(
-                                        f"💰 Calculated streaming cost: ${cost:.6f} for {usage_for_cost.get('inputTokens', 0)} input, {usage_for_cost.get('outputTokens', 0)} output tokens"
+                                        f"💰 Per-message cost (msg_idx={msg_idx}): ${msg_cost['total']:.6f} "
+                                        f"for {msg_usage.get('inputTokens', 0)} input, {msg_usage.get('outputTokens', 0)} output tokens"
+                                    )
+                                if turn_total > 0:
+                                    final_metadata["cost"] = {
+                                        "total": turn_total,
+                                        "inputCost": turn_input_cost,
+                                        "outputCost": turn_output_cost,
+                                        "cacheReadCost": turn_cache_read_cost,
+                                        "cacheWriteCost": turn_cache_write_cost,
+                                    }
+                                    logger.info(
+                                        f"💰 Turn total cost: ${turn_total:.6f} across {len(per_message_metadata)} message(s)"
                                     )
                             except Exception as cost_error:
-                                logger.warning(f"Failed to calculate streaming cost: {cost_error}")
+                                logger.warning(f"Failed to calculate turn cost: {cost_error}")
+
+                            # Surface the model's context window so the
+                            # frontend session-cost badge can show "% of
+                            # context used" without an extra round-trip.
+                            try:
+                                from apis.shared.costs.pricing_config import get_model_by_model_id
+                                model_record = await get_model_by_model_id(model_id)
+                                if model_record is not None:
+                                    max_input_tokens = getattr(model_record, "max_input_tokens", None)
+                                    if max_input_tokens:
+                                        final_metadata["contextWindow"] = int(max_input_tokens)
+                            except Exception as ctx_err:
+                                logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
                         # Log cache metrics for performance monitoring
                         self._log_cache_metrics(usage=final_metadata.get("usage", {}), session_id=session_id)
@@ -243,6 +334,48 @@ class StreamCoordinator:
                         # Send final metadata event to client (before done event)
                         final_metadata_event = {"type": "metadata", "data": final_metadata}
                         yield self._format_sse_event(final_metadata_event)
+
+                    # Update compaction state after the final metadata event so
+                    # the badge updates first, then the divider drops in. If the
+                    # checkpoint advanced on this turn, emit a `compaction` SSE
+                    # so the frontend can place an inline "earlier messages
+                    # summarized" divider. Fires after metadata, before done.
+                    #
+                    # CAUTION: do NOT replace this with Strands'
+                    # AgentResult.context_size / EventLoopMetrics.latest_context_size.
+                    # Both return ONLY `inputTokens` from the last cycle —
+                    # under Bedrock prompt caching that's the uncached
+                    # suffix only, so a 50k-token fully-cached context
+                    # reports ~50 (inputTokens) and hides ~49,950 in
+                    # cacheReadInputTokens. Summing all three buckets
+                    # below is the only correct "current context size"
+                    # under caching.
+                    if hasattr(session_manager, "update_after_turn"):
+                        usage = accumulated_metadata.get("usage", {})
+                        total_input_tokens = (
+                            usage.get("inputTokens", 0)
+                            + usage.get("cacheReadInputTokens", 0)
+                            + usage.get("cacheWriteInputTokens", 0)
+                        )
+                        if total_input_tokens > 0:
+                            try:
+                                current_messages = getattr(agent, "messages", None)
+                                compaction_result = await session_manager.update_after_turn(
+                                    total_input_tokens,
+                                    current_messages=current_messages,
+                                )
+                                logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
+                                if compaction_result is not None:
+                                    compaction_payload = {
+                                        "type": "compaction",
+                                        "previousCheckpoint": compaction_result.previous_checkpoint,
+                                        "newCheckpoint": compaction_result.new_checkpoint,
+                                        "summarizedTurns": compaction_result.summarized_turns,
+                                        "inputTokens": compaction_result.input_tokens,
+                                    }
+                                    yield f"event: compaction\ndata: {json.dumps(compaction_payload)}\n\n"
+                            except Exception as e:
+                                logger.warning(f"Failed to update compaction state: {e}")
 
                 # Intercept legacy "error" events from stream_processor and convert to conversational format
                 # This ensures errors appear as assistant messages in the chat UI
@@ -463,22 +596,6 @@ class StreamCoordinator:
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
 
-            # Update compaction state if session manager supports it
-            # This tracks input token usage and triggers compaction when threshold exceeded
-            if hasattr(session_manager, "update_after_turn"):
-                input_tokens = accumulated_metadata.get("usage", {}).get("inputTokens", 0)
-                # Also include cache tokens for accurate context size tracking
-                cache_read_tokens = accumulated_metadata.get("usage", {}).get("cacheReadInputTokens", 0)
-                cache_write_tokens = accumulated_metadata.get("usage", {}).get("cacheWriteInputTokens", 0)
-                total_input_tokens = input_tokens + cache_read_tokens + cache_write_tokens
-
-                if total_input_tokens > 0:
-                    try:
-                        await session_manager.update_after_turn(total_input_tokens)
-                        logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
-                    except Exception as e:
-                        logger.warning(f"Failed to update compaction state: {e}")
-
         except Exception as e:
             # Handle errors with emergency flush
             logger.error(f"Error in stream_response: {e}")
@@ -528,6 +645,225 @@ class StreamCoordinator:
                     logger.info(f"💾 Saved stream error messages to session {session_id}")
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
+
+    async def _persist_paused_turn_snapshot(
+        self,
+        agent: Any,
+        session_id: Optional[str],
+        user_id: Optional[str],
+        main_agent_wrapper: Any,
+    ) -> None:
+        """Persist a ``PausedTurnSnapshot`` capturing the agent's construction
+        params so a resume after refresh / cache eviction rebuilds the same
+        agent shape (matching tool registry) and lets Strands restore
+        ``_interrupt_state`` from AgentCore Memory.
+
+        Called once per pause from the ``done`` branch — shared across
+        interrupt extractors so any flavor of pause (OAuth consent, tool
+        approval, future variants) gets a snapshot. Multiple interrupts in
+        the same turn share one snapshot; they were all built against the
+        same agent. TTL matches AgentCore Identity's consent window so stale
+        snapshots don't pin storage and a too-late resume returns a clean
+        400.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
+        """
+        from datetime import timedelta
+        from apis.shared.sessions.metadata import set_paused_turn
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return
+        if not (session_id and user_id):
+            return
+        snapshot_source = (
+            getattr(main_agent_wrapper, "_construction_snapshot", None)
+            if main_agent_wrapper
+            else None
+        )
+        if not snapshot_source:
+            return
+
+        try:
+            now = datetime.now(timezone.utc)
+            inference_params = snapshot_source.get("inference_params") or {}
+            snapshot = PausedTurnSnapshot(
+                enabled_tools=snapshot_source.get("enabled_tools"),
+                model_id=snapshot_source.get("model_id"),
+                provider=snapshot_source.get("provider"),
+                temperature=inference_params.get("temperature"),
+                system_prompt=snapshot_source.get("system_prompt"),
+                caching_enabled=snapshot_source.get("caching_enabled"),
+                max_tokens=inference_params.get("max_tokens"),
+                agent_type=snapshot_source.get("agent_type"),
+                inference_params=dict(inference_params) if inference_params else None,
+                captured_at=now.isoformat(),
+                expires_at=(now + timedelta(hours=1)).isoformat(),
+            )
+            await set_paused_turn(session_id, user_id, snapshot)
+        except Exception as e:
+            logger.error(
+                "Failed to persist paused_turn snapshot for session %s: %s",
+                session_id, e, exc_info=True,
+            )
+
+    async def _extract_oauth_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        triggering_message_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted `oauth_required` event per pending OAuth
+        interrupt on the agent, persisting each one to session metadata so
+        the frontend can rediscover them after a refresh.
+
+        The Strands `_interrupt_state` is populated when `OAuthConsentHook`
+        calls `event.interrupt(...)`. We look for interrupts whose `reason`
+        carries `type: "oauth_required"` and translate them into the SSE
+        shape the frontend already understands. Non-OAuth interrupts (other
+        approval gates added later) are ignored here so they can be handled
+        by their own SSE event types.
+
+        The ``PausedTurnSnapshot`` is written separately by
+        :meth:`_persist_paused_turn_snapshot` on the same ``done`` event —
+        any pause flavor needs the snapshot, so it's hoisted out of here.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
+        """
+        from apis.shared.oauth.models import OAuthRequiredEvent
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != "oauth_required":
+                continue
+            provider_id = reason.get("providerId")
+            authorization_url = reason.get("authorizationUrl")
+            if not provider_id or not authorization_url:
+                logger.warning(
+                    "OAuth interrupt missing providerId or authorizationUrl: id=%s",
+                    interrupt.id,
+                )
+                continue
+
+            # Persist the breadcrumb before yielding so a client that loads
+            # the session a moment later sees this interrupt. Only attempt
+            # when we have session/user context — preview/anonymous flows
+            # don't have a metadata record to write to.
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            provider_id=provider_id,
+                            triggering_message_id=triggering_message_id,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(
+                OAuthRequiredEvent(
+                    provider_id=provider_id,
+                    authorization_url=authorization_url,
+                    interrupt_id=interrupt.id,
+                ).to_sse_format()
+            )
+        return events
+
+    async def _extract_tool_approval_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted `tool_approval_required` event per pending
+        per-tool approval interrupt on the agent, persisting each one to
+        session metadata so the frontend can rediscover them after a refresh.
+
+        The ``PausedTurnSnapshot`` needed to rebuild the agent on resume is
+        written by :meth:`_persist_paused_turn_snapshot` on the same
+        ``done`` event — independent of which interrupt flavor caused the
+        pause.
+
+        Persistence is best-effort: a DynamoDB write failure logs but does
+        not break the live SSE flow.
+        """
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+        from apis.shared.tool_approval.models import ToolApprovalRequiredEvent
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != "tool_approval_required":
+                continue
+            tool_name = reason.get("toolName")
+            if not tool_name:
+                logger.warning(
+                    "Tool approval interrupt missing toolName: id=%s", interrupt.id
+                )
+                continue
+
+            tool_use_id = reason.get("toolUseId", "")
+            tool_input = reason.get("toolInput")
+            message = reason.get("message", "")
+
+            # Persist the breadcrumb before yielding so a client that
+            # refreshes mid-prompt can rehydrate the approve/decline UI.
+            # Only attempt when we have session/user context — preview /
+            # anonymous flows have no metadata record to write to.
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="tool_approval",
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            message=message,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist tool_approval pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(
+                ToolApprovalRequiredEvent(
+                    interrupt_id=interrupt.id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    message=message,
+                ).to_sse_format()
+            )
+        return events
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """
@@ -624,15 +960,16 @@ class StreamCoordinator:
 
     def _get_initial_message_count(self, session_manager: Any) -> int:
         """
-        Get the initial message count from session manager BEFORE streaming starts.
+        Get the GLOBAL initial message count BEFORE streaming starts.
 
-        This is a key optimization that eliminates post-stream AgentCore Memory queries.
-        By capturing the message count at the start of streaming, we can calculate
-        the indices of new messages without querying the database after streaming.
+        Returns the total number of messages across ALL agents (default + voice)
+        in the session, because metadata retrieval in get_messages_from_cloud()
+        uses global enumerate indices across all agents' messages.
 
-        The count is obtained from:
-        1. TurnBasedSessionManager.message_count (initialized from AgentCore Memory at session start)
-        2. Fallback to 0 if no count is available
+        The agent-specific message_count (from TurnBasedSessionManager) only
+        counts messages for the "default" agent, which causes index mismatches
+        in mixed voice+text sessions.  We prefer list_messages() which returns
+        ALL messages regardless of agent_id.
 
         Args:
             session_manager: Session manager instance
@@ -640,58 +977,55 @@ class StreamCoordinator:
         Returns:
             int: Number of messages that existed before this stream started (0 if unknown)
         """
-        # For TurnBasedSessionManager (cloud mode): use the pre-initialized message_count
-        # This was queried from AgentCore Memory when the session manager was created
+        # Prefer list_messages() for global count — it returns ALL messages
+        # regardless of agent_id, matching how get_messages_from_cloud() retrieves them.
+        session_id = self._resolve_session_id(session_manager)
+        if session_id:
+            lister = self._resolve_list_messages(session_manager)
+            if lister:
+                try:
+                    messages = lister(session_id, "default")
+                    count = len(messages) if messages else 0
+                    logger.info(f"Using global list_messages count: {count}")
+                    return count
+                except Exception as e:
+                    logger.warning(f"Failed to get global message count: {e}")
+
+        # Fallback to agent-specific message_count (may undercount in mixed sessions)
         if hasattr(session_manager, "message_count"):
             count = session_manager.message_count
-            logger.debug(f"Using TurnBasedSessionManager.message_count: {count}")
+            logger.debug(f"Fallback to TurnBasedSessionManager.message_count: {count}")
             return count
 
-        # Check wrapped session managers
         if hasattr(session_manager, "base_manager"):
             base_manager = session_manager.base_manager
-
-            # Check if base manager has message_count
             if hasattr(base_manager, "message_count"):
                 count = base_manager.message_count
-                logger.debug(f"Using base_manager.message_count: {count}")
+                logger.debug(f"Fallback to base_manager.message_count: {count}")
                 return count
 
-            # Try list_messages if available
-            if hasattr(base_manager, "list_messages"):
-                try:
-                    # Get session_id from config or session_manager
-                    session_id = None
-                    if hasattr(base_manager, "config"):
-                        session_id = base_manager.config.session_id
-                    elif hasattr(base_manager, "session_id"):
-                        session_id = base_manager.session_id
-                    elif hasattr(session_manager, "session_id"):
-                        session_id = session_manager.session_id
-
-                    if session_id:
-                        messages = base_manager.list_messages(session_id, "default")
-                        count = len(messages) if messages else 0
-                        logger.debug(f"Using base_manager.list_messages count: {count}")
-                        return count
-                except Exception as e:
-                    logger.warning(f"Failed to get message count from base_manager: {e}")
-
-        # Direct session manager with list_messages
-        if hasattr(session_manager, "list_messages"):
-            try:
-                session_id = getattr(session_manager, "session_id", None)
-                if session_id:
-                    messages = session_manager.list_messages(session_id, "default")
-                    count = len(messages) if messages else 0
-                    logger.debug(f"Using session_manager.list_messages count: {count}")
-                    return count
-            except Exception as e:
-                logger.warning(f"Failed to get message count from session_manager: {e}")
-
-        # Fallback: no count available (assume new session)
         logger.warning("Could not determine initial message count, defaulting to 0")
         return 0
+
+    @staticmethod
+    def _resolve_session_id(session_manager: Any) -> Optional[str]:
+        """Extract session_id from a session manager."""
+        for mgr in (session_manager, getattr(session_manager, "base_manager", None)):
+            if mgr is None:
+                continue
+            if hasattr(mgr, "config") and hasattr(mgr.config, "session_id"):
+                return mgr.config.session_id
+            if hasattr(mgr, "session_id"):
+                return mgr.session_id
+        return None
+
+    @staticmethod
+    def _resolve_list_messages(session_manager: Any) -> Optional[callable]:
+        """Find list_messages callable on a session manager."""
+        for mgr in (session_manager, getattr(session_manager, "base_manager", None)):
+            if mgr and hasattr(mgr, "list_messages"):
+                return mgr.list_messages
+        return None
 
     def _get_latest_message_id(self, session_manager: Any) -> Optional[int]:
         """
@@ -817,8 +1151,8 @@ class StreamCoordinator:
             citations: Optional list of citation dicts from RAG retrieval
         """
         try:
-            from apis.app_api.messages.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
-            from apis.app_api.sessions.services.metadata import store_message_metadata
+            from apis.shared.sessions.models import Attribution, LatencyMetrics, MessageMetadata, ModelInfo, TokenUsage
+            from apis.shared.sessions.metadata import store_message_metadata
 
             # Build TokenUsage if we have usage data
             token_usage = None
@@ -854,27 +1188,25 @@ class StreamCoordinator:
                 end_to_end_latency_ms = int((stream_end_time - stream_start_time) * 1000)
                 logger.info(f"📊 Calculated E2E latency: {end_to_end_latency_ms}ms")
 
-            # Get time to first token
-            # PRIORITY 1: Use provider's timeToFirstByteMs if available (most accurate)
+            # Get time to first token. We persist `None` (not 0) when the
+            # provider didn't emit `timeToFirstByteMs` and we couldn't
+            # measure it locally — a real TTFT can never be 0ms, and any
+            # downstream aggregation (averages, percentiles) needs to
+            # distinguish "not measured" from a real value to avoid
+            # pulling stats toward zero.
             if accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
                 time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
                 logger.info(f"📊 Using provider timeToFirstByteMs: {time_to_first_token_ms}ms")
-            # PRIORITY 2: Estimate TTFT as a portion of latency if we don't have it
-            # This is a rough estimate but better than 0 or None
-            # For most LLM calls, TTFT is typically 20-40% of total latency
-            elif end_to_end_latency_ms and end_to_end_latency_ms > 100:
-                # If E2E latency is available and substantial, estimate TTFT
-                # We don't have actual TTFT so we can't store it accurately
-                # Instead, log that we're missing it
-                logger.info(f"📊 No TTFT available - provider did not send timeToFirstByteMs for this message")
-                # Still create latency metrics with just E2E, using a placeholder of 0 for TTFT
-                # This is better than losing all latency data
-                time_to_first_token_ms = 0  # Indicates "not measured"
+            else:
+                logger.info("📊 No TTFT available - provider did not send timeToFirstByteMs for this message")
 
-            # Create latency metrics if we have at least E2E latency
+            # Create latency metrics if we have at least E2E latency.
+            # `time_to_first_token_ms` may be None — LatencyMetrics.time_to_first_token
+            # is Optional, so this serializes as JSON null.
             if end_to_end_latency_ms is not None:
                 latency_metrics = LatencyMetrics(
-                    time_to_first_token=time_to_first_token_ms if time_to_first_token_ms is not None else 0, end_to_end_latency=end_to_end_latency_ms
+                    time_to_first_token=time_to_first_token_ms,
+                    end_to_end_latency=end_to_end_latency_ms,
                 )
                 logger.info(f"📊 Created LatencyMetrics: TTFT={time_to_first_token_ms}ms, E2E={end_to_end_latency_ms}ms")
             else:
@@ -885,12 +1217,27 @@ class StreamCoordinator:
             model_info = None
             pricing_snapshot = None
             cost = None
+            context_window: Optional[int] = None
 
             if agent and hasattr(agent, "model_config"):
                 model_id = agent.model_config.model_id
 
                 # Get pricing snapshot from managed models database
                 pricing_snapshot = await self._get_pricing_snapshot(model_id)
+
+                # Look up the model's max_input_tokens once so the bump of
+                # session-level aggregates (for the chat cost badge) has a
+                # context window value to persist alongside the latest
+                # turn's input token count.
+                try:
+                    from apis.shared.costs.pricing_config import get_model_by_model_id
+                    model_record = await get_model_by_model_id(model_id)
+                    if model_record is not None:
+                        max_input_tokens = getattr(model_record, "max_input_tokens", None)
+                        if max_input_tokens:
+                            context_window = int(max_input_tokens)
+                except Exception as ctx_err:
+                    logger.debug(f"Skipping contextWindow capture for storage: {ctx_err}")
 
                 # Extract provider from model config
                 provider = None
@@ -907,7 +1254,9 @@ class StreamCoordinator:
 
                 # Calculate cost if we have both usage and pricing
                 if token_usage and pricing_snapshot:
-                    cost = self._calculate_message_cost(usage=accumulated_metadata.get("usage", {}), pricing=pricing_snapshot)
+                    cost_result = self._calculate_message_cost(usage=accumulated_metadata.get("usage", {}), pricing=pricing_snapshot)
+                    if cost_result is not None:
+                        cost = cost_result
 
             # Create Attribution for cost tracking foundation
             attribution = Attribution(
@@ -920,14 +1269,20 @@ class StreamCoordinator:
 
             # Create MessageMetadata
             if token_usage or latency_metrics or model_info or citations:
-                message_metadata = MessageMetadata(
+                # contextWindow is passed as an extra field (MessageMetadata
+                # has extra="allow"); _bump_session_aggregates picks it up
+                # via model_extra to denormalize onto the session row.
+                metadata_kwargs: Dict[str, Any] = dict(
                     latency=latency_metrics,
                     token_usage=token_usage,
                     model_info=model_info,
                     attribution=attribution,
                     cost=cost,
-                    citations=citations,  # Include citations from RAG retrieval
+                    citations=citations,
                 )
+                if context_window is not None:
+                    metadata_kwargs["contextWindow"] = context_window
+                message_metadata = MessageMetadata(**metadata_kwargs)
 
                 # Store metadata
                 await store_message_metadata(session_id=session_id, user_id=user_id, message_id=message_id, message_metadata=message_metadata)
@@ -994,8 +1349,8 @@ class StreamCoordinator:
             PricingSnapshot dict or None if model not found
         """
         try:
-            from apis.app_api.costs.pricing_config import create_pricing_snapshot
-            from apis.app_api.messages.models import PricingSnapshot
+            from apis.shared.costs.pricing_config import create_pricing_snapshot
+            from apis.shared.sessions.models import PricingSnapshot
 
             # Get pricing snapshot from managed models
             snapshot_dict = await create_pricing_snapshot(model_id)
@@ -1011,7 +1366,7 @@ class StreamCoordinator:
             logger.error(f"Failed to get pricing snapshot for {model_id}: {e}")
             return None
 
-    def _calculate_message_cost(self, usage: Dict[str, Any], pricing: Optional[Dict[str, Any]]) -> Optional[float]:
+    def _calculate_message_cost(self, usage: Dict[str, Any], pricing: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
         Calculate message cost from usage and pricing
 
@@ -1020,13 +1375,13 @@ class StreamCoordinator:
             pricing: Pricing snapshot (PricingSnapshot model)
 
         Returns:
-            Total cost in USD or None if pricing unavailable
+            Dict with total cost and breakdown, or None if pricing unavailable
         """
         if not pricing:
             return None
 
         try:
-            from apis.app_api.costs.calculator import CostCalculator
+            from apis.shared.costs.calculator import CostCalculator
 
             # Convert PricingSnapshot model to dict for calculator
             if hasattr(pricing, "model_dump"):
@@ -1034,14 +1389,20 @@ class StreamCoordinator:
             else:
                 pricing_dict = pricing
 
-            total_cost, _ = CostCalculator.calculate_message_cost(usage, pricing_dict)
-            return total_cost
+            total_cost, breakdown = CostCalculator.calculate_message_cost(usage, pricing_dict)
+            return {
+                "total": total_cost,
+                "inputCost": breakdown.input_cost,
+                "outputCost": breakdown.output_cost,
+                "cacheReadCost": breakdown.cache_read_cost,
+                "cacheWriteCost": breakdown.cache_write_cost,
+            }
 
         except Exception as e:
             logger.error(f"Failed to calculate message cost: {e}")
             return None
 
-    async def _calculate_streaming_cost(self, model_id: str, usage: Dict[str, Any]) -> Optional[float]:
+    async def _calculate_streaming_cost(self, model_id: str, usage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Calculate cost for streaming response to send to client in real-time.
 
@@ -1054,7 +1415,7 @@ class StreamCoordinator:
             usage: Token usage dict from streaming
 
         Returns:
-            Total cost in USD or None if pricing unavailable
+            Dict with total cost and breakdown, or None if pricing unavailable
         """
         if not usage:
             return None
@@ -1083,149 +1444,36 @@ class StreamCoordinator:
             return None
 
     async def _update_session_metadata(self, session_id: str, user_id: str, message_id: int, agent: Any = None) -> None:
-        """
-        Update session-level metadata after each message
+        """Update per-turn session activity (lastMessageAt, messageCount, preferences).
 
-        This updates conversation-level tracking after each message:
-        - lastMessageAt: Timestamp of this message
-        - messageCount: Incremented by 1
-        - preferences: Model/temperature/tools/system_prompt_hash from agent config
-        - Auto-creates session metadata on first message
-
-        Args:
-            session_id: Session identifier
-            user_id: User identifier
-            message_id: Message ID that was just flushed
-            agent: Agent instance for extracting model preferences
+        Delegates to ``update_session_activity``, which uses targeted writes
+        so concurrent writers (title-gen, pending-interrupt persistence)
+        cannot be clobbered. Pre-create is handled at /invocations entry, so
+        no lazy-create branch is needed here.
         """
         try:
             import hashlib
 
-            from apis.shared.sessions.models import SessionMetadata, SessionPreferences
-            from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
+            from apis.shared.sessions.metadata import update_session_activity
 
-            logger.info(f"🔍 _update_session_metadata called for session {session_id}, message_id {message_id}")
-
-            # Get existing metadata or create new
-            existing = await get_session_metadata(session_id, user_id)
-
-            if existing:
-                logger.info(f"📄 Found existing metadata: messageCount={existing.message_count}, has_preferences={existing.preferences is not None}")
+            last_model = None
+            enabled_tools = None
+            system_prompt_hash = None
+            if agent and hasattr(agent, "model_config"):
+                last_model = agent.model_config.model_id
+                enabled_tools = getattr(agent, "enabled_tools", None)
+                if hasattr(agent, "system_prompt") and agent.system_prompt:
+                    system_prompt_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]
             else:
-                logger.info(f"📄 No existing metadata found - creating new")
+                logger.warning("⚠️ Agent is None or missing model_config — skipping preference update")
 
-            # Calculate message count incrementally
-            # NOTE: We cannot query AgentCore Memory immediately after flush due to eventual consistency.
-            # The turn-based session manager calls create_message() then immediately calls list_messages(),
-            # but the newly created message is not yet available for reading (can take several seconds).
-            #
-            # Instead, we use incremental counting:
-            # - Each streaming turn creates 1 merged message in AgentCore Memory
-            # - We increment the count by 1 per turn
-            #
-            # This count represents "turns" (user-assistant exchanges), not individual message events.
-            # Tool use creates multiple content blocks within a single turn/message.
-            if not existing:
-                actual_message_count = 1
-                logger.info(f"📊 First turn in session - message_count: {actual_message_count}")
-            else:
-                actual_message_count = existing.message_count + 1
-                logger.info(f"📊 Incremental turn count: {existing.message_count} + 1 = {actual_message_count}")
-
-            now = datetime.now(timezone.utc).isoformat()
-
-            if not existing:
-                # First message - create session metadata
-                preferences = None
-                if agent and hasattr(agent, "model_config"):
-                    logger.info(f"📦 Agent has model_config: model_id={agent.model_config.model_id}")
-
-                    # Generate system prompt hash for tracking exact prompt version
-                    # This hash represents the FINAL rendered system prompt (after date injection, etc.)
-                    system_prompt_hash = None
-                    if hasattr(agent, "system_prompt") and agent.system_prompt:
-                        system_prompt_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]  # 16 char hash for uniqueness
-                        logger.debug(f"Generated system_prompt_hash: {system_prompt_hash}")
-
-                    # Extract enabled tools from agent
-                    enabled_tools = getattr(agent, "enabled_tools", None)
-
-                    preferences = SessionPreferences(
-                        last_model=agent.model_config.model_id,
-                        last_temperature=getattr(agent.model_config, "temperature", None),
-                        enabled_tools=enabled_tools,
-                        system_prompt_hash=system_prompt_hash,
-                    )
-                    logger.info(f"✨ Created new preferences: last_model={preferences.last_model}")
-                else:
-                    logger.warning(f"⚠️ Agent is None or missing model_config")
-
-                metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title="New Conversation",  # Will be updated by frontend
-                    status="active",
-                    created_at=now,
-                    last_message_at=now,
-                    message_count=actual_message_count,
-                    starred=False,
-                    tags=[],
-                    preferences=preferences,
-                )
-            else:
-                # Update existing - only update what changed
-                preferences = existing.preferences
-                if agent and hasattr(agent, "model_config"):
-                    logger.info(f"📦 Updating preferences with model_id={agent.model_config.model_id}")
-
-                    # Update preferences if model/temperature/tools/system_prompt changed
-                    prefs_dict = preferences.model_dump(by_alias=False) if preferences else {}
-                    logger.info(f"📝 Existing prefs_dict: {prefs_dict}")
-
-                    prefs_dict["last_model"] = agent.model_config.model_id
-                    prefs_dict["last_temperature"] = getattr(agent.model_config, "temperature", None)
-
-                    # Update enabled_tools from agent
-                    prefs_dict["enabled_tools"] = getattr(agent, "enabled_tools", None)
-
-                    # Update system_prompt_hash if system prompt changed
-                    # This allows tracking when the prompt was modified during a conversation
-                    if hasattr(agent, "system_prompt") and agent.system_prompt:
-                        new_hash = hashlib.md5(agent.system_prompt.encode()).hexdigest()[:16]
-                        # Only update if hash changed (prompt was modified)
-                        if prefs_dict.get("system_prompt_hash") != new_hash:
-                            logger.info(f"System prompt changed - updating hash from {prefs_dict.get('system_prompt_hash')} to {new_hash}")
-                            prefs_dict["system_prompt_hash"] = new_hash
-
-                    preferences = SessionPreferences(**prefs_dict)
-                    logger.info(f"✨ Updated preferences: last_model={preferences.last_model}")
-                else:
-                    logger.warning(f"⚠️ Agent is None or missing model_config - keeping existing preferences")
-
-                metadata = SessionMetadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title=existing.title,
-                    status=existing.status,
-                    created_at=existing.created_at,
-                    last_message_at=now,
-                    message_count=actual_message_count,
-                    starred=existing.starred,
-                    tags=existing.tags,
-                    preferences=preferences,
-                )
-
-            # Store updated metadata (uses deep merge in storage layer)
-            await store_session_metadata(session_id=session_id, user_id=user_id, session_metadata=metadata)
-
-            logger.info(
-                f"✅ Updated session metadata - last_model: {metadata.preferences.last_model if metadata.preferences else 'None'}, message_count: {metadata.message_count}"
+            await update_session_activity(
+                session_id=session_id,
+                user_id=user_id,
+                last_model=last_model,
+                enabled_tools=enabled_tools,
+                system_prompt_hash=system_prompt_hash,
             )
-
-            # Return message count for use as a fallback message_id
-            return metadata.message_count
-
         except Exception as e:
             logger.error(f"Failed to update session metadata: {e}", exc_info=True)
-            # Don't raise - metadata failures shouldn't break streaming
-            return None
+            # Don't raise — metadata failures shouldn't break streaming.

@@ -6,6 +6,7 @@ import logging
 from typing import Optional, Any, Dict, Tuple
 from functools import lru_cache
 
+from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.session.memory_config import load_memory_config
 from agents.main_agent.session.compaction_models import CompactionConfig
 from agents.main_agent.session.preview_session_manager import (
@@ -160,8 +161,8 @@ class SessionFactory:
         semantic_id, preference_id, summary_id = _discover_strategy_ids(memory_id, aws_region)
 
         # Load retrieval thresholds from environment (configurable per deployment)
-        relevance_score = float(os.environ.get("AGENTCORE_MEMORY_RELEVANCE_SCORE", "0.7"))
-        top_k = int(os.environ.get("AGENTCORE_MEMORY_TOP_K", "10"))
+        relevance_score = float(os.environ.get(EnvVars.MEMORY_RELEVANCE_SCORE, str(Defaults.MEMORY_RELEVANCE_SCORE)))
+        top_k = int(os.environ.get(EnvVars.MEMORY_TOP_K, str(Defaults.MEMORY_TOP_K)))
 
         # Build retrieval config using the correct namespace patterns
         # AgentCore stores memories in: /strategies/{strategyId}/actors/{actorId}

@@ -4,7 +4,7 @@ import os
 import logging
 from fastapi import Depends, HTTPException, status
 from apis.shared.auth import User
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_from_session
 from .repository import FineTuningAccessRepository, get_fine_tuning_access_repository
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ DEFAULT_MONTHLY_QUOTA_HOURS = float(
 
 
 async def require_fine_tuning_access(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_session),
     repo: FineTuningAccessRepository = Depends(get_fine_tuning_access_repository),
 ) -> dict:
     """FastAPI dependency that enforces fine-tuning access.

@@ -2,7 +2,6 @@ import { Injectable, inject, resource, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import { Tool, ToolListResponse, UserToolPermissions } from '../models/tool.model';
 
 /**
@@ -13,7 +12,6 @@ import { Tool, ToolListResponse, UserToolPermissions } from '../models/tool.mode
 })
 export class ToolsService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
   private readonly baseUrl = computed(() => this.config.appApiUrl());
 
@@ -22,7 +20,7 @@ export class ToolsService {
    */
   readonly catalogResource = resource({
     loader: async () => {
-      await this.authService.ensureAuthenticated();
+      await Promise.resolve();
       return this.fetchCatalog();
     }
   });

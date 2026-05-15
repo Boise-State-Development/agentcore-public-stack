@@ -98,19 +98,6 @@
             }
           </div>
 
-          <!-- Reasoning Model Checkbox -->
-          <div class="flex items-center gap-3">
-            <input
-              type="checkbox"
-              id="isReasoningModel"
-              formControlName="isReasoningModel"
-              class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
-            />
-            <label for="isReasoningModel" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-              Reasoning Model (e.g., o1, o3 series)
-            </label>
-          </div>
-
           <!-- Knowledge Cutoff Date -->
           <div>
             <label for="knowledgeCutoffDate" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
@@ -458,6 +445,258 @@
             </div>
           }
         </div>
+      </div>
+
+      <!-- Inference Parameters Section -->
+      <div class="rounded-sm border border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800">
+        <button
+          type="button"
+          (click)="toggleInferenceParams()"
+          [attr.aria-expanded]="inferenceParamsExpanded()"
+          aria-controls="inference-params-body"
+          class="flex w-full items-center justify-between gap-4 p-6 text-left hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:hover:bg-gray-700/50"
+        >
+          <div class="flex items-center gap-3">
+            <ng-icon
+              [name]="inferenceParamsExpanded() ? 'heroChevronDown' : 'heroChevronRight'"
+              class="size-5 text-gray-500 dark:text-gray-400"
+              aria-hidden="true"
+            />
+            <h2 class="text-xl/8 font-semibold text-gray-900 dark:text-white">Inference Parameters</h2>
+          </div>
+          <span class="text-xs/5 font-medium text-gray-500 dark:text-gray-400">
+            @if (configuredParamCount() === 0) {
+              No parameters configured (passthrough)
+            } @else if (configuredParamCount() === 1) {
+              1 parameter configured
+            } @else {
+              {{ configuredParamCount() }} parameters configured
+            }
+          </span>
+        </button>
+
+        @if (inferenceParamsExpanded()) {
+        <div id="inference-params-body" class="border-t border-gray-200 px-6 pb-6 pt-4 dark:border-gray-700">
+        <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
+          Mark each parameter as supported or unsupported on this model, and set the default the runtime will send when the user doesn't override. Unsupported params are dropped from outbound requests. Untouched rows are treated as passthrough — the provider's server-side default applies.
+        </p>
+
+        @if (inferenceParamRows().length === 0) {
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">No known parameters for this provider.</p>
+        }
+
+        <div class="space-y-4" formArrayName="inferenceParams">
+          @for (meta of inferenceParamRows(); track meta.key; let i = $index) {
+            <div class="rounded-sm border border-gray-200 p-4 dark:border-gray-700" [formGroupName]="i">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex-1">
+                  <div class="font-medium text-gray-900 dark:text-white">{{ meta.label }}</div>
+                  <div class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    <span class="font-mono">{{ meta.key }}</span> — {{ meta.description }}
+                  </div>
+                </div>
+                <label class="flex items-center gap-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    formControlName="supported"
+                    class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                  />
+                  Supported
+                </label>
+              </div>
+
+              @if (paramRowGroup(i).controls.supported.value) {
+                <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                  @if (meta.kind === 'number' || meta.kind === 'integer' || meta.kind === 'thinkingBudget') {
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Min</label>
+                      <input
+                        type="number"
+                        formControlName="min"
+                        [step]="meta.kind === 'number' ? 'any' : 1"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Max</label>
+                      <input
+                        type="number"
+                        formControlName="max"
+                        [step]="meta.kind === 'number' ? 'any' : 1"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">
+                        @if (meta.kind === 'thinkingBudget') {
+                          Budget (tokens)
+                        } @else {
+                          Default
+                        }
+                      </label>
+                      <input
+                        type="number"
+                        formControlName="defaultValue"
+                        [step]="meta.kind === 'number' ? 'any' : 1"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                  } @else if (meta.kind === 'toggle') {
+                    <div class="md:col-span-3">
+                      <label class="flex items-center gap-2 text-xs/5 font-medium text-gray-600 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          formControlName="defaultValue"
+                          class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                        />
+                        Default to enabled
+                      </label>
+                    </div>
+                  }
+                  <div>
+                    <label class="flex items-center gap-2 pt-5 text-xs/5 font-medium text-gray-600 dark:text-gray-400">
+                      <input
+                        type="checkbox"
+                        formControlName="locked"
+                        class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                      />
+                      Locked (no user override)
+                    </label>
+                  </div>
+                </div>
+                @if (paramRowErrors(i, 'known').length > 0) {
+                  <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-red-600 dark:text-red-400">
+                    @for (err of paramRowErrors(i, 'known'); track err) {
+                      <li>{{ err }}</li>
+                    }
+                  </ul>
+                }
+              }
+            </div>
+          }
+        </div>
+
+        <!-- Custom parameters (escape hatch for params not in the catalog) -->
+        <div class="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+          <h3 class="mb-2 text-base/7 font-semibold text-gray-900 dark:text-white">Custom Parameters</h3>
+          <p class="mb-4 text-xs/5 text-gray-500 dark:text-gray-400">
+            Add a parameter the catalog doesn't yet recognize. The runtime will pass it through to the provider SDK if its translation table knows the key, otherwise it's silently dropped.
+          </p>
+
+          <div class="space-y-4" formArrayName="customInferenceParams">
+            @for (row of modelForm.controls.customInferenceParams.controls; track $index; let i = $index) {
+              <div class="rounded-sm border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900/40 dark:bg-amber-900/10" [formGroupName]="i">
+                <div class="flex items-start gap-4">
+                  <div class="flex-1">
+                    <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Parameter key</label>
+                    <input
+                      type="text"
+                      formControlName="key"
+                      placeholder="snake_case_key"
+                      class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      [class.border-red-500]="customParamGroup(i).controls.key.invalid && customParamGroup(i).controls.key.touched"
+                    />
+                    @if (customParamGroup(i).controls.key.invalid && customParamGroup(i).controls.key.touched) {
+                      <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">Use snake_case: lowercase letters, digits, underscores; must start with a letter.</p>
+                    }
+                  </div>
+                  <label class="flex items-center gap-2 pt-5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      formControlName="supported"
+                      class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                    />
+                    Supported
+                  </label>
+                  <button
+                    type="button"
+                    (click)="removeCustomParam(i)"
+                    class="mt-5 rounded-sm border border-gray-300 bg-white px-2 py-1 text-xs/5 font-medium text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                    aria-label="Remove custom parameter"
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                @if (customParamGroup(i).controls.supported.value) {
+                  <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Min</label>
+                      <input
+                        type="number"
+                        formControlName="min"
+                        step="any"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Max</label>
+                      <input
+                        type="number"
+                        formControlName="max"
+                        step="any"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Default</label>
+                      <input
+                        type="number"
+                        formControlName="defaultValue"
+                        step="any"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label class="flex items-center gap-2 pt-5 text-xs/5 font-medium text-gray-600 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          formControlName="locked"
+                          class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                        />
+                        Locked (no user override)
+                      </label>
+                    </div>
+                  </div>
+                  @if (paramRowErrors(i, 'custom').length > 0) {
+                    <ul role="alert" class="mt-3 list-disc space-y-0.5 pl-5 text-xs/5 text-red-600 dark:text-red-400">
+                      @for (err of paramRowErrors(i, 'custom'); track err) {
+                        <li>{{ err }}</li>
+                      }
+                    </ul>
+                  }
+                }
+              </div>
+            }
+          </div>
+
+          <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div class="flex-1">
+              <label for="newCustomParamKey" class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">New parameter key</label>
+              <input
+                id="newCustomParamKey"
+                type="text"
+                placeholder="snake_case_key"
+                [value]="newCustomParamKey()"
+                (input)="onCustomKeyInput($any($event.target).value)"
+                (keydown.enter)="$event.preventDefault(); addCustomParam()"
+                class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <button
+              type="button"
+              (click)="addCustomParam()"
+              class="rounded-sm bg-gray-200 px-3 py-1.5 text-sm/6 font-medium text-gray-800 hover:bg-gray-300 focus:outline-hidden focus:ring-3 focus:ring-gray-500/50 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
+            >
+              Add custom parameter
+            </button>
+          </div>
+          @if (newCustomParamError()) {
+            <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">{{ newCustomParamError() }}</p>
+          }
+        </div>
+        </div>
+        }
       </div>
 
       <!-- Form Actions -->

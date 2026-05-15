@@ -1,6 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -73,56 +72,21 @@ export class FrontendStack extends cdk.Stack {
     }
 
     // ============================================================================
-    // SSM Parameter Imports - Cognito Configuration
+    // Runtime configuration is no longer fetched from S3.
     // ============================================================================
-    // These parameters are exported by InfrastructureStack (Cognito User Pool)
-    // and InferenceApiStack (Runtime endpoint URL).
-    // ============================================================================
-
-    const cognitoDomainUrl = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/${config.projectPrefix}/auth/cognito/domain-url`
-    );
-
-    const cognitoAppClientId = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/${config.projectPrefix}/auth/cognito/app-client-id`
-    );
-
-    const inferenceApiUrl = ssm.StringParameter.valueForStringParameter(
-      this,
-      `/${config.projectPrefix}/inference-api/runtime-endpoint-url`
-    );
-
-    // Log imported values for debugging (values will be tokens at synth time)
+    // Pre-Phase-7 the SPA fetched `/config.json` at startup. After the Phase 7
+    // cleanup the only field worth keeping was `appApiUrl`, which is now
+    // hardcoded into the bundle via Angular `fileReplacements` (`/api` for
+    // production, `http://localhost:8000` for local dev). `version` is baked
+    // in by the frontend's `prebuild` script reading the root VERSION file,
+    // and `cognitoDomainUrl` moved server-side behind
+    // `GET /admin/auth-providers/cognito-redirect-uri` on app-api.
+    //
+    // The `appApiUrl` SSM token is still resolved below: it feeds the
+    // CloudFront `/api/*` HttpOrigin that fronts the same-origin browser
+    // path, just no longer the deprecated runtime-config blob.
     console.log('📥 Imported backend URLs from SSM:');
     console.log(`   App API URL: ${appApiUrl}`);
-    console.log(`   Cognito Domain URL: ${cognitoDomainUrl}`);
-    console.log(`   Inference API URL: ${inferenceApiUrl}`);
-
-    // ============================================================================
-    // Runtime Configuration Generation
-    // ============================================================================
-    // Generate config.json content with backend URLs and environment settings.
-    // This configuration will be deployed to S3 and fetched by the Angular app
-    // at startup via APP_INITIALIZER, enabling environment-agnostic builds.
-    //
-    // Note: The frontend only needs the App API URL. The inference API is
-    // accessed through the App API backend, not directly from the frontend.
-    // ============================================================================
-
-    const runtimeConfig = {
-      appApiUrl: appApiUrl,
-      environment: config.production ? 'production' : 'development',
-      version: config.appVersion,
-      cognitoDomainUrl: cognitoDomainUrl,
-      cognitoAppClientId: cognitoAppClientId,
-      cognitoRegion: config.awsRegion,
-      inferenceApiUrl: inferenceApiUrl,
-    };
-
-    console.log('🔧 Generated runtime configuration:');
-    console.log(`   Environment: ${runtimeConfig.environment}`);
 
     // Generate bucket name with account ID to ensure global uniqueness
     const bucketName = config.frontend.bucketName || 
@@ -205,6 +169,116 @@ export class FrontendStack extends cdk.Stack {
       }
     );
 
+    // ============================================================================
+    // BFF /api/* behavior — same-origin proxy to the app-api ALB
+    // ============================================================================
+    // Phase 6a of the BFF Token Handler migration. The SPA hits `/api/*` on the
+    // CloudFront origin; CloudFront forwards to the app-api ALB. This makes
+    // app-api same-origin with the SPA so `__Host-` session cookies work and
+    // there is no CORS preflight on the chat hot path.
+    //
+    // - HttpOrigin hostname is parsed out of the absolute SSM ALB URL using
+    //   Fn.split/Fn.select because the value is a CDK token at synth time.
+    // - Path-strip CloudFront Function removes `/api` so app-api stays
+    //   prefix-unaware (local dev still hits `localhost:8000` directly).
+    // - CACHING_DISABLED + ALL_VIEWER_EXCEPT_HOST_HEADER: every /api/* response
+    //   is dynamic and must forward cookies + CSRF + auth headers untouched.
+    // - No response-headers-policy: SSE responses must keep the origin's
+    //   Content-Type/Cache-Control/X-Accel-Buffering headers verbatim.
+    // - compress: false because gzip on text/event-stream re-introduces the
+    //   buffering bug we fixed in Phase 4.
+    // ============================================================================
+
+    // Strip leading "/api" from the request URI before forwarding to the ALB.
+    // CloudFront Functions run at viewer-request, ~1ms, no Lambda cold start.
+    const apiPathStripFunction = new cloudfront.Function(this, 'ApiPathStripFunction', {
+      functionName: getResourceName(config, 'api-path-strip'),
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      comment: 'Strip /api prefix before forwarding requests to the app-api ALB origin',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var req = event.request;
+  if (req.uri === '/api') {
+    req.uri = '/';
+  } else if (req.uri.indexOf('/api/') === 0) {
+    req.uri = req.uri.substring(4);
+  }
+  return req;
+}
+`),
+    });
+
+    // Extract the bare hostname from the absolute ALB URL (e.g.
+    // "https://api.example.com" -> "api.example.com"). The value is a CDK
+    // token resolved at deploy time, so use Fn.split/Fn.select rather than
+    // JS string ops.
+    const appApiOriginHostname = cdk.Fn.select(2, cdk.Fn.split('/', appApiUrl));
+
+    // HTTPS to the origin when an ALB cert is configured; HTTP fallback for
+    // dev environments without `certificateArn`. CloudFront → ALB always
+    // crosses public internet, so HTTPS is preferred whenever possible.
+    const appApiOrigin = new origins.HttpOrigin(appApiOriginHostname, {
+      protocolPolicy: config.certificateArn
+        ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
+        : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+      // Long-running SSE streams need a generous read timeout. 60s is the
+      // CloudFront default max without a service-quota increase; if any SSE
+      // stream goes >60s without sending data, the proxy needs to emit a
+      // heartbeat (verified during the Phase 6 soak window).
+      readTimeout: cdk.Duration.seconds(60),
+      keepaliveTimeout: cdk.Duration.seconds(60),
+    });
+
+    const apiBehavior: cloudfront.BehaviorOptions = {
+      origin: appApiOrigin,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+      cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      compress: false,
+      functionAssociations: [
+        {
+          function: apiPathStripFunction,
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+        },
+      ],
+    };
+
+    // ============================================================================
+    // SPA routing — rewrite non-asset paths to /index.html at viewer-request
+    // ============================================================================
+    // Distribution-wide `errorResponses` (the previous approach) caught 403/404
+    // from EVERY behavior, including `/api/*`, which silently rewrote real API
+    // errors into `200 + index.html` and broke JSON parsing on the SPA. Doing
+    // the rewrite at viewer-request on the default behavior keeps SPA fallback
+    // scoped to S3-bound traffic and lets API 4xx responses pass through with
+    // their original status and JSON body.
+    //
+    // Anything with a file extension (`.js`, `.css`, `.png`, etc.) is treated
+    // as a static asset and forwarded to S3 unchanged. Everything else (SPA
+    // routes like `/auth/login`, `/chat/123`) is rewritten to `/index.html`
+    // so Angular's router can take over.
+    const spaRoutingFunction = new cloudfront.Function(this, 'SpaRoutingFunction', {
+      functionName: getResourceName(config, 'spa-routing'),
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      comment: 'Rewrite SPA routes to /index.html so Angular can handle client-side routing',
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var req = event.request;
+  var uri = req.uri;
+  // Static asset (has a file extension in the last path segment) → leave as-is.
+  var lastSegment = uri.substring(uri.lastIndexOf('/') + 1);
+  if (lastSegment.indexOf('.') !== -1) {
+    return req;
+  }
+  // SPA route → serve index.html so the Angular router can resolve it.
+  req.uri = '/index.html';
+  return req;
+}
+`),
+    });
+
     // CloudFront distribution configuration
     let distributionProps: cloudfront.DistributionProps = {
       comment: `${config.projectPrefix} Frontend Distribution`,
@@ -215,23 +289,17 @@ export class FrontendStack extends cdk.Stack {
         responseHeadersPolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
+        functionAssociations: [
+          {
+            function: spaRoutingFunction,
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
+      },
+      additionalBehaviors: {
+        '/api/*': apiBehavior,
       },
       defaultRootObject: 'index.html',
-      // Custom error responses for SPA routing
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-      ],
       priceClass: cloudfront.PriceClass[config.frontend.cloudFrontPriceClass as keyof typeof cloudfront.PriceClass],
       enabled: true,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -288,34 +356,6 @@ export class FrontendStack extends cdk.Stack {
         ),
       });
     }
-
-    // ============================================================================
-    // Deploy Runtime Configuration to S3
-    // ============================================================================
-    // Deploy config.json to the S3 bucket root with appropriate cache headers.
-    // Cache strategy:
-    // - TTL: 5 minutes (balance between freshness and performance)
-    // - Must revalidate: Ensures clients check for updates after TTL expires
-    // - Prune: false (don't delete other files in the bucket)
-    // ============================================================================
-
-    new s3deploy.BucketDeployment(this, 'RuntimeConfigDeployment', {
-      sources: [
-        s3deploy.Source.jsonData('config.json', runtimeConfig),
-      ],
-      destinationBucket: this.bucket,
-      cacheControl: [
-        s3deploy.CacheControl.maxAge(cdk.Duration.minutes(5)), // Short TTL for config updates
-        s3deploy.CacheControl.mustRevalidate(), // Force revalidation after TTL
-      ],
-      prune: false, // Don't delete other files (static assets deployed separately)
-    });
-
-    console.log('📦 Runtime config deployment configured:');
-    console.log('   File: config.json');
-    console.log('   Cache TTL: 5 minutes');
-    console.log('   Must revalidate: true');
-    console.log('   Prune: false');
 
     // Store parameters in SSM Parameter Store for cross-stack references
     new ssm.StringParameter(this, 'DistributionIdParameter', {

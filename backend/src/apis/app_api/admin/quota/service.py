@@ -6,7 +6,7 @@ from decimal import Decimal
 import uuid
 import logging
 from apis.shared.auth.models import User
-from apis.app_api.costs.aggregator import CostAggregator
+from apis.shared.costs.aggregator import CostAggregator
 from agents.main_agent.quota.repository import QuotaRepository
 from agents.main_agent.quota.resolver import QuotaResolver
 from agents.main_agent.quota.models import QuotaTier, QuotaAssignment

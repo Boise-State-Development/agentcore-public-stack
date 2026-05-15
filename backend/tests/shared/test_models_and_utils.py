@@ -97,35 +97,28 @@ class TestOAuthModels:
 
     def test_provider_scopes_hash_property(self):
         from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
-        p = OAuthProvider(provider_id="p1", display_name="P", provider_type=OAuthProviderType.CUSTOM, client_id="c", authorization_endpoint="http://a", token_endpoint="http://t", scopes=["a", "b"], allowed_roles=[])
+        p = OAuthProvider(
+            provider_id="p1", display_name="P",
+            provider_type=OAuthProviderType.GOOGLE,
+            scopes=["a", "b"], allowed_roles=[],
+        )
         assert p.scopes_hash == p.scopes_hash  # consistent
-
-    def test_token_is_expired(self):
-        from apis.shared.oauth.models import OAuthUserToken
-        t = OAuthUserToken(user_id="u1", provider_id="p1", access_token_encrypted="x", expires_at=946684800)
-        assert t.is_expired is True
-
-    def test_token_not_expired(self):
-        from apis.shared.oauth.models import OAuthUserToken
-        t = OAuthUserToken(user_id="u1", provider_id="p1", access_token_encrypted="x", expires_at=4070908800)
-        assert t.is_expired is False
 
     def test_provider_dynamo_roundtrip(self):
         from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
-        p = OAuthProvider(provider_id="p1", display_name="P", provider_type=OAuthProviderType.CUSTOM, client_id="c", authorization_endpoint="http://a", token_endpoint="http://t", scopes=["a"], allowed_roles=[])
+        p = OAuthProvider(
+            provider_id="p1", display_name="P",
+            provider_type=OAuthProviderType.GOOGLE,
+            scopes=["a"], allowed_roles=[],
+            credential_provider_arn="arn:aws:bedrock-agentcore:us-east-1:1:cp/p1",
+            callback_url="https://bedrock-agentcore.us-east-1.amazonaws.com/cb/p1",
+        )
         item = p.to_dynamo_item()
         assert item["PK"] == "PROVIDER#p1"
         restored = OAuthProvider.from_dynamo_item(item)
         assert restored.provider_id == "p1"
-
-    def test_token_dynamo_roundtrip(self):
-        from apis.shared.oauth.models import OAuthUserToken
-        t = OAuthUserToken(user_id="u1", provider_id="p1", access_token_encrypted="enc", expires_at=4070908800)
-        item = t.to_dynamo_item()
-        assert item["PK"] == "USER#u1"
-        assert item["SK"] == "PROVIDER#p1"
-        restored = OAuthUserToken.from_dynamo_item(item)
-        assert restored.user_id == "u1"
+        assert restored.callback_url == p.callback_url
+        assert restored.credential_provider_arn == p.credential_provider_arn
 
 
 # ===================================================================

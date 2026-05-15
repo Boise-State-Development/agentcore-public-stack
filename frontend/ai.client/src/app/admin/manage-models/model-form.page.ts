@@ -1,11 +1,144 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
-import { FormBuilder, FormGroup, FormControl, Validators, ReactiveFormsModule } from '@angular/forms';
+import {
+  AbstractControl,
+  FormBuilder,
+  FormGroup,
+  FormArray,
+  FormControl,
+  ValidationErrors,
+  Validators,
+  ReactiveFormsModule,
+} from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft } from '@ng-icons/heroicons/outline';
-import { AVAILABLE_PROVIDERS, ManagedModelFormData, ModelProvider } from './models/managed-model.model';
+import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
+import {
+  AVAILABLE_PROVIDERS,
+  KNOWN_PARAMS,
+  KnownParamMeta,
+  ManagedModelFormData,
+  ModelParamSpec,
+  ModelProvider,
+  SupportedParams,
+} from './models/managed-model.model';
 import { ManagedModelsService } from './services/managed-models.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
+
+interface ParamRowGroup {
+  /**
+   * Canonical param name. Read-only on known rows (seeded from the catalog,
+   * no validators). Custom rows add `Validators.required +
+   * Validators.pattern(CUSTOM_PARAM_KEY_PATTERN)`.
+   *
+   * Carrying `key` on every row lets the FormArray-level validator look up
+   * `thinking` / `max_tokens` without depending on parallel signals.
+   */
+  key: FormControl<string>;
+  supported: FormControl<boolean>;
+  min: FormControl<number | null>;
+  max: FormControl<number | null>;
+  defaultValue: FormControl<number | boolean | string | null>;
+  locked: FormControl<boolean>;
+}
+
+/**
+ * Custom-param rows carry their canonical key as a form control so admins
+ * can stage params the frontend catalog doesn't yet know about (e.g. a brand
+ * new provider knob shipped before the next deploy).
+ */
+type CustomParamRowGroup = ParamRowGroup;
+
+const CUSTOM_PARAM_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * Cross-field validator for a single inference param row. Mirrors the
+ * Pydantic `ModelParamSpec._check_bounds` rule on the backend so admins
+ * see the failure inline instead of a 422 from the save action.
+ *
+ * Returns `null` when the row is unsupported (we don't care about bounds
+ * on unsupported rows) or when nothing's wrong. Otherwise sets one of:
+ *   - `minGreaterThanMax` — `min > max`
+ *   - `defaultBelowMin`   — numeric default < min
+ *   - `defaultAboveMax`   — numeric default > max
+ */
+function paramRowBoundsValidator(group: AbstractControl): ValidationErrors | null {
+  const supported = group.get('supported')?.value;
+  if (!supported) return null;
+  const min = group.get('min')?.value;
+  const max = group.get('max')?.value;
+  const def = group.get('defaultValue')?.value;
+
+  const errors: Record<string, true> = {};
+  if (typeof min === 'number' && typeof max === 'number' && min > max) {
+    errors['minGreaterThanMax'] = true;
+  }
+  if (typeof def === 'number') {
+    if (typeof min === 'number' && def < min) errors['defaultBelowMin'] = true;
+    if (typeof max === 'number' && def > max) errors['defaultAboveMax'] = true;
+  }
+  return Object.keys(errors).length > 0 ? errors : null;
+}
+
+/**
+ * FormArray-level validator that catches the two thinking-budget invariants
+ * Anthropic enforces (and that `SupportedParams._check_thinking_invariants`
+ * also enforces on the backend):
+ *   - thinking budget must be >= 1024
+ *   - thinking budget must be < the max_tokens default
+ *
+ * Errors are placed on the `thinking` row so the inline error markup picks
+ * them up alongside per-row bounds errors.
+ */
+function thinkingInvariantsValidator(array: AbstractControl): ValidationErrors | null {
+  if (!(array instanceof FormArray)) return null;
+  let thinkingRow: FormGroup | undefined;
+  let maxTokensRow: FormGroup | undefined;
+  for (const row of array.controls as FormGroup[]) {
+    const key = row.get('key')?.value;
+    if (key === 'thinking') thinkingRow = row;
+    else if (key === 'max_tokens') maxTokensRow = row;
+  }
+  if (!thinkingRow) return null;
+
+  const supported = thinkingRow.get('supported')?.value;
+  const def = thinkingRow.get('defaultValue')?.value;
+  if (!supported || def === null || def === undefined || def === '' || def === 0) {
+    // Clear any prior thinking-specific errors but keep bounds errors set
+    // by the per-row validator (which runs independently).
+    const existing = { ...(thinkingRow.errors ?? {}) };
+    delete existing['thinkingBudgetTooLow'];
+    delete existing['thinkingBudgetExceedsMaxTokens'];
+    delete existing['thinkingBudgetNotNumeric'];
+    thinkingRow.setErrors(Object.keys(existing).length > 0 ? existing : null);
+    return null;
+  }
+
+  const errors: Record<string, true> = {};
+  if (typeof def !== 'number' || Number.isNaN(def)) {
+    errors['thinkingBudgetNotNumeric'] = true;
+  } else {
+    if (def < 1024) errors['thinkingBudgetTooLow'] = true;
+    const maxTokensDef = maxTokensRow?.get('defaultValue')?.value;
+    if (typeof maxTokensDef === 'number' && def >= maxTokensDef) {
+      errors['thinkingBudgetExceedsMaxTokens'] = true;
+    }
+  }
+
+  // Merge with any pre-existing per-row bounds errors so both are visible.
+  const merged = { ...(thinkingRow.errors ?? {}), ...errors };
+  thinkingRow.setErrors(Object.keys(merged).length > 0 ? merged : null);
+  return null;
+}
+
+/**
+ * Helper used as a key on each known-param row so the FormArray validator
+ * can find the `thinking` and `max_tokens` rows. Custom rows already store
+ * their key in a `key` control; known rows don't, so we tag them with a
+ * disabled control of the same name for symmetry.
+ */
+function knownParamKeyControl(fb: FormBuilder, key: string): FormControl<string> {
+  return fb.control(key, { nonNullable: true });
+}
 
 interface ModelFormGroup {
   modelId: FormControl<string>;
@@ -24,15 +157,16 @@ interface ModelFormGroup {
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
   cacheReadPricePerMillionTokens: FormControl<number | null>;
-  isReasoningModel: FormControl<boolean>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
+  inferenceParams: FormArray<FormGroup<ParamRowGroup>>;
+  customInferenceParams: FormArray<FormGroup<CustomParamRowGroup>>;
 }
 
 @Component({
   selector: 'app-model-form-page',
   imports: [ReactiveFormsModule, RouterLink, NgIcon],
-  providers: [provideIcons({ heroArrowLeft })],
+  providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -46,7 +180,7 @@ export class ModelFormPage implements OnInit {
 
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
-  readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'EMBEDDING'];
+  readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'SPEECH', 'EMBEDDING'];
 
   // AppRoles from the API (reactive resource)
   readonly rolesResource = this.appRolesService.rolesResource;
@@ -56,6 +190,11 @@ export class ModelFormPage implements OnInit {
   readonly isEditMode = signal<boolean>(false);
   readonly modelId = signal<string | null>(null);
   readonly isSubmitting = signal<boolean>(false);
+
+  // Inference-param row metadata, parallel to the ``inferenceParams`` FormArray.
+  // Provider switch rebuilds both together so each row is paired with its
+  // friendly label and input kind.
+  readonly inferenceParamRows = signal<KnownParamMeta[]>([]);
 
   // Form group
   readonly modelForm: FormGroup<ModelFormGroup> = this.fb.group({
@@ -75,14 +214,70 @@ export class ModelFormPage implements OnInit {
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
-    isReasoningModel: this.fb.control(false, { nonNullable: true }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     supportsCaching: this.fb.control(false, { nonNullable: true }),
+    inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
+      validators: [thinkingInvariantsValidator],
+    }),
+    customInferenceParams: this.fb.array<FormGroup<CustomParamRowGroup>>([]),
   });
+
+  // Bound to the "Add custom parameter" input. Cleared after a successful add.
+  readonly newCustomParamKey = signal<string>('');
+  readonly newCustomParamError = signal<string | null>(null);
+
+  /**
+   * Param keys that came from the persisted record on load. Combined with
+   * each row's dirty flag to decide what `collectSupportedParams()` persists:
+   * untouched + not-loaded rows are dropped so the admin's "did nothing"
+   * means "passthrough", not "block everything".
+   */
+  private loadedKnownKeys = new Set<string>();
+
+  /**
+   * Inference Parameters section visibility. Collapsed by default — most
+   * admins won't need to touch this for chat-shaped models, and the runtime
+   * already supplies sensible per-model defaults via the seed/registry.
+   */
+  readonly inferenceParamsExpanded = signal<boolean>(false);
+
+  toggleInferenceParams(): void {
+    this.inferenceParamsExpanded.update(v => !v);
+  }
+
+  /**
+   * Count of parameters the admin has actually configured on this model.
+   * Drives the collapsed-section summary so the admin knows at a glance
+   * whether anything's set before they expand.
+   *
+   * Implemented as a method (not computed signal) so it re-evaluates on
+   * every CD pass — form-control changes don't tick signal dependencies,
+   * and we want the count to track checkbox/key edits in real time.
+   */
+  configuredParamCount(): number {
+    let count = 0;
+    this.modelForm.controls.inferenceParams.controls.forEach((row, i) => {
+      const meta = this.inferenceParamRows()[i];
+      if (!meta) return;
+      const wasLoaded = this.loadedKnownKeys.has(meta.key);
+      const wasTouched = row.dirty;
+      if ((wasLoaded || wasTouched) && row.controls.supported.value) {
+        count++;
+      }
+    });
+    this.modelForm.controls.customInferenceParams.controls.forEach(row => {
+      if (row.controls.key.value) count++;
+    });
+    return count;
+  }
 
   readonly pageTitle = computed(() => this.isEditMode() ? 'Edit Model' : 'Add Model');
 
   ngOnInit(): void {
+    // Seed the inference-params section for the default provider before any
+    // edit-mode load runs, so it can patch into existing rows.
+    this.rebuildInferenceParamRows(this.modelForm.controls.provider.value);
+
     // Check if we're in edit mode
     const id = this.route.snapshot.paramMap.get('id');
     if (id && id !== 'new') {
@@ -106,6 +301,286 @@ export class ModelFormPage implements OnInit {
         });
       }
     });
+
+    // Rebuild the inference-param rows whenever the provider changes so the
+    // visible knobs match what the selected SDK actually understands.
+    this.modelForm.controls.provider.valueChanges.subscribe(provider => {
+      this.rebuildInferenceParamRows(provider);
+    });
+  }
+
+  /**
+   * Build (or rebuild) the inference-params FormArray for a given provider.
+   *
+   * When the param key list is unchanged we **patch values in place** rather
+   * than clear+push. Replacing FormGroup instances is unsafe here because the
+   * already-rendered ``[formGroupName]="i"`` / ``formControlName="..."``
+   * directives bind once and don't notice when a parent FormArray's child
+   * gets swapped — clicks would update the old, detached FormGroup and the
+   * ``@if (paramRowGroup(i).controls.supported.value)`` guard would never
+   * flip. A full rebuild only fires when the visible row set actually
+   * changes (i.e. real provider switch).
+   *
+   * Persisted keys outside the known catalog populate the custom-params
+   * FormArray instead — admins can stage params the frontend catalog doesn't
+   * yet recognize without losing them on save.
+   */
+  private rebuildInferenceParamRows(provider: ModelProvider, existing?: SupportedParams | null): void {
+    const knownForProvider = KNOWN_PARAMS.filter(p => p.providers.includes(provider));
+    const knownKeys = new Set(KNOWN_PARAMS.map(p => p.key));
+
+    // Track which keys came from the persisted record so the save path can
+    // round-trip them even if the admin doesn't interact with the row.
+    if (existing?.params) {
+      for (const k of Object.keys(existing.params)) {
+        this.loadedKnownKeys.add(k);
+      }
+    }
+
+    const arr = this.modelForm.controls.inferenceParams;
+    const currentMetas = this.inferenceParamRows();
+    const sameStructure =
+      currentMetas.length === knownForProvider.length &&
+      currentMetas.every((m, i) => m.key === knownForProvider[i].key);
+
+    if (sameStructure) {
+      // Patch persisted values into existing rows. Where there's no override,
+      // leave the seeded defaults alone so admins keep their suggested bounds.
+      knownForProvider.forEach((meta, i) => {
+        const row = arr.at(i) as FormGroup<ParamRowGroup>;
+        const fromExisting = existing?.params?.[meta.key];
+        if (!fromExisting) return;
+        row.patchValue({
+          supported: fromExisting.supported,
+          min: fromExisting.min ?? row.controls.min.value,
+          max: fromExisting.max ?? row.controls.max.value,
+          defaultValue: fromExisting.default ?? null,
+          locked: fromExisting.locked,
+        });
+      });
+    } else {
+      // Snapshot in-flight values keyed by param name so survivors of the
+      // provider switch keep what the admin typed.
+      const currentValues = new Map<string, ModelParamSpec>();
+      arr.controls.forEach((row, i) => {
+        const key = currentMetas[i]?.key;
+        if (key) {
+          currentValues.set(key, this.rowToSpec(row));
+        }
+      });
+      arr.clear();
+      for (const meta of knownForProvider) {
+        const fromExisting = existing?.params?.[meta.key];
+        const fromCurrent = currentValues.get(meta.key);
+        const seed = fromExisting ?? fromCurrent ?? null;
+        arr.push(this.buildParamRow(meta, seed, provider));
+      }
+      this.inferenceParamRows.set(knownForProvider);
+    }
+
+    // Custom params: patch in place when key set matches, full rebuild
+    // otherwise (same FormGroup-identity reasoning as the known section).
+    const customArr = this.modelForm.controls.customInferenceParams;
+    const persistedCustomKeys = Object.keys(existing?.params ?? {}).filter(k => !knownKeys.has(k));
+    const currentCustomKeys = customArr.controls.map(r => r.controls.key.value);
+
+    const sameCustomStructure =
+      persistedCustomKeys.length === currentCustomKeys.length &&
+      persistedCustomKeys.every((k, i) => k === currentCustomKeys[i]);
+
+    if (sameCustomStructure && persistedCustomKeys.length > 0) {
+      persistedCustomKeys.forEach((key, i) => {
+        const row = customArr.at(i) as FormGroup<CustomParamRowGroup>;
+        const spec = existing!.params![key];
+        row.patchValue({
+          key,
+          supported: spec.supported,
+          min: spec.min ?? row.controls.min.value,
+          max: spec.max ?? row.controls.max.value,
+          defaultValue: spec.default ?? null,
+          locked: spec.locked,
+        });
+      });
+    } else if (persistedCustomKeys.length > 0 || currentCustomKeys.length > 0) {
+      // Preserve in-flight custom edits that aren't in the persisted record.
+      const currentCustom = new Map<string, ModelParamSpec>();
+      customArr.controls.forEach(row => {
+        const v = row.getRawValue();
+        if (v.key) {
+          currentCustom.set(v.key, this.rowToSpec(row as unknown as FormGroup<ParamRowGroup>));
+        }
+      });
+      customArr.clear();
+      const seen = new Set<string>();
+      for (const key of persistedCustomKeys) {
+        seen.add(key);
+        customArr.push(this.buildCustomParamRow(key, existing!.params![key]));
+      }
+      currentCustom.forEach((spec, key) => {
+        if (!seen.has(key)) {
+          customArr.push(this.buildCustomParamRow(key, spec));
+        }
+      });
+    }
+  }
+
+  private buildCustomParamRow(key: string, seed: ModelParamSpec | null): FormGroup<CustomParamRowGroup> {
+    return this.fb.group<CustomParamRowGroup>(
+      {
+        key: this.fb.control(key, { nonNullable: true, validators: [Validators.required, Validators.pattern(CUSTOM_PARAM_KEY_PATTERN)] }),
+        supported: this.fb.control(seed?.supported ?? true, { nonNullable: true }),
+        min: this.fb.control<number | null>(seed?.min ?? null),
+        max: this.fb.control<number | null>(seed?.max ?? null),
+        defaultValue: this.fb.control<number | boolean | string | null>(seed?.default ?? null),
+        locked: this.fb.control(seed?.locked ?? false, { nonNullable: true }),
+      },
+      { validators: [paramRowBoundsValidator] },
+    );
+  }
+
+  /** Push a new custom-param row from the "Add custom parameter" input. */
+  addCustomParam(): void {
+    const raw = this.newCustomParamKey().trim();
+    if (!raw) {
+      this.newCustomParamError.set('Enter a parameter key.');
+      return;
+    }
+    if (!CUSTOM_PARAM_KEY_PATTERN.test(raw)) {
+      this.newCustomParamError.set('Use snake_case: lowercase letters, digits, and underscores.');
+      return;
+    }
+    const knownKeys = new Set(KNOWN_PARAMS.map(p => p.key));
+    if (knownKeys.has(raw)) {
+      this.newCustomParamError.set(`'${raw}' is a built-in parameter — toggle it on above instead.`);
+      return;
+    }
+    const existingCustomKeys = this.modelForm.controls.customInferenceParams.controls
+      .map(r => r.controls.key.value);
+    if (existingCustomKeys.includes(raw)) {
+      this.newCustomParamError.set(`'${raw}' is already in the list.`);
+      return;
+    }
+    this.modelForm.controls.customInferenceParams.push(this.buildCustomParamRow(raw, null));
+    this.newCustomParamKey.set('');
+    this.newCustomParamError.set(null);
+  }
+
+  removeCustomParam(index: number): void {
+    this.modelForm.controls.customInferenceParams.removeAt(index);
+  }
+
+  customParamGroup(index: number): FormGroup<CustomParamRowGroup> {
+    return this.modelForm.controls.customInferenceParams.at(index) as FormGroup<CustomParamRowGroup>;
+  }
+
+  onCustomKeyInput(value: string): void {
+    this.newCustomParamKey.set(value);
+    if (this.newCustomParamError()) {
+      this.newCustomParamError.set(null);
+    }
+  }
+
+  private buildParamRow(meta: KnownParamMeta, seed: ModelParamSpec | null, provider: ModelProvider): FormGroup<ParamRowGroup> {
+    // Per-provider seeded bounds win over the catalog-wide fallbacks. Persisted
+    // values from `seed` always win over both — admin edits aren't clobbered.
+    const providerBounds = meta.defaults?.[provider];
+    const seedMin = seed?.min ?? providerBounds?.min ?? meta.defaultMin ?? null;
+    const seedMax = seed?.max ?? providerBounds?.max ?? meta.defaultMax ?? null;
+    return this.fb.group<ParamRowGroup>(
+      {
+        // Catalog key is fixed for known rows — no validators, just a read-only
+        // tag the FormArray validator can pivot on.
+        key: knownParamKeyControl(this.fb, meta.key),
+        supported: this.fb.control(seed?.supported ?? false, { nonNullable: true }),
+        min: this.fb.control<number | null>(seedMin),
+        max: this.fb.control<number | null>(seedMax),
+        defaultValue: this.fb.control<number | boolean | string | null>(seed?.default ?? null),
+        locked: this.fb.control(seed?.locked ?? false, { nonNullable: true }),
+      },
+      { validators: [paramRowBoundsValidator] },
+    );
+  }
+
+  private rowToSpec(row: FormGroup<ParamRowGroup>): ModelParamSpec {
+    const v = row.getRawValue();
+    return {
+      supported: v.supported,
+      min: v.min,
+      max: v.max,
+      default: v.defaultValue,
+      locked: v.locked,
+    };
+  }
+
+  /**
+   * Convert the inference-params FormArrays + row metadata into the canonical
+   * `SupportedParams` shape the API expects.
+   *
+   * Known-param rows are only persisted when the admin has opined on them —
+   * either by loading from a persisted record (tracked in
+   * ``loadedKnownKeys``) or by interacting with the row in this session
+   * (FormGroup ``dirty``). Untouched rows are omitted, so the runtime sees
+   * an empty spec map and falls back to passthrough. That keeps "I didn't
+   * touch this section" symmetric for new vs existing models — neither
+   * silently flips behavior.
+   *
+   * Custom rows are always explicit (admin had to type a key or load one
+   * from DDB) so they're persisted whenever present.
+   */
+  private collectSupportedParams(): SupportedParams | null {
+    const rows = this.inferenceParamRows();
+    const params: Record<string, ModelParamSpec> = {};
+
+    this.modelForm.controls.inferenceParams.controls.forEach((row, i) => {
+      const meta = rows[i];
+      if (!meta) return;
+      const wasLoaded = this.loadedKnownKeys.has(meta.key);
+      const wasTouched = row.dirty;
+      if (!wasLoaded && !wasTouched) return;
+      params[meta.key] = this.rowToSpec(row);
+    });
+
+    this.modelForm.controls.customInferenceParams.controls.forEach(row => {
+      const v = row.getRawValue();
+      const key = (v.key ?? '').trim();
+      if (!key) return;
+      params[key] = this.rowToSpec(row as unknown as FormGroup<ParamRowGroup>);
+    });
+
+    return Object.keys(params).length > 0 ? { params } : null;
+  }
+
+  paramRowGroup(index: number): FormGroup<ParamRowGroup> {
+    return this.modelForm.controls.inferenceParams.at(index) as FormGroup<ParamRowGroup>;
+  }
+
+  /**
+   * Returns the inline error messages to render under a known-param row, or
+   * `[]` for none. Errors come from two sources: per-row bounds checks
+   * (`paramRowBoundsValidator`) and thinking-specific cross-row checks
+   * (`thinkingInvariantsValidator` writes onto the thinking row).
+   *
+   * Surfaced unconditionally for supported rows — bounds problems are
+   * always immediate and don't need a `touched` gate to feel right.
+   */
+  paramRowErrors(index: number, kind: 'known' | 'custom' = 'known'): string[] {
+    const arr = kind === 'known'
+      ? this.modelForm.controls.inferenceParams
+      : this.modelForm.controls.customInferenceParams;
+    const row = arr.at(index) as FormGroup<ParamRowGroup> | undefined;
+    if (!row || !row.errors || !row.get('supported')?.value) return [];
+    const out: string[] = [];
+    if (row.errors['minGreaterThanMax']) out.push('Min must be less than or equal to Max.');
+    if (row.errors['defaultBelowMin']) out.push('Default must be greater than or equal to Min.');
+    if (row.errors['defaultAboveMax']) out.push('Default must be less than or equal to Max.');
+    if (row.errors['thinkingBudgetTooLow']) out.push('Thinking budget must be at least 1024 tokens.');
+    if (row.errors['thinkingBudgetExceedsMaxTokens']) {
+      out.push('Thinking budget must be less than the Max Output Tokens default.');
+    }
+    if (row.errors['thinkingBudgetNotNumeric']) {
+      out.push('Thinking budget must be a number — clear the value to disable, or enter an integer ≥ 1024.');
+    }
+    return out;
   }
 
   /**
@@ -133,10 +608,12 @@ export class ModelFormPage implements OnInit {
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
-        isReasoningModel: model.isReasoningModel,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
       });
+
+      // Repopulate the inference-params rows with any persisted spec.
+      this.rebuildInferenceParamRows(model.provider as ModelProvider, model.supportedParams ?? null);
     } catch (error) {
       console.error('Error loading model data:', error);
       alert('Failed to load model data. Please try again.');
@@ -158,7 +635,6 @@ export class ModelFormPage implements OnInit {
         outputModalities: params['outputModalities'] ? params['outputModalities'].split(',') : [],
         maxInputTokens: params['maxInputTokens'] ? parseInt(params['maxInputTokens'], 10) : 0,
         maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : 0,
-        isReasoningModel: params['isReasoningModel'] === 'true',
         knowledgeCutoffDate: params['knowledgeCutoffDate'] || null,
       });
     }
@@ -198,7 +674,32 @@ export class ModelFormPage implements OnInit {
     this.isSubmitting.set(true);
 
     try {
-      const formData = this.modelForm.value as ManagedModelFormData;
+      // The FormArray for inference params lives outside the flat form-value
+      // shape that ManagedModelFormData expects, so we read fields directly
+      // from the typed form controls and attach `supportedParams` separately.
+      const v = this.modelForm.getRawValue();
+      const formData: ManagedModelFormData = {
+        modelId: v.modelId,
+        modelName: v.modelName,
+        provider: v.provider,
+        providerName: v.providerName,
+        inputModalities: v.inputModalities,
+        outputModalities: v.outputModalities,
+        responseStreamingSupported: false,
+        maxInputTokens: v.maxInputTokens,
+        maxOutputTokens: v.maxOutputTokens,
+        allowedAppRoles: v.allowedAppRoles,
+        availableToRoles: v.availableToRoles,
+        enabled: v.enabled,
+        isDefault: v.isDefault,
+        inputPricePerMillionTokens: v.inputPricePerMillionTokens,
+        outputPricePerMillionTokens: v.outputPricePerMillionTokens,
+        cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
+        cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
+        knowledgeCutoffDate: v.knowledgeCutoffDate,
+        supportsCaching: v.supportsCaching,
+        supportedParams: this.collectSupportedParams(),
+      };
 
       if (this.isEditMode() && this.modelId()) {
         // Update existing model

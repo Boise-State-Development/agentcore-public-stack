@@ -1,7 +1,8 @@
-import { Injectable, inject, signal, computed } from '@angular/core';
+import { Injectable, InjectionToken, inject, signal, computed } from '@angular/core';
 import { v4 as uuidv4 } from 'uuid';
-import { fetchEventSource, EventSourceMessage } from '@microsoft/fetch-event-source';
-import { AuthService } from '../../../auth/auth.service';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
+import type { EventSourceMessage, FetchEventSourceInit } from '@microsoft/fetch-event-source';
+import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
 import { Message } from '../../../session/services/models/message.model';
 import { PREVIEW_SESSION_PREFIX } from '../../../shared/constants/session.constants';
@@ -10,6 +11,23 @@ import {
   type StreamParserCallbacks,
   type ContentBlockDeltaEvent,
 } from '../../../shared/utils/stream-parser';
+
+/**
+ * Injection token for the SSE client. Lets specs swap in a mock without
+ * relying on `vi.mock('@microsoft/fetch-event-source')` — that approach
+ * raced with sibling specs that transitively import this module in the
+ * Angular vitest builder's shared worker pool, surfacing as the well-known
+ * `expected vi.fn() called 1, got 0` flake on `preview-chat.service.spec.ts`.
+ */
+export type FetchEventSource = (
+  input: RequestInfo,
+  init: FetchEventSourceInit,
+) => Promise<void>;
+
+export const FETCH_EVENT_SOURCE = new InjectionToken<FetchEventSource>('FETCH_EVENT_SOURCE', {
+  providedIn: 'root',
+  factory: () => fetchEventSource,
+});
 
 /**
  * Component-scoped service for managing preview chat state.
@@ -26,8 +44,9 @@ import {
  */
 @Injectable()
 export class PreviewChatService {
-  private authService = inject(AuthService);
+  private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
+  private fetchEventSource = inject(FETCH_EVENT_SOURCE);
 
   // Local state signals (isolated from global ChatStateService)
   private readonly messagesSignal = signal<Message[]>([]);
@@ -49,26 +68,6 @@ export class PreviewChatService {
 
   // Computed
   readonly hasMessages = computed(() => this.messagesSignal().length > 0);
-
-  /**
-   * Get bearer token for streaming responses (with refresh if needed)
-   */
-  private async getBearerTokenForStreamingResponse(): Promise<string> {
-    if (this.authService.isTokenExpired()) {
-      try {
-        await this.authService.refreshAccessToken();
-      } catch (error) {
-        console.error('Failed to refresh token:', error);
-      }
-    }
-
-    const token = this.authService.getAccessToken();
-    if (!token) {
-      throw new Error('No access token available');
-    }
-
-    return token;
-  }
 
   /**
    * Create callbacks for the stream parser.
@@ -188,14 +187,15 @@ export class PreviewChatService {
     const callbacks = this.createCallbacks();
 
     try {
-      const token = await this.getBearerTokenForStreamingResponse();
-
-      // Single runtime endpoint from configuration
-      const runtimeEndpointUrl = this.config.inferenceApiUrl();
-      if (!runtimeEndpointUrl) {
-        throw new Error('Inference API URL not configured. Please check your configuration.');
+      // Phase 6c: route the preview stream through the BFF chat proxy
+      // (cookie auth) instead of inference-api directly. Same SSE
+      // protocol; the proxy is transparent.
+      const appApiUrl = this.config.appApiUrl();
+      if (!appApiUrl) {
+        throw new Error('App API URL not configured. Please check your configuration.');
       }
-      const url = `${runtimeEndpointUrl}/invocations?qualifier=DEFAULT`;
+      const baseUrl = appApiUrl.endsWith('/') ? appApiUrl.slice(0, -1) : appApiUrl;
+      const url = `${baseUrl}/chat/stream`;
 
       // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
       // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
@@ -208,12 +208,18 @@ export class PreviewChatService {
         enabled_tools: [], // No tools in preview
       };
 
-      await fetchEventSource(url, {
+      // `fetchEventSource` bypasses the HttpClient pipeline, so the
+      // csrfInterceptor doesn't run here. Attach X-CSRF-Token by hand.
+      const csrfHeaders = this.bffSession.csrfHeaders();
+
+      await this.fetchEventSource(url, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
           Accept: 'text/event-stream',
+          OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
+          ...csrfHeaders,
         },
         body: JSON.stringify(requestBody),
         signal: this.abortController.signal,

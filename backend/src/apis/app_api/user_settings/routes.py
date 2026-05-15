@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 import logging
 
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.user_settings.models import UserSettings, UserSettingsUpdate
 from apis.shared.user_settings.repository import UserSettingsRepository
@@ -20,7 +20,7 @@ def get_user_settings_repository() -> UserSettingsRepository:
 
 @router.get("", response_model=UserSettings)
 async def get_settings(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
     repo: UserSettingsRepository = Depends(get_user_settings_repository),
 ):
     """Get the current user's settings."""
@@ -32,7 +32,7 @@ async def get_settings(
 @router.put("", response_model=UserSettings)
 async def update_settings(
     body: UserSettingsUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_session),
     repo: UserSettingsRepository = Depends(get_user_settings_repository),
 ):
     """Update the current user's settings (partial merge)."""
@@ -53,6 +53,23 @@ async def update_settings(
             logger.warning("Managed models table not configured - skipping model validation")
         except Exception as e:
             logger.warning(f"Could not validate model ID: {e}")
+
+    # Surface the missing-table case as a real 503 instead of silently
+    # echoing the requested values back to the client. Previously the route
+    # returned 200 with the new payload while persisting nothing, so the
+    # SPA's "Saving..." indicator cleared and the user assumed success —
+    # then the next page load showed defaultModelId=null because the GET
+    # path falls through to the same disabled repo and returns defaults
+    # (#161). Failing loud here lets the frontend show the user that the
+    # backend is misconfigured rather than silently dropping their choice.
+    if not repo.enabled:
+        logger.error(
+            "User settings update rejected: DYNAMODB_USER_SETTINGS_TABLE_NAME is not configured"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="User settings storage is not configured on this server.",
+        )
 
     try:
         updated = await repo.update_settings(current_user.user_id, update_data)

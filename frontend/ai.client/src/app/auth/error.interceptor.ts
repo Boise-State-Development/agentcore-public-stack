@@ -2,6 +2,7 @@ import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 import { ErrorService } from '../services/error/error.service';
+import { SessionService } from './session.service';
 
 /**
  * HTTP interceptor that handles errors from non-streaming HTTP requests
@@ -17,10 +18,14 @@ import { ErrorService } from '../services/error/error.service';
  */
 export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   const errorService = inject(ErrorService);
+  const sessionService = inject(SessionService);
 
   // Skip error handling for SSE streaming endpoints
-  // These are handled by fetchEventSource's onerror callback
-  const streamingEndpoints = ['/invocations', '/chat/stream'];
+  // These are handled by fetchEventSource's onerror callback.
+  // Only `/chat/stream` (the BFF proxy on app-api) is reachable from
+  // the SPA — `/invocations` was removed when the public PKCE client
+  // was retired in Phase 7.
+  const streamingEndpoints = ['/chat/stream'];
   const isStreamingRequest = streamingEndpoints.some(endpoint =>
     req.url.includes(endpoint)
   );
@@ -40,7 +45,12 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
           req.url.includes(endpoint)
         );
 
-        if (!isSilentEndpoint) {
+        // 401s mean the BFF session is missing or expired. Route to the
+        // SPA login page (idempotent across concurrent 401s) and skip the
+        // toast — it just flashes before the redirect lands.
+        if (error.status === 401) {
+          sessionService.handleUnauthorized();
+        } else if (!isSilentEndpoint) {
           // Use ErrorService to display the error
           errorService.handleHttpError(error);
         }

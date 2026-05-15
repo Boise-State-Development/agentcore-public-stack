@@ -89,6 +89,31 @@ async def get_runtime_image_tag(
             )
 
 
+@router.get(
+    "/cognito-redirect-uri",
+    summary="Get the Cognito IdP-response redirect URI",
+)
+async def get_cognito_redirect_uri(
+    admin_user: User = Depends(require_system_admin),
+) -> dict:
+    """Return the Cognito Hosted UI URL admins must register on an external IdP.
+
+    Composed from the `COGNITO_DOMAIN_URL` env var that CDK pins on the
+    app-api task. Owning this server-side keeps the Cognito domain off
+    the public SPA bundle and lets the admin form fetch it on demand.
+    """
+    import os
+
+    cognito_domain = (os.environ.get("COGNITO_DOMAIN_URL") or "").rstrip("/")
+    if not cognito_domain:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="COGNITO_DOMAIN_URL not configured on app-api",
+        )
+
+    return {"redirect_uri": f"{cognito_domain}/oauth2/idpresponse"}
+
+
 @router.post(
     "/discover",
     response_model=OIDCDiscoveryResponse,

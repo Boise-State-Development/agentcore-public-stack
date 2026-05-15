@@ -67,7 +67,7 @@ from agents.main_agent import MainAgent
 agent = MainAgent(
     session_id="session-123",
     user_id="user-456",
-    enabled_tools=["calculator", "weather", "gateway_wikipedia"],
+    enabled_tools=["calculator", "fetch_url_content", "gateway_wikipedia"],
     model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     temperature=0.7,
     caching_enabled=True
@@ -75,7 +75,7 @@ agent = MainAgent(
 
 # Stream responses
 async for event in agent.stream_async(
-    message="What's the weather in Seattle?",
+    message="Summarize this page: https://example.com",
     files=None
 ):
     print(event)
@@ -128,7 +128,7 @@ prompt = builder.build(include_date=True)
 # Filter tools
 registry = create_default_registry()
 filter = ToolFilter(registry)
-tools, gateway_ids = filter.filter_tools(["calculator", "weather"])
+tools, gateway_ids = filter.filter_tools(["calculator", "fetch_url_content"])
 ```
 
 ## Module Details

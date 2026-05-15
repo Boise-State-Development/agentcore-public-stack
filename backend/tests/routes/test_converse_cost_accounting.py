@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.inference_api.chat.converse_routes import router
-from apis.app_api.auth.api_keys.models import ValidatedApiKey
+from apis.shared.auth.api_keys.models import ValidatedApiKey
 
 
 # ---------------------------------------------------------------------------

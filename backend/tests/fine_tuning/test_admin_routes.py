@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from apis.shared.auth.models import User
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.rbac import require_admin
 from apis.app_api.fine_tuning.repository import FineTuningAccessRepository
 
@@ -27,7 +27,7 @@ def _create_app():
 
 
 def _override_auth(app: FastAPI, user: User):
-    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_current_user_from_session] = lambda: user
     app.dependency_overrides[require_admin] = lambda: user
 
 

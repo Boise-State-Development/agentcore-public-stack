@@ -34,6 +34,11 @@ on:
         required: false
         default: ''
         type: string
+      run-e2e:
+        description: 'Run Playwright E2E tests after smoke test (requires Cognito test user secrets)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
@@ -55,7 +60,7 @@ jobs:
 
       - name: Restore infrastructure node_modules cache
         id: cache-infrastructure
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -70,7 +75,7 @@ jobs:
 
       - name: Save infrastructure node_modules cache
         if: steps.cache-infrastructure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -120,7 +125,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -174,7 +179,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -261,7 +266,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -337,6 +342,8 @@ jobs:
       CDK_APP_API_DESIRED_COUNT: 1
       CDK_APP_API_MAX_CAPACITY: 2
       CDK_RETAIN_DATA_ON_DELETE: false
+      CDK_DOMAIN_NAME: ""
+      CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -348,7 +355,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -424,6 +431,7 @@ jobs:
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
       CDK_DOMAIN_NAME: ""
       CDK_HOSTED_ZONE_DOMAIN: ""
+      CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       CDK_FRONTEND_CERTIFICATE_ARN: ""
       CDK_FRONTEND_BUCKET_NAME: ""
       CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS: ""
@@ -438,7 +446,7 @@ jobs:
 
       - name: Restore frontend build cache
         id: cache-frontend-build
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: frontend/ai.client/dist
           key: frontend-build-${{ hashFiles('frontend/ai.client/src/**', 'frontend/ai.client/angular.json', 'frontend/ai.client/tsconfig.json') }}
@@ -452,7 +460,7 @@ jobs:
         run: bash scripts/stack-frontend/build.sh
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -510,7 +518,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}
@@ -584,10 +592,89 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
 
+  e2e-tests:
+    name: "[${{ inputs.label }}] E2E Tests"
+    runs-on: ubuntu-24.04
+    needs: smoke-test
+    if: ${{ inputs.run-e2e == 'true' && needs.smoke-test.result == 'success' }}
+    environment: development
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+      duration: ${{ steps.summary.outputs.duration }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      ADMIN_USERNAME: ${{ secrets.E2E_ADMIN_USERNAME }}
+      ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      USER_USERNAME: ${{ secrets.E2E_USER_USERNAME }}
+      USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Restore frontend node_modules cache
+        id: cache-frontend
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: frontend/ai.client/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/ai.client/package-lock.json') }}
+
+      - name: Install frontend dependencies
+        if: steps.cache-frontend.outputs.cache-hit != 'true'
+        run: |
+          cd frontend/ai.client
+          npm ci
+
+      - name: Verify Playwright package
+        run: |
+          cd frontend/ai.client
+          if [ ! -d "node_modules/@playwright/test" ]; then
+            echo "::warning::@playwright/test missing from cached node_modules — reinstalling"
+            npm ci
+          fi
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-${{ inputs.label }}-E2E
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Run E2E tests
+        id: run-tests
+        run: bash scripts/nightly/e2e-test.sh
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ inputs.label }}
+          path: frontend/ai.client/playwright-report/
+          retention-days: 30
+
+      - name: Generate summary
+        id: summary
+        if: always()
+        run: |
+          if [ "${{ steps.run-tests.outcome }}" = "success" ]; then STATUS="success"; else STATUS="failure"; fi
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
+
   teardown:
     name: "[${{ inputs.label }}] Teardown"
     runs-on: ubuntu-24.04
-    needs: smoke-test
+    needs: [smoke-test, e2e-tests]
     if: ${{ always() && inputs.skip-teardown != 'true' }}
     environment: development
     outputs:
@@ -609,7 +696,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Restore infrastructure node_modules cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: infrastructure/node_modules
           key: infrastructure-node-modules-${{ hashFiles('infrastructure/package-lock.json') }}

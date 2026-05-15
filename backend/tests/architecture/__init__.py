@@ -1,0 +1,1 @@
+"""Architectural boundary enforcement tests."""

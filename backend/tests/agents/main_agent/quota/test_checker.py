@@ -14,8 +14,8 @@ from agents.main_agent.quota.models import (
     QuotaCheckResult
 )
 from apis.shared.auth.models import User
-from apis.app_api.costs.aggregator import CostAggregator
-from apis.app_api.costs.models import UserCostSummary
+from apis.shared.costs.aggregator import CostAggregator
+from apis.shared.costs.models import UserCostSummary
 
 
 @pytest.fixture

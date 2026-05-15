@@ -87,6 +87,63 @@ export interface ReasoningEvent {
 }
 
 /**
+ * OAuth required event — emitted when an external MCP tool needs the user
+ * to grant consent via AgentCore Identity. The agent's tool call is paused
+ * (Strands interrupt) and the frontend resumes the same turn after the
+ * user completes consent by POSTing back the carried `interruptId`.
+ */
+export interface OAuthRequiredEvent {
+  type: 'oauth_required';
+  providerId: string;
+  authorizationUrl: string;
+  interruptId: string;
+}
+
+/**
+ * Tool approval required event — emitted when an MCP tool flagged
+ * `needs_approval` in the catalog is about to run. The agent's tool call
+ * is paused (Strands interrupt); the frontend renders an inline
+ * approve/decline prompt and resumes the same turn by POSTing the carried
+ * `interruptId` with `response: "approved" | "declined"`.
+ */
+export interface ToolApprovalRequiredEvent {
+  type: 'tool_approval_required';
+  interruptId: string;
+  toolUseId: string;
+  toolName: string;
+  /** JSON-encoded tool input arguments. Pre-stringified by the backend so
+   *  one shape works for both the live SSE event and the persisted
+   *  PendingInterrupt breadcrumb (which DynamoDB would otherwise coerce
+   *  floats inside). */
+  toolInput?: string;
+  message: string;
+}
+
+/**
+ * Compaction event — emitted after the final `metadata` event (so the badge
+ * updates first) and before `done` when the backend rolls older turns into
+ * a summary on this turn. The frontend feeds it to `CompactionSummaryService`,
+ * which increments a running total and renders a single end-of-conversation
+ * "Earlier messages summarized" indicator. (An earlier draft of this work
+ * placed inline dividers anchored at `newCheckpoint`; that variant was
+ * dropped because the mid-conversation drop-in caused jarring layout shifts.)
+ *
+ * `summarizedTurns` is the *delta* count of turns rolled up at this
+ * compaction event, not the cumulative total across prior compactions —
+ * the service sums these deltas to keep its own running total, which is
+ * also persisted on the backend as `totalSummarizedTurns` for refresh
+ * survival. `previousCheckpoint` / `newCheckpoint` are kept on the wire
+ * for diagnostics and possible future per-event UI.
+ */
+export interface CompactionEvent {
+  type: 'compaction';
+  previousCheckpoint: number;
+  newCheckpoint: number;
+  summarizedTurns: number;
+  inputTokens: number;
+}
+
+/**
  * Tool result event data structure
  */
 export interface ToolResultEventData {
@@ -123,7 +180,9 @@ export type StreamEventType =
   | 'quota_warning'
   | 'quota_exceeded'
   | 'stream_error'
-  | 'citation';
+  | 'citation'
+  | 'oauth_required'
+  | 'compaction';
 
 /**
  * Union type of all possible event data types
@@ -143,6 +202,8 @@ export type StreamEventData =
   | StreamErrorEvent
   | ConversationalStreamErrorEvent
   | Citation
+  | OAuthRequiredEvent
+  | CompactionEvent
   | null
   | undefined;
 

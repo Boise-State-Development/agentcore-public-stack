@@ -8,7 +8,7 @@
 **An open-source, production-ready Generative AI platform for institutions**
 *Built by Boise State University, designed for everyone.*
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.22-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--beta.26-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB?style=flat&logo=python&logoColor=white)
@@ -105,6 +105,10 @@ Enable programmatic access to the platform's AI models via REST API. Users gener
 **Authentication:** Include the key in the `X-API-Key` header with each request. The platform resolves the user, checks quotas, enforces RBAC model access, and tracks costs — identical to browser-based usage.
 
 **Built-in code examples:** The API Keys settings page includes a code generator with cURL, Python, and JavaScript examples, a model selector, and configurable parameters (temperature, max tokens, system prompt) so users can start integrating immediately.
+
+### 🎙️ Voice Mode
+
+Have natural, real-time spoken conversations with the assistant. Voice Mode streams audio bidirectionally over WebSockets to an AgentCore-hosted voice agent, using **Amazon Nova Sonic** for low-latency speech-to-speech interaction. Users can speak their questions and hear responses aloud — no typing required — while the same RBAC, quotas, and model access rules as the chat interface apply.
 
 ### 🧠 Memory and Context
 
@@ -256,7 +260,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full changelog, including new features, bug fixes, platform upgrades, and deployment notes for each release.
 
-**Current release:** v1.0.0-beta.22
+**Current release:** v1.0.0-beta.26
 
 ---
 

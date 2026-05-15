@@ -2,8 +2,8 @@ import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
-import { AuthService } from '../../../auth/auth.service';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
+import { UserSettingsService } from '../../../services/user-settings.service';
 
 interface ManagedModelsListResponse {
   models: ManagedModel[];
@@ -15,12 +15,15 @@ interface ManagedModelsListResponse {
 })
 export class ModelService {
   private http = inject(HttpClient);
-  private authService = inject(AuthService);
   private config = inject(ConfigService);
+  private userSettings = inject(UserSettingsService);
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/models`);
 
   // Session storage key for persisting model selection
   private readonly SELECTED_MODEL_KEY = 'selectedModelId';
+  // Session storage key for persisting per-model inference param overrides.
+  // Keyed by modelId so switching models doesn't bleed values across.
+  private readonly INFERENCE_OVERRIDES_KEY = 'inferenceParamOverrides';
 
   // Default model used when no models are available (matches backend default)
   private readonly DEFAULT_MODEL: ManagedModel = {
@@ -38,7 +41,6 @@ export class ModelService {
     enabled: true,
     inputPricePerMillionTokens: 0,
     outputPricePerMillionTokens: 0,
-    isReasoningModel: false,
     knowledgeCutoffDate: null,
     supportsCaching: true,
     isDefault: false,
@@ -52,6 +54,14 @@ export class ModelService {
 
   // Selected model (defaults to first model when available, or system default)
   private readonly _selectedModel = signal<ManagedModel | null>(null);
+
+  // Per-model canonical inference param overrides. Outer key = modelId, inner
+  // key = canonical param name (temperature, top_p, thinking, ...). Sent on
+  // each chat request as `inference_params`; backend layers them on top of
+  // admin defaults and clamps to the model's bounds.
+  private readonly _inferenceOverrides = signal<Record<string, Record<string, unknown>>>(
+    this.loadOverridesFromStorage(),
+  );
 
   // Public read-only signals
   readonly availableModels = this.models.asReadonly();
@@ -68,6 +78,13 @@ export class ModelService {
   });
   readonly modelsLoading = this.isLoading.asReadonly();
   readonly modelsError = this.error.asReadonly();
+
+  /** Inference param overrides for the currently selected model. */
+  readonly selectedModelOverrides = computed<Record<string, unknown>>(() => {
+    const model = this.selectedModel();
+    if (!model) return {};
+    return this._inferenceOverrides()[model.modelId] ?? {};
+  });
 
   constructor() {
     // Load models on initialization
@@ -86,8 +103,6 @@ export class ModelService {
 
     try {
       // Ensure user is authenticated before making the request
-      await this.authService.ensureAuthenticated();
-
       const response = await firstValueFrom(
         this.http.get<ManagedModelsListResponse>(
           this.baseUrl()
@@ -128,10 +143,20 @@ export class ModelService {
           this._selectedModel.set(savedModel);
           this.usingDefaultModel.set(false);
         } else {
-          // Find admin-configured default model, or fall back to first available
-          const defaultModel = enabledModels.find(m => m.isDefault);
-          this._selectedModel.set(defaultModel || enabledModels[0]);
-          this.usingDefaultModel.set(false);
+          // Check the user's persisted default from settings API before
+          // falling back to the admin-configured default. Settings live in
+          // DynamoDB and survive across sessions / browsers, where session
+          // storage above is tab-scoped only.
+          const userDefaultModel = await this.findUserDefaultModel(enabledModels);
+          if (userDefaultModel) {
+            this._selectedModel.set(userDefaultModel);
+            this.usingDefaultModel.set(false);
+          } else {
+            // Find admin-configured default model, or fall back to first available
+            const defaultModel = enabledModels.find(m => m.isDefault);
+            this._selectedModel.set(defaultModel || enabledModels[0]);
+            this.usingDefaultModel.set(false);
+          }
         }
       } else {
         // No models available, use system default
@@ -231,6 +256,86 @@ export class ModelService {
       // SessionStorage may be unavailable in some contexts
       console.warn('Could not read model selection from sessionStorage:', e);
       return null;
+    }
+  }
+
+  /**
+   * Look up the user's persisted defaultModelId from the settings API and
+   * resolve it to a model in the supplied enabled list. Returns null when
+   * the user has no default set, the saved model is no longer available,
+   * or the settings call fails. Failures are swallowed because the caller
+   * has a hardcoded fallback (admin default, then first available).
+   */
+  private async findUserDefaultModel(enabledModels: ManagedModel[]): Promise<ManagedModel | null> {
+    try {
+      const settings = await this.userSettings.fetchSettings();
+      const id = settings?.defaultModelId;
+      if (!id) return null;
+      return enabledModels.find(m => m.modelId === id) ?? null;
+    } catch (e) {
+      console.warn('Could not load user settings to apply default model:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Set a single inference param override on the currently selected model.
+   * Pass `null` / `undefined` to clear the override and fall back to the
+   * admin default. No-op if no model is selected.
+   */
+  setInferenceParamOverride(paramKey: string, value: unknown): void {
+    const model = this.selectedModel();
+    if (!model) return;
+    const next = { ...this._inferenceOverrides() };
+    const modelOverrides = { ...(next[model.modelId] ?? {}) };
+    if (value === null || value === undefined || value === '') {
+      delete modelOverrides[paramKey];
+    } else {
+      modelOverrides[paramKey] = value;
+    }
+    if (Object.keys(modelOverrides).length === 0) {
+      delete next[model.modelId];
+    } else {
+      next[model.modelId] = modelOverrides;
+    }
+    this._inferenceOverrides.set(next);
+    this.persistOverrides(next);
+  }
+
+  /** Clear all inference param overrides for the currently selected model. */
+  clearInferenceParamOverrides(): void {
+    const model = this.selectedModel();
+    if (!model) return;
+    const next = { ...this._inferenceOverrides() };
+    if (model.modelId in next) {
+      delete next[model.modelId];
+      this._inferenceOverrides.set(next);
+      this.persistOverrides(next);
+    }
+  }
+
+  /** Snapshot getter for non-signal contexts (e.g. request builders). */
+  getInferenceParamOverrides(): Record<string, unknown> {
+    return this.selectedModelOverrides();
+  }
+
+  private loadOverridesFromStorage(): Record<string, Record<string, unknown>> {
+    try {
+      const raw = sessionStorage.getItem(this.INFERENCE_OVERRIDES_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      console.warn('Could not read inference overrides from sessionStorage:', e);
+      return {};
+    }
+  }
+
+  private persistOverrides(value: Record<string, Record<string, unknown>>): void {
+    try {
+      sessionStorage.setItem(this.INFERENCE_OVERRIDES_KEY, JSON.stringify(value));
+    } catch (e) {
+      console.warn('Could not save inference overrides to sessionStorage:', e);
     }
   }
 }

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
-from apis.shared.auth.dependencies import get_current_user
+from apis.shared.auth.dependencies import get_current_user, get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.auth.rbac import require_admin
 
@@ -40,6 +40,7 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/token",
     "/auth/refresh",
     "/auth/logout",
+    "/auth/callback",  # BFF Token Handler OAuth callback (Phase 3) — Cognito redirects here with the auth code; no Bearer involved.
     "/oauth/callback",
     "/chat/api-converse",
     "/system/status",
@@ -163,7 +164,10 @@ class TestNonAdminRoleRejection:
             name="Property 4 User",
             roles=roles,
         )
+        # `require_admin` is cookie-only since Phase 7; the Bearer override
+        # is kept too for any test that still relies on it.
         app.dependency_overrides[get_current_user] = lambda: user
+        app.dependency_overrides[get_current_user_from_session] = lambda: user
 
         # Mock AppRoleService to return no admin AppRoles (simulates
         # JWT roles that don't map to system_admin in DynamoDB)

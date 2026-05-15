@@ -1,5 +1,39 @@
 # Contributing to AgentCore Public Stack
 
+## Contribution Policy
+
+AgentCore Public Stack is maintained by Boise State University as a reference
+implementation for academic and public-sector AgentCore deployments. It is
+source-available under the PolyForm Noncommercial License 1.0.0 (see
+[`LICENSE`](./LICENSE)).
+
+### Pull requests are restricted to approved collaborators
+
+To keep the reference architecture coherent and to let downstream deployments
+stay in sync with a single, well-known upstream, this repository uses GitHub's
+**"Collaborators only"** pull request setting. Only users with Write access or
+higher can open a pull request.
+
+### Reporting issues and proposing changes
+
+If you are deploying this stack and find a bug, regression, or documentation
+gap, please open a GitHub issue — issues are open to everyone. A maintainer
+will triage the report, and if the change belongs upstream we will either
+implement it or coordinate with the reporter on next steps.
+
+### For collaborators
+
+- Link the tracking issue in the PR description so changes stay discoverable.
+- Keep each PR focused on a single logical change.
+- Sign off your commits with `git commit -s` (Developer Certificate of Origin).
+- Make sure CI is green before requesting review.
+- Respect the backend import boundaries enforced by
+  `backend/tests/architecture/test_import_boundaries.py` — `app_api`,
+  `inference_api`, and `agents/` are independent consumers of `apis.shared`
+  and must not import from each other.
+
+---
+
 ## Prerequisites
 
 - **Node.js** 20+ (for frontend and infrastructure)

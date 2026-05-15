@@ -5,7 +5,7 @@ import jwt
 import logging
 import os
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from .models import User
@@ -180,6 +180,76 @@ def _get_cognito_validator():
     return _cognito_validator
 
 
+# Separate validator for the BFF confidential client. Phase 1 CDK provisions
+# COGNITO_BFF_APP_CLIENT_ID alongside the SPA's COGNITO_APP_CLIENT_ID, and the
+# refresh exchange in `sessions_bff.refresh` issues against the BFF client —
+# so tokens carry `client_id = COGNITO_BFF_APP_CLIENT_ID` and would be rejected
+# by the SPA validator's client_id check.
+_bff_cognito_validator = None
+
+
+def _get_bff_cognito_validator():
+    """Return the validator instance for tokens minted by the BFF flow.
+
+    Reads `COGNITO_USER_POOL_ID`, `COGNITO_BFF_APP_CLIENT_ID`, and
+    `COGNITO_REGION`/`AWS_REGION`. Returns None if any are unset, which
+    matches the dormant-by-default contract: until Phase 1 env vars are
+    deployed there's nothing for this validator to do.
+    """
+    global _bff_cognito_validator
+    if _bff_cognito_validator is not None:
+        return _bff_cognito_validator
+
+    try:
+        from .cognito_jwt_validator import CognitoJWTValidator
+
+        user_pool_id = os.environ.get("COGNITO_USER_POOL_ID")
+        bff_app_client_id = os.environ.get("COGNITO_BFF_APP_CLIENT_ID")
+        region = os.environ.get("COGNITO_REGION") or os.environ.get("AWS_REGION")
+
+        if not user_pool_id or not bff_app_client_id or not region:
+            logger.warning(
+                "BFF Cognito validator not configured. "
+                "Required: COGNITO_USER_POOL_ID, COGNITO_BFF_APP_CLIENT_ID, "
+                "COGNITO_REGION (or AWS_REGION)"
+            )
+            return None
+
+        _bff_cognito_validator = CognitoJWTValidator(
+            user_pool_id=user_pool_id,
+            app_client_id=bff_app_client_id,
+            region=region,
+        )
+        logger.info("BFF CognitoJWTValidator initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize BFF CognitoJWTValidator: {e}", exc_info=True)
+
+    return _bff_cognito_validator
+
+
+def _skip_auth_user() -> Optional[User]:
+    """Return a fake admin user when SKIP_AUTH=true, else None.
+
+    Local-dev-only bypass so an unattended agent (or a dev with no IdP
+    access) can hit protected routes without the OAuth round-trip. The
+    startup check in `app_api/main.py` refuses to boot when this is
+    combined with deployed-environment indicators.
+    """
+    if os.environ.get("SKIP_AUTH", "").lower() != "true":
+        return None
+    roles = [
+        r.strip()
+        for r in os.environ.get("SKIP_AUTH_ROLES", "admin").split(",")
+        if r.strip()
+    ]
+    return User(
+        user_id=os.environ.get("SKIP_AUTH_USER_ID", "local-dev"),
+        email=os.environ.get("SKIP_AUTH_EMAIL", "dev@local"),
+        name="Local Dev",
+        roles=roles,
+    )
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> User:
@@ -200,6 +270,9 @@ async def get_current_user(
             - 401 if token is missing or invalid
             - 500 if no JWT validator is available
     """
+    if (fake := _skip_auth_user()) is not None:
+        return fake
+
     # Check if credentials are missing
     if credentials is None:
         raise HTTPException(
@@ -242,21 +315,84 @@ async def get_current_user(
     )
 
 
-async def get_current_user_id(
-    user: User = Depends(get_current_user)
-) -> str:
+async def get_current_user_from_session(request: Request) -> User:
+    """FastAPI dependency to authenticate via the BFF session cookie.
+
+    `SessionRefreshMiddleware` is responsible for unsealing the cookie,
+    looking up the session row, refreshing the access token if needed, and
+    attaching the resulting `SessionRecord` to `request.state.bff_session`.
+    This dependency just consumes that and reuses the existing Cognito JWT
+    validator + profile-enrichment pipeline so RBAC, user-profile cache,
+    and the fire-and-forget user-sync background task all behave identically
+    to the Bearer path.
+
+    Phase 2 ships this dependency dormant — no router consumes it yet. Phase
+    6 cuts each router over from `get_current_user` to this one as part of
+    the per-environment cutover.
+
+    Raises:
+        HTTPException 401 if no session was resolved by the upstream
+        middleware (cookie missing, malformed, or session record gone).
     """
-    FastAPI dependency to get the current user's ID as a string.
+    if (fake := _skip_auth_user()) is not None:
+        return fake
 
-    This is a convenience wrapper around get_current_user that extracts
-    just the user_id field. Useful when you only need the user ID and not
-    the full User object.
+    record = getattr(request.state, "bff_session", None)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No active session.",
+        )
 
-    Args:
-        user: User object from get_current_user dependency
+    # BFF tokens are issued by the confidential BFF app client, not the SPA's
+    # public client — they carry `client_id = COGNITO_BFF_APP_CLIENT_ID` and
+    # would fail the SPA validator's client_id check.
+    validator = _get_bff_cognito_validator()
+    if validator is None:
+        # Same failure mode as the Bearer path: a misconfigured environment
+        # is a 500, not a 401, so it's noisy enough to surface.
+        logger.error("No JWT validator available for session-cookie auth.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service not configured.",
+        )
 
-    Returns:
-        User ID string
+    try:
+        # Re-validate signature on every request rather than trusting the
+        # cached row — defense in depth against a compromised DDB row.
+        user = validator.validate_token(record.cognito_access_token)
+    except HTTPException:
+        # An expired/invalid token at this point means the refresh middleware
+        # could not heal the session — treat as no active session.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session token rejected.",
+        )
+    except Exception as exc:
+        logger.error("Session-cookie token validation failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed.",
+        )
+
+    user.raw_token = record.cognito_access_token
+    await _enrich_user_from_store(user)
+
+    sync_service = _get_user_sync_service()
+    if sync_service and sync_service.enabled:
+        asyncio.create_task(_sync_user_background(sync_service, user))
+
+    return user
+
+
+async def get_current_user_id(
+    user: User = Depends(get_current_user_from_session)
+) -> str:
+    """FastAPI dependency to get the current user's ID as a string.
+
+    Convenience wrapper around `get_current_user_from_session` that returns
+    just the user_id field. Cookie-only since Phase 7 removed the Bearer
+    fallback for SPA-facing routes.
     """
     return user.user_id
 
@@ -287,6 +423,9 @@ async def get_current_user_trusted(
             - 401 if token is missing or malformed
     """
     logger.debug("[get_current_user_trusted] Trusted auth extraction started")
+
+    if (fake := _skip_auth_user()) is not None:
+        return fake
 
     # Check if credentials are missing
     if credentials is None:
