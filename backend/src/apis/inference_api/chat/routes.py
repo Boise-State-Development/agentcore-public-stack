@@ -296,6 +296,41 @@ def _build_spreadsheet_tools(
 
 
 # ============================================================
+# Artifact Authoring Tool Injection
+# ============================================================
+
+ARTIFACT_TOOL_IDS = {"create_artifact", "update_artifact"}
+
+
+def _build_artifact_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create context-bound artifact authoring tools if enabled by the user."""
+    if not enabled_tools:
+        return []
+
+    requested = ARTIFACT_TOOL_IDS.intersection(enabled_tools)
+    if not requested:
+        return []
+
+    from agents.builtin_tools.artifacts import (
+        make_create_artifact_tool,
+        make_update_artifact_tool,
+    )
+
+    tools = []
+    if "create_artifact" in requested:
+        tools.append(make_create_artifact_tool(session_id, user_id))
+    if "update_artifact" in requested:
+        tools.append(make_update_artifact_tool(session_id, user_id))
+
+    logger.info(f"Created {len(tools)} artifact authoring tools")
+    return tools
+
+
+# ============================================================
 # Attachment Partitioning (#206)
 # ============================================================
 
@@ -1077,6 +1112,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             extra_tools = _build_spreadsheet_tools(
                 enabled_tools=input_data.enabled_tools,
                 assistant_id=input_data.rag_assistant_id,
+                session_id=input_data.session_id,
+                user_id=user_id,
+            ) + _build_artifact_tools(
+                enabled_tools=input_data.enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
             )
