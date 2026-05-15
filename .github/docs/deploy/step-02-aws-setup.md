@@ -133,8 +133,12 @@ This allows the certificate to cover subdomains like `api.example.com` and `app.
 - `ALB Certificate ARN` (e.g. `arn:aws:acm:us-west-2:123456789012:certificate/abc-123`)
 - `CloudFront Certificate ARN` (e.g. `arn:aws:acm:us-east-1:123456789012:certificate/def-456`)
 
-> [!TIP]
-> The `*.example.com` SAN on the CloudFront certificate also covers `artifacts.example.com`, so the optional **Artifacts** stack reuses the same cert ARN — no third certificate needed.
+> [!IMPORTANT]
+> **If you plan to enable the optional Artifacts stack, mind the wildcard depth.** A TLS wildcard covers **exactly one** label — `*.example.com` matches `artifacts.example.com` but **not** `artifacts.alpha.example.com`.
+> - If `CDK_DOMAIN_NAME` is your **apex** (e.g. `example.com`), the artifact origin is `artifacts.example.com` and the existing `*.example.com` CloudFront cert covers it — reuse that cert ARN, no third certificate needed.
+> - If `CDK_DOMAIN_NAME` is **already a subdomain** (e.g. `alpha.example.com`), the artifact origin is `artifacts.alpha.example.com`, which `*.example.com` does **not** cover. Issue a dedicated `us-east-1` cert for `*.alpha.example.com` (or exactly `artifacts.alpha.example.com`) and use that ARN for `CDK_ARTIFACTS_CERTIFICATE_ARN`.
+>
+> Verify before deploying: `aws acm describe-certificate --region us-east-1 --certificate-arn <arn> --query 'Certificate.SubjectAlternativeNames'` should list a SAN that matches `artifacts.{CDK_DOMAIN_NAME}`.
 
 <details>
 <summary>My certificate is stuck in "Pending validation"</summary>

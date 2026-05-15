@@ -101,7 +101,7 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 |---------------|---------|-------------|
 | `CDK_FINE_TUNING_ENABLED` | `false` | Set to `true` to enable the SageMaker Fine-Tuning stack. Must be set before running the fine-tuning deployment workflow in Step 4. |
 | `CDK_ARTIFACTS_ENABLED` | `false` | Set to `true` to enable iframe-isolated artifact rendering. Provisions the artifacts CloudFront origin, DDB table, S3 bucket, and Lambda. Requires `CDK_ARTIFACTS_CERTIFICATE_ARN`. |
-| `CDK_ARTIFACTS_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `artifacts.{CDK_DOMAIN_NAME}`. **Must be in `us-east-1`** (CloudFront requirement). If you followed Step 2c and issued the CloudFront cert with a `*.example.com` SAN, **set this to the same value as `CDK_FRONTEND_CERTIFICATE_ARN`** — the wildcard already covers the artifacts subdomain. |
+| `CDK_ARTIFACTS_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `artifacts.{CDK_DOMAIN_NAME}`. **Must be in `us-east-1`** (CloudFront requirement). Reuse `CDK_FRONTEND_CERTIFICATE_ARN` **only if `CDK_DOMAIN_NAME` is your apex** (a `*.example.com` cert covers `artifacts.example.com`). If `CDK_DOMAIN_NAME` is itself a subdomain (e.g. `alpha.example.com`), wildcards are one label deep so `*.example.com` does **not** cover `artifacts.alpha.example.com` — issue a dedicated `us-east-1` cert for `*.alpha.example.com`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
 
 ---
 

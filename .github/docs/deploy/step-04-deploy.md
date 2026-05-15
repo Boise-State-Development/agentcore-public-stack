@@ -142,7 +142,7 @@ Creates:
 To enable, set these GitHub environment variables before running:
 
 - `CDK_ARTIFACTS_ENABLED=true`
-- `CDK_ARTIFACTS_CERTIFICATE_ARN` — ACM cert ARN that covers `artifacts.{domain}`. **Must be in `us-east-1`** (CloudFront requirement). If you followed [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates) and issued the CloudFront cert with a `*.example.com` SAN, reuse the same value as `CDK_FRONTEND_CERTIFICATE_ARN` — no third certificate is needed.
+- `CDK_ARTIFACTS_CERTIFICATE_ARN` — ACM cert ARN that covers `artifacts.{domain}`. **Must be in `us-east-1`** (CloudFront requirement). Reuse `CDK_FRONTEND_CERTIFICATE_ARN` **only if `CDK_DOMAIN_NAME` is your apex** — a `*.example.com` cert covers `artifacts.example.com` but, because TLS wildcards are one label deep, does **not** cover `artifacts.alpha.example.com`. If `CDK_DOMAIN_NAME` is a subdomain, issue a dedicated `us-east-1` cert for `*.{CDK_DOMAIN_NAME}`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates).
 - `CDK_ARTIFACTS_RETENTION_DAYS` *(optional, default 90)* — how long soft-deleted artifacts linger before lifecycle expiry.
 
 The artifact origin is intentionally a sibling subdomain (not the SPA origin) so artifact JS runs cross-origin and cannot access the `__Host-` session cookies, `localStorage`, or the app API. Defense in depth via strict CSP (`connect-src 'none'`, pinned `frame-ancestors`) is enforced both at the Lambda response and at the CloudFront response-headers policy.
