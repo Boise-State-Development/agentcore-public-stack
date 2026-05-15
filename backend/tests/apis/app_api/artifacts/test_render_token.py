@@ -159,6 +159,18 @@ def test_session_id_optional(client) -> None:
     assert claims["sid"] == ""
 
 
+def test_missing_origin_is_500(client, monkeypatch) -> None:
+    """Fail-closed config: with ARTIFACTS_ORIGIN unset the service must
+    500 before minting — never hand back a usable token embedded in a
+    relative, unloadable URL. The artifact row exists, so a 500 (not a
+    404) proves the origin check fires first."""
+    tc, ddb = client
+    _put_version(ddb)
+    monkeypatch.delenv("ARTIFACTS_ORIGIN", raising=False)
+    resp = tc.post("/artifacts/art-1/render-token", json={"version": 1})
+    assert resp.status_code == 500
+
+
 def test_requires_authentication() -> None:
     """No dependency override and no session cookie → the route is
     blocked by the session dependency, never reaching mint logic."""

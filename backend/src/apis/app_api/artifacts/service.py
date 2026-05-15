@@ -32,6 +32,7 @@ _AUD = "artifact-render"
 _TTL_SECONDS = 120
 
 _secret_lock = threading.Lock()
+_table_lock = threading.Lock()
 _cached_signing_key: Optional[str] = None
 _secrets_client = None
 _ddb_table = None
@@ -100,7 +101,11 @@ def _signing_key() -> str:
 
 def _table():
     global _ddb_table
-    if _ddb_table is None:
+    if _ddb_table is not None:
+        return _ddb_table
+    with _table_lock:
+        if _ddb_table is not None:
+            return _ddb_table
         name = os.environ.get("DYNAMODB_ARTIFACTS_TABLE_NAME", "")
         if not name:
             raise RenderTokenConfigError(
@@ -109,7 +114,21 @@ def _table():
         _ddb_table = boto3.resource(
             "dynamodb", region_name=_region()
         ).Table(name)
-    return _ddb_table
+        return _ddb_table
+
+
+def _origin() -> str:
+    """The artifact origin the render token is bound to.
+
+    Validated like the signing key and table so a misconfigured deploy
+    fails closed with a 500 — never returns a usable token embedded in a
+    relative, unloadable URL. Infra sets this env var alongside the
+    secret ARN and table name, so an empty value here means a broken
+    artifacts deploy, not a disabled feature."""
+    origin = os.environ.get("ARTIFACTS_ORIGIN", "").strip().rstrip("/")
+    if not origin:
+        raise RenderTokenConfigError("ARTIFACTS_ORIGIN is not set")
+    return origin
 
 
 def _assert_version_exists(
@@ -142,10 +161,12 @@ class RenderTokenService:
         version: int,
         session_id: Optional[str],
     ) -> tuple[str, int]:
-        """Validate ownership/existence, then mint a short-lived token.
+        """Validate config + ownership/existence, then mint a token.
 
-        Returns (token, exp_unix). Raises ArtifactNotFoundError or
-        RenderTokenConfigError."""
+        Returns (render_url, exp_unix). Raises ArtifactNotFoundError or
+        RenderTokenConfigError. Origin is resolved first so a misconfig
+        fails closed before any DDB call or credential is generated."""
+        origin = _origin()
         _assert_version_exists(user_id, artifact_id, version)
         now = int(time.time())
         exp = now + _TTL_SECONDS
@@ -166,7 +187,7 @@ class RenderTokenService:
             artifact_id,
             version,
         )
-        return token, exp
+        return f"{origin}/?t={token}", exp
 
 
 def get_render_token_service() -> RenderTokenService:

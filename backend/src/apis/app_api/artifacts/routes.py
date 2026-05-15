@@ -1,7 +1,6 @@
 """Artifact render-token API routes."""
 
 import logging
-import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,7 +35,7 @@ async def mint_render_token(
     than a token that renders the Lambda's error page in the iframe.
     """
     try:
-        token, exp = service.mint(
+        url, exp = service.mint(
             user_id=user.user_id,
             artifact_id=artifact_id,
             version=request.version,
@@ -53,8 +52,7 @@ async def mint_render_token(
             "Artifact rendering is unavailable",
         )
 
-    origin = os.environ.get("ARTIFACTS_ORIGIN", "").rstrip("/")
     return RenderTokenResponse(
-        url=f"{origin}/?t={token}",
+        url=url,
         expires_at=datetime.fromtimestamp(exp, tz=timezone.utc).isoformat(),
     )
