@@ -23,8 +23,7 @@ const URL_PATTERN = /^https?:\/\/.+/i;
   providers: [provideIcons({ heroArrowLeft })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="min-h-dvh">
-      <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+    <div class="max-w-4xl">
         <a
           routerLink="/admin/manage-user-menu-links"
           class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
@@ -179,7 +178,6 @@ const URL_PATTERN = /^https?:\/\/.+/i;
             </button>
           </div>
         </form>
-      </div>
     </div>
   `,
   styles: `

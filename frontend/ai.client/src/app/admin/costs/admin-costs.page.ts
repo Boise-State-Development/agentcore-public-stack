@@ -39,9 +39,7 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
   providers: [provideIcons({ heroArrowLeft, heroArrowDownTray })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="min-h-dvh bg-gray-50 dark:bg-gray-900">
-      <!-- Content -->
-      <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <div>
         <!-- Page Header -->
         <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -163,7 +161,6 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
             />
           </div>
         }
-      </div>
     </div>
   `,
 })

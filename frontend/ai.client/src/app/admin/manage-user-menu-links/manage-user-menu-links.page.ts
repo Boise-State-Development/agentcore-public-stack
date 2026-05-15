@@ -27,9 +27,8 @@ import { UserMenuLink } from './models/user-menu-link.model';
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="min-h-dvh">
-      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-        <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">User Menu Links</h1>
             <p class="mt-1 text-gray-600 dark:text-gray-400">
@@ -110,8 +109,7 @@ import { UserMenuLink } from './models/user-menu-link.model';
               </div>
             }
           </div>
-        }
-      </div>
+      }
     </div>
   `,
 })

@@ -103,8 +103,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
   ],
   host: { class: 'block' },
   template: `
-    <div class="min-h-dvh">
-      <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+    <div class="max-w-3xl">
         <button
           type="button"
           (click)="goBack()"
@@ -572,7 +571,6 @@ const ICON_ACCEPTED_MIME_TYPES = [
             </div>
           </form>
         }
-      </div>
     </div>
   `,
 })

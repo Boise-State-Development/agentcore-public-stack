@@ -58,8 +58,7 @@ import {
     class: 'block',
   },
   template: `
-    <div class="min-h-dvh">
-      <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+    <div>
         <!-- Page Header -->
         <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -355,7 +354,6 @@ import {
             </div>
           </div>
         }
-      </div>
     </div>
   `,
 })
