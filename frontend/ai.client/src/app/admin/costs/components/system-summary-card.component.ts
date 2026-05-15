@@ -46,52 +46,50 @@ export type SummaryCardIcon =
     <div
       class="bg-white dark:bg-gray-800 rounded-lg shadow-xs border border-gray-200 dark:border-gray-700 p-6"
     >
-      <div class="flex items-center justify-between">
-        <div class="flex-1">
-          <p class="text-sm font-medium text-gray-500 dark:text-gray-400">
-            {{ title() }}
-          </p>
-          <p class="mt-2 text-3xl font-semibold text-gray-900 dark:text-white">
-            {{ value() }}
-          </p>
-
-          @if (trend() !== null && trend() !== undefined) {
-            <div class="mt-2 flex items-center gap-1">
-              @if (trend()! > 0) {
-                <ng-icon
-                  name="heroArrowTrendingUp"
-                  class="size-4 text-green-500"
-                />
-                <span class="text-sm text-green-600 dark:text-green-400">
-                  +{{ trend() | number : '1.1-1' }}%
-                </span>
-              } @else if (trend()! < 0) {
-                <ng-icon
-                  name="heroArrowTrendingDown"
-                  class="size-4 text-red-500"
-                />
-                <span class="text-sm text-red-600 dark:text-red-400">
-                  {{ trend() | number : '1.1-1' }}%
-                </span>
-              } @else {
-                <span class="text-sm text-gray-500 dark:text-gray-400">
-                  No change
-                </span>
-              }
-              <span class="text-sm text-gray-400 dark:text-gray-500">
-                vs last period
-              </span>
-            </div>
-          }
-        </div>
-
+      <div class="flex items-start justify-between gap-3">
+        <p class="text-sm/6 font-medium text-gray-500 dark:text-gray-400">
+          {{ title() }}
+        </p>
         <div
-          class="flex size-12 items-center justify-center rounded-lg"
+          class="flex size-8 shrink-0 items-center justify-center rounded-md"
           [class]="iconBackgroundClass()"
         >
-          <ng-icon [name]="icon()" class="size-6" [class]="iconColorClass()" />
+          <ng-icon [name]="icon()" class="size-4" [class]="iconColorClass()" />
         </div>
       </div>
+
+      <p class="mt-3 text-3xl/9 font-semibold text-gray-900 dark:text-white">
+        {{ value() }}
+      </p>
+
+      @if (trend() !== null && trend() !== undefined) {
+        <div class="mt-2 flex items-center gap-1">
+          @if (trend()! > 0) {
+            <ng-icon
+              name="heroArrowTrendingUp"
+              class="size-4 text-green-500"
+            />
+            <span class="text-sm text-green-600 dark:text-green-400">
+              +{{ trend() | number : '1.1-1' }}%
+            </span>
+          } @else if (trend()! < 0) {
+            <ng-icon
+              name="heroArrowTrendingDown"
+              class="size-4 text-red-500"
+            />
+            <span class="text-sm text-red-600 dark:text-red-400">
+              {{ trend() | number : '1.1-1' }}%
+            </span>
+          } @else {
+            <span class="text-sm text-gray-500 dark:text-gray-400">
+              No change
+            </span>
+          }
+          <span class="text-sm text-gray-400 dark:text-gray-500">
+            vs last period
+          </span>
+        </div>
+      }
     </div>
   `,
 })

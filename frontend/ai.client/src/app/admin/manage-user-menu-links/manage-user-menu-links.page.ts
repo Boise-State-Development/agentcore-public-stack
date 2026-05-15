@@ -29,14 +29,6 @@ import { UserMenuLink } from './models/user-menu-link.model';
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-        <a
-          routerLink="/admin"
-          class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-        >
-          <ng-icon name="heroArrowLeft" class="size-4" />
-          Back to Admin
-        </a>
-
         <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 class="text-3xl/9 font-bold text-gray-900 dark:text-white">User Menu Links</h1>

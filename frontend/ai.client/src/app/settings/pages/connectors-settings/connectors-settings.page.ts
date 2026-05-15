@@ -62,7 +62,7 @@ type ConnectState =
 
       @if (resource.isLoading()) {
         <div class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
-          <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600"></div>
+          <div class="size-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"></div>
           Loading connectors...
         </div>
       } @else if (resource.error()) {

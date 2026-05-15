@@ -60,15 +60,6 @@ import {
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-        <!-- Back Button -->
-        <a
-          routerLink="/admin"
-          class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-        >
-          <ng-icon name="heroArrowLeft" class="size-4" />
-          Back to Admin
-        </a>
-
         <!-- Page Header -->
         <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -149,7 +140,7 @@ import {
           <div class="flex h-64 items-center justify-center">
             <div class="flex flex-col items-center gap-4">
               <div
-                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600"
+                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"
               ></div>
               <p class="text-sm/6 text-gray-500 dark:text-gray-400">
                 Loading connectors...

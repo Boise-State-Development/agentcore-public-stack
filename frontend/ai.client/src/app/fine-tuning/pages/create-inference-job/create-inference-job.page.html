@@ -29,7 +29,7 @@
 
       @if (state.loading() && state.trainedModels().length === 0) {
         <div class="flex items-center justify-center py-8">
-          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Loading trained models"></div>
+          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading trained models"></div>
         </div>
       } @else if (state.trainedModels().length === 0) {
         <div class="rounded-sm border border-gray-200 bg-white py-8 text-center dark:border-gray-700 dark:bg-gray-900">
@@ -73,7 +73,7 @@
               @if (upload.status === 'complete') {
                 <ng-icon name="heroCheck" class="size-5 text-green-600 dark:text-green-400" />
               } @else if (upload.status === 'uploading') {
-                <div class="size-5 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Uploading"></div>
+                <div class="size-5 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Uploading"></div>
               } @else if (upload.status === 'error') {
                 <ng-icon name="heroXMark" class="size-5 text-red-600 dark:text-red-400" />
               }

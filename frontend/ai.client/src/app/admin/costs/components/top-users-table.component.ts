@@ -303,7 +303,7 @@ type SortDirection = 'asc' | 'desc';
         >
           <div class="inline-flex items-center gap-2 text-sm text-gray-500">
             <div
-              class="animate-spin rounded-full size-4 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600"
+              class="animate-spin rounded-full size-4 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
             ></div>
             Loading more users...
           </div>

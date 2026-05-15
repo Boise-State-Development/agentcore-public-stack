@@ -33,7 +33,7 @@
             @if (upload.status === 'complete') {
               <ng-icon name="heroCheck" class="size-5 text-green-600 dark:text-green-400" />
             } @else if (upload.status === 'uploading') {
-              <div class="size-5 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Uploading"></div>
+              <div class="size-5 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Uploading"></div>
             } @else if (upload.status === 'error') {
               <ng-icon name="heroXMark" class="size-5 text-red-600 dark:text-red-400" />
             }
@@ -154,7 +154,7 @@
 
     @if (state.loading() && state.availableModels().length === 0) {
       <div class="flex items-center justify-center py-8">
-        <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Loading models"></div>
+        <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading models"></div>
       </div>
     } @else {
       <!-- Custom HuggingFace Model — prominent option at top -->
@@ -266,7 +266,7 @@
                 <div class="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-sm border border-gray-200 bg-white shadow-lg dark:border-gray-600 dark:bg-gray-800">
                   @if (searchingModels()) {
                     <div class="flex items-center gap-2 px-3 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
-                      <div class="size-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Searching"></div>
+                      <div class="size-4 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Searching"></div>
                       Searching HuggingFace...
                     </div>
                   } @else if (hfSearchResults().length > 0) {

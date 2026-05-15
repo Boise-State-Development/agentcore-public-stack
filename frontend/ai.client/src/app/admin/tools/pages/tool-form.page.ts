@@ -65,7 +65,7 @@ import {
       <!-- Loading State -->
       @if (loading()) {
         <div class="flex items-center justify-center h-64">
-          <div class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600"></div>
+          <div class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"></div>
         </div>
       } @else {
         <!-- Form -->

@@ -33,7 +33,7 @@
   <!-- Loading spinner -->
   @if (state.loading() && !state.currentTrainingJob()) {
     <div class="flex items-center justify-center py-12">
-      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" role="status" aria-label="Loading"></div>
+      <div class="size-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading"></div>
     </div>
   }
 
@@ -220,7 +220,7 @@
 
       @if (loadingLogs() && state.currentLogs().length === 0) {
         <div class="flex items-center justify-center rounded-sm border border-gray-200 bg-white py-8 dark:border-gray-700 dark:bg-gray-900">
-          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600" role="status" aria-label="Loading logs"></div>
+          <div class="size-6 animate-spin rounded-full border-2 border-gray-200 border-t-blue-600 dark:border-t-blue-400" role="status" aria-label="Loading logs"></div>
         </div>
       } @else if (state.currentLogs().length > 0) {
         <div class="max-h-96 overflow-auto rounded-sm border border-gray-200 bg-gray-950 dark:border-gray-700">

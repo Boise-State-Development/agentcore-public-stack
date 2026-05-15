@@ -65,7 +65,7 @@ import { UserCostSummary } from './models/cost-summary.model';
       @if ((selectedPeriodType() === 'current' && costSummary.isLoading()) || isLoadingCustomReport()) {
         <div class="flex items-center justify-center py-12">
           <div class="flex flex-col items-center gap-3">
-            <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600"></div>
+            <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400"></div>
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading cost data...</p>
           </div>
         </div>

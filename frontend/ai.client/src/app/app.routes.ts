@@ -30,53 +30,9 @@ export const routes: Routes = [
     },
     {
         path: 'admin',
-        loadComponent: () => import('./admin/admin.page').then(m => m.AdminPage),
+        loadComponent: () => import('./admin/admin.layout').then(m => m.AdminLayout),
         canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/bedrock/models',
-        loadComponent: () => import('./admin/bedrock-models/bedrock-models.page').then(m => m.BedrockModelsPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/gemini/models',
-        loadComponent: () => import('./admin/gemini-models/gemini-models.page').then(m => m.GeminiModelsPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/openai/models',
-        loadComponent: () => import('./admin/openai-models/openai-models.page').then(m => m.OpenAIModelsPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-models',
-        loadComponent: () => import('./admin/manage-models/manage-models.page').then(m => m.ManageModelsPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-models/new',
-        loadComponent: () => import('./admin/manage-models/model-form.page').then(m => m.ModelFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-models/edit/:id',
-        loadComponent: () => import('./admin/manage-models/model-form.page').then(m => m.ModelFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-user-menu-links',
-        loadComponent: () => import('./admin/manage-user-menu-links/manage-user-menu-links.page').then(m => m.ManageUserMenuLinksPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-user-menu-links/new',
-        loadComponent: () => import('./admin/manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/manage-user-menu-links/edit/:id',
-        loadComponent: () => import('./admin/manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
-        canActivate: [adminGuard],
+        loadChildren: () => import('./admin/admin.routes').then(m => m.adminRoutes),
     },
     {
         path: 'assistants/new',
@@ -117,111 +73,6 @@ export const routes: Routes = [
         loadComponent: () => import('./settings/settings.page').then(m => m.SettingsPage),
         canActivate: [authGuard],
         loadChildren: () => import('./settings/settings.routes').then(m => m.settingsRoutes),
-    },
-    {
-        path: 'admin/quota',
-        loadChildren: () => import('./admin/quota-tiers/quota-routing.module').then(m => m.quotaRoutes),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/costs',
-        loadComponent: () => import('./admin/costs/admin-costs.page').then(m => m.AdminCostsPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/users',
-        loadComponent: () => import('./admin/users/pages/user-list/user-list.page').then(m => m.UserListPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/users/:userId',
-        loadComponent: () => import('./admin/users/pages/user-detail/user-detail.page').then(m => m.UserDetailPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/roles',
-        loadComponent: () => import('./admin/roles/pages/role-list.page').then(m => m.RoleListPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/roles/new',
-        loadComponent: () => import('./admin/roles/pages/role-form.page').then(m => m.RoleFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/roles/edit/:id',
-        loadComponent: () => import('./admin/roles/pages/role-form.page').then(m => m.RoleFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/tools',
-        loadComponent: () => import('./admin/tools/pages/tool-list.page').then(m => m.ToolListPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/tools/new',
-        loadComponent: () => import('./admin/tools/pages/tool-form.page').then(m => m.ToolFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/tools/edit/:toolId',
-        loadComponent: () => import('./admin/tools/pages/tool-form.page').then(m => m.ToolFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/auth-providers',
-        loadComponent: () => import('./admin/auth-providers/pages/provider-list.page').then(m => m.AuthProviderListPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/auth-providers/new',
-        loadComponent: () => import('./admin/auth-providers/pages/provider-form.page').then(m => m.AuthProviderFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/auth-providers/edit/:providerId',
-        loadComponent: () => import('./admin/auth-providers/pages/provider-form.page').then(m => m.AuthProviderFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/oauth-providers',
-        redirectTo: 'admin/connectors',
-        pathMatch: 'full',
-    },
-    {
-        path: 'admin/oauth-providers/new',
-        redirectTo: 'admin/connectors/new',
-        pathMatch: 'full',
-    },
-    {
-        path: 'admin/oauth-providers/edit/:providerId',
-        redirectTo: 'admin/connectors/edit/:providerId',
-        pathMatch: 'full',
-    },
-    {
-        path: 'admin/connectors',
-        loadComponent: () => import('./admin/connectors/pages/connector-list.page').then(m => m.ConnectorListPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/connectors/new',
-        loadComponent: () => import('./admin/connectors/pages/connector-form.page').then(m => m.ConnectorFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/connectors/edit/:providerId',
-        loadComponent: () => import('./admin/connectors/pages/connector-form.page').then(m => m.ConnectorFormPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/fine-tuning',
-        loadComponent: () => import('./admin/fine-tuning-access/fine-tuning-access.page').then(m => m.FineTuningAccessPage),
-        canActivate: [adminGuard],
-    },
-    {
-        path: 'admin/fine-tuning/costs',
-        loadComponent: () => import('./admin/fine-tuning-costs/fine-tuning-costs.page').then(m => m.FineTuningCostsPage),
-        canActivate: [adminGuard],
     },
     {
         path: 'fine-tuning',

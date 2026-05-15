@@ -44,14 +44,6 @@ import { ToolsService } from '../../tools/services/tools.service';
     class: 'block p-6',
   },
   template: `
-    <!-- Back Button -->
-    <a
-      routerLink="/admin"
-      class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-    >
-      <ng-icon name="heroArrowLeft" class="size-4" />
-      Back to Admin
-    </a>
 
     <div class="mb-6 flex items-center justify-between">
       <div>
@@ -117,7 +109,7 @@ import { ToolsService } from '../../tools/services/tools.service';
       <div class="flex items-center justify-center h-64">
         <div class="flex flex-col items-center gap-4">
           <div
-            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600"
+            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
           ></div>
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading roles...

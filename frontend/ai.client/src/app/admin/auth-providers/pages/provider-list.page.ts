@@ -45,15 +45,6 @@ import { AuthProvider } from '../models/auth-provider.model';
     class: 'block p-6',
   },
   template: `
-    <!-- Back Button -->
-    <a
-      routerLink="/admin"
-      class="mb-6 inline-flex items-center gap-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-    >
-      <ng-icon name="heroArrowLeft" class="size-4" />
-      Back to Admin
-    </a>
-
     <div class="mb-6 flex items-center justify-between">
       <div>
         <h1 class="text-3xl/9 font-bold">Authentication Providers</h1>
@@ -118,7 +109,7 @@ import { AuthProvider } from '../models/auth-provider.model';
       <div class="flex h-64 items-center justify-center">
         <div class="flex flex-col items-center gap-4">
           <div
-            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600"
+            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-t-blue-400 dark:border-gray-600"
           ></div>
           <p class="text-sm text-gray-500 dark:text-gray-400">
             Loading providers...
