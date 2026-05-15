@@ -1,24 +1,39 @@
 <nav class="flex h-full flex-col">
     @if (isLoading()) {
-        <div class="flex items-center justify-center py-8">
-            <span class="text-sm text-gray-500 dark:text-gray-400">Loading sessions...</span>
+        <!-- Loading skeleton: mirrors the real list's group + row layout -->
+        <div class="flex flex-col gap-y-3" aria-hidden="true">
+            @for (group of skeletonGroups; track $index) {
+                <section>
+                    <div class="px-2 pb-0.5">
+                        <div class="h-3 w-12 rounded-sm bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"></div>
+                    </div>
+                    <ul role="list" class="flex flex-col gap-y-0.5">
+                        @for (width of group; track $index) {
+                            <li class="px-2 py-1.5">
+                                <div class="h-4 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5" [style.width]="width"></div>
+                            </li>
+                        }
+                    </ul>
+                </section>
+            }
         </div>
+        <span class="sr-only" role="status">Loading sessions</span>
     } @else if (error()) {
         <div class="flex items-center justify-center py-8">
             <span class="text-sm text-red-500 dark:text-red-400">Failed to load sessions</span>
         </div>
     } @else {
         @if (groupedSessions().length > 0) {
-            <div class="flex flex-col gap-y-4">
+            <div class="session-list-enter flex flex-col gap-y-3">
                 @for (group of groupedSessions(); track group.label) {
                     <section>
-                        <h3 class="px-2 pb-1 text-[11px]/5 font-medium text-gray-400 dark:text-gray-500">{{ group.label }}</h3>
-                        <ul role="list" class="flex flex-col gap-y-1">
+                        <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-400 dark:text-gray-500">{{ group.label }}</h3>
+                        <ul role="list" class="flex flex-col gap-y-0.5">
                             @for (session of group.sessions; track session.sessionId) {
                                 <li class="group relative">
                                     @if (renamingSessionId() === session.sessionId) {
                                         <!-- Inline rename input -->
-                                        <div class="flex items-center gap-1 rounded-md px-2 py-1.5">
+                                        <div class="flex items-center gap-1 rounded-md px-2 py-1">
                                             <input
                                                 #renameInput
                                                 type="text"
@@ -26,7 +41,7 @@
                                                 (input)="renameValue.set(renameInput.value)"
                                                 (keydown)="onRenameKeydown($event, session)"
                                                 (blur)="onRenameSubmit(session)"
-                                                class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm/6 font-medium text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
+                                                class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm/5 font-medium text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
                                                 aria-label="Rename conversation"
                                             />
                                         </div>
@@ -34,15 +49,11 @@
                                         <a
                                             [routerLink]="['/s', getSessionId(session.sessionId)]"
                                             [queryParams]="getSessionQueryParams(session)"
-                                            routerLinkActive="bg-gray-200 !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                                            routerLinkActive="bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
                                             (click)="onSessionClick()"
-                                            class="flex gap-x-3 rounded-md px-2 py-2 pr-10 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            class="block truncate rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
-                                            <div class="flex min-w-0 flex-1 flex-col gap-y-1">
-                                                <div class="min-w-0 flex-auto truncate">
-                                                    <span>{{ getSessionTitle(session) }}</span>
-                                                </div>
-                                            </div>
+                                            {{ getSessionTitle(session) }}
                                         </a>
                                         <!-- Ellipsis menu button - visible on hover with fade-in animation -->
                                         <button

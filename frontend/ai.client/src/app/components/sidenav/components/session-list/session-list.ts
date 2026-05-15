@@ -50,6 +50,16 @@ export class SessionList {
   protected renameValue = signal('');
 
   /**
+   * Placeholder row widths used by the loading skeleton.
+   * Each inner array is a "group" (e.g. Today, Yesterday) and each string
+   * is the width of one row, varied to mimic real session-title lengths.
+   */
+  protected readonly skeletonGroups: readonly (readonly string[])[] = [
+    ['78%', '52%', '64%'],
+    ['70%', '58%'],
+  ];
+
+  /**
    * Reactive resource for fetching sessions (base API data).
    */
   readonly sessionsResource = this.sessionService.sessionsResource;
