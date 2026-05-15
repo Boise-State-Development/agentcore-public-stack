@@ -216,6 +216,14 @@ if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
     app.include_router(fine_tuning_router)
     logger.info("Fine-tuning routes enabled")
 
+# Conditionally register artifact render-token routes. Infra only sets
+# the secret ARN when the artifacts feature is enabled for the
+# environment, so its presence is the enablement signal.
+if os.environ.get("ARTIFACTS_RENDER_TOKEN_SECRET_ARN"):
+    from apis.app_api.artifacts.routes import router as artifacts_router
+    app.include_router(artifacts_router)
+    logger.info("Artifact render-token routes enabled")
+
 # Mount static file directories for serving generated content
 # These are created by tools (visualization, code interpreter, etc.)
 # Use parent directory (src/) as base
