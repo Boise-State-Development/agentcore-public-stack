@@ -11,6 +11,7 @@ import {
   validateQuotaExceededEvent,
   validateConversationalStreamError,
   validateCitation,
+  validateArtifactEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -370,6 +371,53 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateArtifactEvent', () => {
+    const valid = {
+      type: 'artifact',
+      artifactId: 'art-1',
+      version: 1,
+      title: 'Sales Dashboard',
+      contentType: 'text/html; charset=utf-8',
+      sessionId: 'sess-9',
+      updatedAt: '2026-05-15T12:00:05+00:00',
+      action: 'created'
+    };
+
+    it('should return true for a valid created artifact', () => {
+      expect(validateArtifactEvent(valid)).toBe(true);
+    });
+
+    it('should return true for an updated artifact (version > 1)', () => {
+      expect(validateArtifactEvent({ ...valid, version: 4, action: 'updated' })).toBe(true);
+    });
+
+    it('should return false for null/undefined', () => {
+      expect(validateArtifactEvent(null)).toBe(false);
+      expect(validateArtifactEvent(undefined)).toBe(false);
+    });
+
+    it('should return false when type is not "artifact"', () => {
+      expect(validateArtifactEvent({ ...valid, type: 'compaction' })).toBe(false);
+    });
+
+    it('should return false for empty artifactId', () => {
+      expect(validateArtifactEvent({ ...valid, artifactId: '' })).toBe(false);
+    });
+
+    it('should return false for version < 1 or non-integer', () => {
+      expect(validateArtifactEvent({ ...valid, version: 0 })).toBe(false);
+      expect(validateArtifactEvent({ ...valid, version: 1.5 })).toBe(false);
+    });
+
+    it('should return false for an unknown action', () => {
+      expect(validateArtifactEvent({ ...valid, action: 'deleted' })).toBe(false);
+    });
+
+    it('should return false for missing fields', () => {
+      expect(validateArtifactEvent({ type: 'artifact', artifactId: 'art-1' })).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -386,6 +434,7 @@ describe('stream-parser-core', () => {
         onQuotaExceeded: vi.fn(),
         onStreamError: vi.fn(),
         onCitation: vi.fn(),
+        onArtifact: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -437,6 +486,26 @@ describe('stream-parser-core', () => {
     it('should ignore unknown event types', () => {
       processStreamEvent('unknown_event', {}, callbacks);
       expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onArtifact for a valid artifact event', () => {
+      const data = {
+        type: 'artifact',
+        artifactId: 'art-1',
+        version: 2,
+        title: 'Report',
+        contentType: 'text/html; charset=utf-8',
+        sessionId: 'sess-9',
+        updatedAt: '2026-05-15T12:00:05+00:00',
+        action: 'updated'
+      };
+      processStreamEvent('artifact', data, callbacks);
+      expect(callbacks.onArtifact).toHaveBeenCalledWith(data);
+    });
+
+    it('should call onParseError for an invalid artifact event', () => {
+      processStreamEvent('artifact', { type: 'artifact', artifactId: '' }, callbacks);
+      expect(callbacks.onParseError).toHaveBeenCalledWith('artifact: invalid data structure');
     });
   });
 

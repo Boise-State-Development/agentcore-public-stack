@@ -66,7 +66,16 @@ class StreamCoordinator:
 
         # Track timing for latency metrics
         stream_start_time = time.time()
+        # Wall-clock turn start as a tz-aware datetime. Used post-turn to
+        # tell which artifacts (HEAD.updated_at) were touched *this* turn
+        # vs. carried over from earlier turns in the same session.
+        turn_start_dt = datetime.now(timezone.utc)
         first_token_time: Optional[float] = None
+
+        # Set when a create_artifact / update_artifact tool call is seen
+        # this turn — the only turns that need the post-turn artifacts
+        # query + `artifact` SSE emit. Normal turns pay nothing.
+        artifact_tool_invoked = False
 
         # Accumulate metadata from stream
         accumulated_metadata: Dict[str, Any] = {"usage": {}, "metrics": {}}
@@ -125,6 +134,16 @@ class StreamCoordinator:
                                 # Also update global first_token_time for the first message (backward compatibility)
                                 if current_assistant_message_index == 0 and first_token_time is None:
                                     first_token_time = per_message_metadata[0]["first_token_time"]
+
+                # Note whether the agent invoked an artifact authoring
+                # tool this turn. Gates the post-turn artifacts query so
+                # only artifact turns pay for it.
+                if not artifact_tool_invoked and event.get("type") == "tool_use":
+                    tool_name = (
+                        event.get("data", {}).get("tool_use", {}).get("name")
+                    )
+                    if tool_name in ("create_artifact", "update_artifact"):
+                        artifact_tool_invoked = True
 
                 # Track when assistant messages end
                 if event.get("type") == "message_stop":
@@ -376,6 +395,19 @@ class StreamCoordinator:
                                     yield f"event: compaction\ndata: {json.dumps(compaction_payload)}\n\n"
                             except Exception as e:
                                 logger.warning(f"Failed to update compaction state: {e}")
+
+                # Emit one `artifact` SSE per artifact created/updated this
+                # turn. Placed after the compaction emit (so it lands with
+                # the other post-message_stop side-channel events) and
+                # before `done`. Best-effort: a lookup failure logs and is
+                # swallowed so it never breaks the live stream.
+                if event.get("type") == "done" and artifact_tool_invoked:
+                    for sse in await self._extract_artifact_events(
+                        session_id=session_id,
+                        user_id=user_id,
+                        turn_start=turn_start_dt,
+                    ):
+                        yield sse
 
                 # Intercept legacy "error" events from stream_processor and convert to conversational format
                 # This ensures errors appear as assistant messages in the chat UI
@@ -862,6 +894,69 @@ class StreamCoordinator:
                     tool_input=tool_input,
                     message=message,
                 ).to_sse_format()
+            )
+        return events
+
+    async def _extract_artifact_events(
+        self,
+        session_id: Optional[str],
+        user_id: Optional[str],
+        turn_start: datetime,
+    ) -> List[str]:
+        """Yield one SSE-formatted `artifact` event per artifact whose
+        HEAD was created or updated during this turn.
+
+        Identifies "this turn" by `updated_at >= turn_start` rather than
+        parsing the tool result text: it reflects exactly what was
+        persisted, handles multiple artifacts in one turn, and ignores
+        artifacts carried over from earlier turns in the same session. A
+        row with an unparseable `updated_at` is included (the artifact
+        tool ran this turn and the SPA dedupes by id+version anyway).
+
+        Best-effort: any failure (artifacts not configured for this env,
+        DynamoDB error) logs and returns [] — never breaks the stream.
+        """
+        if not (session_id and user_id):
+            return []
+        try:
+            from agents.builtin_tools.artifacts.service import (
+                ArtifactConfigError,
+                list_session_artifacts,
+            )
+
+            rows = await asyncio.to_thread(
+                list_session_artifacts, user_id, session_id
+            )
+        except ArtifactConfigError:
+            return []
+        except Exception as e:
+            logger.warning("Failed to list session artifacts: %s", e)
+            return []
+
+        events: List[str] = []
+        for row in rows:
+            updated_at = row.get("updated_at") or ""
+            try:
+                touched = datetime.fromisoformat(updated_at) >= turn_start
+            except (ValueError, TypeError):
+                touched = True
+            if not touched:
+                continue
+            version = int(row.get("version", 0))
+            payload = {
+                "type": "artifact",
+                "artifactId": row.get("artifact_id", ""),
+                "version": version,
+                "title": row.get("title", ""),
+                "contentType": row.get(
+                    "content_type", "text/html; charset=utf-8"
+                ),
+                "sessionId": session_id,
+                "updatedAt": updated_at,
+                "action": "created" if version == 1 else "updated",
+            }
+            events.append(
+                f"event: artifact\ndata: {json.dumps(payload)}\n\n"
             )
         return events
 

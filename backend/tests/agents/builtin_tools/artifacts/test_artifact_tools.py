@@ -169,3 +169,30 @@ def test_record_satisfies_minter(aws) -> None:
 def test_routes_gating(enabled, expected) -> None:
     tools = _build_artifact_tools(enabled, SESSION, USER)
     assert len(tools) == expected
+
+
+def test_list_session_artifacts_returns_heads_newest_first(aws) -> None:
+    a1, _ = service.create_artifact_record(USER, SESSION, "First", DOC, "")
+    a2, _ = service.create_artifact_record(USER, SESSION, "Second", DOC, "")
+    # Bump a1 to v2 so it becomes the most-recently-updated HEAD.
+    service.update_artifact_record(USER, a1, DOC, None, None)
+
+    rows = service.list_session_artifacts(USER, SESSION)
+    by_id = {r["artifact_id"]: r for r in rows}
+    assert set(by_id) == {a1, a2}
+    assert by_id[a1]["version"] == 2  # reflects current HEAD, not v1
+    assert by_id[a2]["title"] == "Second"
+    # Newest-first: a1 (just updated) precedes a2.
+    assert [r["artifact_id"] for r in rows] == [a1, a2]
+
+
+def test_list_session_artifacts_scopes_to_user(aws) -> None:
+    mine, _ = service.create_artifact_record(USER, SESSION, "Mine", DOC, "")
+    service.create_artifact_record("someone-else", SESSION, "Theirs", DOC, "")
+
+    rows = service.list_session_artifacts(USER, SESSION)
+    assert [r["artifact_id"] for r in rows] == [mine]
+
+
+def test_list_session_artifacts_empty_session(aws) -> None:
+    assert service.list_session_artifacts(USER, "no-such-session") == []

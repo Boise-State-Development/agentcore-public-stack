@@ -17,10 +17,12 @@ import {
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from './compaction-summary.service';
+import { ArtifactStateService } from '../artifacts/artifact-state.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
   CompactionEvent,
+  ArtifactEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -59,6 +61,7 @@ export class StreamParserService {
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
+  private artifactState = inject(ArtifactStateService);
 
   // =========================================================================
   // State Signals
@@ -326,6 +329,8 @@ export class StreamParserService {
       },
 
       onCompaction: (data: CompactionEvent) => this.compactionSummary.recordLive(data),
+
+      onArtifact: (data: ArtifactEvent) => this.artifactState.recordLive(data),
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
         const messages = this.allMessages();

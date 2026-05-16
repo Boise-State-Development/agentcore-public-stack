@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
@@ -254,3 +255,53 @@ def update_artifact_record(
         "updated artifact user=%s artifact=%s v=%s", user_id, artifact_id, version
     )
     return version
+
+
+_SESSION_INDEX = "SessionIndex"
+
+
+def list_session_artifacts(user_id: str, session_id: str) -> list[dict]:
+    """Current HEAD of every artifact written in a chat session.
+
+    Read side of the same SessionIndex GSI the app-api list endpoint
+    uses; the stream coordinator calls this post-turn to emit the live
+    `artifact` SSE event. Only HEAD rows carry GSI1PK/GSI1SK, so the
+    query returns one row per artifact (its current version). GSI1PK is
+    SESSION#-scoped (not user-scoped) so every row is re-checked against
+    the authenticated user's id.
+    """
+    table = _table()
+    items: list[dict] = []
+    kwargs: dict = {
+        "IndexName": _SESSION_INDEX,
+        "KeyConditionExpression": Key("GSI1PK").eq(f"SESSION#{session_id}"),
+        "ScanIndexForward": False,  # GSI1SK embeds updated_at → newest first
+    }
+    try:
+        while True:
+            resp = table.query(**kwargs)
+            items.extend(resp.get("Items", []))
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                break
+            kwargs["ExclusiveStartKey"] = last
+    except ClientError as exc:
+        raise ArtifactError("artifact list query failed") from exc
+
+    out: list[dict] = []
+    for item in items:
+        if item.get("user_id") != user_id:
+            continue
+        out.append(
+            {
+                "artifact_id": item.get("artifact_id", ""),
+                "version": int(item.get("version", 0)),
+                "title": item.get("title", ""),
+                "content_type": item.get(
+                    "content_type", _DEFAULT_CONTENT_TYPE
+                ),
+                "updated_at": item.get("updated_at", ""),
+                "created_at": item.get("created_at"),
+            }
+        )
+    return out

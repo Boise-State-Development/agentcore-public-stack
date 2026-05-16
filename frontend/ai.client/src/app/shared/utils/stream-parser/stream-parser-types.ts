@@ -144,6 +144,31 @@ export interface CompactionEvent {
 }
 
 /**
+ * Artifact event — emitted once per artifact created or updated during a
+ * turn, after the final `metadata`/`compaction` events and before `done`
+ * (same post-`message_stop` side-channel placement as `oauth_required`).
+ *
+ * The artifact's HTML content is never carried on the wire: it lives in
+ * S3 and renders in a sandboxed iframe via the artifact render origin.
+ * This event only signals existence so the SPA can show an inline card
+ * and open the panel (which mints a short-lived render token on demand).
+ *
+ * `action` is `created` for v1, `updated` for any later version. Cards
+ * also hydrate on session load via the app-api list endpoint; the SPA
+ * dedupes by `artifactId` keeping the highest `version`.
+ */
+export interface ArtifactEvent {
+  type: 'artifact';
+  artifactId: string;
+  version: number;
+  title: string;
+  contentType: string;
+  sessionId: string;
+  updatedAt: string;
+  action: 'created' | 'updated';
+}
+
+/**
  * Tool result event data structure
  */
 export interface ToolResultEventData {
@@ -182,7 +207,8 @@ export type StreamEventType =
   | 'stream_error'
   | 'citation'
   | 'oauth_required'
-  | 'compaction';
+  | 'compaction'
+  | 'artifact';
 
 /**
  * Union type of all possible event data types
@@ -204,6 +230,7 @@ export type StreamEventData =
   | Citation
   | OAuthRequiredEvent
   | CompactionEvent
+  | ArtifactEvent
   | null
   | undefined;
 

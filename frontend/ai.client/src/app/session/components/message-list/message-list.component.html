@@ -45,6 +45,22 @@
     />
   }
 
+  <!-- Session-level artifact strip. Not anchored to a message: the
+       backend doesn't track which message produced which artifact, and
+       the panel (opened from a card) is the real surface. Hydrated from
+       the app-api list endpoint on load, appended live via the
+       `artifact` SSE event. -->
+  @if (hasArtifacts()) {
+    <section
+      class="mt-3 flex flex-col gap-2"
+      aria-label="Artifacts created in this conversation"
+    >
+      @for (artifact of artifacts(); track artifact.artifactId) {
+        <app-artifact-card [artifact]="artifact" />
+      }
+    </section>
+  }
+
   <!-- OAuth consent prompts not anchored to a loaded message — usually
        hydrated from session metadata after a refresh, when the partial
        assistant message wasn't persisted. -->
@@ -85,4 +101,7 @@
       class="pointer-events-none">
     </div>
   }
+
+  <!-- Fixed-position slide-over; renders only when an artifact is open. -->
+  <app-artifact-panel />
 </div>

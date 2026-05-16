@@ -19,6 +19,7 @@ from typing import Optional
 
 import boto3
 import jwt
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
@@ -192,3 +193,67 @@ class RenderTokenService:
 
 def get_render_token_service() -> RenderTokenService:
     return RenderTokenService()
+
+
+# Frozen contract — the HEAD row + SessionIndex keys the artifact writer
+# (backend/src/agents/builtin_tools/artifacts/service.py) emits.
+_SESSION_INDEX = "SessionIndex"
+
+
+class ArtifactListService:
+    """List a session's artifacts from the SessionIndex GSI.
+
+    The GSI projects only HEAD rows (the writer attaches GSI1PK/GSI1SK to
+    the HEAD put only), so a query already returns one row per artifact —
+    its current version — newest-first. GSI1PK is `SESSION#{sid}`, which
+    is NOT user-scoped, so every returned row is re-checked against the
+    authenticated user's id: a caller passing a borrowed session id can
+    never enumerate another user's artifacts.
+    """
+
+    def list_for_session(
+        self, *, user_id: str, session_id: str
+    ) -> list[dict]:
+        table = _table()
+        items: list[dict] = []
+        kwargs: dict = {
+            "IndexName": _SESSION_INDEX,
+            "KeyConditionExpression": Key("GSI1PK").eq(
+                f"SESSION#{session_id}"
+            ),
+            "ScanIndexForward": False,  # GSI1SK embeds updated_at → newest first
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise RenderTokenConfigError(
+                "artifact list query failed"
+            ) from exc
+
+        summaries: list[dict] = []
+        for item in items:
+            if item.get("user_id") != user_id:
+                continue
+            summaries.append(
+                {
+                    "artifact_id": item.get("artifact_id", ""),
+                    "version": int(item.get("version", 0)),
+                    "title": item.get("title", ""),
+                    "content_type": item.get(
+                        "content_type", "text/html; charset=utf-8"
+                    ),
+                    "updated_at": item.get("updated_at", ""),
+                    "created_at": item.get("created_at"),
+                }
+            )
+        return summaries
+
+
+def get_artifact_list_service() -> ArtifactListService:
+    return ArtifactListService()

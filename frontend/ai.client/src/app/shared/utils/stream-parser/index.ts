@@ -58,6 +58,7 @@ export {
   validateOAuthRequiredEvent,
   validateToolApprovalRequiredEvent,
   validateCompactionEvent,
+  validateArtifactEvent,
 } from './stream-parser-core';
 
 // Types
@@ -80,6 +81,7 @@ export type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
   CompactionEvent,
+  ArtifactEvent,
   StreamEventType,
   StreamEventData,
   ParsedStreamEvent,

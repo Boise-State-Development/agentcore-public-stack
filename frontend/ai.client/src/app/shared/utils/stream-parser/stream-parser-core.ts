@@ -39,6 +39,7 @@ import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
   CompactionEvent,
+  ArtifactEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -86,6 +87,10 @@ export interface StreamParserCallbacks {
 
   // Compaction (backend rolled older turns into a summary on this turn)
   onCompaction?: (data: CompactionEvent) => void;
+
+  // Artifact created/updated this turn (existence signal; content is
+  // fetched out-of-band via a render token + sandboxed iframe)
+  onArtifact?: (data: ArtifactEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -394,6 +399,31 @@ export function validateCompactionEvent(data: unknown): data is CompactionEvent 
 }
 
 /**
+ * Validate ArtifactEvent structure
+ */
+export function validateArtifactEvent(data: unknown): data is ArtifactEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ArtifactEvent>;
+
+  return (
+    event.type === 'artifact' &&
+    typeof event.artifactId === 'string' &&
+    event.artifactId.length > 0 &&
+    typeof event.version === 'number' &&
+    Number.isInteger(event.version) &&
+    event.version >= 1 &&
+    typeof event.title === 'string' &&
+    typeof event.contentType === 'string' &&
+    typeof event.sessionId === 'string' &&
+    typeof event.updatedAt === 'string' &&
+    (event.action === 'created' || event.action === 'updated')
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -579,6 +609,14 @@ export function processStreamEvent(
           callbacks.onCompaction?.(data);
         } else {
           callbacks.onParseError?.('compaction: invalid data structure');
+        }
+        break;
+
+      case 'artifact':
+        if (validateArtifactEvent(data)) {
+          callbacks.onArtifact?.(data);
+        } else {
+          callbacks.onParseError?.('artifact: invalid data structure');
         }
         break;
 

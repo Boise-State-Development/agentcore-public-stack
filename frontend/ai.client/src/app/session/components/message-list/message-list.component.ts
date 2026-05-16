@@ -10,6 +10,9 @@ import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.c
 import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/oauth-consent-prompt.component';
 import { ToolApprovalPromptComponent } from './components/tool-approval-prompt/tool-approval-prompt.component';
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
+import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
+import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
+import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
@@ -32,6 +35,8 @@ import { CompactionSummaryService } from '../../services/chat/compaction-summary
     OAuthConsentPromptComponent,
     ToolApprovalPromptComponent,
     CompactionSummaryComponent,
+    ArtifactCardComponent,
+    ArtifactPanelComponent,
   ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
@@ -53,6 +58,11 @@ export class MessageListComponent implements OnDestroy {
   private consentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
+  private artifactState = inject(ArtifactStateService);
+
+  /** Session artifacts, newest first, for the end-of-conversation strip. */
+  protected artifacts = this.artifactState.artifacts;
+  protected hasArtifacts = this.artifactState.hasArtifacts;
 
   /** Single end-of-conversation compaction summary inputs. Sourced from
    *  live SSE events plus session-metadata hydration on load. The fade-in

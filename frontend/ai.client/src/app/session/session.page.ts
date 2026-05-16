@@ -15,6 +15,8 @@ import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
 import { StreamParserService } from './services/chat/stream-parser.service';
 import { CompactionSummaryService } from './services/chat/compaction-summary.service';
+import { ArtifactStateService } from './services/artifacts/artifact-state.service';
+import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
@@ -44,6 +46,8 @@ export class ConversationPage implements OnDestroy {
   private chatHttpService = inject(ChatHttpService);
   private streamParserService = inject(StreamParserService);
   private compactionSummary = inject(CompactionSummaryService);
+  private artifactState = inject(ArtifactStateService);
+  private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
   private dialog = inject(Dialog);
@@ -284,6 +288,11 @@ export class ConversationPage implements OnDestroy {
       // currentSession.totalSummarizedTurns once the metadata fetch lands.
       this.compactionSummary.reset();
 
+      // Artifacts are session-scoped — clear before the next session
+      // loads so a prior session's cards don't bleed in, then re-hydrate
+      // from the app-api list endpoint below.
+      this.artifactState.reset();
+
       if (id) {
         // Update the messages signal reference (this triggers reactivity)
         this.messagesSignal.set(this.messageMapService.getMessagesForSession(id));
@@ -300,6 +309,12 @@ export class ConversationPage implements OnDestroy {
         } catch (error) {
           console.error('Failed to load messages for session:', id, error);
         }
+
+        // Re-hydrate artifact cards for this session so they survive a
+        // refresh / deep link. Best-effort and non-blocking: a 404 (the
+        // artifacts feature is off for this environment) or any network
+        // error just means no cards — never disrupt the session.
+        this.hydrateArtifacts(id);
       } else {
         // No session selected, clear the session metadata
         this.sessionService.setSessionMetadataId(null);
@@ -316,6 +331,26 @@ export class ConversationPage implements OnDestroy {
   ngOnDestroy() {
     this.routeSubscription?.unsubscribe();
     this.queryParamSubscription?.unsubscribe();
+  }
+
+  /**
+   * Best-effort: pull the session's artifacts and seed the registry so
+   * cards render on load. `seedFromHydration` is non-clobbering, so a
+   * slow response that lands after a live `artifact` event won't undo a
+   * newer version. A guard re-checks the active session because the
+   * fetch is async and the user may have navigated away.
+   */
+  private hydrateArtifacts(sessionId: string): void {
+    this.artifactHttp
+      .listSessionArtifacts(sessionId)
+      .then(artifacts => {
+        if (artifacts.length && this.sessionId() === sessionId) {
+          this.artifactState.seedFromHydration(artifacts);
+        }
+      })
+      .catch(() => {
+        // Feature disabled (404) or transient error — no cards, no noise.
+      });
   }
 
   onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[] }) {

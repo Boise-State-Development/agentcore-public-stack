@@ -23,3 +23,23 @@ class RenderTokenResponse(BaseModel):
         "(set directly as the iframe src)",
     )
     expires_at: str = Field(..., description="ISO-8601 UTC token expiry")
+
+
+class ArtifactSummary(BaseModel):
+    """One artifact's current HEAD, for the session artifacts list.
+
+    Snake-case JSON to match this domain's existing REST shape
+    (RenderTokenResponse.expires_at). The SPA normalizes both this and
+    the camelCase live SSE `artifact` event into one client model.
+    """
+
+    artifact_id: str
+    version: int
+    title: str
+    content_type: str
+    updated_at: str
+    created_at: Optional[str] = None
+
+
+class ArtifactListResponse(BaseModel):
+    artifacts: list[ArtifactSummary] = Field(default_factory=list)
