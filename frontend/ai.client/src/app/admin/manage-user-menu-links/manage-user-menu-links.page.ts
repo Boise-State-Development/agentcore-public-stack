@@ -116,6 +116,10 @@ import { UserMenuLink } from './models/user-menu-link.model';
 export class ManageUserMenuLinksPage {
   private readonly service = inject(UserMenuLinksService);
 
+  constructor() {
+    this.service.ensureAdminLinksLoaded();
+  }
+
   protected readonly links = computed<UserMenuLink[]>(
     () => this.service.adminLinksResource.value()?.links ?? [],
   );

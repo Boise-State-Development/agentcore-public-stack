@@ -1,4 +1,4 @@
-import { Injectable, inject, computed, resource } from '@angular/core';
+import { Injectable, inject, computed, resource, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
@@ -32,9 +32,22 @@ export class UserMenuLinksService {
     () => `${this.config.appApiUrl()}/user-menu-links`,
   );
 
+  // The admin resource is gated: this service is `providedIn: 'root'` and is
+  // injected by the always-rendered user-dropdown, so an eager admin loader
+  // would fire `GET /admin/user-menu-links/` on every app load for every user
+  // (401/403 for non-admins). It only loads once the admin manage page calls
+  // `ensureAdminLinksLoaded()`.
+  private readonly adminLinksRequested = signal(false);
+
   readonly adminLinksResource = resource({
+    params: () => (this.adminLinksRequested() ? {} : undefined),
     loader: async () => this.fetchAdminLinks(),
   });
+
+  /** Activates the admin links resource. Called by the admin manage page. */
+  ensureAdminLinksLoaded(): void {
+    this.adminLinksRequested.set(true);
+  }
 
   readonly enabledLinksResource = resource({
     loader: async () => this.fetchEnabledLinks(),
