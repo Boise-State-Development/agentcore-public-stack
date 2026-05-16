@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
 from apis.app_api.artifacts import service as artifact_service
 from apis.app_api.artifacts.routes import router as artifacts_router
+from apis.app_api.artifacts.service import (
+    ArtifactListService,
+    ArtifactQueryError,
+    RenderTokenConfigError,
+    get_artifact_list_service,
+)
 from apis.shared.auth import User, get_current_user_from_session
 
 TABLE = "test-user-artifacts"
@@ -178,3 +185,56 @@ def test_requires_authentication() -> None:
     app.include_router(artifacts_router)
     resp = TestClient(app).get("/artifacts", params={"session_id": SESSION})
     assert resp.status_code == 401
+
+
+def test_transient_query_error_is_not_a_config_error(
+    client, monkeypatch
+) -> None:
+    """A transient DynamoDB ClientError is a runtime query failure, not a
+    misconfiguration — it must surface as ArtifactQueryError so the route
+    can distinguish a configured-but-throttled feature from a broken one."""
+
+    class _ThrottlingTable:
+        def query(self, **_):
+            raise ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                "Query",
+            )
+
+    monkeypatch.setattr(artifact_service, "_table", lambda: _ThrottlingTable())
+    with pytest.raises(ArtifactQueryError):
+        ArtifactListService().list_for_session(
+            user_id=USER_ID, session_id=SESSION
+        )
+
+
+def test_route_maps_transient_query_failure_to_503(client) -> None:
+    """ArtifactQueryError → 503 (retryable), distinct from the 500 a real
+    RenderTokenConfigError misconfiguration produces."""
+    tc, _ = client
+
+    class _FailingService:
+        def list_for_session(self, **_):
+            raise ArtifactQueryError("artifact list query failed")
+
+    tc.app.dependency_overrides[get_artifact_list_service] = _FailingService
+    try:
+        resp = tc.get("/artifacts", params={"session_id": SESSION})
+    finally:
+        tc.app.dependency_overrides.pop(get_artifact_list_service, None)
+    assert resp.status_code == 503
+
+
+def test_route_maps_misconfig_to_500(client) -> None:
+    tc, _ = client
+
+    class _MisconfiguredService:
+        def list_for_session(self, **_):
+            raise RenderTokenConfigError("DYNAMODB_ARTIFACTS_TABLE_NAME is not set")
+
+    tc.app.dependency_overrides[get_artifact_list_service] = _MisconfiguredService
+    try:
+        resp = tc.get("/artifacts", params={"session_id": SESSION})
+    finally:
+        tc.app.dependency_overrides.pop(get_artifact_list_service, None)
+    assert resp.status_code == 500

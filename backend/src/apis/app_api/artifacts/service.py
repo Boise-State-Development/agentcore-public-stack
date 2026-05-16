@@ -51,6 +51,12 @@ class RenderTokenConfigError(RenderTokenError):
     """Required environment / AWS configuration is missing or unusable."""
 
 
+class ArtifactQueryError(RenderTokenError):
+    """A backing-store query failed at runtime (throttle, timeout,
+    transient DynamoDB error) — distinct from a misconfiguration: the
+    feature is set up correctly, the request just couldn't be served."""
+
+
 def _reset_caches_for_tests() -> None:
     """Drop process-wide singletons so test order can't leak a stale
     signing key, secrets client, or DDB table handle."""
@@ -232,7 +238,7 @@ class ArtifactListService:
                     break
                 kwargs["ExclusiveStartKey"] = last
         except ClientError as exc:
-            raise RenderTokenConfigError(
+            raise ArtifactQueryError(
                 "artifact list query failed"
             ) from exc
 

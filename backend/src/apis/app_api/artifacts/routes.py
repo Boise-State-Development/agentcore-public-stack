@@ -16,6 +16,7 @@ from .models import (
 from .service import (
     ArtifactListService,
     ArtifactNotFoundError,
+    ArtifactQueryError,
     RenderTokenConfigError,
     RenderTokenService,
     get_artifact_list_service,
@@ -88,6 +89,15 @@ async def list_session_artifacts(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "Artifact listing is unavailable",
+        )
+    except ArtifactQueryError:
+        # Feature is configured fine — the backing query just failed
+        # (throttle/timeout/transient). Retryable, so signal 503 rather
+        # than masquerading as a 500 misconfiguration.
+        logger.exception("artifact list query failed")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Artifact listing is temporarily unavailable",
         )
 
     return ArtifactListResponse(
