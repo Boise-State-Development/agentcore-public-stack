@@ -77,6 +77,16 @@ export class ArtifactsStack extends cdk.Stack {
     const certificateArn = config.artifacts.certificateArn!;
     const artifactsSubdomain = `artifacts.${domainName}`;
 
+    // CSP frame-ancestors source list: the deployed SPA origin, plus any
+    // extra origins (e.g. http://localhost:4200 for a local SPA pointed at
+    // this env). Space-separated per the CSP grammar — consumed identically
+    // by the CloudFront response-headers-policy and the render Lambda's own
+    // defense-in-depth CSP.
+    const frameAncestors = [
+      `https://${domainName}`,
+      ...config.artifacts.extraFrameAncestors,
+    ].join(' ');
+
     // ============================================================
     // DynamoDB — artifact metadata + per-version log
     // ============================================================
@@ -170,7 +180,7 @@ export class ArtifactsStack extends cdk.Stack {
         ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
         ARTIFACTS_TABLE: this.artifactsTable.tableName,
         RENDER_TOKEN_SECRET_ARN: renderTokenKeyArn,
-        FRAME_ANCESTOR_ORIGIN: `https://${domainName}`,
+        FRAME_ANCESTOR_ORIGIN: frameAncestors,
         // Pinned CSP allow-list. Adjust here if/when the artifact runtime
         // grows new permitted external script origins (e.g. add chart libs).
         CSP_SCRIPT_SRC: "'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh",
@@ -225,7 +235,7 @@ export class ArtifactsStack extends cdk.Stack {
       `img-src 'self' data: https:`,
       `font-src 'self' data:`,
       `connect-src 'none'`,
-      `frame-ancestors https://${domainName}`,
+      `frame-ancestors ${frameAncestors}`,
       `form-action 'none'`,
       `base-uri 'none'`,
     ].join('; ');

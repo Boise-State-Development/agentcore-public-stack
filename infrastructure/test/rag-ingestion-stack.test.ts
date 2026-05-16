@@ -86,6 +86,7 @@ describe('RagIngestionStack', () => {
       artifacts: {
         enabled: false,
         retentionDays: 90,
+        extraFrameAncestors: [],
       },
       cognito: {
         domainPrefix: 'test-project',

@@ -46,6 +46,10 @@ export interface ArtifactsConfig {
   certificateArn?: string;
   // Soft-delete retention window for objects tagged `lifecycle-class=deleted`.
   retentionDays: number;
+  // Extra origins (beyond https://{domainName}) allowed to embed artifact
+  // iframes via CSP frame-ancestors — e.g. http://localhost:4200 for a
+  // local SPA pointed at this deployment. Empty on prod.
+  extraFrameAncestors: string[];
 }
 
 export interface FrontendConfig {
@@ -276,6 +280,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: parseBooleanEnv(process.env.CDK_ARTIFACTS_ENABLED) ?? scope.node.tryGetContext('artifacts')?.enabled ?? false,
       certificateArn: process.env.CDK_ARTIFACTS_CERTIFICATE_ARN || scope.node.tryGetContext('artifacts')?.certificateArn,
       retentionDays: parseIntEnv(process.env.CDK_ARTIFACTS_RETENTION_DAYS) ?? scope.node.tryGetContext('artifacts')?.retentionDays ?? 90,
+      extraFrameAncestors: process.env.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS?.split(',')
+        .map((s) => s.trim()).filter(Boolean)
+        || scope.node.tryGetContext('artifacts')?.extraFrameAncestors
+        || [],
     },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),

@@ -80,6 +80,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     artifacts: {
       enabled: false,
       retentionDays: 90,
+      extraFrameAncestors: [],
     },
     cognito: {
       domainPrefix: MOCK_PREFIX,
