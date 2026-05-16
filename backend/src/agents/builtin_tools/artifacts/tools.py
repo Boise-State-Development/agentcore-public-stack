@@ -37,9 +37,31 @@ def make_create_artifact_tool(session_id: str, user_id: str):
         - HTML (default): `content` MUST be a complete standalone HTML
           document (include `<!doctype html>` and a full `<html>` …
           `</html>`). It renders in a sandboxed iframe with a strict CSP:
-          inline `<style>`/`<script>` are allowed, as are scripts from
-          `https://cdn.tailwindcss.com` and `https://esm.sh`. It cannot
-          make network calls.
+          inline `<style>`/`<script>` are allowed, and scripts/modules
+          may ONLY be loaded from `https://cdn.tailwindcss.com` and
+          `https://esm.sh`. It cannot make network calls (`fetch`/XHR
+          are blocked), and scripts from any other CDN (unpkg,
+          jsdelivr, cdnjs, …) are BLOCKED by the CSP — the page will
+          render blank (background only, no content).
+
+          For React: do NOT use unpkg, Babel standalone, or
+          `<script type="text/babel">` — all CSP-blocked. Import React
+          from `esm.sh` as ES modules inside an inline
+          `<script type="module">`, and build views with `htm`
+          instead of JSX (no transpiler needed):
+
+              <div id="root"></div>
+              <script type="module">
+                import React, { useState } from "https://esm.sh/react@18.3.1";
+                import { createRoot } from "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1";
+                import htm from "https://esm.sh/htm@3.1.1";
+                const html = htm.bind(React.createElement);
+                function App() {
+                  const [n, setN] = useState(0);
+                  return html`<button onClick=${() => setN(n + 1)}>Count: ${n}</button>`;
+                }
+                createRoot(document.getElementById("root")).render(html`<${App} />`);
+              </script>
 
         - Markdown: pass `content_type="text/markdown"` and provide raw
           GitHub-flavored Markdown as `content`. Do NOT add an HTML
