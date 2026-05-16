@@ -67,6 +67,15 @@ describe('ArtifactHttpService', () => {
           content_type: 'text/html; charset=utf-8',
           updated_at: '2026-05-15T12:00:00+00:00',
           created_at: '2026-05-15T10:00:00+00:00',
+          produced_by_message_index: 4,
+        },
+        {
+          artifact_id: 'legacy',
+          version: 1,
+          title: 'Old',
+          content_type: 'text/html; charset=utf-8',
+          updated_at: '2026-05-15T11:00:00+00:00',
+          created_at: '2026-05-15T11:00:00+00:00',
         },
       ],
     });
@@ -78,6 +87,16 @@ describe('ArtifactHttpService', () => {
         contentType: 'text/html; charset=utf-8',
         updatedAt: '2026-05-15T12:00:00+00:00',
         createdAt: '2026-05-15T10:00:00+00:00',
+        producedByMessageIndex: 4,
+      },
+      {
+        artifactId: 'legacy',
+        version: 1,
+        title: 'Old',
+        contentType: 'text/html; charset=utf-8',
+        updatedAt: '2026-05-15T11:00:00+00:00',
+        createdAt: '2026-05-15T11:00:00+00:00',
+        producedByMessageIndex: null,
       },
     ]);
   });

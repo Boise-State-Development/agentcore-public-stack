@@ -402,10 +402,25 @@ class StreamCoordinator:
                 # before `done`. Best-effort: a lookup failure logs and is
                 # swallowed so it never breaks the live stream.
                 if event.get("type") == "done" and artifact_tool_invoked:
+                    # Anchor every artifact touched this turn to the turn's
+                    # final assistant message. `done` lands after the last
+                    # `message_stop`, so current_assistant_message_index is
+                    # final here; this is the same odd-position index the
+                    # post-loop block uses for per-message metadata
+                    # (assistant_message_ids[-1]), which the messages
+                    # endpoint re-derives as `idx` on reload.
+                    produced_by_message_index = (
+                        initial_message_count
+                        + 2 * current_assistant_message_index
+                        + 1
+                        if current_assistant_message_index >= 0
+                        else None
+                    )
                     for sse in await self._extract_artifact_events(
                         session_id=session_id,
                         user_id=user_id,
                         turn_start=turn_start_dt,
+                        produced_by_message_index=produced_by_message_index,
                     ):
                         yield sse
 
@@ -902,6 +917,7 @@ class StreamCoordinator:
         session_id: Optional[str],
         user_id: Optional[str],
         turn_start: datetime,
+        produced_by_message_index: Optional[int] = None,
     ) -> List[str]:
         """Yield one SSE-formatted `artifact` event per artifact whose
         HEAD was created or updated during this turn.
@@ -922,6 +938,7 @@ class StreamCoordinator:
             from agents.builtin_tools.artifacts.service import (
                 ArtifactConfigError,
                 list_session_artifacts,
+                set_produced_by_message_index,
             )
 
             rows = await asyncio.to_thread(
@@ -942,10 +959,26 @@ class StreamCoordinator:
                 touched = True
             if not touched:
                 continue
+            artifact_id = row.get("artifact_id", "")
+            if produced_by_message_index is not None and artifact_id:
+                try:
+                    await asyncio.to_thread(
+                        set_produced_by_message_index,
+                        user_id,
+                        artifact_id,
+                        produced_by_message_index,
+                    )
+                except Exception as e:  # noqa: BLE001 - best-effort linkage
+                    logger.warning(
+                        "Failed to stamp produced_by_message_index "
+                        "(artifact=%s): %s",
+                        artifact_id,
+                        e,
+                    )
             version = int(row.get("version", 0))
             payload = {
                 "type": "artifact",
-                "artifactId": row.get("artifact_id", ""),
+                "artifactId": artifact_id,
                 "version": version,
                 "title": row.get("title", ""),
                 "contentType": row.get(
@@ -954,6 +987,7 @@ class StreamCoordinator:
                 "sessionId": session_id,
                 "updatedAt": updated_at,
                 "action": "created" if version == 1 else "updated",
+                "producedByMessageIndex": produced_by_message_index,
             }
             events.append(
                 f"event: artifact\ndata: {json.dumps(payload)}\n\n"

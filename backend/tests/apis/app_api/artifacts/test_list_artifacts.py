@@ -153,6 +153,27 @@ def test_lists_head_rows_newest_first(client) -> None:
     assert arts[0]["content_type"] == "text/html; charset=utf-8"
 
 
+def test_produced_by_message_index_round_trips(client) -> None:
+    """The HEAD row's linkage index (stamped post-turn by the stream
+    coordinator) must surface on the list DTO so the SPA can anchor the
+    card inline; absent on legacy rows → null (SPA falls back to strip)."""
+    tc, ddb = client
+    _put_head(ddb, artifact="linked", updated_at="2026-05-15T12:00:00+00:00")
+    ddb.Table(TABLE).update_item(
+        Key={"PK": f"USER#{USER_ID}", "SK": "ARTIFACT#linked#HEAD"},
+        UpdateExpression="SET produced_by_message_index = :i",
+        ExpressionAttributeValues={":i": 5},
+    )
+    _put_head(ddb, artifact="legacy", updated_at="2026-05-15T11:00:00+00:00")
+
+    arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
+        "artifacts"
+    ]
+    by_id = {a["artifact_id"]: a for a in arts}
+    assert by_id["linked"]["produced_by_message_index"] == 5
+    assert by_id["legacy"]["produced_by_message_index"] is None
+
+
 def test_reflects_current_version(client) -> None:
     tc, ddb = client
     _put_head(ddb, artifact="art-1", version=3, title="V3")

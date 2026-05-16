@@ -39,6 +39,13 @@ class ArtifactSummary(BaseModel):
     content_type: str
     updated_at: str
     created_at: Optional[str] = None
+    produced_by_message_index: Optional[int] = Field(
+        default=None,
+        description="0-based index of the assistant message that produced "
+        "or last updated this artifact, matching the messages endpoint's "
+        "`msg-{session_id}-{index}` id. Null for artifacts written before "
+        "linkage existed — the SPA falls back to the end-of-chat strip.",
+    )
 
 
 class ArtifactListResponse(BaseModel):

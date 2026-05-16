@@ -196,3 +196,25 @@ def test_list_session_artifacts_scopes_to_user(aws) -> None:
 
 def test_list_session_artifacts_empty_session(aws) -> None:
     assert service.list_session_artifacts(USER, "no-such-session") == []
+
+
+def test_set_produced_by_message_index_stamps_head_and_lists(aws) -> None:
+    aid, _ = service.create_artifact_record(USER, SESSION, "Doc", DOC, "")
+    assert service.list_session_artifacts(USER, SESSION)[0][
+        "produced_by_message_index"
+    ] is None
+
+    service.set_produced_by_message_index(USER, aid, 7)
+
+    rows = service.list_session_artifacts(USER, SESSION)
+    assert rows[0]["produced_by_message_index"] == 7
+    # The stamp must leave the optimistic-lock `version` untouched so a
+    # later update_artifact still re-points HEAD cleanly.
+    assert service.update_artifact_record(USER, aid, DOC, None, None) == 2
+
+
+def test_set_produced_by_message_index_requires_existing_head(aws) -> None:
+    from botocore.exceptions import ClientError
+
+    with pytest.raises(ClientError):
+        service.set_produced_by_message_index(USER, "nope", 1)

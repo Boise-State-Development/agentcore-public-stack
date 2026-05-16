@@ -337,7 +337,22 @@ export class StreamParserService {
 
       onCompaction: (data: CompactionEvent) => this.compactionSummary.recordLive(data),
 
-      onArtifact: (data: ArtifactEvent) => this.artifactState.recordLive(data),
+      onArtifact: (data: ArtifactEvent) => {
+        // Same post-message_stop timing as oauth_required: the producing
+        // assistant message is the last assistant message in the list.
+        // Anchor live placement to its concrete id — the numeric index
+        // only lines up after a reload (it counts the memory tool
+        // messages the folded client message doesn't have).
+        const messages = this.allMessages();
+        let lastAssistantId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            lastAssistantId = messages[i].id;
+            break;
+          }
+        }
+        this.artifactState.recordLive(data, lastAssistantId);
+      },
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
         const messages = this.allMessages();

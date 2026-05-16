@@ -256,6 +256,9 @@ class ArtifactListService:
                     ),
                     "updated_at": item.get("updated_at", ""),
                     "created_at": item.get("created_at"),
+                    "produced_by_message_index": item.get(
+                        "produced_by_message_index"
+                    ),
                 }
             )
         return summaries

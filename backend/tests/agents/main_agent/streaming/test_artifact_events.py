@@ -65,7 +65,51 @@ async def test_emits_created_for_v1(coord, turn_start, monkeypatch) -> None:
         "sessionId": SESSION,
         "updatedAt": "2026-05-15T12:00:05+00:00",
         "action": "created",
+        "producedByMessageIndex": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_stamps_and_emits_produced_by_message_index(
+    coord, turn_start, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        artifact_service,
+        "list_session_artifacts",
+        lambda u, s: [_row(artifact_id="a"), _row(artifact_id="b")],
+    )
+    stamped: list[tuple] = []
+    monkeypatch.setattr(
+        artifact_service,
+        "set_produced_by_message_index",
+        lambda u, aid, idx: stamped.append((u, aid, idx)),
+    )
+    out = await coord._extract_artifact_events(
+        SESSION, USER, turn_start, produced_by_message_index=7
+    )
+    assert {_parse_sse(e)["producedByMessageIndex"] for e in out} == {7}
+    assert stamped == [(USER, "a", 7), (USER, "b", 7)]
+
+
+@pytest.mark.asyncio
+async def test_stamp_failure_is_swallowed(
+    coord, turn_start, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        artifact_service, "list_session_artifacts", lambda u, s: [_row()]
+    )
+
+    def _boom(u, aid, idx):
+        raise RuntimeError("ddb down")
+
+    monkeypatch.setattr(
+        artifact_service, "set_produced_by_message_index", _boom
+    )
+    out = await coord._extract_artifact_events(
+        SESSION, USER, turn_start, produced_by_message_index=3
+    )
+    # Stamp failure must not drop the live event.
+    assert _parse_sse(out[0])["producedByMessageIndex"] == 3
 
 
 @pytest.mark.asyncio

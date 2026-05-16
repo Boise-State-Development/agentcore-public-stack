@@ -36,14 +36,23 @@ export class ArtifactStateService {
     return this.byId().get(artifactId);
   }
 
-  /** Record a live `artifact` SSE event. Keeps the highest version. */
-  recordLive(event: ArtifactEvent): void {
+  /**
+   * Record a live `artifact` SSE event. Keeps the highest version.
+   *
+   * `producedByMessageId` is the concrete id of the assistant message
+   * that just streamed (resolved by the caller the same way oauth /
+   * tool-approval prompts are). Live placement keys off this rather than
+   * the numeric index, which only lines up after a reload.
+   */
+  recordLive(event: ArtifactEvent, producedByMessageId?: string | null): void {
     this.upsert({
       artifactId: event.artifactId,
       version: event.version,
       title: event.title,
       contentType: event.contentType,
       updatedAt: event.updatedAt,
+      producedByMessageIndex: event.producedByMessageIndex ?? null,
+      producedByMessageId: producedByMessageId ?? null,
     });
   }
 

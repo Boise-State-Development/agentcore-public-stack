@@ -36,6 +36,26 @@ describe('ArtifactStateService', () => {
     expect(svc.get('art-1')?.version).toBe(1);
   });
 
+  it('threads producedByMessageIndex from the live event', () => {
+    svc.recordLive(ev({ producedByMessageIndex: 7 }));
+    expect(svc.get('art-1')?.producedByMessageIndex).toBe(7);
+  });
+
+  it('defaults producedByMessageIndex to null when the event omits it', () => {
+    svc.recordLive(ev());
+    expect(svc.get('art-1')?.producedByMessageIndex).toBeNull();
+  });
+
+  it('stores the live producing message id when provided', () => {
+    svc.recordLive(ev(), 'msg-sess-9-3');
+    expect(svc.get('art-1')?.producedByMessageId).toBe('msg-sess-9-3');
+  });
+
+  it('defaults producedByMessageId to null on the hydration-style call', () => {
+    svc.recordLive(ev());
+    expect(svc.get('art-1')?.producedByMessageId).toBeNull();
+  });
+
   it('keeps the highest version for the same id (update_artifact)', () => {
     svc.recordLive(ev({ version: 1 }));
     svc.recordLive(ev({ version: 3, updatedAt: '2026-05-15T12:05:00+00:00' }));

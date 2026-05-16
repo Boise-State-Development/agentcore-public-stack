@@ -16,6 +16,7 @@ interface ArtifactSummaryDto {
   content_type: string;
   updated_at: string;
   created_at?: string | null;
+  produced_by_message_index?: number | null;
 }
 
 interface ArtifactListResponseDto {
@@ -70,6 +71,7 @@ export class ArtifactHttpService {
       contentType: a.content_type,
       updatedAt: a.updated_at,
       createdAt: a.created_at ?? undefined,
+      producedByMessageIndex: a.produced_by_message_index ?? null,
     }));
   }
 }

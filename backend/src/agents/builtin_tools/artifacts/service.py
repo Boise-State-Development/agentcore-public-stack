@@ -257,6 +257,33 @@ def update_artifact_record(
     return version
 
 
+def set_produced_by_message_index(
+    user_id: str, artifact_id: str, message_index: int
+) -> None:
+    """Stamp the HEAD row with the index of the assistant message that
+    produced (or last updated) the artifact this turn.
+
+    The artifact tool can't know this at write time — the turn isn't
+    finished — so the stream coordinator writes it back post-turn using
+    the same odd-position index it already computes for per-message
+    metadata (`initial_message_count + 2*i + 1`). That index matches the
+    `idx` the messages endpoint enumerates on reload, so the SPA can
+    render the card inline after the right assistant message.
+
+    Best-effort: a SET on a single attribute, keyed by the HEAD row, that
+    deliberately does not touch `version` so it can never collide with
+    the update_artifact optimistic lock. Failures are swallowed by the
+    caller (linkage is a UX nicety, never worth breaking a turn over).
+    """
+    table = _table()
+    table.update_item(
+        Key={"PK": f"USER#{user_id}", "SK": f"ARTIFACT#{artifact_id}#HEAD"},
+        UpdateExpression="SET produced_by_message_index = :idx",
+        ExpressionAttributeValues={":idx": message_index},
+        ConditionExpression="attribute_exists(SK)",
+    )
+
+
 _SESSION_INDEX = "SessionIndex"
 
 
@@ -302,6 +329,9 @@ def list_session_artifacts(user_id: str, session_id: str) -> list[dict]:
                 ),
                 "updated_at": item.get("updated_at", ""),
                 "created_at": item.get("created_at"),
+                "produced_by_message_index": item.get(
+                    "produced_by_message_index"
+                ),
             }
         )
     return out

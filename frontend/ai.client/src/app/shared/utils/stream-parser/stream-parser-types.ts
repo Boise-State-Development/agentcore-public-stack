@@ -156,6 +156,12 @@ export interface CompactionEvent {
  * `action` is `created` for v1, `updated` for any later version. Cards
  * also hydrate on session load via the app-api list endpoint; the SPA
  * dedupes by `artifactId` keeping the highest `version`.
+ *
+ * `producedByMessageIndex` is the 0-based index of the turn's final
+ * assistant message (`msg-{sessionId}-{index}`), stamped by the stream
+ * coordinator so the SPA can anchor the card inline after that message.
+ * Null when the index couldn't be resolved — the SPA falls back to the
+ * end-of-conversation strip.
  */
 export interface ArtifactEvent {
   type: 'artifact';
@@ -166,6 +172,7 @@ export interface ArtifactEvent {
   sessionId: string;
   updatedAt: string;
   action: 'created' | 'updated';
+  producedByMessageIndex?: number | null;
 }
 
 /**

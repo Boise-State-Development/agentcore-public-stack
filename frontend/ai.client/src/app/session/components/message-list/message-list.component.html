@@ -32,6 +32,22 @@
         </div>
     }
 
+    <!-- Artifacts produced by this turn, anchored to their final
+         assistant message via producedByMessageIndex. Renders both live
+         (the `artifact` SSE event carries the index) and after a session
+         reload (the list endpoint persists it on the HEAD row). -->
+    @let messageArtifacts = artifactsForMessageId(message.id);
+    @if (messageArtifacts.length > 0) {
+      <section
+        class="flex flex-col gap-2"
+        aria-label="Artifacts from this response"
+      >
+        @for (artifact of messageArtifacts; track artifact.artifactId) {
+          <app-artifact-card [artifact]="artifact" />
+        }
+      </section>
+    }
+
   }
 
   <!-- Single subtle compaction summary at the end of the conversation,
@@ -45,17 +61,16 @@
     />
   }
 
-  <!-- Session-level artifact strip. Not anchored to a message: the
-       backend doesn't track which message produced which artifact, and
-       the panel (opened from a card) is the real surface. Hydrated from
-       the app-api list endpoint on load, appended live via the
-       `artifact` SSE event. -->
-  @if (hasArtifacts()) {
+  <!-- Fallback strip for artifacts that can't be anchored to a loaded
+       message: legacy rows written before linkage existed, or an index
+       pointing outside the currently paginated page. Anchored artifacts
+       render inline after their producing message (see the @for above). -->
+  @if (hasOrphanArtifacts()) {
     <section
       class="mt-3 flex flex-col gap-2"
       aria-label="Artifacts created in this conversation"
     >
-      @for (artifact of artifacts(); track artifact.artifactId) {
+      @for (artifact of orphanArtifacts(); track artifact.artifactId) {
         <app-artifact-card [artifact]="artifact" />
       }
     </section>
