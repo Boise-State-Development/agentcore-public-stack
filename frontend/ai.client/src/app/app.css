@@ -54,3 +54,14 @@
 .sidenav-backdrop-exit {
   animation: fadeOut 0.3s ease-in forwards;
 }
+
+/* Docked artifact pane: reserve right-side space equal to the panel's
+   max width (max-w-2xl = 42rem) so the fixed pane sits beside the chat
+   instead of over it. Desktop only — below lg the pane is a full-width
+   takeover and the chat is not shown alongside it. The wrapper already
+   carries `transition-[padding]`, so this eases in/out with the nav. */
+@media (min-width: 1024px) {
+  .artifact-pane-open {
+    padding-right: var(--artifact-pane-width, 42rem);
+  }
+}

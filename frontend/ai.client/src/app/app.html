@@ -103,8 +103,10 @@
 
   <div
     class="transition-[padding] duration-300"
+    [style.--artifact-pane-width]="artifactPaneWidthCss()"
     [class.lg:pl-72]="!sidenavService.isCollapsed() && !sidenavService.isHidden()"
-    [class.lg:pl-0]="sidenavService.isCollapsed() || sidenavService.isHidden()">
+    [class.lg:pl-0]="sidenavService.isCollapsed() || sidenavService.isHidden()"
+    [class.artifact-pane-open]="artifactPanelOpen()">
     <main class="flex flex-col">
       <!-- Scrollable Content -->
       <div class="flex-1 overflow-y-auto">

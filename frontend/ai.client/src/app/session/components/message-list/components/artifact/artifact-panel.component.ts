@@ -18,8 +18,10 @@ import { ArtifactHttpService } from '../../../../services/artifacts/artifact-htt
 import { SessionService } from '../../../../services/session/session.service';
 
 /**
- * Right slide-over that renders one artifact version in a sandboxed
- * iframe. Open state lives in `ArtifactStateService`; this component
+ * Right-docked pane that renders one artifact version in a sandboxed
+ * iframe. Non-modal: the side nav collapses to free the space (handled
+ * by `ArtifactStateService`) and the chat stays visible and interactive
+ * alongside it. Open state lives in `ArtifactStateService`; this component
  * mints a fresh short-lived render token each time it opens (the token
  * is a ~120s bearer credential — never cached) and points the iframe at
  * the returned artifact-origin URL.
@@ -44,17 +46,32 @@ import { SessionService } from '../../../../services/session/session.service';
   },
   template: `
     @if (open(); as ref) {
-      <div
-        class="fixed inset-0 z-40 bg-black/30"
-        (click)="close()"
-        aria-hidden="true"
-      ></div>
       <aside
-        class="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
-        role="dialog"
-        aria-modal="true"
+        class="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
+        [style.maxWidth]="paneWidthCss()"
+        [class.select-none]="dragging()"
         [attr.aria-label]="'Artifact: ' + ref.title"
       >
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          tabindex="0"
+          aria-label="Resize artifact panel"
+          [attr.aria-valuemin]="paneWidthMin"
+          [attr.aria-valuemax]="paneWidthMax"
+          [attr.aria-valuenow]="paneWidth()"
+          class="group absolute inset-y-0 left-0 z-10 flex w-2 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center focus-visible:outline-none"
+          (pointerdown)="onHandlePointerDown($event)"
+          (pointermove)="onHandlePointerMove($event)"
+          (pointerup)="onHandlePointerUp($event)"
+          (pointercancel)="onHandlePointerUp($event)"
+          (keydown)="onHandleKeydown($event)"
+        >
+          <span
+            aria-hidden="true"
+            class="h-12 w-1 rounded-full bg-gray-300 transition-colors group-hover:bg-blue-500 group-focus-visible:bg-blue-500 dark:bg-gray-600 dark:group-hover:bg-blue-400"
+          ></span>
+        </div>
         <header
           class="flex items-center gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700"
         >
@@ -116,6 +133,7 @@ import { SessionService } from '../../../../services/session/session.service';
             <iframe
               [src]="safeUrl()"
               class="h-full w-full border-0 bg-white"
+              [class.pointer-events-none]="dragging()"
               [title]="ref.title || 'Artifact'"
               sandbox="allow-scripts"
               referrerpolicy="no-referrer"
@@ -144,6 +162,19 @@ export class ArtifactPanelComponent {
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
 
+  // Resize handle state. Width itself lives in ArtifactStateService so
+  // the layout (content padding + fixed footer/topnav) can reserve the
+  // same amount via a CSS var.
+  protected readonly paneWidth = this.artifactState.paneWidth;
+  protected readonly paneWidthMin = this.artifactState.paneWidthMin;
+  protected readonly paneWidthMax = this.artifactState.paneWidthMax;
+  protected readonly paneWidthCss = computed(
+    () => `${this.artifactState.paneWidth()}px`,
+  );
+  protected readonly dragging = signal(false);
+  private dragStartX = 0;
+  private dragStartWidth = 0;
+
   /** Bumped per open/retry so a slow mint that resolves after the panel
    *  closed (or moved to another artifact) is discarded. */
   private requestSeq = 0;
@@ -165,6 +196,77 @@ export class ArtifactPanelComponent {
       }
       void this.load();
     });
+  }
+
+  protected onHandlePointerDown(e: PointerEvent): void {
+    e.preventDefault();
+    // Capture so the drag keeps tracking even while the cursor is over
+    // the sandboxed iframe (which would otherwise swallow the events).
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch {
+      /* not all pointer types/environments allow capture — drag still works */
+    }
+    this.dragStartX = e.clientX;
+    this.dragStartWidth = this.artifactState.paneWidth();
+    this.dragging.set(true);
+  }
+
+  protected onHandlePointerMove(e: PointerEvent): void {
+    if (!this.dragging()) return;
+    // Pane is docked to the right edge: dragging the handle left (a
+    // smaller clientX) widens it.
+    const delta = this.dragStartX - e.clientX;
+    this.applyWidth(this.dragStartWidth + delta);
+  }
+
+  protected onHandlePointerUp(e: PointerEvent): void {
+    if (!this.dragging()) return;
+    this.dragging.set(false);
+    try {
+      const el = e.target as Element;
+      if (el.hasPointerCapture(e.pointerId)) {
+        el.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      /* capture may never have been established — nothing to release */
+    }
+  }
+
+  protected onHandleKeydown(e: KeyboardEvent): void {
+    const step = e.shiftKey ? 64 : 16;
+    const w = this.artifactState.paneWidth();
+    switch (e.key) {
+      case 'ArrowLeft': // widen (boundary moves left)
+        this.applyWidth(w + step);
+        break;
+      case 'ArrowRight': // narrow
+        this.applyWidth(w - step);
+        break;
+      case 'Home':
+        this.applyWidth(this.paneWidthMax);
+        break;
+      case 'End':
+        this.applyWidth(this.paneWidthMin);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  }
+
+  /** Clamp to the absolute service bounds and to a viewport-relative
+   *  ceiling so the chat column can never be squeezed away entirely. */
+  private applyWidth(px: number): void {
+    let target = px;
+    if (typeof window !== 'undefined') {
+      const maxByViewport = Math.max(
+        this.paneWidthMin,
+        window.innerWidth - 360,
+      );
+      target = Math.min(target, maxByViewport);
+    }
+    this.artifactState.setPaneWidth(target);
   }
 
   protected onEscape(): void {

@@ -4,7 +4,8 @@
     <!-- Full-page mode: fixed topnav with sidenav awareness -->
     <div
       class="chat-topnav-wrapper"
-      [class.sidenav-expanded]="!isSidenavCollapsed()">
+      [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
       <app-topnav />
     </div>
   }
@@ -82,7 +83,8 @@
       <!-- Assistant is loading: show skeleton card -->
       <div
         class="chat-container-empty full-page"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="w-full max-w-sm px-4 -mt-20">
           <div class="animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
             <!-- Skeleton gradient header -->
@@ -107,7 +109,8 @@
       <!-- Input at bottom while loading -->
       <div
         class="chat-input-footer full-page"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <!-- Skeleton indicator chip -->
           <div class="flex justify-center mb-2">
@@ -136,7 +139,8 @@
       <!-- Assistant selected: show only assistant card with fixed input at bottom -->
       <div
         class="chat-container-empty full-page"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
           <!-- Assistant Card -->
           <div class="mb-6 relative">
@@ -171,7 +175,8 @@
       <!-- Fixed input at bottom when assistant is selected -->
       <div
         class="chat-input-footer full-page"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
           <app-chat-input
             [sessionId]="sessionId()"
@@ -189,7 +194,8 @@
       <!-- No assistant: show greeting with inline input -->
       <div
         class="chat-container-empty full-page"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
           <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
             <img
@@ -294,7 +300,8 @@
       <!-- Header (fixed, content scrolls underneath) -->
       <div
         class="chat-topnav-wrapper"
-        [class.sidenav-expanded]="!isSidenavCollapsed()">
+        [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
         <app-topnav />
       </div>
     }
@@ -318,7 +325,8 @@
     <!-- Chat input footer -->
     <div
       class="chat-input-footer full-page"
-      [class.sidenav-expanded]="!isSidenavCollapsed()">
+      [class.sidenav-expanded]="!isSidenavCollapsed()"
+      [class.artifact-pane-open]="artifactPanelOpen()">
       <div class="mx-auto px-4 max-w-[720px]">
         <!-- Assistant Indicator (floating badge above input) -->
         @if (isLoadingAssistant()) {

@@ -9,35 +9,40 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCodeBracket,
   heroDocumentText,
-  heroArrowTopRightOnSquare,
+  heroArrowLongRight,
 } from '@ng-icons/heroicons/outline';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 
 /** Visual treatment derived from an artifact's content type. */
 interface ArtifactKind {
+  /** Short type label (HTML, JS, MD…). */
   label: string;
+  /** Heroicon name for the type stamp. */
   icon: string;
-  /** Full class list for the icon tile (no static classes — see note). */
-  tile: string;
-  /** Full class list for the type badge. */
-  badge: string;
-  /** Full class list for the left accent rail. */
-  rail: string;
+  /** Single accent color (CSS). Used sparingly — a 2px edge rule, the
+   *  stamp outline, and the type glyph — never as a fill. One mid tone
+   *  that holds up on both the light and dark surface. */
+  accent: string;
 }
 
 /**
- * Compact, clickable card for one artifact. The artifact's content is
- * never inlined here — opening the card asks the panel to mint a
- * short-lived render token and load it in a sandboxed iframe.
+ * One artifact, presented as a calm, rounded card — deliberately
+ * un-"component-kit": a borderless tinted surface (radius matched to the
+ * chat input), a hairline type stamp, and a quiet sans metadata line.
+ * The lone accent color appears only as a thin left rule, the stamp
+ * outline, and the glyph — not as a filled tile or pill.
+ *
+ * The artifact's content is never inlined here — opening asks the panel
+ * to mint a short-lived render token and load it in a sandboxed iframe.
  *
  * Anchored inline after its producing assistant message by the
  * message-list (via `Artifact.producedByMessageIndex`); only legacy /
  * unanchorable artifacts fall back to the end-of-conversation strip.
  *
- * The colored sub-elements bind `[class]` to a full computed class
- * string (no static `class` on those nodes) so the accent swaps cleanly
- * by content type without static/dynamic class-merge ambiguity.
+ * Accent is applied via `[style.color]` (not a bound class string) so
+ * the structural classes stay static and there's no class-merge
+ * ambiguity; `currentColor` then carries it into the rule/stamp/glyph.
  */
 @Component({
   selector: 'app-artifact-card',
@@ -47,57 +52,244 @@ interface ArtifactKind {
     provideIcons({
       heroCodeBracket,
       heroDocumentText,
-      heroArrowTopRightOnSquare,
+      heroArrowLongRight,
     }),
   ],
   template: `
     <button
       type="button"
-      class="group relative flex w-full max-w-md items-center gap-3 overflow-hidden rounded-xl border border-gray-200/80 bg-white py-3 pl-4 pr-3.5 text-left shadow-sm transition-all duration-150 hover:-translate-y-px hover:border-gray-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:border-gray-700/80 dark:bg-gray-800/70 dark:hover:border-gray-600 dark:focus-visible:ring-offset-gray-900"
+      class="artifact-card"
       [attr.aria-label]="ariaLabel()"
       (click)="open()"
     >
-      <span aria-hidden="true" [class]="kind().rail"></span>
-
-      <span [class]="kind().tile">
-        <ng-icon [name]="kind().icon" class="text-lg" aria-hidden="true" />
-      </span>
-
-      <span class="min-w-0 flex-1">
+      <span class="artifact-card__surface">
         <span
-          class="block truncate text-sm font-semibold text-gray-900 dark:text-gray-100"
-        >
-          {{ artifact().title || 'Untitled artifact' }}
-        </span>
-        <span
-          class="mt-1 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400"
-        >
-          <span [class]="kind().badge">{{ kind().label }}</span>
-          <span>v{{ artifact().version }}</span>
-          @if (updatedLabel()) {
-            <span aria-hidden="true" class="text-gray-300 dark:text-gray-600"
-              >·</span
-            >
-            <span>{{ updatedLabel() }}</span>
-          }
-        </span>
-      </span>
-
-      <span
-        class="flex shrink-0 items-center gap-1 text-xs font-medium text-gray-400 transition-colors group-hover:text-blue-600 dark:text-gray-500 dark:group-hover:text-blue-300"
-      >
-        <span class="hidden sm:inline">Open</span>
-        <ng-icon
-          name="heroArrowTopRightOnSquare"
-          class="text-base"
+          class="artifact-card__rule"
+          [style.color]="kind().accent"
           aria-hidden="true"
-        />
+        ></span>
+
+        <span
+          class="artifact-card__stamp"
+          [style.color]="kind().accent"
+          aria-hidden="true"
+        >
+          <ng-icon [name]="kind().icon" />
+        </span>
+
+        <span class="artifact-card__body">
+          <span class="artifact-card__title">{{
+            artifact().title || 'Untitled artifact'
+          }}</span>
+          <span class="artifact-card__meta">
+            <span class="artifact-card__type">{{ kind().label }}</span>
+            <span class="artifact-card__sep" aria-hidden="true">·</span>
+            <span>v{{ artifact().version }}</span>
+            @if (updatedLabel()) {
+              <span class="artifact-card__sep" aria-hidden="true">·</span>
+              <span>{{ updatedLabel() }}</span>
+            }
+          </span>
+        </span>
+
+        <span class="artifact-card__open" aria-hidden="true">
+          <ng-icon name="heroArrowLongRight" />
+        </span>
       </span>
     </button>
   `,
   styles: `
     :host {
       display: block;
+    }
+
+    /* The focusable element carries no visual chrome; it owns only the
+       focus ring (an un-clipped rectangle, so the notched corner can't
+       eat it). */
+    .artifact-card {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      display: block;
+      width: 100%;
+      max-width: 28rem;
+      /* matches the chat input's rounded-2xl so the focus ring (and the
+         surface below) share the app's corner radius */
+      border-radius: 1rem;
+      cursor: pointer;
+    }
+
+    .artifact-card:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 3px;
+    }
+
+    :host-context(html.dark) .artifact-card:focus-visible {
+      outline-color: #60a5fa;
+    }
+
+    /* The visible body: a borderless, tinted, generously rounded card.
+       overflow:hidden so the left rule conforms to the rounded edge. */
+    .artifact-card__surface {
+      position: relative;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 0.875rem;
+      padding: 0.8rem 1rem 0.8rem 1.1rem;
+      background: #f1f2f4;
+      border-radius: 1rem;
+      overflow: hidden;
+      transition: background-color 0.18s ease;
+    }
+
+    :host-context(html.dark) .artifact-card__surface {
+      background: rgba(255, 255, 255, 0.045);
+    }
+
+    .artifact-card:hover .artifact-card__surface {
+      background: #e7e8ec;
+    }
+
+    :host-context(html.dark) .artifact-card:hover .artifact-card__surface {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Thin left rule: a short tick at rest, runs the full height on
+       hover/focus. The card's only structural line. */
+    .artifact-card__rule {
+      position: absolute;
+      left: 0;
+      top: 50%;
+      width: 2px;
+      height: 1.15rem;
+      transform: translateY(-50%);
+      background: currentColor;
+      opacity: 0.65;
+      transition:
+        height 0.2s ease,
+        opacity 0.2s ease;
+    }
+
+    .artifact-card:hover .artifact-card__rule,
+    .artifact-card:focus-visible .artifact-card__rule {
+      height: 100%;
+      opacity: 1;
+    }
+
+    /* Hairline type stamp — outline only, no fill. */
+    .artifact-card__stamp {
+      display: grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+      border-radius: 4px;
+    }
+
+    .artifact-card__stamp ng-icon {
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .artifact-card__body {
+      min-width: 0;
+    }
+
+    .artifact-card__title {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      letter-spacing: -0.006em;
+      color: #1f2430;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    :host-context(html.dark) .artifact-card__title {
+      color: #eceef2;
+    }
+
+    /* Metadata line — the app's sans, small and quiet. */
+    .artifact-card__meta {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 0.2rem;
+      font-size: 0.75rem;
+      color: #4b5563;
+    }
+
+    :host-context(html.dark) .artifact-card__meta {
+      color: #9aa3b2;
+    }
+
+    .artifact-card__type {
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      color: #353c4a;
+    }
+
+    :host-context(html.dark) .artifact-card__type {
+      color: #c4cbd8;
+    }
+
+    .artifact-card__sep {
+      opacity: 0.4;
+    }
+
+    /* Quiet open affordance: a long thin arrow that settles in on
+       hover. No label, no shouting. */
+    .artifact-card__open {
+      display: flex;
+      align-items: center;
+      color: #9ca3af;
+      opacity: 0.5;
+      transform: translateX(-3px);
+      transition:
+        opacity 0.18s ease,
+        transform 0.18s ease,
+        color 0.18s ease;
+    }
+
+    .artifact-card__open ng-icon {
+      font-size: 1.05rem;
+      line-height: 1;
+    }
+
+    .artifact-card:hover .artifact-card__open,
+    .artifact-card:focus-visible .artifact-card__open {
+      opacity: 1;
+      transform: translateX(0);
+      color: #4b5563;
+    }
+
+    :host-context(html.dark) .artifact-card__open {
+      color: #6b7280;
+    }
+
+    :host-context(html.dark) .artifact-card:hover .artifact-card__open,
+    :host-context(html.dark) .artifact-card:focus-visible .artifact-card__open {
+      color: #aab2c0;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .artifact-card__surface,
+      .artifact-card__rule,
+      .artifact-card__open {
+        transition: none;
+      }
+      .artifact-card__open {
+        transform: none;
+      }
     }
   `,
 })
@@ -131,95 +323,37 @@ export class ArtifactCardComponent {
   }
 }
 
-const TILE_BASE =
-  'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg';
-const BADGE_BASE =
-  'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide';
-const RAIL_BASE = 'absolute inset-y-0 left-0 w-1';
-
-function kind(
-  label: string,
-  icon: string,
-  tile: string,
-  badge: string,
-  rail: string,
-): ArtifactKind {
-  return {
-    label,
-    icon,
-    tile: `${TILE_BASE} ${tile}`,
-    badge: `${BADGE_BASE} ${badge}`,
-    rail: `${RAIL_BASE} ${rail}`,
-  };
-}
-
 const CODE = 'heroCodeBracket';
 const DOC = 'heroDocumentText';
 
-/** Map a MIME type to a label + accent palette. The match is on the
- *  bare type (parameters like `; charset=utf-8` are ignored). */
+/** Map a MIME type to a label + accent. The match is on the bare type
+ *  (parameters like `; charset=utf-8` are ignored). One mid-tone accent
+ *  per type — legible on both the light and dark surface, used only as
+ *  a thin rule / outline / glyph. */
 function classifyContentType(contentType: string): ArtifactKind {
   const mime = (contentType || '').split(';')[0].trim().toLowerCase();
 
   switch (mime) {
     case 'text/html':
     case 'application/xhtml+xml':
-      return kind(
-        'HTML',
-        CODE,
-        'bg-orange-100 text-orange-600 dark:bg-orange-900/40 dark:text-orange-300',
-        'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-        'bg-orange-400 dark:bg-orange-500',
-      );
+      return { label: 'HTML', icon: CODE, accent: '#e8762a' };
     case 'text/javascript':
     case 'application/javascript':
-      return kind(
-        'JS',
-        CODE,
-        'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300',
-        'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-        'bg-amber-400 dark:bg-amber-500',
-      );
+      return { label: 'JS', icon: CODE, accent: '#cf9a13' };
     case 'text/css':
-      return kind(
-        'CSS',
-        CODE,
-        'bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300',
-        'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
-        'bg-sky-400 dark:bg-sky-500',
-      );
+      return { label: 'CSS', icon: CODE, accent: '#2f9bd6' };
     case 'application/json':
-      return kind(
-        'JSON',
-        CODE,
-        'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300',
-        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-        'bg-emerald-400 dark:bg-emerald-500',
-      );
+      return { label: 'JSON', icon: CODE, accent: '#1f9d6b' };
     case 'image/svg+xml':
-      return kind(
-        'SVG',
-        CODE,
-        'bg-pink-100 text-pink-600 dark:bg-pink-900/40 dark:text-pink-300',
-        'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300',
-        'bg-pink-400 dark:bg-pink-500',
-      );
+      return { label: 'SVG', icon: CODE, accent: '#d6519a' };
     case 'text/markdown':
-      return kind(
-        'MD',
-        DOC,
-        'bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-300',
-        'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
-        'bg-violet-400 dark:bg-violet-500',
-      );
+      return { label: 'MD', icon: DOC, accent: '#7c6cf0' };
     default:
-      return kind(
-        mime.startsWith('text/') ? 'TEXT' : 'DOC',
-        DOC,
-        'bg-slate-100 text-slate-600 dark:bg-slate-700/60 dark:text-slate-300',
-        'bg-slate-100 text-slate-600 dark:bg-slate-700/60 dark:text-slate-300',
-        'bg-slate-400 dark:bg-slate-500',
-      );
+      return {
+        label: mime.startsWith('text/') ? 'TEXT' : 'DOC',
+        icon: DOC,
+        accent: '#8a93a3',
+      };
   }
 }
 

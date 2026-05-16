@@ -1,4 +1,5 @@
-import { Injectable, computed, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
+import { SidenavService } from '../../../services/sidenav/sidenav.service';
 import type { ArtifactEvent } from '../../../shared/utils/stream-parser';
 import type { Artifact, OpenArtifactRef } from './artifact.model';
 
@@ -16,8 +17,26 @@ import type { Artifact, OpenArtifactRef } from './artifact.model';
  */
 @Injectable({ providedIn: 'root' })
 export class ArtifactStateService {
+  private readonly sidenav = inject(SidenavService);
+
   private readonly byId = signal<Map<string, Artifact>>(new Map());
   private readonly openRef = signal<OpenArtifactRef | null>(null);
+
+  /** Sidenav collapsed state captured the moment the panel opened, so a
+   *  user who had the nav open isn't left with it collapsed after they
+   *  close the artifact (and one who had it collapsed keeps it that way). */
+  private navWasCollapsed = false;
+
+  /** User-controlled docked pane width in px. Shared with the layout
+   *  (content padding + fixed footer/topnav offset) via a CSS var so the
+   *  chat never ends up under the pane. Survives open/close within a
+   *  session (it's a root singleton); resets on full reload. */
+  private static readonly MIN_PANE_WIDTH = 360;
+  private static readonly MAX_PANE_WIDTH = 1200;
+  private static readonly DEFAULT_PANE_WIDTH = 672; // 42rem, prior fixed size
+  private readonly paneWidthSignal = signal(
+    ArtifactStateService.DEFAULT_PANE_WIDTH,
+  );
 
   /** Artifacts for the current session, newest update first. */
   readonly artifacts = computed<Artifact[]>(() =>
@@ -30,6 +49,28 @@ export class ArtifactStateService {
 
   /** The artifact the side panel is showing, or null when closed. */
   readonly openArtifact = this.openRef.asReadonly();
+
+  /** Current docked pane width in px (clamped). */
+  readonly paneWidth = this.paneWidthSignal.asReadonly();
+
+  get paneWidthMin(): number {
+    return ArtifactStateService.MIN_PANE_WIDTH;
+  }
+
+  get paneWidthMax(): number {
+    return ArtifactStateService.MAX_PANE_WIDTH;
+  }
+
+  /** Set the docked pane width, clamped to the allowed range. The caller
+   *  is responsible for any viewport-relative ceiling (the service only
+   *  knows absolute bounds, not the window size). */
+  setPaneWidth(px: number): void {
+    const clamped = Math.min(
+      ArtifactStateService.MAX_PANE_WIDTH,
+      Math.max(ArtifactStateService.MIN_PANE_WIDTH, Math.round(px)),
+    );
+    this.paneWidthSignal.set(clamped);
+  }
 
   /** Latest known version of an artifact, if any (used by the card). */
   get(artifactId: string): Artifact | undefined {
@@ -66,17 +107,36 @@ export class ArtifactStateService {
   }
 
   openArtifactPanel(ref: OpenArtifactRef): void {
+    // Collapse the side nav to make room for the docked pane. Only capture
+    // the prior state on a genuine closed -> open transition: switching
+    // between artifacts while the panel is already open must not overwrite
+    // it (the nav is collapsed by us at that point).
+    if (this.openRef() === null) {
+      this.navWasCollapsed = this.sidenav.isCollapsed();
+      this.sidenav.collapse();
+    }
     this.openRef.set(ref);
   }
 
   closeArtifactPanel(): void {
+    if (this.openRef() === null) return;
     this.openRef.set(null);
+    this.restoreNav();
   }
 
   /** Clear all state — called on session change. */
   reset(): void {
     this.byId.set(new Map());
-    this.openRef.set(null);
+    if (this.openRef() !== null) {
+      this.openRef.set(null);
+      this.restoreNav();
+    }
+  }
+
+  /** Return the side nav to whatever state it was in before the panel
+   *  opened. If the user had it collapsed already, leave it collapsed. */
+  private restoreNav(): void {
+    if (!this.navWasCollapsed) this.sidenav.expand();
   }
 
   private upsert(a: Artifact): void {
