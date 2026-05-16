@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TestBed } from '@angular/core/testing';
 import { ArtifactStateService } from './artifact-state.service';
 import type { ArtifactEvent } from '../../../shared/utils/stream-parser';
 import type { Artifact } from './artifact.model';
@@ -21,7 +22,11 @@ describe('ArtifactStateService', () => {
   let svc: ArtifactStateService;
 
   beforeEach(() => {
-    svc = new ArtifactStateService();
+    // ArtifactStateService injects SidenavService (both providedIn:
+    // 'root'), so it must be created in an injection context rather
+    // than via `new`.
+    TestBed.configureTestingModule({});
+    svc = TestBed.inject(ArtifactStateService);
   });
 
   it('starts empty', () => {
