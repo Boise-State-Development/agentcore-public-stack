@@ -8,6 +8,9 @@ Lambda would serve.
 
 from __future__ import annotations
 
+import base64
+import re
+
 import boto3
 import pytest
 from moto import mock_aws
@@ -21,6 +24,15 @@ BUCKET = "test-artifacts-content"
 USER = "user-123"
 SESSION = "sess-9"
 DOC = "<!doctype html><html><body><h1>hi</h1></body></html>"
+MD = "# Title\n\nSome **bold** text and a list:\n\n- one\n- two\n"
+
+
+def _embedded_markdown(body: str) -> str:
+    """Decode the base64 source the render wrapper embeds (no `<` in
+    base64, so the cheap regex is safe)."""
+    m = re.search(r'id="md-src">([^<]+)</script>', body)
+    assert m, "render wrapper is missing the embedded markdown block"
+    return base64.b64decode(m.group(1)).decode()
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +138,62 @@ def test_content_type_default(aws) -> None:
     ddb, _ = aws
     aid, _ = service.create_artifact_record(USER, SESSION, "T", DOC, "")
     assert _item(ddb, aid, "V#00001")["content_type"] == "text/html; charset=utf-8"
+
+
+def test_markdown_create_wraps_and_preserves_type(aws) -> None:
+    ddb, s3 = aws
+    aid, ver = service.create_artifact_record(
+        USER, SESSION, "Notes", MD, "text/markdown"
+    )
+    assert ver == 1
+
+    # DDB keeps the authored Markdown type — drives the SPA card badge
+    # and list; the render Lambda maps it to text/html when serving.
+    assert _item(ddb, aid, "V#00001")["content_type"] == "text/markdown"
+
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode()
+    assert body.lstrip().startswith("<!doctype html>")
+    assert "https://esm.sh/marked@14.1.4" in body
+    # Source is base64-embedded, never inlined raw (escaping/XSS-safe).
+    assert MD not in body
+    assert _embedded_markdown(body) == MD
+
+
+def test_markdown_charset_suffix_still_markdown(aws) -> None:
+    _, s3 = aws
+    aid, _ = service.create_artifact_record(
+        USER, SESSION, "Doc", MD, "text/markdown; charset=utf-8"
+    )
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode()
+    assert _embedded_markdown(body) == MD
+
+
+def test_markdown_update_rewraps_inherited_type(aws) -> None:
+    _, s3 = aws
+    aid, _ = service.create_artifact_record(
+        USER, SESSION, "Doc", MD, "text/markdown"
+    )
+    new_md = "## v2\n\nrevised body\n"
+    # content_type omitted → inherits Markdown from HEAD, must re-wrap.
+    ver = service.update_artifact_record(USER, aid, new_md, None, None)
+    assert ver == 2
+    body = s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v2/index.html"
+    )["Body"].read().decode()
+    assert body.lstrip().startswith("<!doctype html>")
+    assert _embedded_markdown(body) == new_md
+
+
+def test_html_artifact_not_wrapped(aws) -> None:
+    _, s3 = aws
+    aid, _ = service.create_artifact_record(USER, SESSION, "Page", DOC, "text/html")
+    assert s3.get_object(
+        Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
+    )["Body"].read().decode() == DOC
 
 
 def test_ssm_fallback(aws, monkeypatch: pytest.MonkeyPatch) -> None:

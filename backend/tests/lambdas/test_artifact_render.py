@@ -364,6 +364,44 @@ def test_version_pins_exact_sk(aws_env) -> None:
     assert resp["statusCode"] == 404
 
 
+@pytest.mark.parametrize(
+    "stored,served",
+    [
+        ("text/markdown", "text/html; charset=utf-8"),
+        ("text/markdown; charset=utf-8", "text/html; charset=utf-8"),
+        ("text/x-markdown", "text/html; charset=utf-8"),
+        ("TEXT/MARKDOWN", "text/html; charset=utf-8"),
+        ("text/html; charset=utf-8", "text/html; charset=utf-8"),
+        ("image/svg+xml", "image/svg+xml"),
+        ("application/json", "application/json"),
+    ],
+)
+def test_serve_content_type_mapping(stored: str, served: str) -> None:
+    assert handler._serve_content_type(stored) == served
+
+
+def test_markdown_record_served_as_html(aws_env) -> None:
+    # S3 holds the writer's HTML render wrapper; the row is typed
+    # text/markdown so the SPA card/list stay truthful. The Lambda must
+    # serve the exact bytes but with a text/html HTTP content type.
+    wrapper = "<!doctype html><html><body>rendered md</body></html>"
+    boto3.client("s3", region_name="us-east-1").put_object(
+        Bucket=BUCKET, Key=CONTENT_KEY, Body=wrapper.encode()
+    )
+    _put_record(aws_env["ddb"], content_type="text/markdown; charset=utf-8")
+    resp = handler.handler(_event(_mint(_valid_claims())), None)
+    assert resp["statusCode"] == 200
+    assert resp["headers"]["content-type"] == "text/html; charset=utf-8"
+    assert resp["body"] == wrapper  # bytes are an exact pass-through
+
+
+def test_non_markdown_content_type_served_verbatim(aws_env) -> None:
+    _put_record(aws_env["ddb"], content_type="image/svg+xml")
+    resp = handler.handler(_event(_mint(_valid_claims())), None)
+    assert resp["statusCode"] == 200
+    assert resp["headers"]["content-type"] == "image/svg+xml"
+
+
 def test_oversized_content_is_500(aws_env, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(handler, "_MAX_CONTENT_BYTES", 16)
     boto3.client("s3", region_name="us-east-1").put_object(

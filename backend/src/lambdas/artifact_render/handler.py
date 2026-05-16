@@ -21,6 +21,14 @@ templating layer: S3 holds the complete document to serve, and the
 artifact writer owns all rendering. `#HEAD` is never read — the token
 pins an exact version.
 
+Markdown serve-type mapping: a Markdown artifact's version row carries
+the authored `content_type` (`text/markdown`) so the SPA card/list stay
+truthful, but S3 holds the writer's self-contained HTML render wrapper.
+So records typed as Markdown are served with a `text/html` HTTP
+content type — still the exact S3 bytes, only the response header is
+mapped (header stamping, not templating). Must stay in sync with the
+writer (`agents/builtin_tools/artifacts/service.py`).
+
 No third-party dependencies: HS256 is HMAC-SHA256, verified with the
 standard library. boto3 is provided by the Lambda runtime.
 
@@ -112,6 +120,25 @@ def _csp_header() -> str:
             "base-uri 'none'",
         ]
     )
+
+
+# Authored types whose S3 body is a writer-produced HTML render wrapper
+# (see module docstring). Mirrors `_MARKDOWN_MIME_TYPES` in the writer's
+# service.py — this Lambda is standalone (no apis/* imports) so the small
+# duplication is by design; keep the two in sync.
+_HTML_CONTENT_TYPE = "text/html; charset=utf-8"
+_MARKDOWN_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown"})
+
+
+def _serve_content_type(stored: str) -> str:
+    """HTTP content type to emit for a stored authored type.
+
+    Markdown records hold an HTML render wrapper in S3, so they are
+    served as HTML; every other type is served exactly as stored."""
+    bare = (stored or "").split(";")[0].strip().lower()
+    if bare in _MARKDOWN_MIME_TYPES:
+        return _HTML_CONTENT_TYPE
+    return stored
 
 
 def _security_headers(content_type: str) -> dict[str, str]:
@@ -364,7 +391,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         content_key = record.get("content_key")
         if not isinstance(content_key, str) or not content_key:
             raise _ArtifactNotFound("version record has no content pointer")
-        content_type = record.get("content_type") or "text/html; charset=utf-8"
+        stored_content_type = record.get("content_type") or _HTML_CONTENT_TYPE
+        content_type = _serve_content_type(stored_content_type)
         body = _fetch_content(content_key)
     except _ArtifactNotFound as exc:
         logger.warning(

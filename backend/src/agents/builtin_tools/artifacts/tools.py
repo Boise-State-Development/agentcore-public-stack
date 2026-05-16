@@ -30,19 +30,30 @@ def make_create_artifact_tool(session_id: str, user_id: str):
 
         Use this when you produce a self-contained deliverable the user
         will want to view, keep, or iterate on — an HTML page, a chart,
-        an interactive widget, a formatted report.
+        an interactive widget, a formatted report, or a written document.
 
-        `content` MUST be a complete standalone HTML document (include
-        `<!doctype html>` and a full `<html>` … `</html>`). It renders in
-        a sandboxed iframe with a strict CSP: inline `<style>`/`<script>`
-        are allowed, as are scripts from `https://cdn.tailwindcss.com`
-        and `https://esm.sh`. It cannot make network calls. Do NOT wrap
-        the document in markdown fences.
+        Two authoring modes:
+
+        - HTML (default): `content` MUST be a complete standalone HTML
+          document (include `<!doctype html>` and a full `<html>` …
+          `</html>`). It renders in a sandboxed iframe with a strict CSP:
+          inline `<style>`/`<script>` are allowed, as are scripts from
+          `https://cdn.tailwindcss.com` and `https://esm.sh`. It cannot
+          make network calls.
+
+        - Markdown: pass `content_type="text/markdown"` and provide raw
+          GitHub-flavored Markdown as `content`. Do NOT add an HTML
+          shell — the system renders the Markdown for the user. Prefer
+          this for prose, reports, and documentation.
+
+        Either way, do NOT wrap `content` in markdown code fences.
 
         Args:
             title: Short human-readable name shown in the artifacts list.
-            content: The full HTML document.
-            content_type: Defaults to text/html; leave as-is for HTML.
+            content: The full HTML document, or raw Markdown when
+                content_type is text/markdown.
+            content_type: Defaults to text/html. Pass "text/markdown"
+                to author a Markdown document instead.
 
         Returns the new artifact id and version — reference the id if the
         user later asks you to change it (via update_artifact).
@@ -79,14 +90,18 @@ def make_update_artifact_tool(session_id: str, user_id: str):
 
         Prior versions are kept immutably. Pass the `artifact_id`
         returned by an earlier create_artifact. `content` follows the
-        same rules as create_artifact (a complete standalone HTML
-        document, no markdown fences).
+        same rules as create_artifact: a complete standalone HTML
+        document, or raw Markdown when content_type is text/markdown; no
+        markdown code fences either way. If content_type is omitted the
+        artifact's existing type (HTML or Markdown) is kept.
 
         Args:
             artifact_id: The artifact to update.
-            content: The full replacement HTML document.
+            content: The full replacement HTML document, or raw Markdown
+                for a Markdown artifact.
             title: Optional new title; unchanged if omitted.
-            content_type: Optional; unchanged if omitted.
+            content_type: Optional; unchanged if omitted. Pass
+                "text/markdown" to switch an artifact to Markdown.
 
         Returns the new version number.
         """
