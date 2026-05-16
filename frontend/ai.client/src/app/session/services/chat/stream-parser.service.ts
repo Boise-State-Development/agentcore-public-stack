@@ -28,6 +28,7 @@ import {
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
+  extractStreamingStringField,
   parseToolResultContent,
   type StreamParserCallbacks,
   type ContentBlockBuilder,
@@ -50,6 +51,12 @@ enum StreamState {
 
 // Re-export ToolProgress for backwards compatibility
 export type { ToolProgress };
+
+/**
+ * Tools whose `content` input is a long document worth surfacing live (as a
+ * "generating…" preview) while the model is still streaming the tool call.
+ */
+const STREAMING_CONTENT_TOOLS = new Set(['create_artifact', 'update_artifact']);
 
 @Injectable({
   providedIn: 'root',
@@ -967,6 +974,21 @@ export class StreamParserService {
 
       if (builder.status) {
         toolUseData['status'] = builder.status;
+      }
+
+      // While an artifact tool is still streaming (no result yet), surface the
+      // partially-generated `content` so the UI can show live progress. The
+      // full tool-input JSON is incomplete during this window, so JSON.parse
+      // above yields {} — we extract the in-flight value directly instead.
+      if (
+        !builder.result &&
+        builder.toolName &&
+        STREAMING_CONTENT_TOOLS.has(builder.toolName)
+      ) {
+        const streaming = extractStreamingStringField(inputStr, 'content');
+        if (streaming) {
+          toolUseData['streamingContent'] = streaming;
+        }
       }
 
       return {

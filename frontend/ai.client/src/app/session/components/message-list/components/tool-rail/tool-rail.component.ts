@@ -8,6 +8,7 @@ import {
 import { KeyValuePipe } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
 import { ToolCallGroup, ToolCallDisplay } from './tool-rail.model';
+import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
 @Component({
@@ -15,7 +16,7 @@ import { ToolResultContent } from '../../../../services/models/message.model';
   templateUrl: './tool-rail.component.html',
   styleUrl: './tool-rail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [JsonSyntaxHighlightPipe, KeyValuePipe],
+  imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective],
 })
 export class ToolRailComponent {
   /** The grouped tool calls to display */
@@ -87,6 +88,14 @@ export class ToolRailComponent {
       case 'awaiting_auth':  return 'status-dot bg-primary-500 ring-2 ring-primary-300/40 dark:ring-primary-400/30';
       default:               return 'status-dot bg-gray-400';
     }
+  }
+
+  /**
+   * True while a tool is still streaming its long output (e.g. an artifact)
+   * and has not yet returned a result — drives the live "generating" preview.
+   */
+  isGenerating(call: ToolCallDisplay): boolean {
+    return !!call.streamingContent && !call.result;
   }
 
   /** Format duration for display */

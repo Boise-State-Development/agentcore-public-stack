@@ -38,6 +38,7 @@ export {
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
+  extractStreamingStringField,
   parseToolResultContent,
   type StreamParserCallbacks,
 } from './stream-parser-core';

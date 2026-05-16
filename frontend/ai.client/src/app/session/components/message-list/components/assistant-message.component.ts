@@ -355,6 +355,7 @@ export class AssistantMessageComponent {
             input: toolUse.input || {},
             result: toolUse.result,
             status,
+            streamingContent: toolUse.streamingContent,
           });
         }
         continue;

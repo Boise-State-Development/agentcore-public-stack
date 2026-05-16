@@ -71,6 +71,13 @@ export interface ToolUseData {
   };
   /** Tool execution status */
   status?: 'pending' | 'complete' | 'error';
+  /**
+   * Best-effort decoded value of a long string input field (e.g. an artifact's
+   * `content`) extracted from the still-incomplete tool-call JSON while the
+   * model is streaming it. Used to give the user live "generating" feedback
+   * before the full tool input has arrived. Unset once the tool completes.
+   */
+  streamingContent?: string;
 }
 
 /**

@@ -26,6 +26,14 @@ export interface ToolCallDisplay {
    *  for the user to authorize. */
   status: 'pending' | 'complete' | 'error' | 'awaiting_auth';
 
+  /**
+   * Partially-generated long output (e.g. an artifact's HTML) decoded from the
+   * still-incomplete tool-call JSON while the model is streaming it. Present
+   * only while the call is in flight; cleared once a result arrives. Used to
+   * show live "generating output" feedback in the rail.
+   */
+  streamingContent?: string;
+
   /** Optional LLM-generated one-line summary of this tool call's result */
   summary?: string;
 

@@ -15,6 +15,7 @@ import {
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
+  extractStreamingStringField,
   parseToolResultContent,
   StreamParserCallbacks
 } from './stream-parser-core';
@@ -576,6 +577,65 @@ describe('stream-parser-core', () => {
     it('should return text by default', () => {
       expect(inferContentBlockType({ contentBlockIndex: 0, text: 'hello' })).toBe('text');
       expect(inferContentBlockType({ contentBlockIndex: 0 })).toBe('text');
+    });
+  });
+
+  describe('extractStreamingStringField', () => {
+    it('returns null when input is empty', () => {
+      expect(extractStreamingStringField('', 'content')).toBeNull();
+    });
+
+    it('returns null when the field has not started streaming', () => {
+      expect(extractStreamingStringField('{"title":"Hi"', 'content')).toBeNull();
+      expect(extractStreamingStringField('{"title":"Hi","content"', 'content')).toBeNull();
+      expect(extractStreamingStringField('{"title":"Hi","content":', 'content')).toBeNull();
+    });
+
+    it('returns the partial value while the string is still open', () => {
+      expect(
+        extractStreamingStringField('{"title":"Hi","content":"<!DOCTYPE htm', 'content'),
+      ).toBe('<!DOCTYPE htm');
+    });
+
+    it('returns the full value once the closing quote arrives', () => {
+      expect(
+        extractStreamingStringField('{"content":"<h1>Hello</h1>","x":1}', 'content'),
+      ).toBe('<h1>Hello</h1>');
+    });
+
+    it('decodes JSON string escapes', () => {
+      expect(
+        extractStreamingStringField('{"content":"line1\\nline2\\t\\"q\\"\\\\","', 'content'),
+      ).toBe('line1\nline2\t"q"\\');
+    });
+
+    it('decodes unicode escapes', () => {
+      expect(extractStreamingStringField('{"content":"\\u00e9\\u4e2d', 'content')).toBe(
+        'é中',
+      );
+    });
+
+    it('drops a dangling backslash that has not finished streaming', () => {
+      expect(extractStreamingStringField('{"content":"abc\\', 'content')).toBe('abc');
+    });
+
+    it('drops an incomplete unicode escape', () => {
+      expect(extractStreamingStringField('{"content":"abc\\u00e', 'content')).toBe('abc');
+    });
+
+    it('does not match a different field with a shared prefix', () => {
+      // `content_type` must not be mistaken for `content`
+      expect(
+        extractStreamingStringField('{"content_type":"text/html","content":"body', 'content'),
+      ).toBe('body');
+    });
+
+    it('tolerates whitespace between key, colon, and value', () => {
+      expect(extractStreamingStringField('{"content"  :  "hi', 'content')).toBe('hi');
+    });
+
+    it('returns empty string for an empty completed value', () => {
+      expect(extractStreamingStringField('{"content":""}', 'content')).toBe('');
     });
   });
 

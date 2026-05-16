@@ -277,5 +277,33 @@ describe('AssistantMessageComponent', () => {
       const call = blocks[0].group!.calls[0];
       expect(call.status).toBe('pending');
     });
+
+    it('should carry streamingContent through to the ToolCallDisplay', () => {
+      fixture.componentRef.setInput('message', makeMessage([
+        makeToolBlock('create_artifact', {
+          status: 'pending',
+          streamingContent: '<!DOCTYPE html><html><body>partial',
+          // no result yet — still generating
+          result: undefined,
+        }),
+      ]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      const call = blocks[0].group!.calls[0];
+      expect(call.streamingContent).toBe('<!DOCTYPE html><html><body>partial');
+      expect(call.status).toBe('pending');
+    });
+
+    it('should leave streamingContent undefined for ordinary tool calls', () => {
+      fixture.componentRef.setInput('message', makeMessage([
+        makeToolBlock('my_tool'),
+      ]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      const call = blocks[0].group!.calls[0];
+      expect(call.streamingContent).toBeUndefined();
+    });
   });
 });

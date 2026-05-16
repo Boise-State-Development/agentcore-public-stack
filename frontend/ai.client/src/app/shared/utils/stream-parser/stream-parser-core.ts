@@ -734,6 +734,120 @@ export function inferContentBlockType(
 }
 
 /**
+ * Best-effort extraction of a single string field's value from an incomplete
+ * JSON object that is still streaming in (e.g. a tool call's `input` arriving
+ * as `input_json_delta` chunks).
+ *
+ * Returns the decoded string value so far — even when the closing quote has
+ * not yet arrived — so callers can render live "generating" feedback. Returns
+ * `null` if the field's string value has not started streaming yet.
+ *
+ * Never throws: malformed / truncated input yields the portion decoded so far.
+ * Only string-valued fields are handled (non-string values return `null`).
+ *
+ * @param partialJson Accumulated (possibly incomplete) JSON text
+ * @param field       Top-level field name to extract (e.g. "content")
+ */
+export function extractStreamingStringField(
+  partialJson: string,
+  field: string,
+): string | null {
+  if (!partialJson) {
+    return null;
+  }
+
+  // Locate `"field" : "` allowing JSON-permitted whitespace. Escaping the
+  // field name keeps this safe even though callers pass simple identifiers.
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const opener = new RegExp(`"${escapedField}"\\s*:\\s*"`);
+  const match = opener.exec(partialJson);
+  if (!match) {
+    return null;
+  }
+
+  let i = match.index + match[0].length;
+  let result = '';
+
+  while (i < partialJson.length) {
+    const ch = partialJson[i];
+
+    if (ch === '"') {
+      // Unescaped closing quote -> value is complete.
+      return result;
+    }
+
+    if (ch === '\\') {
+      // Need at least one more char to know the escape; if it hasn't
+      // streamed yet, drop the dangling backslash and return what we have.
+      if (i + 1 >= partialJson.length) {
+        return result;
+      }
+      const esc = partialJson[i + 1];
+      switch (esc) {
+        case '"':
+          result += '"';
+          i += 2;
+          break;
+        case '\\':
+          result += '\\';
+          i += 2;
+          break;
+        case '/':
+          result += '/';
+          i += 2;
+          break;
+        case 'b':
+          result += '\b';
+          i += 2;
+          break;
+        case 'f':
+          result += '\f';
+          i += 2;
+          break;
+        case 'n':
+          result += '\n';
+          i += 2;
+          break;
+        case 'r':
+          result += '\r';
+          i += 2;
+          break;
+        case 't':
+          result += '\t';
+          i += 2;
+          break;
+        case 'u': {
+          // Need 4 hex digits; if the buffer cuts off mid-sequence, drop
+          // the incomplete escape and return the decoded prefix.
+          if (i + 6 > partialJson.length) {
+            return result;
+          }
+          const hex = partialJson.slice(i + 2, i + 6);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
+            return result;
+          }
+          result += String.fromCharCode(parseInt(hex, 16));
+          i += 6;
+          break;
+        }
+        default:
+          // Invalid escape — emit the char literally and move on.
+          result += esc;
+          i += 2;
+          break;
+      }
+      continue;
+    }
+
+    result += ch;
+    i += 1;
+  }
+
+  // Buffer exhausted before the closing quote — value still streaming.
+  return result;
+}
+
+/**
  * Parse tool result content array into normalized format
  */
 export function parseToolResultContent(
