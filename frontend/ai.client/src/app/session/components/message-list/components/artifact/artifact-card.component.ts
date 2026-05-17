@@ -122,9 +122,13 @@ interface ArtifactKind {
     }
 
     /* Card shell: a positioning context for the stretched open button
-       and the download button. No chrome of its own. */
+       and the download button. No chrome of its own. isolation:isolate
+       keeps the internal z-index (hit=1, surface=2) scoped to the card
+       so it can't paint over page overlays (e.g. the context popover) —
+       the card as a whole stacks at its normal flow level. */
     .artifact-card {
       position: relative;
+      isolation: isolate;
       display: block;
       width: 100%;
       /* matches the chat input's rounded-2xl so the focus ring and the
