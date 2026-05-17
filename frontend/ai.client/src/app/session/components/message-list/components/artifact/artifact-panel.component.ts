@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
+import { NgTemplateOutlet } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
@@ -48,7 +49,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, ArtifactSourceComponent],
+  imports: [NgIcon, NgTemplateOutlet, ArtifactSourceComponent],
   providers: [
     provideIcons({
       heroXMark,
@@ -190,19 +191,7 @@ import { ArtifactSourceComponent } from './artifact-source.component';
 
         <div class="relative min-h-0 flex-1">
           @if (view() === 'code') {
-            @if (sourceLoading()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400"
-                role="status"
-              >
-                <ng-icon
-                  name="heroArrowPath"
-                  class="animate-spin text-2xl"
-                  aria-hidden="true"
-                />
-                <span class="text-sm">Loading source…</span>
-              </div>
-            } @else if (sourceError()) {
+            @if (sourceError()) {
               <div
                 class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
                 role="alert"
@@ -228,21 +217,14 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                 [content]="src.content"
                 [contentType]="src.contentType"
               />
+            } @else {
+              <ng-container
+                [ngTemplateOutlet]="skeleton"
+                [ngTemplateOutletContext]="{ label: 'Building source view…' }"
+              />
             }
           } @else {
-            @if (loading()) {
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400"
-                role="status"
-              >
-                <ng-icon
-                  name="heroArrowPath"
-                  class="animate-spin text-2xl"
-                  aria-hidden="true"
-                />
-                <span class="text-sm">Loading artifact…</span>
-              </div>
-            } @else if (error()) {
+            @if (error()) {
               <div
                 class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
                 role="alert"
@@ -263,25 +245,102 @@ import { ArtifactSourceComponent } from './artifact-source.component';
                   Try again
                 </button>
               </div>
-            } @else if (safeUrl()) {
-              <iframe
-                [src]="safeUrl()"
-                class="h-full w-full border-0 bg-white"
-                [class.pointer-events-none]="dragging()"
-                [title]="ref.title || 'Artifact'"
-                sandbox="allow-scripts"
-                referrerpolicy="no-referrer"
-                loading="lazy"
-              ></iframe>
+            } @else {
+              @if (safeUrl(); as url) {
+                <iframe
+                  [src]="url"
+                  class="h-full w-full border-0 bg-white"
+                  [class.pointer-events-none]="dragging()"
+                  [title]="ref.title || 'Artifact'"
+                  sandbox="allow-scripts"
+                  referrerpolicy="no-referrer"
+                  loading="lazy"
+                  (load)="onIframeLoad()"
+                ></iframe>
+              }
+              @if (!previewReady()) {
+                <ng-container
+                  [ngTemplateOutlet]="skeleton"
+                  [ngTemplateOutletContext]="{ label: 'Rendering artifact…' }"
+                />
+              }
             }
           }
         </div>
       </aside>
+      <ng-template #skeleton let-label="label">
+        <div
+          class="absolute inset-0 overflow-hidden bg-white p-8 dark:bg-gray-900"
+          role="status"
+          [attr.aria-label]="label"
+        >
+          <div aria-hidden="true" class="mx-auto flex max-w-2xl flex-col gap-6">
+            <div class="flex flex-col gap-3">
+              <div
+                class="skeleton-shimmer h-8 w-1/2 rounded-lg bg-gray-200 dark:bg-gray-700"
+              ></div>
+              <div
+                class="skeleton-shimmer h-4 w-1/4 rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+            </div>
+            <div class="flex flex-col gap-3">
+              <div
+                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+              <div
+                class="skeleton-shimmer h-3.5 w-11/12 rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+              <div
+                class="skeleton-shimmer h-3.5 w-4/5 rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+            </div>
+            <div
+              class="skeleton-shimmer h-48 w-full rounded-xl bg-gray-200 dark:bg-gray-700"
+            ></div>
+            <div class="flex flex-col gap-3">
+              <div
+                class="skeleton-shimmer h-3.5 w-full rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+              <div
+                class="skeleton-shimmer h-3.5 w-10/12 rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+              <div
+                class="skeleton-shimmer h-3.5 w-2/3 rounded bg-gray-200 dark:bg-gray-700"
+              ></div>
+            </div>
+          </div>
+          <span class="sr-only">{{ label }}</span>
+        </div>
+      </ng-template>
     }
   `,
   styles: `
     :host {
       display: contents;
+    }
+    .skeleton-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.45) 50%,
+        transparent 100%
+      );
+      background-size: 220% 100%;
+      background-repeat: no-repeat;
+      animation: artifact-skeleton-shimmer 1.5s ease-in-out infinite;
+    }
+    @keyframes artifact-skeleton-shimmer {
+      0% {
+        background-position: 130% 0;
+      }
+      100% {
+        background-position: -130% 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .skeleton-shimmer {
+        animation: none;
+      }
     }
   `,
 })
@@ -295,9 +354,16 @@ export class ArtifactPanelComponent {
   protected readonly open = this.artifactState.openArtifact;
 
   protected readonly safeUrl = signal<SafeResourceUrl | null>(null);
-  protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly downloading = signal(false);
+
+  /** Flips when the preview iframe fires `load` — the document has
+   *  actually painted, not merely that the render token was minted. */
+  protected readonly iframeLoaded = signal(false);
+  /** Skeleton clears only when a URL exists AND the iframe has painted. */
+  protected readonly previewReady = computed(
+    () => !!this.safeUrl() && this.iframeLoaded(),
+  );
 
   // Code-view state. The source is fetched lazily the first time the
   // user switches to 'code' for a given artifact (the preview iframe
@@ -438,6 +504,10 @@ export class ArtifactPanelComponent {
     void this.load();
   }
 
+  protected onIframeLoad(): void {
+    this.iframeLoaded.set(true);
+  }
+
   protected setView(next: 'preview' | 'code'): void {
     if (this.view() === next) return;
     this.view.set(next);
@@ -521,7 +591,7 @@ export class ArtifactPanelComponent {
   private reset(): void {
     this.safeUrl.set(null);
     this.error.set(null);
-    this.loading.set(false);
+    this.iframeLoaded.set(false);
     this.resetSource();
     this.view.set('preview');
   }
@@ -530,9 +600,9 @@ export class ArtifactPanelComponent {
     const ref = this.open();
     if (!ref) return;
     const seq = ++this.requestSeq;
-    this.loading.set(true);
     this.error.set(null);
     this.safeUrl.set(null);
+    this.iframeLoaded.set(false);
     try {
       const sessionId = this.sessionService.currentSession().sessionId;
       const token = await this.artifactHttp.mintRenderToken(
@@ -549,8 +619,6 @@ export class ArtifactPanelComponent {
       this.error.set(
         "This artifact couldn't be loaded. It may have expired or been removed.",
       );
-    } finally {
-      if (seq === this.requestSeq) this.loading.set(false);
     }
   }
 }

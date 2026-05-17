@@ -108,6 +108,63 @@ describe('ArtifactStateService', () => {
     expect(svc.openArtifact()).toBeNull();
   });
 
+  it('auto-opens the panel for a created artifact', () => {
+    svc.recordLive(ev({ artifactId: 'art-9', version: 1, title: 'Generated' }));
+    expect(svc.openArtifact()).toEqual({
+      artifactId: 'art-9',
+      version: 1,
+      title: 'Generated',
+    });
+  });
+
+  it('re-points the panel to the new version when an artifact is updated', () => {
+    svc.recordLive(ev({ version: 1, action: 'created' }));
+    svc.recordLive(
+      ev({
+        version: 2,
+        action: 'updated',
+        title: 'Doc v2',
+        updatedAt: '2026-05-15T12:05:00+00:00',
+      }),
+    );
+    expect(svc.get('art-1')?.version).toBe(2);
+    expect(svc.openArtifact()).toEqual({
+      artifactId: 'art-1',
+      version: 2,
+      title: 'Doc v2',
+    });
+  });
+
+  it('re-opens the panel on an update even after the user closed it', () => {
+    svc.recordLive(ev({ version: 1, action: 'created' }));
+    svc.closeArtifactPanel();
+    expect(svc.openArtifact()).toBeNull();
+    svc.recordLive(
+      ev({ version: 2, action: 'updated', updatedAt: '2026-05-15T12:05:00+00:00' }),
+    );
+    expect(svc.openArtifact()?.version).toBe(2);
+  });
+
+  it('keeps the panel on the highest version for an out-of-order update', () => {
+    svc.recordLive(ev({ version: 3, updatedAt: '2026-05-15T12:10:00+00:00' }));
+    svc.recordLive(ev({ version: 2, action: 'updated' })); // stale — ignored
+    expect(svc.get('art-1')?.version).toBe(3);
+    expect(svc.openArtifact()?.version).toBe(3);
+  });
+
+  it('hydration on reload does not auto-open the panel', () => {
+    svc.seedFromHydration([
+      {
+        artifactId: 'h1',
+        version: 1,
+        title: 'Hydrated',
+        contentType: 'text/html; charset=utf-8',
+        updatedAt: '2026-05-15T09:00:00+00:00',
+      },
+    ]);
+    expect(svc.openArtifact()).toBeNull();
+  });
+
   it('reset clears artifacts and open panel', () => {
     svc.recordLive(ev());
     svc.openArtifactPanel({ artifactId: 'art-1', version: 1, title: 'Doc' });
