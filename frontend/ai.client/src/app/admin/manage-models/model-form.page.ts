@@ -131,6 +131,58 @@ function thinkingInvariantsValidator(array: AbstractControl): ValidationErrors |
 }
 
 /**
+ * FormArray-level validator pinning the `max_tokens` row to the model's
+ * declared output ceiling. The model-level `maxOutputTokens` control is a
+ * sibling of this FormArray (reached via `array.parent`) — neither the
+ * `max` bound nor the `default` the runtime sends may exceed what the
+ * model can physically produce.
+ *
+ * Errors land on the `max_tokens` row so the inline markup surfaces them
+ * next to the per-row bounds errors. Mirrored on the backend by
+ * `_max_tokens_within_ceiling` on `ManagedModelCreate`/`ManagedModelUpdate`.
+ */
+function maxTokensCeilingValidator(array: AbstractControl): ValidationErrors | null {
+  if (!(array instanceof FormArray)) return null;
+  let maxTokensRow: FormGroup | undefined;
+  for (const row of array.controls as FormGroup[]) {
+    if (row.get('key')?.value === 'max_tokens') {
+      maxTokensRow = row;
+      break;
+    }
+  }
+  if (!maxTokensRow) return null;
+
+  // Recompute only the two ceiling keys each pass, preserving the per-row
+  // bounds errors paramRowBoundsValidator sets independently.
+  const rewrite = (extra: Record<string, true>): void => {
+    const existing = { ...(maxTokensRow!.errors ?? {}) };
+    delete existing['maxTokensMaxAboveCeiling'];
+    delete existing['maxTokensDefaultAboveCeiling'];
+    const merged = { ...existing, ...extra };
+    maxTokensRow!.setErrors(Object.keys(merged).length > 0 ? merged : null);
+  };
+
+  if (!maxTokensRow.get('supported')?.value) {
+    rewrite({});
+    return null;
+  }
+
+  const ceiling = array.parent?.get('maxOutputTokens')?.value;
+  if (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling < 1) {
+    rewrite({});
+    return null;
+  }
+
+  const errors: Record<string, true> = {};
+  const max = maxTokensRow.get('max')?.value;
+  const def = maxTokensRow.get('defaultValue')?.value;
+  if (typeof max === 'number' && max > ceiling) errors['maxTokensMaxAboveCeiling'] = true;
+  if (typeof def === 'number' && def > ceiling) errors['maxTokensDefaultAboveCeiling'] = true;
+  rewrite(errors);
+  return null;
+}
+
+/**
  * Helper used as a key on each known-param row so the FormArray validator
  * can find the `thinking` and `max_tokens` rows. Custom rows already store
  * their key in a `key` control; known rows don't, so we tag them with a
@@ -217,7 +269,7 @@ export class ModelFormPage implements OnInit {
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     supportsCaching: this.fb.control(false, { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
-      validators: [thinkingInvariantsValidator],
+      validators: [thinkingInvariantsValidator, maxTokensCeilingValidator],
     }),
     customInferenceParams: this.fb.array<FormGroup<CustomParamRowGroup>>([]),
   });
@@ -306,6 +358,12 @@ export class ModelFormPage implements OnInit {
     // visible knobs match what the selected SDK actually understands.
     this.modelForm.controls.provider.valueChanges.subscribe(provider => {
       this.rebuildInferenceParamRows(provider);
+    });
+
+    // Keep the max_tokens row pinned to the model's output ceiling: pre-fill
+    // it on a fresh model and re-check the cap whenever the ceiling changes.
+    this.modelForm.controls.maxOutputTokens.valueChanges.subscribe(() => {
+      this.syncMaxTokensCeiling();
     });
   }
 
@@ -422,6 +480,37 @@ export class ModelFormPage implements OnInit {
         }
       });
     }
+
+    this.syncMaxTokensCeiling();
+  }
+
+  /**
+   * Pin the `max_tokens` inference-param row to the model's declared output
+   * ceiling. Pre-fills the row's Max and Default from `maxOutputTokens` so a
+   * fresh model defaults to "request the full ceiling" — but only while
+   * those fields are untouched and weren't loaded from a persisted record,
+   * so deliberate admin edits and saved specs win. Always re-validates the
+   * array so the ceiling cap re-checks when only the model-level field
+   * changed (a sibling value change doesn't re-run the array validator on
+   * its own).
+   */
+  private syncMaxTokensCeiling(): void {
+    const idx = this.inferenceParamRows().findIndex(m => m.key === 'max_tokens');
+    if (idx < 0) return;
+    const row = this.paramRowGroup(idx);
+    const ceiling = this.modelForm.controls.maxOutputTokens.value;
+    const loaded = this.loadedKnownKeys.has('max_tokens');
+
+    if (!loaded && typeof ceiling === 'number' && Number.isFinite(ceiling) && ceiling >= 1) {
+      if (row.controls.max.pristine) {
+        row.controls.max.setValue(ceiling, { emitEvent: false });
+      }
+      if (row.controls.defaultValue.pristine) {
+        row.controls.defaultValue.setValue(ceiling, { emitEvent: false });
+      }
+    }
+
+    this.modelForm.controls.inferenceParams.updateValueAndValidity();
   }
 
   private buildCustomParamRow(key: string, seed: ModelParamSpec | null): FormGroup<CustomParamRowGroup> {
@@ -579,6 +668,15 @@ export class ModelFormPage implements OnInit {
     }
     if (row.errors['thinkingBudgetNotNumeric']) {
       out.push('Thinking budget must be a number — clear the value to disable, or enter an integer ≥ 1024.');
+    }
+    if (row.errors['maxTokensMaxAboveCeiling'] || row.errors['maxTokensDefaultAboveCeiling']) {
+      const ceiling = this.modelForm.controls.maxOutputTokens.value;
+      if (row.errors['maxTokensMaxAboveCeiling']) {
+        out.push(`Max must be ≤ the model's Max Output Tokens (${ceiling}).`);
+      }
+      if (row.errors['maxTokensDefaultAboveCeiling']) {
+        out.push(`Default must be ≤ the model's Max Output Tokens (${ceiling}).`);
+      }
     }
     return out;
   }

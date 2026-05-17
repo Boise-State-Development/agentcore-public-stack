@@ -88,6 +88,33 @@ class SupportedParams(BaseModel):
         return self
 
 
+def _max_tokens_within_ceiling(
+    max_output_tokens: Optional[int],
+    supported_params: Optional[SupportedParams],
+) -> None:
+    """Reject a max_tokens spec that lets the runtime request more output
+    than the model can physically produce.
+
+    Mirrors the Angular ``maxTokensCeilingValidator``. Only checks when both
+    the model ceiling and a *supported* max_tokens spec are present in the
+    same payload — a partial update touching only one side is left to the
+    per-field bounds rules.
+    """
+    if max_output_tokens is None or supported_params is None:
+        return
+    spec = supported_params.params.get("max_tokens")
+    if spec is None or not spec.supported:
+        return
+    if spec.max is not None and spec.max > max_output_tokens:
+        raise ValueError("max_tokens max must be <= maxOutputTokens")
+    if (
+        isinstance(spec.default, (int, float))
+        and not isinstance(spec.default, bool)
+        and spec.default > max_output_tokens
+    ):
+        raise ValueError("max_tokens default must be <= maxOutputTokens")
+
+
 class ManagedModelCreate(BaseModel):
     """Request model for creating a managed model."""
     model_config = ConfigDict(populate_by_name=True)
@@ -145,6 +172,11 @@ class ManagedModelCreate(BaseModel):
                     "When None, the runtime sends no inference params."
     )
 
+    @model_validator(mode="after")
+    def _check_max_tokens_within_ceiling(self) -> "ManagedModelCreate":
+        _max_tokens_within_ceiling(self.max_output_tokens, self.supported_params)
+        return self
+
 
 class ManagedModelUpdate(BaseModel):
     """Request model for updating a managed model."""
@@ -200,6 +232,11 @@ class ManagedModelUpdate(BaseModel):
         alias="supportedParams",
         description="Per-model inference parameter capabilities."
     )
+
+    @model_validator(mode="after")
+    def _check_max_tokens_within_ceiling(self) -> "ManagedModelUpdate":
+        _max_tokens_within_ceiling(self.max_output_tokens, self.supported_params)
+        return self
 
 
 class ManagedModel(BaseModel):

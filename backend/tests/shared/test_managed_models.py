@@ -92,3 +92,45 @@ class TestManagedModels:
         from apis.shared.models.managed_models import create_managed_model
         model = await create_managed_model(_make_model_data("gpt4", provider="openai"))
         assert model.supports_caching is False
+
+
+class TestMaxTokensCeiling:
+    """max_tokens spec must not exceed the model's declared output ceiling."""
+
+    def test_default_above_ceiling_rejected(self):
+        # Default 8192 is within the (absent) row bounds but exceeds the
+        # model's 4096 ceiling — only the cross-field rule should fire.
+        with pytest.raises(Exception):
+            _make_model_data(
+                maxOutputTokens=4096,
+                supportedParams={"params": {"max_tokens": {"supported": True, "default": 8192}}},
+            )
+
+    def test_max_above_ceiling_rejected(self):
+        with pytest.raises(Exception):
+            _make_model_data(
+                maxOutputTokens=4096,
+                supportedParams={"params": {"max_tokens": {"supported": True, "max": 8192}}},
+            )
+
+    def test_within_ceiling_ok(self):
+        m = _make_model_data(
+            maxOutputTokens=8192,
+            supportedParams={"params": {"max_tokens": {"supported": True, "max": 8192, "default": 8192}}},
+        )
+        assert m.max_output_tokens == 8192
+
+    def test_unsupported_row_not_ceiling_checked(self):
+        m = _make_model_data(
+            maxOutputTokens=4096,
+            supportedParams={"params": {"max_tokens": {"supported": False, "max": 999999, "default": 999999}}},
+        )
+        assert m.max_output_tokens == 4096
+
+    def test_update_payload_enforced(self):
+        from apis.shared.models.models import ManagedModelUpdate
+        with pytest.raises(Exception):
+            ManagedModelUpdate(
+                maxOutputTokens=4096,
+                supportedParams={"params": {"max_tokens": {"supported": True, "default": 8192}}},
+            )
