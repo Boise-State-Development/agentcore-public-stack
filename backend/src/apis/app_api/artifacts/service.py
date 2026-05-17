@@ -239,27 +239,81 @@ _SESSION_INDEX = "SessionIndex"
 
 
 class ArtifactListService:
-    """List a session's artifacts from the SessionIndex GSI.
+    """List every version of every artifact created in a chat session.
 
-    The GSI projects only HEAD rows (the writer attaches GSI1PK/GSI1SK to
-    the HEAD put only), so a query already returns one row per artifact —
-    its current version — newest-first. GSI1PK is `SESSION#{sid}`, which
-    is NOT user-scoped, so every returned row is re-checked against the
-    authenticated user's id: a caller passing a borrowed session id can
-    never enumerate another user's artifacts.
+    Two-step, because the SessionIndex GSI only projects HEAD rows (the
+    writer attaches GSI1PK/GSI1SK to the HEAD put only):
+
+      1. Query SessionIndex by GSI1PK=SESSION#{sid} to discover the
+         artifacts in the session. GSI1PK is NOT user-scoped, so each
+         HEAD row is re-checked against the authenticated user's id.
+      2. Per artifact, query the main table by PK=USER#{uid} and
+         SK begins_with ARTIFACT#{aid}#V# for all immutable version
+         rows. PK is the authenticated user's id, so step 2 is
+         ownership-safe by construction.
+
+    The SPA renders one card per version, anchored to the turn that
+    produced it via the per-version produced_by_message_index the writer
+    stamps. Version rows written before per-version linkage shipped lack
+    that attribute (and updated_at) and degrade to the SPA's
+    end-of-conversation strip rather than a per-turn anchor.
     """
 
     def list_for_session(
         self, *, user_id: str, session_id: str
     ) -> list[dict]:
         table = _table()
-        items: list[dict] = []
+        head_items: list[dict] = []
         kwargs: dict = {
             "IndexName": _SESSION_INDEX,
             "KeyConditionExpression": Key("GSI1PK").eq(
                 f"SESSION#{session_id}"
             ),
             "ScanIndexForward": False,  # GSI1SK embeds updated_at → newest first
+        }
+        try:
+            while True:
+                resp = table.query(**kwargs)
+                head_items.extend(resp.get("Items", []))
+                last = resp.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+        except ClientError as exc:
+            raise ArtifactQueryError(
+                "artifact list query failed"
+            ) from exc
+
+        # Distinct artifact ids in the session, newest-first, owned by
+        # the caller. dict.fromkeys dedupes while preserving GSI order.
+        artifact_ids = list(
+            dict.fromkeys(
+                item.get("artifact_id", "")
+                for item in head_items
+                if item.get("user_id") == user_id
+                and item.get("artifact_id")
+            )
+        )
+
+        summaries: list[dict] = []
+        for artifact_id in artifact_ids:
+            summaries.extend(
+                self._versions_for_artifact(user_id, artifact_id)
+            )
+        return summaries
+
+    @staticmethod
+    def _versions_for_artifact(
+        user_id: str, artifact_id: str
+    ) -> list[dict]:
+        """All immutable version rows for one artifact, scoped to the
+        user by PK. The #HEAD row shares the SK prefix but not the `#V#`
+        infix, so begins_with cleanly excludes it."""
+        table = _table()
+        items: list[dict] = []
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"USER#{user_id}")
+            & Key("SK").begins_with(f"ARTIFACT#{artifact_id}#V#"),
         }
         try:
             while True:
@@ -271,29 +325,25 @@ class ArtifactListService:
                 kwargs["ExclusiveStartKey"] = last
         except ClientError as exc:
             raise ArtifactQueryError(
-                "artifact list query failed"
+                "artifact version query failed"
             ) from exc
 
-        summaries: list[dict] = []
-        for item in items:
-            if item.get("user_id") != user_id:
-                continue
-            summaries.append(
-                {
-                    "artifact_id": item.get("artifact_id", ""),
-                    "version": int(item.get("version", 0)),
-                    "title": item.get("title", ""),
-                    "content_type": item.get(
-                        "content_type", "text/html; charset=utf-8"
-                    ),
-                    "updated_at": item.get("updated_at", ""),
-                    "created_at": item.get("created_at"),
-                    "produced_by_message_index": item.get(
-                        "produced_by_message_index"
-                    ),
-                }
-            )
-        return summaries
+        return [
+            {
+                "artifact_id": item.get("artifact_id", ""),
+                "version": int(item.get("version", 0)),
+                "title": item.get("title", ""),
+                "content_type": item.get(
+                    "content_type", "text/html; charset=utf-8"
+                ),
+                "updated_at": item.get("updated_at", ""),
+                "created_at": item.get("created_at"),
+                "produced_by_message_index": item.get(
+                    "produced_by_message_index"
+                ),
+            }
+            for item in items
+        ]
 
 
 def get_artifact_list_service() -> ArtifactListService:

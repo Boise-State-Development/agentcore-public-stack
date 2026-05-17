@@ -61,12 +61,37 @@ describe('ArtifactStateService', () => {
     expect(svc.get('art-1')?.producedByMessageId).toBeNull();
   });
 
-  it('keeps the highest version for the same id (update_artifact)', () => {
+  it('keeps every version of an artifact as its own entry', () => {
     svc.recordLive(ev({ version: 1 }));
     svc.recordLive(ev({ version: 3, updatedAt: '2026-05-15T12:05:00+00:00' }));
-    svc.recordLive(ev({ version: 2 })); // stale/out-of-order — ignored
+    svc.recordLive(ev({ version: 2, updatedAt: '2026-05-15T12:02:00+00:00' }));
+    // All three versions coexist (one card per version); get() resolves
+    // the highest.
+    expect(svc.artifacts().length).toBe(3);
+    expect(
+      svc
+        .artifacts()
+        .map((a) => a.version)
+        .sort(),
+    ).toEqual([1, 2, 3]);
     expect(svc.get('art-1')?.version).toBe(3);
-    expect(svc.artifacts().length).toBe(1);
+  });
+
+  it('orders versions of one artifact by version when timestamps tie', () => {
+    const at = '2026-05-15T12:00:00+00:00';
+    svc.recordLive(ev({ version: 1, updatedAt: at }));
+    svc.recordLive(ev({ version: 2, updatedAt: at }));
+    expect(svc.artifacts().map((a) => a.version)).toEqual([2, 1]);
+  });
+
+  it('versionsFor returns one artifact’s versions, newest first', () => {
+    svc.recordLive(ev({ artifactId: 'a', version: 1 }));
+    svc.recordLive(ev({ artifactId: 'a', version: 2 }));
+    svc.recordLive(ev({ artifactId: 'a', version: 3 }));
+    svc.recordLive(ev({ artifactId: 'b', version: 1 }));
+    expect(svc.versionsFor('a').map((v) => v.version)).toEqual([3, 2, 1]);
+    expect(svc.versionsFor('b').map((v) => v.version)).toEqual([1]);
+    expect(svc.versionsFor('missing')).toEqual([]);
   });
 
   it('orders artifacts newest update first', () => {
@@ -75,17 +100,50 @@ describe('ArtifactStateService', () => {
     expect(svc.artifacts().map((a) => a.artifactId)).toEqual(['new', 'old']);
   });
 
-  it('hydration does not clobber a higher live version', () => {
+  it('hydration adds older versions alongside a newer live one', () => {
     svc.recordLive(ev({ version: 5, updatedAt: '2026-05-15T12:10:00+00:00' }));
-    const stale: Artifact = {
+    const v2: Artifact = {
       artifactId: 'art-1',
       version: 2,
       title: 'Old',
       contentType: 'text/html; charset=utf-8',
       updatedAt: '2026-05-15T11:00:00+00:00',
     };
-    svc.seedFromHydration([stale]);
+    svc.seedFromHydration([v2]);
+    // Distinct versions coexist (history), get() still resolves latest.
+    expect(svc.artifacts().map((a) => a.version).sort()).toEqual([2, 5]);
     expect(svc.get('art-1')?.version).toBe(5);
+  });
+
+  it('live anchor wins when hydration repeats the same (id, version)', () => {
+    svc.recordLive(ev({ version: 1 }), 'msg-sess-9-3');
+    svc.seedFromHydration([
+      {
+        artifactId: 'art-1',
+        version: 1,
+        title: 'Doc',
+        contentType: 'text/html; charset=utf-8',
+        updatedAt: '2026-05-15T12:00:00+00:00',
+        producedByMessageIndex: 4,
+      },
+    ]);
+    // The live entry's precise per-turn anchor must survive a later
+    // index-only hydration of the same version.
+    expect(svc.get('art-1')?.producedByMessageId).toBe('msg-sess-9-3');
+  });
+
+  it('a live event fills in the anchor a prior hydration row lacked', () => {
+    svc.seedFromHydration([
+      {
+        artifactId: 'art-1',
+        version: 1,
+        title: 'Doc',
+        contentType: 'text/html; charset=utf-8',
+        updatedAt: '2026-05-15T12:00:00+00:00',
+      },
+    ]);
+    svc.recordLive(ev({ version: 1 }), 'msg-sess-9-3');
+    expect(svc.get('art-1')?.producedByMessageId).toBe('msg-sess-9-3');
   });
 
   it('hydration adds artifacts not seen live', () => {

@@ -1,9 +1,11 @@
 """Tests for the app-api session artifacts list endpoint.
 
-Mirrors the writer's frozen HEAD-row shape from #311
-(backend/src/agents/builtin_tools/artifacts/service.py): only HEAD rows
-carry GSI1PK/GSI1SK, so a SessionIndex query returns exactly one row per
-artifact (its current version) newest-first.
+The endpoint returns *every version* of every artifact in a session via
+a two-step query: SessionIndex (HEAD rows only) to discover the
+artifacts, then a per-artifact main-table `SK begins_with #V#` query for
+all immutable version rows. The SPA renders one card per version,
+anchored to the turn that produced it via the per-version
+`produced_by_message_index` the writer stamps.
 """
 
 from __future__ import annotations
@@ -76,17 +78,52 @@ def client(monkeypatch: pytest.MonkeyPatch):
         yield TestClient(app), boto3.resource("dynamodb", region_name=REGION)
 
 
+def _put_version(
+    ddb,
+    *,
+    artifact: str,
+    version: int,
+    user_id: str = USER_ID,
+    session_id: str = SESSION,
+    title: str = "Doc",
+    updated_at: str | None = "2026-05-15T10:00:00+00:00",
+    created_at: str = "2026-05-15T10:00:00+00:00",
+    produced_by: int | None = None,
+) -> None:
+    """One immutable version row, mirroring the writer. `updated_at` /
+    `produced_by` left None models a pre-per-version-linkage row."""
+    item = {
+        "PK": f"USER#{user_id}",
+        "SK": f"ARTIFACT#{artifact}#V#{version:05d}",
+        "storage": "s3",
+        "content_key": f"{user_id}/{artifact}/v{version}/index.html",
+        "content_type": "text/html; charset=utf-8",
+        "version": version,
+        "artifact_id": artifact,
+        "user_id": user_id,
+        "session_id": session_id,
+        "title": title,
+        "created_at": created_at,
+    }
+    if updated_at is not None:
+        item["updated_at"] = updated_at
+    if produced_by is not None:
+        item["produced_by_message_index"] = produced_by
+    ddb.Table(TABLE).put_item(Item=item)
+
+
 def _put_head(
     ddb,
     *,
+    artifact: str,
+    head_version: int,
     user_id: str = USER_ID,
     session_id: str = SESSION,
-    artifact: str = "art-1",
-    version: int = 1,
-    title: str = "Doc",
     updated_at: str = "2026-05-15T10:00:00+00:00",
-    created_at: str = "2026-05-15T10:00:00+00:00",
+    title: str = "Doc",
 ) -> None:
+    """The HEAD pointer row — carries the SessionIndex GSI keys used for
+    step-1 artifact discovery."""
     ddb.Table(TABLE).put_item(
         Item={
             "PK": f"USER#{user_id}",
@@ -94,36 +131,46 @@ def _put_head(
             "GSI1PK": f"SESSION#{session_id}",
             "GSI1SK": f"ARTIFACT#{updated_at}#{artifact}",
             "storage": "s3",
-            "content_key": f"{user_id}/{artifact}/v{version}/index.html",
+            "content_key": f"{user_id}/{artifact}/v{head_version}/index.html",
             "content_type": "text/html; charset=utf-8",
-            "version": version,
+            "version": head_version,
             "artifact_id": artifact,
             "user_id": user_id,
             "session_id": session_id,
             "title": title,
-            "created_at": created_at,
+            "created_at": "2026-05-15T10:00:00+00:00",
             "updated_at": updated_at,
         }
     )
 
 
-def _put_version_row(ddb, *, artifact: str = "art-1", version: int = 1) -> None:
-    """A non-HEAD version row — must NOT appear in the SessionIndex query
-    (the writer omits GSI1PK/GSI1SK on version rows)."""
-    ddb.Table(TABLE).put_item(
-        Item={
-            "PK": f"USER#{USER_ID}",
-            "SK": f"ARTIFACT#{artifact}#V#{version:05d}",
-            "storage": "s3",
-            "content_key": f"{USER_ID}/{artifact}/v{version}/index.html",
-            "content_type": "text/html; charset=utf-8",
-            "version": version,
-            "artifact_id": artifact,
-            "user_id": USER_ID,
-            "session_id": SESSION,
-            "title": "Doc",
-            "created_at": "2026-05-15T10:00:00+00:00",
-        }
+def _put_artifact(
+    ddb,
+    *,
+    artifact: str,
+    versions: list[dict],
+    user_id: str = USER_ID,
+    session_id: str = SESSION,
+) -> None:
+    """N immutable version rows plus a HEAD at the latest — exactly what
+    the writer leaves after a create + updates sequence."""
+    for v in versions:
+        _put_version(
+            ddb,
+            artifact=artifact,
+            user_id=user_id,
+            session_id=session_id,
+            **v,
+        )
+    last = max(versions, key=lambda v: v["version"])
+    _put_head(
+        ddb,
+        artifact=artifact,
+        head_version=last["version"],
+        user_id=user_id,
+        session_id=session_id,
+        updated_at=last.get("updated_at") or "2026-05-15T10:00:00+00:00",
+        title=last.get("title", "Doc"),
     )
 
 
@@ -134,65 +181,122 @@ def test_empty_session_is_empty_list(client) -> None:
     assert resp.json() == {"artifacts": []}
 
 
-def test_lists_head_rows_newest_first(client) -> None:
+def test_returns_every_version_newest_artifact_first(client) -> None:
     tc, ddb = client
-    _put_head(
-        ddb, artifact="old", updated_at="2026-05-15T10:00:00+00:00", title="Old"
+    _put_artifact(
+        ddb,
+        artifact="old",
+        versions=[
+            {"version": 1, "updated_at": "2026-05-15T10:00:00+00:00", "title": "Old"}
+        ],
     )
-    _put_head(
-        ddb, artifact="new", updated_at="2026-05-15T12:00:00+00:00", title="New"
+    _put_artifact(
+        ddb,
+        artifact="new",
+        versions=[
+            {"version": 1, "updated_at": "2026-05-15T11:00:00+00:00", "title": "New"},
+            {"version": 2, "updated_at": "2026-05-15T11:30:00+00:00", "title": "New"},
+            {"version": 3, "updated_at": "2026-05-15T12:00:00+00:00", "title": "New"},
+        ],
     )
-    # A version row for the same artifact must be ignored by the query.
-    _put_version_row(ddb, artifact="new", version=1)
-
-    resp = tc.get("/artifacts", params={"session_id": SESSION})
-    assert resp.status_code == 200
-    arts = resp.json()["artifacts"]
-    assert [a["artifact_id"] for a in arts] == ["new", "old"]
-    assert arts[0]["title"] == "New"
-    assert arts[0]["content_type"] == "text/html; charset=utf-8"
-
-
-def test_produced_by_message_index_round_trips(client) -> None:
-    """The HEAD row's linkage index (stamped post-turn by the stream
-    coordinator) must surface on the list DTO so the SPA can anchor the
-    card inline; absent on legacy rows → null (SPA falls back to strip)."""
-    tc, ddb = client
-    _put_head(ddb, artifact="linked", updated_at="2026-05-15T12:00:00+00:00")
-    ddb.Table(TABLE).update_item(
-        Key={"PK": f"USER#{USER_ID}", "SK": "ARTIFACT#linked#HEAD"},
-        UpdateExpression="SET produced_by_message_index = :i",
-        ExpressionAttributeValues={":i": 5},
-    )
-    _put_head(ddb, artifact="legacy", updated_at="2026-05-15T11:00:00+00:00")
 
     arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
         "artifacts"
     ]
-    by_id = {a["artifact_id"]: a for a in arts}
-    assert by_id["linked"]["produced_by_message_index"] == 5
-    assert by_id["legacy"]["produced_by_message_index"] is None
+    # Every version of every artifact is present.
+    assert {(a["artifact_id"], a["version"]) for a in arts} == {
+        ("new", 1),
+        ("new", 2),
+        ("new", 3),
+        ("old", 1),
+    }
+    # Step-1 discovery is HEAD-newest-first, so all of "new"'s versions
+    # come before "old"'s.
+    ids = [a["artifact_id"] for a in arts]
+    assert set(ids[:3]) == {"new"}
+    assert ids[-1] == "old"
 
 
-def test_reflects_current_version(client) -> None:
+def test_per_version_produced_by_index(client) -> None:
+    """Each version row carries its own linkage index so the SPA can
+    anchor every version's card under the turn that produced it. A row
+    without one (pre-linkage) is null → SPA end-of-conversation strip."""
     tc, ddb = client
-    _put_head(ddb, artifact="art-1", version=3, title="V3")
-    resp = tc.get("/artifacts", params={"session_id": SESSION})
-    body = resp.json()["artifacts"]
-    assert body[0]["version"] == 3
-    assert body[0]["created_at"] == "2026-05-15T10:00:00+00:00"
+    _put_artifact(
+        ddb,
+        artifact="art-1",
+        versions=[
+            {"version": 1, "updated_at": "2026-05-15T11:00:00+00:00", "produced_by": 3},
+            {"version": 2, "updated_at": "2026-05-15T12:00:00+00:00", "produced_by": 7},
+            {"version": 3, "updated_at": "2026-05-15T12:30:00+00:00"},
+        ],
+    )
+    arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
+        "artifacts"
+    ]
+    by_v = {a["version"]: a for a in arts}
+    assert by_v[1]["produced_by_message_index"] == 3
+    assert by_v[2]["produced_by_message_index"] == 7
+    assert by_v[3]["produced_by_message_index"] is None
 
 
-def test_other_users_session_row_is_filtered(client) -> None:
-    """GSI1PK is SESSION#-scoped, not user-scoped: a row owned by another
-    user that happens to share the queried session id must be dropped."""
+def test_legacy_version_rows_degrade_gracefully(client) -> None:
+    """Version rows written before per-version linkage lack updated_at /
+    produced_by_message_index. They must still be returned (empty/null)
+    so the SPA shows them in the strip rather than dropping them."""
     tc, ddb = client
-    _put_head(ddb, artifact="mine", user_id=USER_ID)
-    _put_head(ddb, artifact="theirs", user_id="someone-else")
+    _put_artifact(
+        ddb,
+        artifact="legacy",
+        versions=[
+            {"version": 1, "updated_at": None},
+            {"version": 2, "updated_at": None},
+        ],
+    )
+    arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
+        "artifacts"
+    ]
+    assert {a["version"] for a in arts} == {1, 2}
+    for a in arts:
+        assert a["updated_at"] == ""
+        assert a["produced_by_message_index"] is None
 
-    resp = tc.get("/artifacts", params={"session_id": SESSION})
-    arts = resp.json()["artifacts"]
-    assert [a["artifact_id"] for a in arts] == ["mine"]
+
+def test_created_at_present_on_each_version(client) -> None:
+    tc, ddb = client
+    _put_artifact(
+        ddb,
+        artifact="art-1",
+        versions=[
+            {"version": 1},
+            {"version": 2, "updated_at": "2026-05-15T12:00:00+00:00"},
+        ],
+    )
+    arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
+        "artifacts"
+    ]
+    assert all(
+        a["created_at"] == "2026-05-15T10:00:00+00:00" for a in arts
+    )
+
+
+def test_other_users_artifact_is_filtered(client) -> None:
+    """Step 1 drops a HEAD owned by another user that happens to share
+    the queried session id; step 2 is PK=USER#{caller}, so their version
+    rows are never read even if a HEAD leaked."""
+    tc, ddb = client
+    _put_artifact(ddb, artifact="mine", versions=[{"version": 1}])
+    _put_artifact(
+        ddb,
+        artifact="theirs",
+        versions=[{"version": 1}],
+        user_id="someone-else",
+    )
+
+    arts = tc.get("/artifacts", params={"session_id": SESSION}).json()[
+        "artifacts"
+    ]
+    assert {a["artifact_id"] for a in arts} == {"mine"}
 
 
 def test_session_id_required(client) -> None:

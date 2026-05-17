@@ -76,13 +76,14 @@ async def list_session_artifacts(
     user: User = Depends(get_current_user_from_session),
     service: ArtifactListService = Depends(get_artifact_list_service),
 ) -> ArtifactListResponse:
-    """List the current HEAD of every artifact created in a chat session.
+    """List every version of every artifact created in a chat session.
 
-    Used by the SPA to hydrate artifact cards on session load (live
-    creation is delivered separately via the `artifact` SSE event). Each
-    row is re-checked against the authenticated user, so a borrowed
-    session id cannot enumerate another user's artifacts. An unknown or
-    artifact-free session is a normal empty list, not a 404.
+    Used by the SPA to hydrate per-version artifact cards on session load
+    (live creation/updates are delivered separately via the `artifact`
+    SSE event). Each artifact is re-checked against the authenticated
+    user, so a borrowed session id cannot enumerate another user's
+    artifacts. An unknown or artifact-free session is a normal empty
+    list, not a 404.
     """
     try:
         rows = service.list_for_session(
