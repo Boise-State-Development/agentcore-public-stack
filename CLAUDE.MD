@@ -36,7 +36,7 @@ npx cdk deploy --all
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
-- **All dependencies use exact version pins** — no `^`, `~`, or `>=`
+- **All dependencies use exact version pins** — no `^`, `~`, or `>=`. _Exception:_ OS-level `apt` packages in the backend Dockerfiles (`curl`, `gcc`, `g++`) are intentionally **unpinned** — reproducibility is anchored by the digest-pinned base image + `uv.lock`, and exact `+deb13uN` apt pins break CI on every Debian security point-release for no reproducibility gain. Do not re-pin them.
 - **Never install packages without explicit user approval**
 
 ## SSE Event Types
