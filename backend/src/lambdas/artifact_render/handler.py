@@ -45,9 +45,10 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 import boto3
 from botocore.exceptions import ClientError
@@ -145,6 +146,72 @@ def _security_headers(content_type: str) -> dict[str, str]:
     return {
         "content-type": content_type,
         "content-security-policy": _csp_header(),
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "cache-control": "no-store",
+    }
+
+
+# File extension to suggest when saving an artifact. Keyed by the bare
+# (parameter-stripped, lowercased) authored content type. Markdown rows
+# hold the writer's HTML render wrapper in S3 (see module docstring), so
+# the saved bytes are HTML — extension follows the bytes, not the label.
+_DOWNLOAD_EXTENSIONS = {
+    "text/html": "html",
+    "text/markdown": "html",
+    "text/x-markdown": "html",
+    "image/svg+xml": "svg",
+    "application/json": "json",
+    "text/css": "css",
+    "text/javascript": "js",
+    "application/javascript": "js",
+    "text/plain": "txt",
+}
+
+# Anything outside this set is collapsed to '_' for the ASCII fallback
+# filename. The UTF-8 `filename*` form carries the original title.
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
+_MAX_FILENAME_BASE = 120
+
+
+def _download_extension(stored_content_type: str) -> str:
+    bare = (stored_content_type or "").split(";")[0].strip().lower()
+    return _DOWNLOAD_EXTENSIONS.get(bare, "bin")
+
+
+def _content_disposition(title: str, ext: str) -> str:
+    """Build an `attachment` Content-Disposition with an ASCII-safe
+    `filename` plus an RFC 5987 `filename*` that preserves a non-ASCII
+    title. Never reflects raw bytes into a header value."""
+    base = (title or "").strip() or "artifact"
+    ascii_base = _SAFE_FILENAME_RE.sub("_", base).strip(" ._")[
+        :_MAX_FILENAME_BASE
+    ] or "artifact"
+    fallback = f"{ascii_base}.{ext}"
+    utf8 = quote(f"{base}.{ext}", safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{utf8}"
+
+
+def _wants_download(event: dict[str, Any]) -> bool:
+    """True when the request asked to save rather than render (`?download=1`).
+    Read the same two ways as the render token (parsed params, then the
+    raw query string) so it survives whichever the Function URL provides."""
+    params = event.get("queryStringParameters") or {}
+    value = params.get("download")
+    if value is None:
+        raw = event.get("rawQueryString") or ""
+        value = (parse_qs(raw).get("download") or [None])[0]
+    return value == "1"
+
+
+def _download_headers(content_type: str, disposition: str) -> dict[str, str]:
+    """Headers for an attachment response. No CSP/frame-ancestors here —
+    the bytes are saved to disk, not framed — but keep nosniff so the
+    browser doesn't re-sniff the type, and no-store so a one-time
+    credentialed URL isn't cached."""
+    return {
+        "content-type": content_type,
+        "content-disposition": disposition,
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
         "cache-control": "no-store",
@@ -393,6 +460,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
             raise _ArtifactNotFound("version record has no content pointer")
         stored_content_type = record.get("content_type") or _HTML_CONTENT_TYPE
         content_type = _serve_content_type(stored_content_type)
+        raw_title = record.get("title")
+        title = raw_title if isinstance(raw_title, str) else ""
         body = _fetch_content(content_key)
     except _ArtifactNotFound as exc:
         logger.warning(
@@ -415,6 +484,17 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
     except _RenderConfigError as exc:
         logger.error("render config error during fetch: %s", exc)
         return _error_response(500, "The artifact service is misconfigured.")
+
+    if _wants_download(event):
+        ext = _download_extension(stored_content_type)
+        headers = _download_headers(
+            content_type, _content_disposition(title, ext)
+        )
+        return {
+            "statusCode": 200,
+            "headers": headers,
+            "body": "" if method == "HEAD" else body,
+        }
 
     if method == "HEAD":
         return _response(200, "", content_type)

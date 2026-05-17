@@ -266,11 +266,21 @@ def _put_record(ddb, **overrides: Any) -> None:
     ddb.Table(TABLE).put_item(Item=item)
 
 
-def _event(token: str | None, method: str = "GET") -> dict[str, Any]:
+def _event(
+    token: str | None, method: str = "GET", *, download: bool = False
+) -> dict[str, Any]:
+    qsp: dict[str, str] = {}
+    raw_parts: list[str] = []
+    if token:
+        qsp["t"] = token
+        raw_parts.append(f"t={token}")
+    if download:
+        qsp["download"] = "1"
+        raw_parts.append("download=1")
     return {
         "requestContext": {"http": {"method": method}},
-        "queryStringParameters": {"t": token} if token else {},
-        "rawQueryString": f"t={token}" if token else "",
+        "queryStringParameters": qsp,
+        "rawQueryString": "&".join(raw_parts),
     }
 
 
@@ -410,3 +420,131 @@ def test_oversized_content_is_500(aws_env, monkeypatch: pytest.MonkeyPatch) -> N
     _put_record(aws_env["ddb"])
     resp = handler.handler(_event(_mint(_valid_claims())), None)
     assert resp["statusCode"] == 500
+
+
+# --------------------------------------------------------------------------
+# Download mode (`?download=1`): attachment disposition, no CSP, gated by
+# the same token as render.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stored,ext",
+    [
+        ("text/html; charset=utf-8", "html"),
+        ("text/markdown", "html"),  # S3 body is the HTML render wrapper
+        ("text/x-markdown", "html"),
+        ("TEXT/MARKDOWN; charset=utf-8", "html"),
+        ("image/svg+xml", "svg"),
+        ("application/json", "json"),
+        ("text/css", "css"),
+        ("application/javascript", "js"),
+        ("text/plain", "txt"),
+        ("application/x-weird", "bin"),
+    ],
+)
+def test_download_extension_mapping(stored: str, ext: str) -> None:
+    assert handler._download_extension(stored) == ext
+
+
+def test_content_disposition_sanitizes_title() -> None:
+    cd = handler._content_disposition("Q3 / Report: <draft>", "html")
+    assert cd.startswith('attachment; filename="')
+    # The ASCII fallback must not carry path/header-hostile characters.
+    fallback = cd.split('filename="', 1)[1].split('"', 1)[0]
+    assert fallback.endswith(".html")
+    for bad in ("/", ":", "<", ">", "\\", "\r", "\n"):
+        assert bad not in fallback
+    # The original title is preserved in the RFC 5987 form.
+    assert "filename*=UTF-8''" in cd
+
+
+def test_content_disposition_defaults_when_title_blank() -> None:
+    # A whitespace-only title is treated as absent: both forms fall back
+    # to "artifact" (never a file literally named "   .json").
+    assert handler._content_disposition("   ", "json") == (
+        "attachment; filename=\"artifact.json\"; "
+        "filename*=UTF-8''artifact.json"
+    )
+
+
+def test_content_disposition_preserves_unicode_title() -> None:
+    cd = handler._content_disposition("résumé", "txt")
+    # Non-ASCII collapses to '_' in the fallback but survives in filename*.
+    assert 'filename="r' in cd
+    assert "filename*=UTF-8''r%C3%A9sum%C3%A9.txt" in cd
+
+
+def test_download_returns_attachment(aws_env) -> None:
+    _put_record(aws_env["ddb"], title="My Page")
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), download=True), None
+    )
+    assert resp["statusCode"] == 200
+    assert resp["body"] == DOC
+    cd = resp["headers"]["content-disposition"]
+    assert cd.startswith("attachment; ")
+    assert 'filename="My Page.html"' in cd
+    assert resp["headers"]["content-type"] == "text/html; charset=utf-8"
+    assert resp["headers"]["x-content-type-options"] == "nosniff"
+    assert resp["headers"]["cache-control"] == "no-store"
+    # An attachment is saved, never framed — no CSP/frame-ancestors.
+    assert "content-security-policy" not in resp["headers"]
+
+
+def test_download_markdown_uses_html_extension(aws_env) -> None:
+    wrapper = "<!doctype html><html><body>rendered md</body></html>"
+    boto3.client("s3", region_name="us-east-1").put_object(
+        Bucket=BUCKET, Key=CONTENT_KEY, Body=wrapper.encode()
+    )
+    _put_record(
+        aws_env["ddb"],
+        content_type="text/markdown; charset=utf-8",
+        title="Notes",
+    )
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), download=True), None
+    )
+    assert resp["statusCode"] == 200
+    assert resp["body"] == wrapper
+    assert resp["headers"]["content-type"] == "text/html; charset=utf-8"
+    assert 'filename="Notes.html"' in resp["headers"]["content-disposition"]
+
+
+def test_download_default_filename_when_title_missing(aws_env) -> None:
+    _put_record(aws_env["ddb"], content_type="application/json")
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), download=True), None
+    )
+    assert 'filename="artifact.json"' in resp["headers"]["content-disposition"]
+
+
+def test_head_download_omits_body_keeps_disposition(aws_env) -> None:
+    _put_record(aws_env["ddb"], title="Doc")
+    resp = handler.handler(
+        _event(_mint(_valid_claims()), method="HEAD", download=True), None
+    )
+    assert resp["statusCode"] == 200
+    assert resp["body"] == ""
+    assert resp["headers"]["content-disposition"].startswith("attachment; ")
+
+
+def test_download_still_requires_valid_token(aws_env) -> None:
+    _put_record(aws_env["ddb"])
+    bad = _mint(_valid_claims(), tamper_sig=True)
+    resp = handler.handler(_event(bad, download=True), None)
+    assert resp["statusCode"] == 403
+    assert "content-disposition" not in resp["headers"]
+
+
+def test_download_flag_from_raw_query_string(aws_env) -> None:
+    _put_record(aws_env["ddb"], title="Doc")
+    token = _mint(_valid_claims())
+    event = {
+        "requestContext": {"http": {"method": "GET"}},
+        "queryStringParameters": None,
+        "rawQueryString": f"t={token}&download=1",
+    }
+    resp = handler.handler(event, None)
+    assert resp["statusCode"] == 200
+    assert resp["headers"]["content-disposition"].startswith("attachment; ")

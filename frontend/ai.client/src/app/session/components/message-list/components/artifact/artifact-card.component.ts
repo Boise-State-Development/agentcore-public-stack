@@ -4,15 +4,18 @@ import {
   computed,
   inject,
   input,
+  signal,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCodeBracket,
   heroDocumentText,
-  heroArrowLongRight,
+  heroArrowDownTray,
+  heroArrowPath,
 } from '@ng-icons/heroicons/outline';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
+import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 
 /** Visual treatment derived from an artifact's content type. */
 interface ArtifactKind {
@@ -52,16 +55,19 @@ interface ArtifactKind {
     provideIcons({
       heroCodeBracket,
       heroDocumentText,
-      heroArrowLongRight,
+      heroArrowDownTray,
+      heroArrowPath,
     }),
   ],
   template: `
-    <button
-      type="button"
-      class="artifact-card"
-      [attr.aria-label]="ariaLabel()"
-      (click)="open()"
-    >
+    <div class="artifact-card">
+      <button
+        type="button"
+        class="artifact-card__hit"
+        [attr.aria-label]="ariaLabel()"
+        (click)="open()"
+      ></button>
+
       <span class="artifact-card__surface">
         <span
           class="artifact-card__rule"
@@ -77,67 +83,92 @@ interface ArtifactKind {
           <ng-icon [name]="kind().icon" />
         </span>
 
-        <span class="artifact-card__body">
+        <span class="artifact-card__body" aria-hidden="true">
           <span class="artifact-card__title">{{
             artifact().title || 'Untitled artifact'
           }}</span>
           <span class="artifact-card__meta">
             <span class="artifact-card__type">{{ kind().label }}</span>
-            <span class="artifact-card__sep" aria-hidden="true">·</span>
+            <span class="artifact-card__sep">·</span>
             <span>v{{ artifact().version }}</span>
             @if (updatedLabel()) {
-              <span class="artifact-card__sep" aria-hidden="true">·</span>
+              <span class="artifact-card__sep">·</span>
               <span>{{ updatedLabel() }}</span>
             }
           </span>
         </span>
 
-        <span class="artifact-card__open" aria-hidden="true">
-          <ng-icon name="heroArrowLongRight" />
-        </span>
+        <button
+          type="button"
+          class="artifact-card__download"
+          [class.is-busy]="downloading()"
+          [attr.aria-label]="downloadAriaLabel()"
+          [attr.aria-busy]="downloading()"
+          [disabled]="downloading()"
+          (click)="download()"
+        >
+          <ng-icon
+            [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
+            aria-hidden="true"
+          />
+          <span class="artifact-card__download-label">Download</span>
+        </button>
       </span>
-    </button>
+    </div>
   `,
   styles: `
     :host {
       display: block;
     }
 
-    /* The focusable element carries no visual chrome; it owns only the
-       focus ring (an un-clipped rectangle, so the notched corner can't
-       eat it). */
+    /* Card shell: a positioning context for the stretched open button
+       and the download button. No chrome of its own. */
     .artifact-card {
+      position: relative;
+      display: block;
+      width: 100%;
+      /* matches the chat input's rounded-2xl so the focus ring and the
+         surface share the app's corner radius */
+      border-radius: 1rem;
+    }
+
+    /* Primary action: an invisible button stretched over the whole card.
+       It owns the focus ring (an un-clipped rectangle so the rounded
+       corner can't eat it). The surface above is pointer-events:none, so
+       a click anywhere but the download button falls through to here. */
+    .artifact-card__hit {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
       appearance: none;
       -webkit-appearance: none;
       margin: 0;
       padding: 0;
       border: 0;
       background: none;
-      color: inherit;
       font: inherit;
-      text-align: left;
-      display: block;
-      width: 100%;
-      max-width: 28rem;
-      /* matches the chat input's rounded-2xl so the focus ring (and the
-         surface below) share the app's corner radius */
-      border-radius: 1rem;
+      border-radius: inherit;
       cursor: pointer;
     }
 
-    .artifact-card:focus-visible {
+    .artifact-card__hit:focus-visible {
       outline: 2px solid #2563eb;
       outline-offset: 3px;
     }
 
-    :host-context(html.dark) .artifact-card:focus-visible {
+    :host-context(html.dark) .artifact-card__hit:focus-visible {
       outline-color: #60a5fa;
     }
 
     /* The visible body: a borderless, tinted, generously rounded card.
-       overflow:hidden so the left rule conforms to the rounded edge. */
+       overflow:hidden so the left rule conforms to the rounded edge.
+       pointer-events:none delegates clicks to the stretched button
+       beneath; the download button (col 3) re-enables them. The grid's
+       auto last column sizes itself to the button — no manual gutter. */
     .artifact-card__surface {
       position: relative;
+      z-index: 2;
+      pointer-events: none;
       display: grid;
       grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
@@ -178,7 +209,9 @@ interface ArtifactKind {
     }
 
     .artifact-card:hover .artifact-card__rule,
-    .artifact-card:focus-visible .artifact-card__rule {
+    .artifact-card__hit:focus-visible
+      ~ .artifact-card__surface
+      .artifact-card__rule {
       height: 100%;
       opacity: 1;
     }
@@ -246,49 +279,92 @@ interface ArtifactKind {
       opacity: 0.4;
     }
 
-    /* Quiet open affordance: a long thin arrow that settles in on
-       hover. No label, no shouting. */
-    .artifact-card__open {
-      display: flex;
+    /* Secondary action: a bordered, labelled download button in the
+       grid's last column. It lives inside the pointer-events:none
+       surface but re-enables them for itself, so it captures its own
+       clicks while the rest of the card falls through to the open
+       button. Resting colour clears the 3:1 non-text contrast bar. */
+    .artifact-card__download {
+      pointer-events: auto;
+      display: inline-flex;
       align-items: center;
-      color: #9ca3af;
-      opacity: 0.5;
-      transform: translateX(-3px);
+      gap: 0.4rem;
+      margin: 0;
+      padding: 0.34rem 0.7rem;
+      border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+      border-radius: 7px;
+      background: none;
+      color: #6b7280;
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+      cursor: pointer;
       transition:
-        opacity 0.18s ease,
-        transform 0.18s ease,
-        color 0.18s ease;
+        color 0.18s ease,
+        border-color 0.18s ease,
+        background-color 0.18s ease;
     }
 
-    .artifact-card__open ng-icon {
-      font-size: 1.05rem;
+    .artifact-card__download ng-icon {
+      font-size: 0.95rem;
       line-height: 1;
     }
 
-    .artifact-card:hover .artifact-card__open,
-    .artifact-card:focus-visible .artifact-card__open {
-      opacity: 1;
-      transform: translateX(0);
-      color: #4b5563;
+    .artifact-card:hover .artifact-card__download,
+    .artifact-card__download:hover {
+      color: #374151;
     }
 
-    :host-context(html.dark) .artifact-card__open {
-      color: #6b7280;
+    .artifact-card__download:hover {
+      background: rgba(0, 0, 0, 0.05);
     }
 
-    :host-context(html.dark) .artifact-card:hover .artifact-card__open,
-    :host-context(html.dark) .artifact-card:focus-visible .artifact-card__open {
-      color: #aab2c0;
+    .artifact-card__download:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
+    }
+
+    .artifact-card__download:disabled {
+      cursor: default;
+    }
+
+    .artifact-card__download.is-busy ng-icon {
+      animation: artifact-card-spin 0.8s linear infinite;
+    }
+
+    :host-context(html.dark) .artifact-card__download {
+      color: #9aa3b2;
+    }
+
+    :host-context(html.dark) .artifact-card:hover .artifact-card__download,
+    :host-context(html.dark) .artifact-card__download:hover {
+      color: #cbd2dd;
+    }
+
+    :host-context(html.dark) .artifact-card__download:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    :host-context(html.dark) .artifact-card__download:focus-visible {
+      outline-color: #60a5fa;
+    }
+
+    @keyframes artifact-card-spin {
+      to {
+        transform: rotate(360deg);
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
       .artifact-card__surface,
       .artifact-card__rule,
-      .artifact-card__open {
+      .artifact-card__download {
         transition: none;
       }
-      .artifact-card__open {
-        transform: none;
+      .artifact-card__download.is-busy ng-icon {
+        animation: none;
       }
     }
   `,
@@ -297,6 +373,9 @@ export class ArtifactCardComponent {
   artifact = input.required<Artifact>();
 
   private artifactState = inject(ArtifactStateService);
+  private artifactDownload = inject(ArtifactDownloadService);
+
+  protected readonly downloading = signal(false);
 
   protected readonly kind = computed<ArtifactKind>(() =>
     classifyContentType(this.artifact().contentType),
@@ -313,6 +392,13 @@ export class ArtifactCardComponent {
       `Open ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
   );
 
+  /** Static so the visible "Download" label is always contained in the
+   *  accessible name (WCAG 2.5.3); the working state rides `aria-busy`. */
+  protected readonly downloadAriaLabel = computed(
+    () =>
+      `Download ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
+  );
+
   protected open(): void {
     const a = this.artifact();
     this.artifactState.openArtifactPanel({
@@ -320,6 +406,20 @@ export class ArtifactCardComponent {
       version: a.version,
       title: a.title,
     });
+  }
+
+  protected async download(): Promise<void> {
+    if (this.downloading()) return;
+    const a = this.artifact();
+    this.downloading.set(true);
+    try {
+      await this.artifactDownload.download({
+        artifactId: a.artifactId,
+        version: a.version,
+      });
+    } finally {
+      this.downloading.set(false);
+    }
   }
 }
 

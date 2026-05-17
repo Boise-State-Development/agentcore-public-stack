@@ -12,9 +12,11 @@ import {
   heroXMark,
   heroArrowPath,
   heroExclamationTriangle,
+  heroArrowDownTray,
 } from '@ng-icons/heroicons/outline';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from '../../../../services/artifacts/artifact-http.service';
+import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
 
 /**
@@ -39,7 +41,12 @@ import { SessionService } from '../../../../services/session/session.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
   providers: [
-    provideIcons({ heroXMark, heroArrowPath, heroExclamationTriangle }),
+    provideIcons({
+      heroXMark,
+      heroArrowPath,
+      heroExclamationTriangle,
+      heroArrowDownTray,
+    }),
   ],
   host: {
     '(document:keydown.escape)': 'onEscape()',
@@ -85,6 +92,23 @@ import { SessionService } from '../../../../services/session/session.service';
               Version {{ ref.version }}
             </p>
           </div>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="
+              downloading() ? 'Downloading artifact…' : 'Download artifact'
+            "
+            [attr.aria-busy]="downloading()"
+            [disabled]="downloading() || !safeUrl()"
+            (click)="download()"
+          >
+            <ng-icon
+              [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
+              class="text-lg"
+              [class.animate-spin]="downloading()"
+              aria-hidden="true"
+            />
+          </button>
           <button
             type="button"
             class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
@@ -155,12 +179,14 @@ export class ArtifactPanelComponent {
   private artifactHttp = inject(ArtifactHttpService);
   private sessionService = inject(SessionService);
   private sanitizer = inject(DomSanitizer);
+  private artifactDownload = inject(ArtifactDownloadService);
 
   protected readonly open = this.artifactState.openArtifact;
 
   protected readonly safeUrl = signal<SafeResourceUrl | null>(null);
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
+  protected readonly downloading = signal(false);
 
   // Resize handle state. Width itself lives in ArtifactStateService so
   // the layout (content padding + fixed footer/topnav) can reserve the
@@ -279,6 +305,20 @@ export class ArtifactPanelComponent {
 
   protected retry(): void {
     void this.load();
+  }
+
+  protected async download(): Promise<void> {
+    const ref = this.open();
+    if (!ref || this.downloading()) return;
+    this.downloading.set(true);
+    try {
+      await this.artifactDownload.download({
+        artifactId: ref.artifactId,
+        version: ref.version,
+      });
+    } finally {
+      this.downloading.set(false);
+    }
   }
 
   private reset(): void {
