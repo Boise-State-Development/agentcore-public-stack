@@ -182,8 +182,12 @@ export class ArtifactsStack extends cdk.Stack {
         RENDER_TOKEN_SECRET_ARN: renderTokenKeyArn,
         FRAME_ANCESTOR_ORIGIN: frameAncestors,
         // Pinned CSP allow-list. Adjust here if/when the artifact runtime
-        // grows new permitted external script origins (e.g. add chart libs).
-        CSP_SCRIPT_SRC: "'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh",
+        // grows new permitted external script origins. Keep in exact sync
+        // with the `script-src` line in `cspDirectives` below — the render
+        // Lambda reads this env var, CloudFront stamps the literal, and the
+        // two must be identical (defense in depth).
+        CSP_SCRIPT_SRC:
+          "'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com",
       },
     });
 
@@ -230,7 +234,7 @@ export class ArtifactsStack extends cdk.Stack {
     // so other sites can't embed your users' artifacts.
     const cspDirectives = [
       `default-src 'none'`,
-      `script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh`,
+      `script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com`,
       `style-src 'self' 'unsafe-inline'`,
       `img-src 'self' data: https:`,
       `font-src 'self' data:`,

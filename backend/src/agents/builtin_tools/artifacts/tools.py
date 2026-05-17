@@ -38,8 +38,19 @@ def make_create_artifact_tool(session_id: str, user_id: str):
           document (include `<!doctype html>` and a full `<html>` …
           `</html>`). It renders in a sandboxed iframe with a strict CSP:
           inline `<style>`/`<script>` are allowed, as are scripts from
-          `https://cdn.tailwindcss.com` and `https://esm.sh`. It cannot
-          make network calls.
+          `https://cdn.tailwindcss.com`, `https://esm.sh`,
+          `https://cdn.jsdelivr.net`, and `https://unpkg.com` — no
+          other origin loads. The page cannot make `fetch`/XHR calls
+          (CSP `connect-src` is blocked), so inline any data.
+
+          Load JS libraries from one of those CDNs and pin a version.
+          Chart.js note: use an auto-registering build or charts
+          render blank — e.g.
+          `import Chart from "https://esm.sh/chart.js@4/auto"` inside a
+          `<script type="module">`, or the UMD bundle
+          `<script src="https://cdn.jsdelivr.net/npm/chart.js@4">`. A
+          bare `https://esm.sh/chart.js` import (no `/auto`) silently
+          fails to draw.
 
         - Markdown: pass `content_type="text/markdown"` and provide raw
           GitHub-flavored Markdown as `content`. Do NOT add an HTML
