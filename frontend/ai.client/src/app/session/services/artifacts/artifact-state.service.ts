@@ -117,7 +117,7 @@ export class ArtifactStateService {
     // the registry (not event.version) so a stale out-of-order event can't
     // pin the panel to an older version. Reopening a past session uses
     // seedFromHydration, not this, so it never pops the panel.
-    const latest = this.byId().get(event.artifactId);
+    const latest = this.get(event.artifactId);
     if (latest) {
       this.openArtifactPanel({
         artifactId: latest.artifactId,
