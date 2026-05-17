@@ -52,6 +52,13 @@ _GEMINI_PARAM_MAP: Dict[str, str] = {
 # them. Suppression happens in `_apply_canonical_params` before dispatch.
 _THINKING_INCOMPATIBLE = {"temperature", "top_p", "top_k"}
 
+# Canonical params whose provider-native value must be a plain int. JSON- and
+# DynamoDB-sourced inference params arrive untyped (Dict[str, Any]) and can be
+# a float (e.g. 100000.0); the Bedrock Converse SDK rejects a float maxTokens
+# with a hard boto3 validation error. Coerce at this single translation
+# chokepoint. `thinking` is excluded — `_shape_thinking_value` already int()s it.
+_INTEGER_CANONICAL_PARAMS: frozenset[str] = frozenset({"max_tokens", "top_k"})
+
 # Union of every canonical key we know how to translate. Used by the request
 # merge step to gate user-supplied keys against an allow-list — admins can
 # constrain known params with `supportedParams`, but users shouldn't be able
@@ -129,6 +136,12 @@ def _apply_canonical_params(
             if shaped is None:
                 continue
             value = shaped
+        elif (
+            name in _INTEGER_CANONICAL_PARAMS
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            value = int(value)
         _set_nested(target, native_path, value)
 
 

@@ -83,6 +83,23 @@ def _sanitize_log(value: object) -> str:
     return text.translate(control_map)
 
 
+def _as_int_or_none(value: object) -> int | None:
+    """Coerce a numeric inference-param value to int for safety comparisons.
+
+    Inference params arrive untyped (``Dict[str, Any]`` from JSON), so an
+    integer bound can show up as a float (e.g. ``8192.0``). Returns ``None``
+    for bool / non-numeric values (including a ``thinking`` value an admin
+    pasted as a raw SDK dict) so callers skip the check rather than crash.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
 async def _find_managed_model(model_id: str | None):
     """Best-effort lookup of a managed-model record by external model ID."""
     if not model_id:
@@ -208,15 +225,12 @@ def _merge_inference_params(
     # both are set and inconsistent, drop `thinking` so the response still
     # streams instead of erroring out — the user just doesn't get a
     # reasoning trace this turn. Logged so the gap is visible in metrics.
-    thinking = merged.get("thinking")
-    max_tokens = merged.get("max_tokens")
-    if (
-        isinstance(thinking, int)
-        and not isinstance(thinking, bool)
-        and isinstance(max_tokens, int)
-        and not isinstance(max_tokens, bool)
-        and thinking >= max_tokens
-    ):
+    # Coerce before comparing: both values can arrive as floats (untyped
+    # Dict[str, Any] from JSON), and an `isinstance(..., int)` gate would
+    # silently skip the check on float input and let the bad request through.
+    thinking = _as_int_or_none(merged.get("thinking"))
+    max_tokens = _as_int_or_none(merged.get("max_tokens"))
+    if thinking is not None and max_tokens is not None and thinking >= max_tokens:
         logger.warning(
             "Dropping thinking budget %d for model %s — not less than max_tokens %d",
             thinking,

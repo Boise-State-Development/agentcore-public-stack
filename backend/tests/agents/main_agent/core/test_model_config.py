@@ -180,6 +180,27 @@ class TestToBedrockConfig:
         assert result["temperature"] == 0.5
         assert result["top_p"] == 0.8
 
+    def test_bedrock_config_coerces_float_max_tokens_to_int(self):
+        """JSON-sourced inference params can carry a float (100000.0); the
+        Bedrock SDK rejects a float maxTokens, so it must be coerced to int."""
+        cfg = ModelConfig(inference_params={"max_tokens": 100000.0, "top_k": 40.0})
+        result = cfg.to_bedrock_config()
+
+        assert result["max_tokens"] == 100000
+        assert isinstance(result["max_tokens"], int)
+        assert result["additional_request_fields"]["top_k"] == 40
+        assert isinstance(result["additional_request_fields"]["top_k"], int)
+
+    def test_gemini_config_coerces_float_max_tokens_to_int(self):
+        """Coercion applies across providers — Gemini max_output_tokens too."""
+        cfg = ModelConfig(
+            model_id="gemini-pro", inference_params={"max_tokens": 2048.0}
+        )
+        result = cfg.to_gemini_config()
+
+        assert result["params"]["max_output_tokens"] == 2048
+        assert isinstance(result["params"]["max_output_tokens"], int)
+
     def test_bedrock_config_drops_unknown_canonical_param(self):
         """Provider translation table silently drops keys it doesn't know."""
         cfg = ModelConfig(inference_params={"reasoning_effort": "high"})
