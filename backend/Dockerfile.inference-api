@@ -8,10 +8,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /uvx /bin/
 
 WORKDIR /app
 
-# Install system dependencies
+# Build toolchain. Intentionally unpinned: reproducibility is anchored
+# by the digest-pinned base image above + uv.lock. Exact apt pins on a
+# base whose security index keeps moving (+deb13uN) break CI on every
+# Debian point release with no reproducibility gain — and this is the
+# builder stage, not shipped in the final image.
 RUN apt-get update && apt-get install -y \
-    gcc=4:14.2.0-1 \
-    g++=4:14.2.0-1 \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (layer caching)
@@ -37,9 +41,12 @@ FROM --platform=linux/arm64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0
 
 WORKDIR /app
 
-# Install runtime dependencies (curl required for HEALTHCHECK)
+# curl is the HEALTHCHECK dependency. Intentionally unpinned so the
+# build absorbs Debian security point-releases (+deb13uN) instead of
+# hard-failing when the pinned one rotates out of the apt index;
+# reproducibility is anchored by the digest-pinned base image above.
 RUN apt-get update && apt-get install -y \
-    curl=8.14.1-2+deb13u2 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment from builder
