@@ -108,4 +108,33 @@ describe('ArtifactHttpService', () => {
       .flush({});
     await expect(p).resolves.toEqual([]);
   });
+
+  it('fetches artifact content and maps snake_case to camelCase', async () => {
+    const p = service.getArtifactContent('art-1', 2);
+    const req = httpMock.expectOne(
+      (r) =>
+        r.url === `${API}/artifacts/art-1/content` &&
+        r.params.get('version') === '2',
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      content: '# Title\n\nbody',
+      content_type: 'text/markdown',
+      version: 2,
+    });
+    await expect(p).resolves.toEqual({
+      content: '# Title\n\nbody',
+      contentType: 'text/markdown',
+      version: 2,
+    });
+  });
+
+  it('url-encodes the artifact id in the content path', async () => {
+    const p = service.getArtifactContent('a/b 1', 1);
+    const req = httpMock.expectOne(
+      (r) => r.url === `${API}/artifacts/a%2Fb%201/content`,
+    );
+    req.flush({ content: '', content_type: 'text/html', version: 1 });
+    await p;
+  });
 });

@@ -23,9 +23,22 @@ interface ArtifactListResponseDto {
   artifacts: ArtifactSummaryDto[];
 }
 
+interface ArtifactContentResponseDto {
+  content: string;
+  content_type: string;
+  version: number;
+}
+
 export interface RenderToken {
   url: string;
   expiresAt: string;
+}
+
+/** Raw source of one artifact version, for the panel's code view. */
+export interface ArtifactContent {
+  content: string;
+  contentType: string;
+  version: number;
 }
 
 /**
@@ -55,6 +68,29 @@ export class ArtifactHttpService {
       ),
     );
     return { url: res.url, expiresAt: res.expires_at };
+  }
+
+  /**
+   * Fetch one artifact version's raw source for the code view. The
+   * bytes are inert text the panel highlights client-side. The backend
+   * unwraps Markdown back to the authored source and 413s anything too
+   * large to highlight inline (callers steer to download on that).
+   */
+  async getArtifactContent(
+    artifactId: string,
+    version: number,
+  ): Promise<ArtifactContent> {
+    const res = await firstValueFrom(
+      this.http.get<ArtifactContentResponseDto>(
+        `${this.config.appApiUrl()}/artifacts/${encodeURIComponent(artifactId)}/content`,
+        { params: { version } },
+      ),
+    );
+    return {
+      content: res.content,
+      contentType: res.content_type,
+      version: res.version,
+    };
   }
 
   /** List the current HEAD of every artifact in a chat session. */

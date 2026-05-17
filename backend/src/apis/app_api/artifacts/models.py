@@ -50,3 +50,17 @@ class ArtifactSummary(BaseModel):
 
 class ArtifactListResponse(BaseModel):
     artifacts: list[ArtifactSummary] = Field(default_factory=list)
+
+
+class ArtifactContentResponse(BaseModel):
+    """Raw source of one artifact version, for the panel's code view.
+
+    `content` is inert text the SPA highlights client-side — never
+    executed. For Markdown artifacts the stored S3 object is a rendered
+    HTML wrapper; the service unwraps it back to the authored Markdown
+    and `content_type` is normalized to `text/markdown` accordingly.
+    """
+
+    content: str
+    content_type: str
+    version: int

@@ -7,17 +7,26 @@ import {
   signal,
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
+import { HttpErrorResponse } from '@angular/common/http';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroXMark,
   heroArrowPath,
   heroExclamationTriangle,
   heroArrowDownTray,
+  heroEye,
+  heroCodeBracket,
+  heroClipboard,
+  heroCheck,
 } from '@ng-icons/heroicons/outline';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
-import { ArtifactHttpService } from '../../../../services/artifacts/artifact-http.service';
+import {
+  ArtifactHttpService,
+  type ArtifactContent,
+} from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
 import { SessionService } from '../../../../services/session/session.service';
+import { ArtifactSourceComponent } from './artifact-source.component';
 
 /**
  * Right-docked pane that renders one artifact version in a sandboxed
@@ -39,13 +48,17 @@ import { SessionService } from '../../../../services/session/session.service';
 @Component({
   selector: 'app-artifact-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, ArtifactSourceComponent],
   providers: [
     provideIcons({
       heroXMark,
       heroArrowPath,
       heroExclamationTriangle,
       heroArrowDownTray,
+      heroEye,
+      heroCodeBracket,
+      heroClipboard,
+      heroCheck,
     }),
   ],
   host: {
@@ -92,6 +105,62 @@ import { SessionService } from '../../../../services/session/session.service';
               Version {{ ref.version }}
             </p>
           </div>
+          <div
+            role="group"
+            aria-label="Artifact view mode"
+            class="flex items-center gap-0.5 rounded-md border border-gray-200 p-0.5 dark:border-gray-700"
+          >
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              [class]="
+                view() === 'preview'
+                  ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
+                  : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+              "
+              [attr.aria-pressed]="view() === 'preview'"
+              aria-label="Preview"
+              title="Preview"
+              (click)="setView('preview')"
+            >
+              <ng-icon name="heroEye" class="text-base" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              [class]="
+                view() === 'code'
+                  ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
+                  : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+              "
+              [attr.aria-pressed]="view() === 'code'"
+              aria-label="View code"
+              title="View code"
+              (click)="setView('code')"
+            >
+              <ng-icon
+                name="heroCodeBracket"
+                class="text-base"
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+          @if (view() === 'code') {
+            <button
+              type="button"
+              class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              [attr.aria-label]="copied() ? 'Copied' : 'Copy code'"
+              [disabled]="!source()"
+              (click)="copy()"
+            >
+              <ng-icon
+                [name]="copied() ? 'heroCheck' : 'heroClipboard'"
+                class="text-lg"
+                [class.text-green-600]="copied()"
+                aria-hidden="true"
+              />
+            </button>
+          }
           <button
             type="button"
             class="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
@@ -120,49 +189,91 @@ import { SessionService } from '../../../../services/session/session.service';
         </header>
 
         <div class="relative min-h-0 flex-1">
-          @if (loading()) {
-            <div
-              class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400"
-              role="status"
-            >
-              <ng-icon
-                name="heroArrowPath"
-                class="animate-spin text-2xl"
-                aria-hidden="true"
-              />
-              <span class="text-sm">Loading artifact…</span>
-            </div>
-          } @else if (error()) {
-            <div
-              class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
-              role="alert"
-            >
-              <ng-icon
-                name="heroExclamationTriangle"
-                class="text-3xl text-amber-500"
-                aria-hidden="true"
-              />
-              <p class="text-sm text-gray-700 dark:text-gray-300">
-                {{ error() }}
-              </p>
-              <button
-                type="button"
-                class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
-                (click)="retry()"
+          @if (view() === 'code') {
+            @if (sourceLoading()) {
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400"
+                role="status"
               >
-                Try again
-              </button>
-            </div>
-          } @else if (safeUrl()) {
-            <iframe
-              [src]="safeUrl()"
-              class="h-full w-full border-0 bg-white"
-              [class.pointer-events-none]="dragging()"
-              [title]="ref.title || 'Artifact'"
-              sandbox="allow-scripts"
-              referrerpolicy="no-referrer"
-              loading="lazy"
-            ></iframe>
+                <ng-icon
+                  name="heroArrowPath"
+                  class="animate-spin text-2xl"
+                  aria-hidden="true"
+                />
+                <span class="text-sm">Loading source…</span>
+              </div>
+            } @else if (sourceError()) {
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
+                role="alert"
+              >
+                <ng-icon
+                  name="heroExclamationTriangle"
+                  class="text-3xl text-amber-500"
+                  aria-hidden="true"
+                />
+                <p class="text-sm text-gray-700 dark:text-gray-300">
+                  {{ sourceError() }}
+                </p>
+                <button
+                  type="button"
+                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+                  (click)="retrySource()"
+                >
+                  Try again
+                </button>
+              </div>
+            } @else if (source(); as src) {
+              <app-artifact-source
+                [content]="src.content"
+                [contentType]="src.contentType"
+              />
+            }
+          } @else {
+            @if (loading()) {
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-500 dark:text-gray-400"
+                role="status"
+              >
+                <ng-icon
+                  name="heroArrowPath"
+                  class="animate-spin text-2xl"
+                  aria-hidden="true"
+                />
+                <span class="text-sm">Loading artifact…</span>
+              </div>
+            } @else if (error()) {
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center"
+                role="alert"
+              >
+                <ng-icon
+                  name="heroExclamationTriangle"
+                  class="text-3xl text-amber-500"
+                  aria-hidden="true"
+                />
+                <p class="text-sm text-gray-700 dark:text-gray-300">
+                  {{ error() }}
+                </p>
+                <button
+                  type="button"
+                  class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-900"
+                  (click)="retry()"
+                >
+                  Try again
+                </button>
+              </div>
+            } @else if (safeUrl()) {
+              <iframe
+                [src]="safeUrl()"
+                class="h-full w-full border-0 bg-white"
+                [class.pointer-events-none]="dragging()"
+                [title]="ref.title || 'Artifact'"
+                sandbox="allow-scripts"
+                referrerpolicy="no-referrer"
+                loading="lazy"
+              ></iframe>
+            }
           }
         </div>
       </aside>
@@ -187,6 +298,22 @@ export class ArtifactPanelComponent {
   protected readonly loading = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly downloading = signal(false);
+
+  // Code-view state. The source is fetched lazily the first time the
+  // user switches to 'code' for a given artifact (the preview iframe
+  // path is untouched and stays the default).
+  protected readonly view = signal<'preview' | 'code'>('preview');
+  protected readonly source = signal<ArtifactContent | null>(null);
+  protected readonly sourceLoading = signal(false);
+  protected readonly sourceError = signal<string | null>(null);
+  protected readonly copied = signal(false);
+  /** Bumped per source fetch so a slow response that resolves after the
+   *  panel closed or switched artifact is discarded. */
+  private sourceSeq = 0;
+  /** Which `currentKey()` the loaded source belongs to, so re-opening
+   *  the same version doesn't refetch but switching does. */
+  private loadedSourceKey: string | null = null;
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Resize handle state. Width itself lives in ArtifactStateService so
   // the layout (content padding + fixed footer/topnav) can reserve the
@@ -220,6 +347,10 @@ export class ArtifactPanelComponent {
         this.reset();
         return;
       }
+      // New artifact/version: drop any stale source and return to the
+      // preview default so the toggle doesn't carry across artifacts.
+      this.resetSource();
+      this.view.set('preview');
       void this.load();
     });
   }
@@ -307,6 +438,72 @@ export class ArtifactPanelComponent {
     void this.load();
   }
 
+  protected setView(next: 'preview' | 'code'): void {
+    if (this.view() === next) return;
+    this.view.set(next);
+    if (next === 'code') void this.ensureSource();
+  }
+
+  protected retrySource(): void {
+    this.loadedSourceKey = null;
+    void this.ensureSource();
+  }
+
+  /** Fetch the raw source once per artifact version. No-op if it's
+   *  already loaded for the current key or a fetch is in flight. */
+  private async ensureSource(): Promise<void> {
+    const ref = this.open();
+    if (!ref) return;
+    const key = this.currentKey();
+    if (this.sourceLoading()) return;
+    if (this.source() && this.loadedSourceKey === key) return;
+
+    const seq = ++this.sourceSeq;
+    this.sourceLoading.set(true);
+    this.sourceError.set(null);
+    this.source.set(null);
+    try {
+      const content = await this.artifactHttp.getArtifactContent(
+        ref.artifactId,
+        ref.version,
+      );
+      if (seq !== this.sourceSeq) return; // superseded — drop
+      this.source.set(content);
+      this.loadedSourceKey = key;
+    } catch (err) {
+      if (seq !== this.sourceSeq) return;
+      this.sourceError.set(
+        err instanceof HttpErrorResponse && err.status === 413
+          ? 'This artifact is too large to preview here — download it instead.'
+          : "This artifact's source couldn't be loaded. It may have expired or been removed.",
+      );
+    } finally {
+      if (seq === this.sourceSeq) this.sourceLoading.set(false);
+    }
+  }
+
+  protected async copy(): Promise<void> {
+    const src = this.source();
+    if (!src) return;
+    try {
+      await navigator.clipboard.writeText(src.content);
+      this.copied.set(true);
+      if (this.copiedTimer) clearTimeout(this.copiedTimer);
+      this.copiedTimer = setTimeout(() => this.copied.set(false), 2000);
+    } catch {
+      /* clipboard blocked (permissions/insecure context) — no-op;
+         the user can still select the visible source manually */
+    }
+  }
+
+  private resetSource(): void {
+    this.source.set(null);
+    this.sourceError.set(null);
+    this.sourceLoading.set(false);
+    this.copied.set(false);
+    this.loadedSourceKey = null;
+  }
+
   protected async download(): Promise<void> {
     const ref = this.open();
     if (!ref || this.downloading()) return;
@@ -325,6 +522,8 @@ export class ArtifactPanelComponent {
     this.safeUrl.set(null);
     this.error.set(null);
     this.loading.set(false);
+    this.resetSource();
+    this.view.set('preview');
   }
 
   private async load(): Promise<void> {

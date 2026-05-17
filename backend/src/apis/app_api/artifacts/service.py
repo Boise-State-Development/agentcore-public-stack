@@ -11,8 +11,10 @@ Never log the token or the assembled URL — log identifiers only.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -34,9 +36,30 @@ _TTL_SECONDS = 120
 
 _secret_lock = threading.Lock()
 _table_lock = threading.Lock()
+_s3_lock = threading.Lock()
 _cached_signing_key: Optional[str] = None
 _secrets_client = None
 _ddb_table = None
+_s3_client = None
+_cached_bucket: Optional[str] = None
+
+# Inline code-view ceiling. Past this the SPA shows a "too large to
+# preview — download instead" affordance rather than highlighting a
+# multi-MB blob in the DOM.
+_MAX_CONTENT_BYTES = 2 * 1024 * 1024
+
+# Bare Markdown MIME types. Duplicated (not imported) from the agent
+# writer: the import-boundary rule forbids app_api importing from
+# agents/, and this set rarely changes.
+_MARKDOWN_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown"})
+
+# The writer embeds the authored Markdown as base64 in this exact script
+# tag inside the rendered HTML wrapper (agents/builtin_tools/artifacts
+# _MARKDOWN_RENDER_TEMPLATE). We unwrap it back to source for code view.
+_MD_SRC_RE = re.compile(
+    r'<script type="application/x-markdown-base64" id="md-src">'
+    r"(?P<b64>[^<]*)</script>"
+)
 
 
 class RenderTokenError(Exception):
@@ -57,10 +80,19 @@ class ArtifactQueryError(RenderTokenError):
     feature is set up correctly, the request just couldn't be served."""
 
 
+class ArtifactTooLargeError(RenderTokenError):
+    """The artifact body exceeds the inline code-view cap. The caller
+    should fall back to the download path rather than streaming a huge
+    blob into the SPA's DOM for syntax highlighting."""
+
+
 def _reset_caches_for_tests() -> None:
     """Drop process-wide singletons so test order can't leak a stale
     signing key, secrets client, or DDB table handle."""
     global _cached_signing_key, _secrets_client, _ddb_table
+    global _s3_client, _cached_bucket
+    _s3_client = None
+    _cached_bucket = None
     _cached_signing_key = None
     _secrets_client = None
     _ddb_table = None
@@ -266,3 +298,130 @@ class ArtifactListService:
 
 def get_artifact_list_service() -> ArtifactListService:
     return ArtifactListService()
+
+
+def _bucket_name() -> str:
+    """The artifacts S3 bucket. Set by app-api-stack alongside the table
+    name; an empty value means a broken artifacts deploy, not a disabled
+    feature, so fail closed with a 500."""
+    global _cached_bucket
+    if _cached_bucket is not None:
+        return _cached_bucket
+    with _s3_lock:
+        if _cached_bucket is not None:
+            return _cached_bucket
+        name = os.environ.get("S3_ARTIFACTS_BUCKET_NAME", "")
+        if not name:
+            raise RenderTokenConfigError(
+                "S3_ARTIFACTS_BUCKET_NAME is not set"
+            )
+        _cached_bucket = name
+        return name
+
+
+def _s3():
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
+    with _s3_lock:
+        if _s3_client is None:
+            _s3_client = boto3.client("s3", region_name=_region())
+        return _s3_client
+
+
+def _get_version_item(
+    user_id: str, artifact_id: str, version: int
+) -> dict:
+    """Fetch the exact version row, scoped to the authenticated user.
+
+    Building the PK from the session user's id is what prevents reading
+    another user's artifact. SK zero-pad matches the writer/verifier
+    `V#{version:05d}` contract."""
+    sk = f"ARTIFACT#{artifact_id}#V#{version:05d}"
+    try:
+        result = _table().get_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk}
+        )
+    except ClientError as exc:
+        raise ArtifactQueryError(
+            "artifact metadata lookup failed"
+        ) from exc
+    item = result.get("Item")
+    if not item:
+        raise ArtifactNotFoundError("artifact version not found")
+    return item
+
+
+def _is_markdown(content_type: str) -> bool:
+    bare = (content_type or "").split(";")[0].strip().lower()
+    return bare in _MARKDOWN_MIME_TYPES
+
+
+def _unwrap_markdown(html_body: str) -> Optional[str]:
+    """Recover the authored Markdown from the writer's HTML wrapper.
+
+    Markdown artifacts are stored as a self-contained HTML render
+    scaffold with the original source base64-embedded in a fixed
+    `<script id="md-src">` tag. Returns the decoded Markdown, or None if
+    the tag is absent / undecodable (legacy object or a future template
+    change) so the caller can fall back to the raw bytes."""
+    match = _MD_SRC_RE.search(html_body)
+    if not match:
+        return None
+    try:
+        return base64.b64decode(match.group("b64")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+class ArtifactContentService:
+    """Return one artifact version's raw source for the panel code view.
+
+    Ownership is enforced by the PK lookup. For Markdown the stored S3
+    object is a rendered HTML wrapper; we unwrap it back to the authored
+    Markdown so code view shows what the model actually wrote, and
+    normalize `content_type` to `text/markdown` to match. Anything that
+    can't be unwrapped falls back to the raw stored bytes + real type so
+    the view still shows something truthful instead of erroring."""
+
+    def get(
+        self, *, user_id: str, artifact_id: str, version: int
+    ) -> tuple[str, str]:
+        bucket = _bucket_name()
+        item = _get_version_item(user_id, artifact_id, version)
+        content_key = item.get("content_key")
+        stored_type = item.get(
+            "content_type", "text/html; charset=utf-8"
+        )
+        if not content_key:
+            raise ArtifactNotFoundError("artifact has no stored content")
+
+        try:
+            obj = _s3().get_object(Bucket=bucket, Key=content_key)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "NoSuchBucket", "404"):
+                raise ArtifactNotFoundError(
+                    "artifact content not found"
+                ) from exc
+            raise ArtifactQueryError(
+                "artifact content fetch failed"
+            ) from exc
+
+        if obj.get("ContentLength", 0) > _MAX_CONTENT_BYTES:
+            raise ArtifactTooLargeError("artifact too large for code view")
+
+        raw = obj["Body"].read(_MAX_CONTENT_BYTES + 1)
+        if len(raw) > _MAX_CONTENT_BYTES:
+            raise ArtifactTooLargeError("artifact too large for code view")
+        body = raw.decode("utf-8", errors="replace")
+
+        if _is_markdown(stored_type):
+            unwrapped = _unwrap_markdown(body)
+            if unwrapped is not None:
+                return unwrapped, "text/markdown"
+        return body, stored_type
+
+
+def get_artifact_content_service() -> ArtifactContentService:
+    return ArtifactContentService()
