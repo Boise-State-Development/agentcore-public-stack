@@ -286,7 +286,12 @@ def create_artifact_record(
     table = _table()
     try:
         table.put_item(
-            Item={**common, "PK": pk, "SK": f"ARTIFACT#{artifact_id}#V#{version:05d}"},
+            Item={
+                **common,
+                "PK": pk,
+                "SK": f"ARTIFACT#{artifact_id}#V#{version:05d}",
+                "updated_at": now,
+            },
             ConditionExpression="attribute_not_exists(SK)",
         )
         table.put_item(
@@ -351,7 +356,12 @@ def update_artifact_record(
     }
     try:
         table.put_item(
-            Item={**common, "PK": pk, "SK": f"ARTIFACT#{artifact_id}#V#{version:05d}"},
+            Item={
+                **common,
+                "PK": pk,
+                "SK": f"ARTIFACT#{artifact_id}#V#{version:05d}",
+                "updated_at": now,
+            },
             ConditionExpression="attribute_not_exists(SK)",
         )
         # Optimistic lock: HEAD must still be at the version we read, so
@@ -383,30 +393,38 @@ def update_artifact_record(
 
 
 def set_produced_by_message_index(
-    user_id: str, artifact_id: str, message_index: int
+    user_id: str, artifact_id: str, version: int, message_index: int
 ) -> None:
-    """Stamp the HEAD row with the index of the assistant message that
-    produced (or last updated) the artifact this turn.
+    """Stamp the artifact's version row (and HEAD) with the index of the
+    assistant message that produced this version this turn.
 
-    The artifact tool can't know this at write time — the turn isn't
-    finished — so the stream coordinator writes it back post-turn using
-    the same odd-position index it already computes for per-message
+    Per-version linkage is what lets the SPA place every version's card
+    under the turn that produced it after a reload — the list endpoint
+    returns all version rows, not just HEAD. HEAD is stamped too so any
+    HEAD-only reader still sees the latest version's linkage.
+
+    The artifact tool can't know this index at write time — the turn
+    isn't finished — so the stream coordinator writes it back post-turn
+    using the same odd-position index it already computes for per-message
     metadata (`initial_message_count + 2*i + 1`). That index matches the
-    `idx` the messages endpoint enumerates on reload, so the SPA can
-    render the card inline after the right assistant message.
+    `idx` the messages endpoint enumerates on reload.
 
-    Best-effort: a SET on a single attribute, keyed by the HEAD row, that
-    deliberately does not touch `version` so it can never collide with
-    the update_artifact optimistic lock. Failures are swallowed by the
-    caller (linkage is a UX nicety, never worth breaking a turn over).
+    Best-effort: a SET on a single attribute that deliberately does not
+    touch `version`, so it can never collide with the update_artifact
+    optimistic lock. Failures are swallowed by the caller (linkage is a
+    UX nicety, never worth breaking a turn over).
     """
     table = _table()
-    table.update_item(
-        Key={"PK": f"USER#{user_id}", "SK": f"ARTIFACT#{artifact_id}#HEAD"},
-        UpdateExpression="SET produced_by_message_index = :idx",
-        ExpressionAttributeValues={":idx": message_index},
-        ConditionExpression="attribute_exists(SK)",
-    )
+    for sk in (
+        f"ARTIFACT#{artifact_id}#V#{version:05d}",
+        f"ARTIFACT#{artifact_id}#HEAD",
+    ):
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET produced_by_message_index = :idx",
+            ExpressionAttributeValues={":idx": message_index},
+            ConditionExpression="attribute_exists(SK)",
+        )
 
 
 _SESSION_INDEX = "SessionIndex"

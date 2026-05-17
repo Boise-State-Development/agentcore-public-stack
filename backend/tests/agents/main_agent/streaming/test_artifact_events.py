@@ -82,13 +82,15 @@ async def test_stamps_and_emits_produced_by_message_index(
     monkeypatch.setattr(
         artifact_service,
         "set_produced_by_message_index",
-        lambda u, aid, idx: stamped.append((u, aid, idx)),
+        lambda u, aid, ver, idx: stamped.append((u, aid, ver, idx)),
     )
     out = await coord._extract_artifact_events(
         SESSION, USER, turn_start, produced_by_message_index=7
     )
     assert {_parse_sse(e)["producedByMessageIndex"] for e in out} == {7}
-    assert stamped == [(USER, "a", 7), (USER, "b", 7)]
+    # Each artifact's own version is threaded to the stamp so the right
+    # version row is linked (both rows are v1 here).
+    assert stamped == [(USER, "a", 1, 7), (USER, "b", 1, 7)]
 
 
 @pytest.mark.asyncio
@@ -99,7 +101,7 @@ async def test_stamp_failure_is_swallowed(
         artifact_service, "list_session_artifacts", lambda u, s: [_row()]
     )
 
-    def _boom(u, aid, idx):
+    def _boom(u, aid, ver, idx):
         raise RuntimeError("ddb down")
 
     monkeypatch.setattr(

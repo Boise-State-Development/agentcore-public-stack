@@ -9,17 +9,18 @@ import type { Artifact, OpenArtifactRef } from './artifact.model';
  * session-load hydration path (`seedFromHydration`), and a `reset()`
  * called on session change.
  *
- * Artifacts are keyed by `artifactId` holding only the highest version
- * seen — `update_artifact` emits a new event for the same id and the
- * card should track the latest. Hydration never clobbers a higher
- * version already recorded from a live event (a stale list response can
- * arrive after the user has already driven a newer update this session).
+ * Keyed by `artifactId#version` — every version is its own entry so the
+ * conversation can show one card per version. `update_artifact` emits a
+ * new event for a new version (a new key), not a replacement. When the
+ * same (id, version) arrives from both a live event and reload
+ * hydration, the live entry wins: it carries `producedByMessageId`, the
+ * precise per-turn anchor the index-only hydration row lacks.
  */
 @Injectable({ providedIn: 'root' })
 export class ArtifactStateService {
   private readonly sidenav = inject(SidenavService);
 
-  private readonly byId = signal<Map<string, Artifact>>(new Map());
+  private readonly byKey = signal<Map<string, Artifact>>(new Map());
   private readonly openRef = signal<OpenArtifactRef | null>(null);
 
   /** Sidenav collapsed state captured the moment the panel opened, so a
@@ -38,14 +39,17 @@ export class ArtifactStateService {
     ArtifactStateService.DEFAULT_PANE_WIDTH,
   );
 
-  /** Artifacts for the current session, newest update first. */
+  /** Every artifact version for the current session, newest first.
+   *  Tie-broken by version so versions of one artifact stay ordered
+   *  even when their timestamps are equal or missing. */
   readonly artifacts = computed<Artifact[]>(() =>
-    Array.from(this.byId().values()).sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
+    Array.from(this.byKey().values()).sort(
+      (a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || b.version - a.version,
     ),
   );
 
-  readonly hasArtifacts = computed(() => this.byId().size > 0);
+  readonly hasArtifacts = computed(() => this.byKey().size > 0);
 
   /** The artifact the side panel is showing, or null when closed. */
   readonly openArtifact = this.openRef.asReadonly();
@@ -72,9 +76,23 @@ export class ArtifactStateService {
     this.paneWidthSignal.set(clamped);
   }
 
-  /** Latest known version of an artifact, if any (used by the card). */
+  /** Highest known version of an artifact, if any. */
   get(artifactId: string): Artifact | undefined {
-    return this.byId().get(artifactId);
+    let latest: Artifact | undefined;
+    for (const a of this.byKey().values()) {
+      if (a.artifactId !== artifactId) continue;
+      if (!latest || a.version > latest.version) latest = a;
+    }
+    return latest;
+  }
+
+  /** Every known version of an artifact, newest first. */
+  versionsFor(artifactId: string): Artifact[] {
+    const out: Artifact[] = [];
+    for (const a of this.byKey().values()) {
+      if (a.artifactId === artifactId) out.push(a);
+    }
+    return out.sort((x, y) => y.version - x.version);
   }
 
   /**
@@ -126,7 +144,7 @@ export class ArtifactStateService {
 
   /** Clear all state — called on session change. */
   reset(): void {
-    this.byId.set(new Map());
+    this.byKey.set(new Map());
     if (this.openRef() !== null) {
       this.openRef.set(null);
       this.restoreNav();
@@ -140,11 +158,14 @@ export class ArtifactStateService {
   }
 
   private upsert(a: Artifact): void {
-    const existing = this.byId().get(a.artifactId);
-    if (existing && existing.version >= a.version) return;
-    this.byId.update((m) => {
+    const key = `${a.artifactId}#${a.version}`;
+    const existing = this.byKey().get(key);
+    // A later reload-hydration call for the same (id, version) must not
+    // drop the live entry's precise per-turn anchor.
+    if (existing?.producedByMessageId && !a.producedByMessageId) return;
+    this.byKey.update((m) => {
       const next = new Map(m);
-      next.set(a.artifactId, a);
+      next.set(key, a);
       return next;
     });
   }

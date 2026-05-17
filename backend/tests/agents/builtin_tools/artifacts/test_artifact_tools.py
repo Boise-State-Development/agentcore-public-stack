@@ -266,14 +266,19 @@ def test_list_session_artifacts_empty_session(aws) -> None:
     assert service.list_session_artifacts(USER, "no-such-session") == []
 
 
-def test_set_produced_by_message_index_stamps_head_and_lists(aws) -> None:
+def test_set_produced_by_message_index_stamps_version_and_head(aws) -> None:
+    ddb, _ = aws
     aid, _ = service.create_artifact_record(USER, SESSION, "Doc", DOC, "")
     assert service.list_session_artifacts(USER, SESSION)[0][
         "produced_by_message_index"
     ] is None
 
-    service.set_produced_by_message_index(USER, aid, 7)
+    service.set_produced_by_message_index(USER, aid, 1, 7)
 
+    # Per-version linkage: the v1 row itself carries the index — this is
+    # what survives reload via the all-versions list endpoint.
+    assert _item(ddb, aid, "V#00001")["produced_by_message_index"] == 7
+    # HEAD is stamped too, so the writer's HEAD-based live list still sees it.
     rows = service.list_session_artifacts(USER, SESSION)
     assert rows[0]["produced_by_message_index"] == 7
     # The stamp must leave the optimistic-lock `version` untouched so a
@@ -281,8 +286,9 @@ def test_set_produced_by_message_index_stamps_head_and_lists(aws) -> None:
     assert service.update_artifact_record(USER, aid, DOC, None, None) == 2
 
 
-def test_set_produced_by_message_index_requires_existing_head(aws) -> None:
+def test_set_produced_by_message_index_requires_existing_rows(aws) -> None:
     from botocore.exceptions import ClientError
 
+    # No version/HEAD rows for "nope": the conditional update fails closed.
     with pytest.raises(ClientError):
-        service.set_produced_by_message_index(USER, "nope", 1)
+        service.set_produced_by_message_index(USER, "nope", 1, 1)

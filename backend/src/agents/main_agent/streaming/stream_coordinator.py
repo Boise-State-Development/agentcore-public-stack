@@ -960,12 +960,14 @@ class StreamCoordinator:
             if not touched:
                 continue
             artifact_id = row.get("artifact_id", "")
+            version = int(row.get("version", 0))
             if produced_by_message_index is not None and artifact_id:
                 try:
                     await asyncio.to_thread(
                         set_produced_by_message_index,
                         user_id,
                         artifact_id,
+                        version,
                         produced_by_message_index,
                     )
                 except Exception as e:  # noqa: BLE001 - best-effort linkage
@@ -975,7 +977,6 @@ class StreamCoordinator:
                         artifact_id,
                         e,
                     )
-            version = int(row.get("version", 0))
             payload = {
                 "type": "artifact",
                 "artifactId": artifact_id,

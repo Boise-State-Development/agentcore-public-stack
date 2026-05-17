@@ -1,10 +1,12 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   computed,
   effect,
   inject,
   signal,
+  viewChild,
 } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -18,7 +20,9 @@ import {
   heroCodeBracket,
   heroClipboard,
   heroCheck,
+  heroChevronUpDown,
 } from '@ng-icons/heroicons/outline';
+import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import {
   ArtifactHttpService,
@@ -59,10 +63,12 @@ import { ArtifactSourceComponent } from './artifact-source.component';
       heroCodeBracket,
       heroClipboard,
       heroCheck,
+      heroChevronUpDown,
     }),
   ],
   host: {
     '(document:keydown.escape)': 'onEscape()',
+    '(document:pointerdown)': 'onDocumentPointerDown($event)',
   },
   template: `
     @if (open(); as ref) {
@@ -101,9 +107,83 @@ import { ArtifactSourceComponent } from './artifact-source.component';
             >
               {{ ref.title || 'Untitled artifact' }}
             </h2>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              Version {{ ref.version }}
-            </p>
+            @if (versions().length > 1) {
+              <div #versionControl class="relative">
+                <button
+                  type="button"
+                  class="-ml-1 flex items-center gap-0.5 rounded px-1 py-0.5 text-xs text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400 dark:hover:text-gray-100"
+                  aria-haspopup="menu"
+                  [attr.aria-expanded]="menuOpen()"
+                  aria-controls="artifact-version-menu"
+                  [attr.aria-label]="
+                    'Version ' +
+                    ref.version +
+                    ' of ' +
+                    versions().length +
+                    ', change version'
+                  "
+                  (click)="toggleMenu()"
+                >
+                  <span>Version {{ ref.version }}</span>
+                  <ng-icon
+                    name="heroChevronUpDown"
+                    class="text-sm"
+                    aria-hidden="true"
+                  />
+                </button>
+                @if (menuOpen()) {
+                  <div
+                    id="artifact-version-menu"
+                    role="menu"
+                    aria-label="Artifact versions"
+                    class="absolute left-0 z-20 mt-1 max-h-72 w-60 overflow-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-700 dark:bg-gray-800"
+                    (keydown)="onMenuKeydown($event)"
+                  >
+                    @for (v of versions(); track v.version) {
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        [attr.aria-checked]="v.version === ref.version"
+                        class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                        [class]="
+                          v.version === ref.version
+                            ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
+                            : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+                        "
+                        (click)="selectVersion(v)"
+                      >
+                        <span
+                          class="flex h-4 w-4 shrink-0 items-center justify-center"
+                          aria-hidden="true"
+                        >
+                          @if (v.version === ref.version) {
+                            <ng-icon name="heroCheck" class="text-sm" />
+                          }
+                        </span>
+                        <span class="min-w-0 flex-1">
+                          <span class="font-medium">Version {{ v.version }}</span>
+                          @if (relativeLabel(v.updatedAt); as t) {
+                            <span class="ml-1 text-gray-400 dark:text-gray-500"
+                              >· {{ t }}</span
+                            >
+                          }
+                        </span>
+                        @if (v.version === latestVersion()) {
+                          <span
+                            class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-500/15 dark:text-blue-300"
+                            >Latest</span
+                          >
+                        }
+                      </button>
+                    }
+                  </div>
+                }
+              </div>
+            } @else {
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                Version {{ ref.version }}
+              </p>
+            }
           </div>
           <div
             role="group"
@@ -337,12 +417,29 @@ export class ArtifactPanelComponent {
     return r ? `${r.artifactId}#${r.version}` : null;
   });
 
+  // Version picker. All versions live in ArtifactStateService (one
+  // registry entry per `artifactId#version`); selecting one just
+  // re-points openRef and the currentKey effect reloads it.
+  protected readonly versions = computed<Artifact[]>(() => {
+    const r = this.open();
+    return r ? this.artifactState.versionsFor(r.artifactId) : [];
+  });
+  /** Highest version number (the list is desc) — drives the badge. */
+  protected readonly latestVersion = computed(
+    () => this.versions()[0]?.version,
+  );
+  protected readonly menuOpen = signal(false);
+  private readonly versionControl =
+    viewChild<ElementRef<HTMLElement>>('versionControl');
+
   constructor() {
     // Mint a fresh token whenever the panel opens or switches artifact.
     // Closing (open() === null) clears the iframe so the credential URL
     // doesn't linger in the DOM.
     effect(() => {
       const key = this.currentKey();
+      // Any open / version-switch / close also dismisses the menu.
+      this.menuOpen.set(false);
       if (!key) {
         this.reset();
         return;
@@ -427,7 +524,108 @@ export class ArtifactPanelComponent {
   }
 
   protected onEscape(): void {
+    if (this.menuOpen()) {
+      this.closeMenuAndRefocus();
+      return;
+    }
     if (this.open()) this.close();
+  }
+
+  protected toggleMenu(): void {
+    const next = !this.menuOpen();
+    this.menuOpen.set(next);
+    // Let the menu render, then move focus into it for keyboard users.
+    if (next) setTimeout(() => this.focusSelectedItem());
+  }
+
+  protected selectVersion(v: Artifact): void {
+    this.menuOpen.set(false);
+    // Re-points openRef; the currentKey effect re-mints the token and
+    // reloads (preview) / refetches (code) for the chosen version, and
+    // the header title tracks that version.
+    this.artifactState.openArtifactPanel({
+      artifactId: v.artifactId,
+      version: v.version,
+      title: v.title,
+    });
+  }
+
+  protected onMenuKeydown(e: KeyboardEvent): void {
+    const items = this.menuItems();
+    if (!items.length) return;
+    const idx = items.indexOf(
+      document.activeElement as HTMLButtonElement,
+    );
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        items[(Math.max(idx, -1) + 1) % items.length]?.focus();
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        items[(idx <= 0 ? items.length : idx) - 1]?.focus();
+        break;
+      case 'Home':
+        e.preventDefault();
+        items[0]?.focus();
+        break;
+      case 'End':
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+        break;
+      case 'Tab':
+        // Don't leave an orphaned menu when focus tabs away.
+        this.menuOpen.set(false);
+        break;
+      default:
+        break;
+    }
+  }
+
+  protected onDocumentPointerDown(e: PointerEvent): void {
+    if (!this.menuOpen()) return;
+    const root = this.versionControl()?.nativeElement;
+    if (root && !root.contains(e.target as Node)) {
+      this.menuOpen.set(false);
+    }
+  }
+
+  /** Short relative time for a version row; '' (hidden) if unparseable. */
+  protected relativeLabel(iso: string): string {
+    if (!iso) return '';
+    const then = Date.parse(iso);
+    if (Number.isNaN(then)) return '';
+    const min = Math.floor((Date.now() - then) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
+  private menuItems(): HTMLButtonElement[] {
+    const root = this.versionControl()?.nativeElement;
+    if (!root) return [];
+    return Array.from(
+      root.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    );
+  }
+
+  private focusSelectedItem(): void {
+    const items = this.menuItems();
+    const current =
+      items.find((b) => b.getAttribute('aria-checked') === 'true') ??
+      items[0];
+    current?.focus();
+  }
+
+  private closeMenuAndRefocus(): void {
+    this.menuOpen.set(false);
+    this.versionControl()
+      ?.nativeElement.querySelector<HTMLButtonElement>(
+        '[aria-haspopup="menu"]',
+      )
+      ?.focus();
   }
 
   protected close(): void {
