@@ -68,6 +68,10 @@ export class ChatRequestService implements OnDestroy {
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
+    // Any new send (including a "Continue") retires the previous turn's
+    // max_tokens "Continue" affordance immediately, before the stream starts.
+    this.chatStateService.setLastTurnContinuable(false);
+
     const isNewSession = !sessionId;
     sessionId = sessionId || uuidv4();
 
@@ -112,6 +116,52 @@ export class ChatRequestService implements OnDestroy {
       this.chatStateService.setChatLoading(false);
       this.messageMapService.endStreaming();
       throw error; // Re-throw to allow caller to handle
+    }
+  }
+
+  /**
+   * "Continue" after a max_tokens truncation. Modeled on the OAuth/tool
+   * resume flow, NOT on submitChatRequest: no user message is added (no
+   * visible bubble, no new user turn) so the model resumes the truncated
+   * assistant message in restored history instead of answering a fresh
+   * instruction. The full request object is sent so the backend rebuilds
+   * the same agent shape; `continue_truncated` makes it re-enter the loop
+   * with an empty prompt.
+   */
+  async continueTruncatedTurn(
+    sessionId: string | null,
+    assistantId?: string,
+  ): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    // Hide the affordance immediately; retire any stale continuable state.
+    this.chatStateService.setLastTurnContinuable(false);
+
+    // Continuation streaming: pins the existing messages (history +
+    // truncated partial + error bubble) as a stable prefix and appends the
+    // continuation after them, instead of the normal sync which would
+    // truncate back to the last user message and drop the partial. Also
+    // resets the parser (with the correct starting count) so the resumed
+    // stream is treated as a fresh batch.
+    this.messageMapService.beginContinuationStreaming(sessionId);
+    this.chatStateService.createNewAbortController();
+    this.chatStateService.setChatLoading(true);
+
+    // Reuse the normal request shape so the backend rebuilds the same
+    // model/tools/assistant agent, but with an empty message and the
+    // continuation flag. No addUserMessage call → no user bubble.
+    const requestObject = this.buildChatRequestObject('', sessionId, undefined, assistantId);
+    requestObject['message'] = '';
+    requestObject['continue_truncated'] = true;
+
+    try {
+      await this.chatHttpService.sendChatRequest(requestObject);
+    } catch (error) {
+      this.chatStateService.setChatLoading(false);
+      this.messageMapService.endStreaming();
+      throw error;
     }
   }
 

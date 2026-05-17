@@ -244,6 +244,27 @@ class TestErrors:
         evt = build_conversational_error_event(ErrorCode.SERVICE_UNAVAILABLE, Exception("down"))
         assert "unavailable" in evt.message.lower()
 
+    def test_build_conversational_error_max_tokens(self):
+        from apis.shared.errors import build_conversational_error_event, ErrorCode
+        # The raw SDK message carries a strandsagents.com URL we must NOT leak.
+        raw = Exception(
+            "Agent has reached an unrecoverable state due to max_tokens limit. "
+            "For more information see: https://strandsagents.com/x"
+        )
+        evt = build_conversational_error_event(
+            ErrorCode.MAX_TOKENS, raw, session_id="s1", recoverable=True
+        )
+        # Concise, not rendered as a bubble — the UI owns the wording.
+        assert "limit" in evt.message.lower()
+        # No leaked SDK URL or raw exception text.
+        assert "strandsagents.com" not in evt.message
+        assert "unrecoverable" not in evt.message.lower()
+        # Recoverable + machine-readable hint for the frontend affordance.
+        assert evt.recoverable is True
+        assert evt.code == ErrorCode.MAX_TOKENS
+        assert evt.metadata["error_kind"] == "max_tokens"
+        assert evt.metadata["session_id"] == "s1"
+
 
 # ===================================================================
 # sessions/metadata.py — pure functions

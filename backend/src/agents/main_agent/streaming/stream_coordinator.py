@@ -446,42 +446,86 @@ class StreamCoordinator:
                         code=error_code, error=synthetic_error, session_id=session_id, recoverable=error_data.get("recoverable", False)
                     )
 
-                    # Emit message events so error appears in chat
-                    yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
-                    yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
-                    yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': conv_error_event.message})}\n\n"
-                    yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
-                    yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
-                    yield conv_error_event.to_sse_format()
-                    yield "event: done\ndata: {}\n\n"
+                    if error_code == ErrorCode.MAX_TOKENS:
+                        # No verbose assistant bubble for truncation. The model
+                        # stream already emitted its own message_stop
+                        # (stopReason max_tokens) for the partial, so do NOT
+                        # emit a second synthetic message_stop here — a
+                        # duplicate with no active builder flips the client
+                        # parser into an error state and drops the
+                        # stream_error below. Just emit the stream_error
+                        # signal (frontend shows the inline "response length
+                        # limit reached" notice + Continue on the partial) and
+                        # done; `done` finalizes any still-open builder.
+                        yield conv_error_event.to_sse_format()
+                        # Durable marker so the Continue affordance survives a
+                        # page refresh (the partial itself is already in
+                        # AgentCore Memory). Best-effort; never blocks the
+                        # stream. Cleared at the start of the next non-resume
+                        # turn (see invocations route).
+                        try:
+                            from apis.shared.sessions.metadata import set_truncated_turn
+                            await set_truncated_turn(session_id, user_id)
+                        except Exception as marker_err:
+                            logger.error(
+                                "max_tokens: failed to persist truncated_turn marker for session %s: %s",
+                                session_id, marker_err, exc_info=True,
+                            )
+                        yield "event: done\ndata: {}\n\n"
+                    else:
+                        # Other errors still surface as a conversational
+                        # assistant message in the chat.
+                        yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
+                        yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
+                        yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': conv_error_event.message})}\n\n"
+                        yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
+                        yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
+                        yield conv_error_event.to_sse_format()
+                        yield "event: done\ndata: {}\n\n"
 
-                    # Persist error messages to session
-                    try:
-                        from strands.types.content import Message
-                        from strands.types.session import SessionMessage
+                    # Persist error messages to session.
+                    #
+                    # SKIP for max_tokens: Strands already appended the recovered
+                    # partial assistant turn to agent.messages and the
+                    # MessageAddedEvent hook persisted it to AgentCore Memory
+                    # before the exception propagated; the user turn was
+                    # persisted at turn start by the normal hook. Re-persisting
+                    # here would duplicate the user turn and add a SECOND
+                    # consecutive assistant message, breaking Bedrock role
+                    # alternation for the follow-up "Continue" turn. The error
+                    # explanation stays a live-only UI affordance for this turn.
+                    if error_code == ErrorCode.MAX_TOKENS:
+                        logger.info(
+                            f"max_tokens: skipping error re-persist for session {session_id} "
+                            f"(Strands already committed the recovered partial turn)"
+                        )
+                    else:
+                        try:
+                            from strands.types.content import Message
+                            from strands.types.session import SessionMessage
 
-                        from agents.main_agent.session.session_factory import SessionFactory
+                            from agents.main_agent.session.session_factory import SessionFactory
 
-                        persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+                            persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
 
-                        # Extract user text from prompt (can be string or ContentBlock list)
-                        if isinstance(prompt, str):
-                            user_text = prompt
-                        else:
-                            # Extract text from ContentBlock list
-                            user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
+                            # Extract user text from prompt (can be string or ContentBlock list)
+                            if isinstance(prompt, str):
+                                user_text = prompt
+                            else:
+                                # Extract text from ContentBlock list
+                                user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
 
-                        user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
-                        assistant_msg: Message = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
+                            user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
+                            assistant_msg: Message = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
 
-                        if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
-                            user_session_msg = SessionMessage.from_message(user_msg, 0)
-                            assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
-                            persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
-                            persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-                            logger.info(f"💾 Saved intercepted error messages to session {session_id}")
-                    except Exception as persist_error:
-                        logger.error(f"Failed to persist intercepted error to session: {persist_error}")
+                            if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
+                                user_session_msg = SessionMessage.from_message(user_msg, 0)
+                                assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                                persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
+                                persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
+                                logger.info(f"💾 Saved intercepted error messages to session {session_id}")
+                        except Exception as persist_error:
+                            logger.error(f"Failed to persist intercepted error to session: {persist_error}")
 
                     # Skip the original error event and exit the loop - we've handled the error
                     return

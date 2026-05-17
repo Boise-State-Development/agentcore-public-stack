@@ -40,15 +40,31 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('setLastTurnContinuable', () => {
+    it('defaults to false', () => {
+      expect(service.lastTurnContinuable()).toBe(false);
+    });
+
+    it('toggles the continuable flag', () => {
+      service.setLastTurnContinuable(true);
+      expect(service.lastTurnContinuable()).toBe(true);
+
+      service.setLastTurnContinuable(false);
+      expect(service.lastTurnContinuable()).toBe(false);
+    });
+  });
+
   describe('resetState', () => {
     it('should reset all state to initial values', () => {
       service.setChatLoading(true);
       service.setStopReason('stop');
-      
+      service.setLastTurnContinuable(true);
+
       service.resetState();
-      
+
       expect(service.isChatLoading()).toBe(false);
       expect(service.currentStopReason()).toBeNull();
+      expect(service.lastTurnContinuable()).toBe(false);
     });
   });
 

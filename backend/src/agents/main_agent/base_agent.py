@@ -184,6 +184,7 @@ class BaseAgent(ABC):
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
+        continue_truncated: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Stream agent responses. Subclasses must implement.
 
@@ -191,6 +192,12 @@ class BaseAgent(ABC):
         agent turn (Strands interrupt protocol) instead of starting a new
         one. In that case `message`/`files` are ignored — the original turn
         already has the user's prompt in its context.
+
+        When `continue_truncated` is True, the call resumes after a
+        max_tokens truncation: `message`/`files` are ignored and the loop is
+        re-entered with an empty prompt so the model continues the truncated
+        assistant message already in restored history (assistant-prefill),
+        rather than answering a fresh instruction.
         """
         ...
 

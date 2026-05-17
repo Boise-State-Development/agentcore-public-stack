@@ -189,6 +189,14 @@ export class ConversationPage implements OnDestroy {
         lastContextTokens: session.lastContextTokens,
         contextWindow: session.contextWindow,
       });
+      // Refresh-survival for the max_tokens "Continue" affordance: the
+      // truncated partial is already in restored history; this flag is the
+      // missing piece. Only set true here — the route-change reset clears
+      // it (cross-session safety) and the live stream_error path owns the
+      // in-turn signal, so we never clobber a live true with stale metadata.
+      if (session.lastTurnContinuable) {
+        this.chatStateService.setLastTurnContinuable(true);
+      }
     });
 
     // Hydrate the compaction summary indicator from persisted session
@@ -281,6 +289,11 @@ export class ConversationPage implements OnDestroy {
       // metadata loads — otherwise the previous session's totals briefly
       // flash on the badge while the new metadata is in flight.
       this.chatStateService.seedSessionAggregates({});
+
+      // Retire any prior session's "Continue" affordance before the new
+      // session's metadata lands; the seed effect re-sets it from
+      // metadata.lastTurnContinuable when applicable.
+      this.chatStateService.setLastTurnContinuable(false);
 
       // Compaction summary is session-scoped — clear before loading the
       // next session's metadata so the previous session's totals don't
@@ -384,6 +397,23 @@ export class ConversationPage implements OnDestroy {
     if (this.stagedSessionId()) {
       this.stagedSessionId.set(null);
     }
+  }
+
+  /**
+   * "Continue" affordance on a max_tokens-truncated assistant message.
+   * NOT a new user turn: it resumes the truncated assistant message via the
+   * continuation path (no visible user bubble, empty prompt) so the model
+   * picks up where it stopped instead of re-answering the original request.
+   */
+  onContinueRequested() {
+    const sessionIdToUse = this.effectiveSessionId();
+    const assistantIdToUse =
+      this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
+    this.chatRequestService
+      .continueTruncatedTurn(sessionIdToUse, assistantIdToUse)
+      .catch((error) => {
+        console.error('Error continuing truncated turn:', error);
+      });
   }
 
   /**

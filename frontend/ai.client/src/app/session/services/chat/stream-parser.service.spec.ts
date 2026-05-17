@@ -349,3 +349,86 @@ describe('StreamParserService - Citation Handling', () => {
     });
   });
 });
+
+describe('StreamParserService - max_tokens Continue affordance', () => {
+  let service: StreamParserService;
+  let chatState: ChatStateService;
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        StreamParserService,
+        ChatStateService,
+        ErrorService,
+        QuotaWarningService,
+      ],
+    });
+    service = TestBed.inject(StreamParserService);
+    chatState = TestBed.inject(ChatStateService);
+    service.reset();
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('marks the last turn continuable on a max_tokens stream_error', () => {
+    expect(chatState.lastTurnContinuable()).toBe(false);
+
+    service.parseEventSourceMessage('stream_error', {
+      type: 'stream_error',
+      code: 'max_tokens',
+      message: 'I reached my response-length limit.',
+      recoverable: true,
+      metadata: { error_kind: 'max_tokens' },
+    });
+
+    expect(chatState.lastTurnContinuable()).toBe(true);
+  });
+
+  it('does not mark continuable for a non-max_tokens stream_error', () => {
+    service.parseEventSourceMessage('stream_error', {
+      type: 'stream_error',
+      code: 'stream_error',
+      message: 'Something went wrong.',
+      recoverable: false,
+    });
+
+    expect(chatState.lastTurnContinuable()).toBe(false);
+  });
+
+  it('retires the affordance when the next assistant turn starts streaming', () => {
+    service.parseEventSourceMessage('stream_error', {
+      type: 'stream_error',
+      code: 'max_tokens',
+      message: 'truncated',
+      recoverable: true,
+      metadata: { error_kind: 'max_tokens' },
+    });
+    expect(chatState.lastTurnContinuable()).toBe(true);
+
+    service.parseEventSourceMessage('message_start', { role: 'assistant' });
+    expect(chatState.lastTurnContinuable()).toBe(false);
+  });
+
+  it('processes a terminal stream_error even after the stream completed', () => {
+    // Reproduces the dropped-affordance bug: the parser reaches a
+    // terminal state (message_start sets currentStreamId; done →
+    // Completed), then the max_tokens stream_error arrives last. It must
+    // still be processed (always-allowed) so Continue appears.
+    service.parseEventSourceMessage('message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('done', null);
+    expect(chatState.lastTurnContinuable()).toBe(false);
+
+    service.parseEventSourceMessage('stream_error', {
+      type: 'stream_error',
+      code: 'max_tokens',
+      message: 'Response length limit reached.',
+      recoverable: true,
+      metadata: { error_kind: 'max_tokens' },
+    });
+
+    expect(chatState.lastTurnContinuable()).toBe(true);
+  });
+});

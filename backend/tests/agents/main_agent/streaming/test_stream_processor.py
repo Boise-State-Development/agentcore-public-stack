@@ -19,6 +19,7 @@ from agents.main_agent.streaming.stream_processor import (
     _handle_reasoning_events,
     _handle_tool_events,
     _serialize_object,
+    process_agent_stream,
 )
 
 
@@ -787,3 +788,52 @@ class TestProcessedEventStructure:
             "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
         })
         self._assert_structure(events)
+
+
+class TestProcessAgentStreamMaxTokens:
+    """MaxTokensReachedException is classified as a recoverable max_tokens
+    error event (not the generic stream_error) and never leaks the raw SDK
+    message/URL."""
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_emits_recoverable_error_event(self):
+        from strands.types.exceptions import MaxTokensReachedException
+
+        async def mock_stream():
+            yield {"start_event_loop": True}
+            raise MaxTokensReachedException(
+                "Agent has reached an unrecoverable state due to max_tokens "
+                "limit. For more information see: https://strandsagents.com/x"
+            )
+
+        events = []
+        async for ev in process_agent_stream(mock_stream()):
+            events.append(ev)
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) == 1
+        data = error_events[0]["data"]
+        assert data["code"] == "max_tokens"
+        assert data["recoverable"] is True
+        # detail is None and excluded — no leaked SDK URL/raw exception text.
+        assert "strandsagents.com" not in str(data)
+        assert "unrecoverable" not in str(data).lower()
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_still_stream_error(self):
+        """Regression: a non-max_tokens exception still maps to the
+        non-recoverable generic stream_error."""
+
+        async def mock_stream():
+            yield {"start_event_loop": True}
+            raise RuntimeError("totally unrelated boom")
+
+        events = []
+        async for ev in process_agent_stream(mock_stream()):
+            events.append(ev)
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) == 1
+        data = error_events[0]["data"]
+        assert data["code"] == "stream_error"
+        assert data["recoverable"] is False

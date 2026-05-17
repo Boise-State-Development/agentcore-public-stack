@@ -45,6 +45,8 @@ from decimal import Decimal
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, TypedDict
 from uuid import UUID
 
+from strands.types.exceptions import MaxTokensReachedException
+
 from apis.shared.errors import StreamErrorEvent, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -1478,6 +1480,24 @@ async def process_agent_stream(
                 recoverable=False
             )
             yield _create_event("error", error_event.model_dump(exclude_none=True))
+
+    except MaxTokensReachedException:
+        # The model hit its output-token ceiling mid-turn. Strands has already
+        # appended the recovered partial assistant message (truncated tool uses
+        # swapped for stubs) to agent.messages, and the MessageAddedEvent hook
+        # has persisted it to AgentCore Memory before this exception propagated
+        # — so the turn is recoverable via a follow-up "continue". Emit a
+        # max_tokens-coded error so the coordinator can render an honest,
+        # actionable message and skip the duplicate-persist path. Do NOT leak
+        # the raw SDK message/URL into `detail`.
+        logger.info("Agent stream stopped: max_tokens limit reached (recoverable via continue)")
+        error_event = StreamErrorEvent(
+            error="Response truncated: maximum output length reached",
+            code=ErrorCode.MAX_TOKENS,
+            detail=None,
+            recoverable=True
+        )
+        yield _create_event("error", error_event.model_dump(exclude_none=True))
 
     except Exception as e:
         # ERROR HANDLING: If anything else goes wrong, log it and send an error event

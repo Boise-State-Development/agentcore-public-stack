@@ -50,6 +50,7 @@ class ChatAgent(BaseAgent):
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
+        continue_truncated: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -65,6 +66,12 @@ class ChatAgent(BaseAgent):
             interrupt_responses: When set, resume a paused agent turn by
                 passing this list as the prompt to Strands. Each entry is
                 `{"interruptResponse": {"interruptId": str, "response": Any}}`.
+            continue_truncated: When True, resume after a max_tokens
+                truncation by passing an empty-list prompt to Strands.
+                `_convert_prompt_to_messages([])` appends no message, so the
+                event loop re-runs against restored history whose tail is the
+                truncated assistant message — the model continues it
+                (assistant-prefill) instead of answering a new instruction.
 
         Yields:
             str: SSE formatted events
@@ -78,6 +85,11 @@ class ChatAgent(BaseAgent):
             # interrupts' `.response`, and continues from the paused tool
             # call. multimodal_builder + files do not apply here.
             prompt: Any = interrupt_responses
+        elif continue_truncated:
+            # Empty list → Strands appends nothing → the loop re-runs against
+            # restored history (tail = truncated assistant message). No new
+            # user turn, no multimodal/files.
+            prompt = []
         else:
             prompt = self.multimodal_builder.build_prompt(message, files)
 

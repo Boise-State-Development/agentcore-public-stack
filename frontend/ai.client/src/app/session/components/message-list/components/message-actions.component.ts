@@ -4,12 +4,13 @@ import {
   computed,
   inject,
   input,
+  output,
   PLATFORM_ID,
   signal,
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSquare2Stack, heroCheck } from '@ng-icons/heroicons/outline';
+import { heroSquare2Stack, heroCheck, heroArrowPath } from '@ng-icons/heroicons/outline';
 import { MarkdownService } from 'ngx-markdown';
 import { Message, isTextContentBlock } from '../../../services/models/message.model';
 import { TooltipDirective } from '../../../../components/tooltip';
@@ -18,7 +19,7 @@ import { TooltipDirective } from '../../../../components/tooltip';
   selector: 'app-message-actions',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, TooltipDirective],
-  providers: [provideIcons({ heroSquare2Stack, heroCheck })],
+  providers: [provideIcons({ heroSquare2Stack, heroCheck, heroArrowPath })],
   template: `
     <div class="flex items-center gap-1">
       <button
@@ -36,6 +37,23 @@ import { TooltipDirective } from '../../../../components/tooltip';
           <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
         }
       </button>
+
+      @if (canContinue()) {
+        <span class="pl-1 text-xs text-gray-500 dark:text-gray-400">
+          Response length limit reached
+        </span>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-300 dark:hover:bg-blue-950/40"
+          appTooltip="Resume response"
+          appTooltipPosition="top"
+          aria-label="Continue the truncated response"
+          (click)="continueRequested.emit()"
+        >
+          <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+          <span>Continue</span>
+        </button>
+      }
     </div>
   `,
   styles: `
@@ -58,6 +76,13 @@ export class MessageActionsComponent {
   private markdown = inject(MarkdownService);
 
   message = input.required<Message>();
+
+  /** Show a "Continue" button when this is the last assistant message of a
+   *  recoverable max_tokens-truncated turn. */
+  canContinue = input<boolean>(false);
+
+  /** Emitted when the user asks to continue the truncated response. */
+  continueRequested = output<void>();
 
   protected copied = signal(false);
   private resetTimeout: ReturnType<typeof setTimeout> | null = null;

@@ -157,6 +157,29 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         self._total_message_count_at_init = len(agent.messages)
         self.message_count = self._total_message_count_at_init
 
+        # Slice 0 diagnostic: confirm what restored history a turn actually
+        # sees at init. Decisive for the max_tokens "Continue" flow — on the
+        # continuation turn the restored tail must be the truncated assistant
+        # message for the model to resume rather than restart. One concise
+        # line per init (init is not hot-path frequent).
+        try:
+            _msgs = agent.messages or []
+            if _msgs:
+                _last = _msgs[-1]
+                _last_role = _last.get("role")
+                _last_text = ""
+                for _blk in _last.get("content", []) or []:
+                    if isinstance(_blk, dict) and isinstance(_blk.get("text"), str):
+                        _last_text += _blk["text"]
+                logger.info(
+                    "Restore @init: %d message(s); last role=%s, last text len=%d",
+                    len(_msgs), _last_role, len(_last_text),
+                )
+            else:
+                logger.info("Restore @init: 0 messages (new or empty-at-init session)")
+        except Exception:
+            logger.debug("Restore @init: diagnostic log failed", exc_info=True)
+
         # Initialize compaction defaults
         self.compaction_state = CompactionState()
         self._valid_cutoff_indices = []

@@ -6,6 +6,7 @@ import { ChatStateService } from './chat-state.service';
 import { v4 as uuidv4 } from 'uuid';
 import {
   ErrorService,
+  ErrorCode,
   StreamErrorEvent,
   ConversationalStreamError,
 } from '../../../services/error/error.service';
@@ -217,8 +218,14 @@ export class StreamParserService {
     // Check if we should process this event
     // oauth_required arrives after message_stop/done by design (see CLAUDE.md SSE
     // table) — allow it through even when the stream state is Completed.
+    // stream_error is a terminal signal that likewise arrives after
+    // message_stop (e.g. max_tokens truncation) and must never be dropped by
+    // state gating, or recovery affordances (Continue) silently disappear.
     const isAlwaysAllowedEvent =
-      event === 'message_start' || event === 'error' || event === 'oauth_required';
+      event === 'message_start' ||
+      event === 'error' ||
+      event === 'oauth_required' ||
+      event === 'stream_error';
     if (!isAlwaysAllowedEvent && !this.shouldProcessEvent()) {
       return;
     }
@@ -375,8 +382,19 @@ export class StreamParserService {
       },
 
       onError: (data) => this.handleError(data),
-      onStreamError: (data) =>
-        this.errorService.handleConversationalStreamError(data as ConversationalStreamError),
+      onStreamError: (data) => {
+        const streamError = data as ConversationalStreamError;
+        this.errorService.handleConversationalStreamError(streamError);
+        // A max_tokens truncation is recoverable: Strands already persisted
+        // the partial assistant turn, so the user can continue from it.
+        // Surface the "Continue" affordance on the last assistant message.
+        const isMaxTokens =
+          streamError.code === ErrorCode.MAX_TOKENS ||
+          streamError.metadata?.['error_kind'] === 'max_tokens';
+        if (isMaxTokens) {
+          this.chatStateService.setLastTurnContinuable(true);
+        }
+      },
 
       onParseError: (message) => this.setError(message),
     };
@@ -406,6 +424,10 @@ export class StreamParserService {
 
     // Clear stopReason in ChatStateService
     this.chatStateService.setStopReason(null);
+
+    // A new assistant turn is streaming — retire any stale "Continue"
+    // affordance from a previous max_tokens truncation.
+    this.chatStateService.setLastTurnContinuable(false);
 
     // Compute predictable message ID
     const completedCount = this.completedMessages().length;

@@ -108,6 +108,7 @@ export class ChatContainerComponent {
 
   // Output events
   messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[] }>();
+  continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
   settingsToggled = output<void>();

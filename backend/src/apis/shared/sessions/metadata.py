@@ -1919,3 +1919,83 @@ async def clear_paused_turn(session_id: str, user_id: str) -> None:
         logger.info("Cleared paused_turn for session %s", session_id)
     except Exception as e:
         logger.error("Failed to clear paused_turn: %s", e, exc_info=True)
+
+
+async def set_truncated_turn(session_id: str, user_id: str) -> None:
+    """Mark that the last turn ended in a recoverable max_tokens truncation.
+
+    Lets the client re-show the "Continue" affordance after a page refresh
+    (the truncated partial assistant message is already in AgentCore Memory;
+    this flag is the only missing piece). Idempotent overwrite. Best-effort:
+    a write failure logs but never breaks the live SSE flow. No-op when the
+    session record is missing or the table env var is unset.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping truncated_turn persistence")
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info("Skipping truncated_turn write — session %s not found", session_id)
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning("Session %s has no SK; cannot update truncated_turn", session_id)
+            return
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #ltc = :ltc",
+            ExpressionAttributeNames={"#ltc": "lastTurnContinuable"},
+            ExpressionAttributeValues={":ltc": True},
+        )
+        logger.info("Persisted truncated_turn marker for session %s", session_id)
+    except Exception as e:
+        logger.error("Failed to persist truncated_turn: %s", e, exc_info=True)
+
+
+async def clear_truncated_turn(session_id: str, user_id: str) -> None:
+    """Drop the truncated-turn marker.
+
+    Called at the start of any new turn that isn't an interrupt-resume
+    (fresh turn or a max_tokens continuation), so a stale marker can't
+    resurrect "Continue" against a turn the user moved past. If a
+    continuation itself re-truncates, the intercept re-sets the marker.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            return
+
+        if "lastTurnContinuable" not in existing:
+            return  # Already clear
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #ltc",
+            ExpressionAttributeNames={"#ltc": "lastTurnContinuable"},
+        )
+        logger.info("Cleared truncated_turn for session %s", session_id)
+    except Exception as e:
+        logger.error("Failed to clear truncated_turn: %s", e, exc_info=True)

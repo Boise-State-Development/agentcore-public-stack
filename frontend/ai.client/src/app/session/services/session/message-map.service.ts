@@ -22,6 +22,17 @@ export class MessageMapService {
   private activeStreamSessionId = signal<string | null>(null);
 
   /**
+   * Continuation-after-max_tokens state. A "Continue" turn has NO new user
+   * message, so the normal sync (which truncates back to the last user
+   * message and replaces everything after it) would discard the truncated
+   * partial + error bubbles and show only the continuation. In continuation
+   * mode we instead pin a stable prefix (the messages that existed when the
+   * continuation started) and append the continuation stream after it.
+   */
+  private continuationSessionId: string | null = null;
+  private continuationPrefix: Message[] = [];
+
+  /**
    * Tracks which session is currently loading messages from the API.
    * Used to show skeleton loading state when navigating to a session.
    */
@@ -66,6 +77,10 @@ export class MessageMapService {
   startStreaming(sessionId: string): void {
     this.activeStreamSessionId.set(sessionId);
 
+    // A normal turn uses the standard (truncate-to-last-user) sync.
+    this.continuationSessionId = null;
+    this.continuationPrefix = [];
+
     // Get current message count for this session to enable predictable ID generation
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
     const messageCount = currentMessages.length;
@@ -83,13 +98,39 @@ export class MessageMapService {
   }
 
   /**
+   * Start a "Continue" stream after a max_tokens truncation. Unlike
+   * {@link startStreaming}, the messages that already exist (including the
+   * truncated partial and the error bubble) are pinned as a stable prefix
+   * and the continuation stream is appended after them — nothing is
+   * truncated away. The parser is reset with the current message count so
+   * the continuation's message IDs follow the prefix instead of colliding.
+   */
+  beginContinuationStreaming(sessionId: string): void {
+    this.activeStreamSessionId.set(sessionId);
+
+    const currentMessages = this.messageMap()[sessionId]?.() ?? [];
+    this.continuationSessionId = sessionId;
+    this.continuationPrefix = [...currentMessages];
+
+    this.streamParser.reset(sessionId, currentMessages.length);
+
+    if (!this.messageMap()[sessionId]) {
+      this.messageMap.update(map => ({
+        ...map,
+        [sessionId]: signal<Message[]>([])
+      }));
+    }
+  }
+
+  /**
    * End streaming for the current session.
    * Finalizes messages and clears streaming state.
    */
   endStreaming(): void {
     const sessionId = this.activeStreamSessionId();
     if (sessionId) {
-      // Ensure final messages are synced
+      // Ensure final messages are synced (continuation merge still active
+      // here so the final flush keeps the pinned prefix).
       const finalMessages = this.streamParser.allMessages();
       if (finalMessages.length > 0) {
         this.syncStreamingMessages(sessionId, finalMessages);
@@ -97,6 +138,8 @@ export class MessageMapService {
     }
 
     this.activeStreamSessionId.set(null);
+    this.continuationSessionId = null;
+    this.continuationPrefix = [];
   }
 
   /**
@@ -214,6 +257,15 @@ export class MessageMapService {
     if (!sessionSignal) return;
 
     sessionSignal.update(existingMessages => {
+      // Continuation-after-max_tokens: there is no new user message to
+      // truncate back to. Pin the prefix captured when the continuation
+      // started (history + truncated partial + error bubble) and append the
+      // continuation stream after it. Rebuilt from the stable prefix every
+      // tick so repeated syncs stay idempotent.
+      if (this.continuationSessionId === sessionId) {
+        return [...this.continuationPrefix, ...streamMessages];
+      }
+
       // Find the index of the last user message
       let lastUserMessageIndex = -1;
       for (let i = existingMessages.length - 1; i >= 0; i--) {

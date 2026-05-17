@@ -44,6 +44,10 @@ export interface SessionMetadata {
    *  summary in this session. Drives the end-of-conversation summary
    *  indicator after a refresh. */
   totalSummarizedTurns?: number;
+  /** True when the last turn ended in a recoverable max_tokens truncation.
+   *  Lets the "Continue" affordance survive a page refresh. Cleared
+   *  server-side at the start of any new (non-interrupt-resume) turn. */
+  lastTurnContinuable?: boolean;
 }
 
 // Request model for updating session metadata

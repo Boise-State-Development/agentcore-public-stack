@@ -12,6 +12,13 @@ export class ChatStateService {
     private readonly stopReason = signal<string | null>(null);
     readonly currentStopReason: Signal<string | null> = this.stopReason.asReadonly();
 
+    // True when the most recent turn ended in a recoverable max_tokens
+    // truncation. Drives the "Continue" affordance on the last assistant
+    // message. Live-only (not hydrated on reload); set from the stream_error
+    // event and cleared the moment a new turn starts.
+    private readonly lastTurnContinuableSignal = signal(false);
+    readonly lastTurnContinuable: Signal<boolean> = this.lastTurnContinuableSignal.asReadonly();
+
     // ----- Session-level cost / context aggregates ---------------------------
     // Drive the cost badge above the composer. Seeded from session metadata
     // on route change, then incrementally updated via the SSE metadata event
@@ -47,6 +54,14 @@ export class ChatStateService {
      */
     setStopReason(reason: string | null): void {
         this.stopReason.set(reason);
+    }
+
+    /**
+     * Marks (or clears) whether the last turn ended in a recoverable
+     * max_tokens truncation that the user can continue from.
+     */
+    setLastTurnContinuable(continuable: boolean): void {
+        this.lastTurnContinuableSignal.set(continuable);
     }
 
     /**
@@ -87,6 +102,7 @@ export class ChatStateService {
     resetState(): void {
         this.chatLoading.set(false);
         this.stopReason.set(null);
+        this.lastTurnContinuableSignal.set(false);
         this.costDollarsSignal.set(0);
         this.contextTokensSignal.set(0);
         this.contextWindowSignal.set(0);

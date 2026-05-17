@@ -23,6 +23,7 @@ export enum ErrorCode {
   TOOL_ERROR = 'tool_error',
   MODEL_ERROR = 'model_error',
   STREAM_ERROR = 'stream_error',
+  MAX_TOKENS = 'max_tokens',
 
   // Client-side errors
   NETWORK_ERROR = 'network_error',
@@ -298,6 +299,7 @@ export class ErrorService {
       [ErrorCode.TOOL_ERROR]: 'Tool Error',
       [ErrorCode.MODEL_ERROR]: 'Model Error',
       [ErrorCode.STREAM_ERROR]: 'Stream Error',
+      [ErrorCode.MAX_TOKENS]: 'Response Truncated',
       [ErrorCode.NETWORK_ERROR]: 'Network Error',
       [ErrorCode.UNKNOWN_ERROR]: 'Error',
     };

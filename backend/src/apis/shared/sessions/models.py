@@ -185,6 +185,11 @@ class SessionMetadata(BaseModel):
         alias="pausedTurn",
         description="Agent-construction snapshot for a turn paused on OAuth consent; cleared on successful resume or when a new turn supersedes it",
     )
+    last_turn_continuable: Optional[bool] = Field(
+        default=None,
+        alias="lastTurnContinuable",
+        description="True when the last turn ended in a recoverable max_tokens truncation; lets the 'Continue' affordance survive a page refresh. Cleared at the start of any new (non-interrupt-resume) turn",
+    )
 
     # Denormalized cost + context aggregates for the session-cost badge.
     # Maintained by _bump_session_aggregates after each turn (write-time
@@ -266,6 +271,11 @@ class SessionMetadataResponse(BaseModel):
         default=None,
         alias="totalSummarizedTurns",
         description="Cumulative count of turns rolled into a compaction summary in this session",
+    )
+    last_turn_continuable: Optional[bool] = Field(
+        default=None,
+        alias="lastTurnContinuable",
+        description="True when the last turn ended in a recoverable max_tokens truncation, so the client can re-show the 'Continue' affordance after a refresh",
     )
 
 

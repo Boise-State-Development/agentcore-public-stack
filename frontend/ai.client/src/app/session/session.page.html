@@ -10,6 +10,7 @@
   [greetingMessage]="greetingMessage()"
   [config]="chatConfig"
   (messageSubmitted)="onMessageSubmitted($event)"
+  (continueRequested)="onContinueRequested()"
   (messageCancelled)="onMessageCancelled()"
   (fileAttached)="onFileAttached($event)"
   (settingsToggled)="toggleSettings()"

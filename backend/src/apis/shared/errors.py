@@ -28,6 +28,7 @@ class ErrorCode(str, Enum):
     TOOL_ERROR = "tool_error"
     MODEL_ERROR = "model_error"
     STREAM_ERROR = "stream_error"
+    MAX_TOKENS = "max_tokens"
 
 
 class ErrorDetail(BaseModel):
@@ -204,6 +205,12 @@ Try breaking it into smaller parts or simplifying your query."""
 
 Please wait a moment and try again."""
 
+    elif code == ErrorCode.MAX_TOKENS:
+        # Not rendered as a chat bubble — the frontend shows a compact
+        # inline "response length limit reached" notice + Continue button
+        # off the stream_error signal. Kept concise for logs / payload.
+        message = "Response length limit reached."
+
     elif code == ErrorCode.STREAM_ERROR:
         if "accessdenied" in error_lower or "access denied" in error_lower:
             message = f"""⚠️ I don't have access to complete this request.
@@ -241,9 +248,13 @@ Please try again."""
 
 Please try again."""
 
-    metadata = {}
+    metadata: Dict[str, Any] = {}
     if session_id:
         metadata["session_id"] = session_id
+    if code == ErrorCode.MAX_TOKENS:
+        # Machine-readable hint so the frontend can offer a "Continue"
+        # affordance without parsing the human-readable message.
+        metadata["error_kind"] = "max_tokens"
 
     return ConversationalErrorEvent(
         code=code,

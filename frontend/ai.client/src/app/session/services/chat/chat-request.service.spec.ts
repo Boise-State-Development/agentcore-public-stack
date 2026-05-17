@@ -43,8 +43,8 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn() } },
-        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), endStreaming: vi.fn() } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), createNewAbortController: vi.fn() } },
+        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn() } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },
@@ -102,5 +102,34 @@ describe('ChatRequestService', () => {
     await expect(service.submitChatRequest('Hello', 'session1')).rejects.toThrow(
       'No model selected. Please select a model before sending a message.'
     );
+  });
+
+  describe('continueTruncatedTurn', () => {
+    it('sends continue_truncated with an empty message', async () => {
+      await service.continueTruncatedTurn('session1', 'assistant1');
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: '',
+          session_id: 'session1',
+          continue_truncated: true,
+          rag_assistant_id: 'assistant1',
+        }),
+      );
+    });
+
+    it('does NOT add a user message (no visible bubble); uses continuation streaming', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      await service.continueTruncatedTurn('session1');
+
+      expect(messageMap.addUserMessage).not.toHaveBeenCalled();
+      expect(messageMap.startStreaming).not.toHaveBeenCalled();
+      expect(messageMap.beginContinuationStreaming).toHaveBeenCalledWith('session1');
+    });
+
+    it('is a no-op without a session id', async () => {
+      await service.continueTruncatedTurn(null);
+      expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
   });
 });

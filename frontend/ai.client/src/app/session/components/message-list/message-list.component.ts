@@ -1,4 +1,4 @@
-import { Component, computed, input, signal, effect, OnDestroy, inject, PLATFORM_ID } from '@angular/core';
+import { Component, computed, input, output, signal, effect, OnDestroy, inject, PLATFORM_ID } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
@@ -23,6 +23,7 @@ import {
   ToolApprovalService,
 } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
+import { ChatStateService } from '../../services/chat/chat-state.service';
 
 @Component({
   selector: 'app-message-list',
@@ -56,10 +57,32 @@ export class MessageListComponent implements OnDestroy {
   streamingMessageId = input<string | null>(null);
   embeddedMode = input<boolean>(false);
 
+  /** Bubbled up when the user clicks "Continue" on a max_tokens-truncated
+   *  assistant message. The page reuses the normal submit path with a
+   *  canned prompt. */
+  continueRequested = output<void>();
+
   private consentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
+  private chatStateService = inject(ChatStateService);
+
+  /** Only the final message of a recoverable max_tokens turn gets the
+   *  "Continue" affordance. Live-only state, never shown while a new
+   *  response is streaming. */
+  private readonly lastMessageId = computed<string | null>(() => {
+    const m = this.messages();
+    return m.length ? m[m.length - 1].id : null;
+  });
+
+  protected canContinueFor(messageId: string): boolean {
+    return (
+      this.chatStateService.lastTurnContinuable() &&
+      !this.isChatLoading() &&
+      messageId === this.lastMessageId()
+    );
+  }
 
   /** Session artifacts, newest first. Anchored ones render inline after
    *  their producing assistant message (`producedByMessageIndex` matches

@@ -57,6 +57,12 @@ class InvocationRequest(BaseModel):
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.
     interrupt_responses: Optional[List[InterruptResponseEntry]] = None
+    # When true, this is a "Continue" after a max_tokens truncation. Like a
+    # resume, `message` is ignored: instead of synthesizing a new user turn,
+    # the agent re-enters the loop with an empty prompt so the model
+    # continues the truncated assistant message already in restored history
+    # (assistant-prefill). Bypasses quota / RAG / file resolution like resume.
+    continue_truncated: Optional[bool] = None
     # Selects which agent factory variant builds the turn. Defaults to "chat"
     # (MainAgent / ChatAgent) when omitted, so existing clients are unaffected.
     # Pass "skill" to route through SkillAgent's progressive skill disclosure.

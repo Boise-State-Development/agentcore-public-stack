@@ -74,6 +74,51 @@ class TestGetSessionMetadata:
         assert result is None
 
 
+class TestTruncatedTurnMarker:
+    """Refresh-survival marker for the max_tokens 'Continue' affordance."""
+
+    @pytest.mark.asyncio
+    async def test_set_then_clear(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_truncated_turn,
+            clear_truncated_turn,
+        )
+        await store_session_metadata(session_id="s1", user_id="u1", session_metadata=_make_session_metadata())
+
+        # Default: not continuable.
+        result = await get_session_metadata("s1", "u1")
+        assert not result.last_turn_continuable
+
+        await set_truncated_turn("s1", "u1")
+        result = await get_session_metadata("s1", "u1")
+        assert result.last_turn_continuable is True
+
+        await clear_truncated_turn("s1", "u1")
+        result = await get_session_metadata("s1", "u1")
+        assert not result.last_turn_continuable
+
+    @pytest.mark.asyncio
+    async def test_survives_response_round_trip(self, sessions_metadata_table):
+        # Exact contract the metadata endpoint uses:
+        # SessionMetadataResponse.model_validate(metadata.model_dump(by_alias=True))
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_truncated_turn,
+        )
+        from apis.shared.sessions.models import SessionMetadataResponse
+
+        await store_session_metadata(session_id="s2", user_id="u1", session_metadata=_make_session_metadata(session_id="s2"))
+        await set_truncated_turn("s2", "u1")
+        meta = await get_session_metadata("s2", "u1")
+
+        resp = SessionMetadataResponse.model_validate(meta.model_dump(by_alias=True))
+        assert resp.last_turn_continuable is True
+        assert resp.model_dump(by_alias=True)["lastTurnContinuable"] is True
+
+
 class TestGetAllMessageMetadata:
     @pytest.mark.asyncio
     async def test_get_cost_records(self, sessions_metadata_table):

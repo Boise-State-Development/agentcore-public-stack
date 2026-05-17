@@ -252,7 +252,8 @@
             [messages]="messages()"
             [isChatLoading]="isChatLoading()"
             [streamingMessageId]="streamingMessageId()"
-            [embeddedMode]="true" />
+            [embeddedMode]="true"
+            (continueRequested)="continueRequested.emit()" />
         </div>
       </div>
 
@@ -318,7 +319,8 @@
         <app-message-list
           [messages]="messages()"
           [isChatLoading]="isChatLoading()"
-          [streamingMessageId]="streamingMessageId()" />
+          [streamingMessageId]="streamingMessageId()"
+          (continueRequested)="continueRequested.emit()" />
       </div>
     </div>
 

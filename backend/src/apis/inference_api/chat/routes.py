@@ -629,8 +629,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
+    # A "Continue" after a max_tokens truncation. Like resume, it bypasses
+    # quota / RAG / file resolution and does NOT clear the turn state; unlike
+    # resume there is no interrupt to validate — the agent is rebuilt from the
+    # resent params and re-entered with an empty prompt (assistant-prefill).
+    is_continuation = bool(input_data.continue_truncated)
     logger.info(
-        "Invocation request received (resume=%s)" % is_resume
+        "Invocation request received (resume=%s, continue_truncated=%s)" % (is_resume, is_continuation)
     )
     logger.info("Message received")
 
@@ -697,13 +702,24 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # later (mistaken) resume request pick up against a turn the user
     # already moved past.
     is_new_session = False
-    if not is_resume:
+    if not is_resume and not is_continuation:
         is_new_session = await ensure_session_metadata_exists(input_data.session_id, user_id)
         try:
             from apis.shared.sessions.metadata import clear_paused_turn
             await clear_paused_turn(input_data.session_id, user_id)
         except Exception as e:
             logger.error("Failed to clear stale paused_turn on new turn: %s", e, exc_info=True)
+
+    # Invalidate any prior max_tokens "Continue" marker on every new model
+    # turn that isn't an interrupt-resume — both a fresh turn and a
+    # continuation supersede it. If a continuation itself re-truncates, the
+    # stream_coordinator intercept re-sets the marker.
+    if not is_resume:
+        try:
+            from apis.shared.sessions.metadata import clear_truncated_turn
+            await clear_truncated_turn(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to clear stale truncated_turn on new turn: %s", e, exc_info=True)
 
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
@@ -721,7 +737,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Check quota if enforcement is enabled
     quota_warning_event = None
     quota_exceeded_event = None
-    if is_quota_enforcement_enabled() and not is_resume:
+    if is_quota_enforcement_enabled() and not is_resume and not is_continuation:
         try:
             quota_checker = get_quota_checker()
             quota_result = await quota_checker.check_quota(user=current_user, session_id=input_data.session_id)
@@ -780,7 +796,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request - processing with assistant context"
     )
 
-    if input_data.rag_assistant_id and not is_resume:
+    if input_data.rag_assistant_id and not is_resume and not is_continuation:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
@@ -1237,6 +1253,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 citations=citations_for_storage if citations_for_storage else None,
                 original_message=input_data.message if message_will_be_modified else None,
                 interrupt_responses=interrupt_responses_payload,
+                continue_truncated=is_continuation,
             ):
                 yield event
 
