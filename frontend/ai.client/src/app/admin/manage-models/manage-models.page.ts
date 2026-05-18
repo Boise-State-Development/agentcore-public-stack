@@ -2,14 +2,31 @@ import { Component, ChangeDetectionStrategy, signal, computed, inject } from '@a
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft } from '@ng-icons/heroicons/outline';
+import {
+  heroPlus,
+  heroMagnifyingGlass,
+  heroChevronDown,
+  heroPencilSquare,
+  heroTrash,
+} from '@ng-icons/heroicons/outline';
+import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { ManagedModelsService } from './services/managed-models.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
+import type { ManagedModel } from './models/managed-model.model';
 
 @Component({
   selector: 'app-manage-models-page',
   imports: [RouterLink, FormsModule, NgIcon],
-  providers: [provideIcons({ heroArrowLeft })],
+  providers: [
+    provideIcons({
+      heroPlus,
+      heroMagnifyingGlass,
+      heroChevronDown,
+      heroPencilSquare,
+      heroTrash,
+      heroStarSolid,
+    }),
+  ],
   templateUrl: './manage-models.page.html',
   styleUrl: './manage-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -23,12 +40,17 @@ export class ManageModelsPage {
   providerFilter = signal<string>('');
   enabledFilter = signal<string>('');
 
-  // Get models from service
-  private mockModels = computed(() => this.managedModelsService.getManagedModels());
+  // Row detail expansion state (set of model ids currently expanded)
+  private expandedIds = signal<ReadonlySet<string>>(new Set());
+
+  // Models with an in-flight enable/disable request
+  private togglingIds = signal<ReadonlySet<string>>(new Set());
+
+  private allModels = computed(() => this.managedModelsService.getManagedModels());
 
   // Filtered models based on search and filters
   readonly filteredModels = computed(() => {
-    let models = this.mockModels();
+    let models = this.allModels();
     const query = this.searchQuery().toLowerCase();
     const provider = this.providerFilter();
     const enabled = this.enabledFilter();
@@ -56,7 +78,7 @@ export class ManageModelsPage {
 
   // Available providers for filter dropdown
   readonly availableProviders = computed(() => {
-    const providers = new Set(this.mockModels().map(m => m.providerName));
+    const providers = new Set(this.allModels().map(m => m.providerName));
     return Array.from(providers).sort();
   });
 
@@ -72,6 +94,48 @@ export class ManageModelsPage {
     this.searchQuery.set('');
     this.providerFilter.set('');
     this.enabledFilter.set('');
+  }
+
+  isExpanded(modelId: string): boolean {
+    return this.expandedIds().has(modelId);
+  }
+
+  toggleExpand(modelId: string): void {
+    this.expandedIds.update(current => {
+      const next = new Set(current);
+      if (next.has(modelId)) {
+        next.delete(modelId);
+      } else {
+        next.add(modelId);
+      }
+      return next;
+    });
+  }
+
+  isToggling(modelId: string): boolean {
+    return this.togglingIds().has(modelId);
+  }
+
+  /**
+   * Flip a model's enabled state in place via a partial update.
+   */
+  async toggleEnabled(model: ManagedModel): Promise<void> {
+    if (this.isToggling(model.id)) {
+      return;
+    }
+    this.togglingIds.update(current => new Set(current).add(model.id));
+    try {
+      await this.managedModelsService.updateModel(model.id, { enabled: !model.enabled });
+    } catch (error) {
+      console.error('Error updating model status:', error);
+      alert('Failed to update model status. Please try again.');
+    } finally {
+      this.togglingIds.update(current => {
+        const next = new Set(current);
+        next.delete(model.id);
+        return next;
+      });
+    }
   }
 
   /**

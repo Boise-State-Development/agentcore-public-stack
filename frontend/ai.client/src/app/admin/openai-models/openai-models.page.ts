@@ -2,7 +2,13 @@ import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@a
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft } from '@ng-icons/heroicons/outline';
+import {
+  heroArrowLeft,
+  heroPlus,
+  heroMagnifyingGlass,
+  heroChevronDown,
+} from '@ng-icons/heroicons/outline';
+import { heroCheckCircleSolid } from '@ng-icons/heroicons/solid';
 import { OpenAIModelsService } from './services/openai-models.service';
 import { OpenAIModelSummary } from './models/openai-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
@@ -11,7 +17,15 @@ import { ThinkingDotsComponent } from '../../components/thinking-dots.component'
 @Component({
   selector: 'app-openai-models-page',
   imports: [FormsModule, ThinkingDotsComponent, RouterLink, NgIcon],
-  providers: [provideIcons({ heroArrowLeft })],
+  providers: [
+    provideIcons({
+      heroArrowLeft,
+      heroPlus,
+      heroMagnifyingGlass,
+      heroChevronDown,
+      heroCheckCircleSolid,
+    }),
+  ],
   templateUrl: './openai-models.page.html',
   styleUrl: './openai-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -24,6 +38,9 @@ export class OpenAIModelsPage {
   // Filter signals
   maxResultsFilter = signal<number | undefined>(undefined);
   searchQuery = signal<string>('');
+
+  // Row detail expansion state (set of model ids currently expanded)
+  private expandedIds = signal<ReadonlySet<string>>(new Set());
 
   // Access the models resource from the service
   readonly modelsResource = this.openaiModelsService.modelsResource;
@@ -79,6 +96,22 @@ export class OpenAIModelsPage {
   readonly hasActiveFilters = computed(() => {
     return !!(this.maxResultsFilter() || this.searchQuery());
   });
+
+  isExpanded(modelId: string): boolean {
+    return this.expandedIds().has(modelId);
+  }
+
+  toggleExpand(modelId: string): void {
+    this.expandedIds.update(current => {
+      const next = new Set(current);
+      if (next.has(modelId)) {
+        next.delete(modelId);
+      } else {
+        next.add(modelId);
+      }
+      return next;
+    });
+  }
 
   /**
    * Check if a model has already been added to the managed models list

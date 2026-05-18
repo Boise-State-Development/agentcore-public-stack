@@ -3,7 +3,13 @@ import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { DecimalPipe } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft } from '@ng-icons/heroicons/outline';
+import {
+  heroArrowLeft,
+  heroPlus,
+  heroMagnifyingGlass,
+  heroChevronDown,
+} from '@ng-icons/heroicons/outline';
+import { heroCheckCircleSolid } from '@ng-icons/heroicons/solid';
 import { GeminiModelsService } from './services/gemini-models.service';
 import { GeminiModelSummary } from './models/gemini-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
@@ -12,7 +18,15 @@ import { ThinkingDotsComponent } from '../../components/thinking-dots.component'
 @Component({
   selector: 'app-gemini-models-page',
   imports: [FormsModule, ThinkingDotsComponent, DecimalPipe, RouterLink, NgIcon],
-  providers: [provideIcons({ heroArrowLeft })],
+  providers: [
+    provideIcons({
+      heroArrowLeft,
+      heroPlus,
+      heroMagnifyingGlass,
+      heroChevronDown,
+      heroCheckCircleSolid,
+    }),
+  ],
   templateUrl: './gemini-models.page.html',
   styleUrl: './gemini-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -25,6 +39,9 @@ export class GeminiModelsPage {
   // Filter signals
   maxResultsFilter = signal<number | undefined>(undefined);
   searchQuery = signal<string>('');
+
+  // Row detail expansion state (set of model names currently expanded)
+  private expandedIds = signal<ReadonlySet<string>>(new Set());
 
   // Access the models resource from the service
   readonly modelsResource = this.geminiModelsService.modelsResource;
@@ -81,6 +98,22 @@ export class GeminiModelsPage {
   readonly hasActiveFilters = computed(() => {
     return !!(this.maxResultsFilter() || this.searchQuery());
   });
+
+  isExpanded(modelName: string): boolean {
+    return this.expandedIds().has(modelName);
+  }
+
+  toggleExpand(modelName: string): void {
+    this.expandedIds.update(current => {
+      const next = new Set(current);
+      if (next.has(modelName)) {
+        next.delete(modelName);
+      } else {
+        next.add(modelName);
+      }
+      return next;
+    });
+  }
 
   /**
    * Check if a model has already been added to the managed models list

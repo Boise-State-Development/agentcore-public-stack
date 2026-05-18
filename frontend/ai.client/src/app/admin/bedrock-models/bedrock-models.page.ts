@@ -2,7 +2,13 @@ import { Component, ChangeDetectionStrategy, inject, signal, computed } from '@a
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft } from '@ng-icons/heroicons/outline';
+import {
+  heroArrowLeft,
+  heroPlus,
+  heroMagnifyingGlass,
+  heroChevronDown,
+} from '@ng-icons/heroicons/outline';
+import { heroCheckCircleSolid } from '@ng-icons/heroicons/solid';
 import { BedrockModelsService } from './services/bedrock-models.service';
 import { FoundationModelSummary } from './models/bedrock-model.model';
 import { ManagedModelsService } from '../manage-models/services/managed-models.service';
@@ -11,7 +17,15 @@ import { ThinkingDotsComponent } from '../../components/thinking-dots.component'
 @Component({
   selector: 'app-bedrock-models-page',
   imports: [FormsModule, ThinkingDotsComponent, RouterLink, NgIcon],
-  providers: [provideIcons({ heroArrowLeft })],
+  providers: [
+    provideIcons({
+      heroArrowLeft,
+      heroPlus,
+      heroMagnifyingGlass,
+      heroChevronDown,
+      heroCheckCircleSolid,
+    }),
+  ],
   templateUrl: './bedrock-models.page.html',
   styleUrl: './bedrock-models.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -28,6 +42,9 @@ export class BedrockModelsPage {
   customizationTypeFilter = signal<string>('');
   maxResultsFilter = signal<number | undefined>(undefined);
   searchQuery = signal<string>('');
+
+  // Row detail expansion state (set of model ids currently expanded)
+  private expandedIds = signal<ReadonlySet<string>>(new Set());
 
   // Access the models resource from the service
   readonly modelsResource = this.bedrockModelsService.modelsResource;
@@ -124,6 +141,22 @@ export class BedrockModelsPage {
       this.searchQuery()
     );
   });
+
+  isExpanded(modelId: string): boolean {
+    return this.expandedIds().has(modelId);
+  }
+
+  toggleExpand(modelId: string): void {
+    this.expandedIds.update(current => {
+      const next = new Set(current);
+      if (next.has(modelId)) {
+        next.delete(modelId);
+      } else {
+        next.add(modelId);
+      }
+      return next;
+    });
+  }
 
   /**
    * Check if a model has already been added to the managed models list
