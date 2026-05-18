@@ -61,6 +61,8 @@ npx cdk deploy --all
 | MCP + SigV4 | Cloud Lambda (Gateway) | AWS SigV4 |
 | A2A | Cloud Runtime | AgentCore auth |
 
+Today A2A is **client-only** — `A2AAgentConfig` (`apis/shared/tools/models.py`) describes remote agents we call out to; we do not yet expose an A2A server / `AgentCard`. **When the first A2A server construct lands** (Strands `agent.to_a2a()`, an `A2AServer`, or a hand-built `AgentCard`), its advertised `capabilities` MUST include `streaming=True`. Without it the A2A SDK client silently falls back to non-streaming, never receives a `completed` event, and hangs until its ~40-minute timeout (ref-repo `aws-samples/sample-strands-agent-with-agentcore` commit `50c9112`).
+
 ## Cross-Package Contracts
 
 - Backend route handlers define the API shape; frontend TypeScript interfaces must match
