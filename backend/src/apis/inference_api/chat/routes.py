@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import AsyncGenerator, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -631,8 +632,24 @@ async def stream_conversational_message(
 
 @router.get("/ping")
 async def ping():
-    """Health check endpoint (required by AgentCore Runtime)"""
-    return {"status": "healthy", "version": os.environ.get("APP_VERSION", "unknown")}
+    """Health check endpoint (required by AgentCore Runtime).
+
+    AgentCore's idle reaper requires ``time_of_last_update`` (int epoch
+    seconds) alongside ``status``. When the field is absent the platform
+    reaps the microVM at ``idleRuntimeSessionTimeout`` even mid-stream,
+    regardless of the reported status (bedrock-agentcore-sdk-python#471).
+
+    We do not run the SDK's async-task busy tracking here (that's the
+    deferred ``async_mode`` work), so we cannot report ``HealthyBusy``.
+    Returning a fresh timestamp on every ping keeps the session alive
+    while the runtime data plane is polling us, which is the documented
+    mitigation for the silent mid-generation reap.
+    """
+    return {
+        "status": "Healthy",
+        "time_of_last_update": int(time.time()),
+        "version": os.environ.get("APP_VERSION", "unknown"),
+    }
 
 
 @router.post("/invocations")
