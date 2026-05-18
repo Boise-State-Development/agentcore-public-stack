@@ -65,11 +65,17 @@ class TestPing:
         assert resp.status_code == 200
 
     def test_ping_response_contains_status(self, app):
-        """Req 15.1: /ping response should contain status field."""
+        """Req 15.1: /ping returns the AgentCore health contract.
+
+        Status must be a valid AgentCore PingStatus value, and the response
+        must carry an integer ``time_of_last_update``; without that field the
+        platform idle-reaps the microVM mid-stream
+        (bedrock-agentcore-sdk-python#471).
+        """
         client = TestClient(app)
         body = client.get("/ping").json()
-        assert "status" in body
-        assert body["status"] == "healthy"
+        assert body["status"] in {"Healthy", "HealthyBusy"}
+        assert isinstance(body["time_of_last_update"], int)
 
 
 # ---------------------------------------------------------------------------
