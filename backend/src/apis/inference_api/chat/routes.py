@@ -190,6 +190,19 @@ def _merge_inference_params(
                 merged[name] = spec.default
             continue
 
+        # Enum params (e.g. `effort`): the override must be a member of the
+        # admin-declared `allowed` set; an out-of-domain value falls back to
+        # the default rather than erroring mid-stream. Mirrors the numeric
+        # clamp below, and the per-model `allowed` differences (Sonnet 4.6
+        # vs Opus 4.7) stay data, not code.
+        if spec.allowed is not None:
+            req = request_params.get(name)
+            if req is not None and req in spec.allowed:
+                merged[name] = req
+            elif spec.default is not None:
+                merged[name] = spec.default
+            continue
+
         if name in request_params and request_params[name] is not None:
             value = request_params[name]
             if isinstance(value, (int, float)):

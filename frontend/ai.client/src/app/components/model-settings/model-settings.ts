@@ -310,6 +310,20 @@ export class ModelSettings {
   }
 
   /**
+   * Enum-select params (e.g. `effort`). The empty option clears the override
+   * (fall back to the admin default), mirroring how emptying a number input
+   * clears it. Any non-empty value is sent verbatim; the server gates it
+   * against the model's `allowed` set, so an out-of-domain value can't slip
+   * through even if the option list is momentarily stale.
+   */
+  onParamSelectChange(row: AdvancedParamRow, event: Event): void {
+    if (row.locked || row.disabledByConflict) return;
+    const target = event.target as HTMLSelectElement | null;
+    const raw = target?.value ?? '';
+    this.modelService.setInferenceParamOverride(row.key, raw === '' ? null : raw);
+  }
+
+  /**
    * Extended thinking enable/disable. The stored value is `null` (off) or an
    * int budget (on). Default budget falls back to the admin default, then to
    * the catalog `defaultMin` (1024 for thinking).
