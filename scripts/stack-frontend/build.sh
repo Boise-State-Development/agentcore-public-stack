@@ -144,6 +144,12 @@ if [ -d "dist" ]; then
     rm -rf dist
 fi
 
+# Bake the real version into src/version.ts from the root VERSION file.
+# Invoked explicitly because we call `ng build` directly below, which bypasses
+# the npm `prebuild` lifecycle hook that normally runs gen-version.js.
+log_info "Generating version from root VERSION file..."
+node scripts/gen-version.js
+
 # Build the Angular application
 log_info "Running: ng build --configuration ${BUILD_CONFIG}"
 ./node_modules/.bin/ng build --configuration "${BUILD_CONFIG}"
