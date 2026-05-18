@@ -153,10 +153,6 @@
 
           @if (isAdvancedOpen()) {
             <div id="advanced-params-body" class="space-y-4 px-4 pb-4">
-              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                Per-model inference parameters. Values are clamped to the model's allowed range on the server.
-              </p>
-
               @for (row of advancedRows(); track row.key) {
                 <div class="space-y-1.5">
                   <div class="flex items-baseline justify-between gap-2">
@@ -179,9 +175,7 @@
                       </button>
                     }
                   </div>
-                  <p
-                    [id]="'param-desc-' + row.key"
-                    class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  <p [id]="'param-desc-' + row.key" class="sr-only">
                     {{ row.meta.description }}
                   </p>
 
@@ -252,6 +246,19 @@
                           (change)="onThinkingBudgetChange(row, $event)"
                           class="w-32 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0" />
                       </div>
+                    }
+                    @case ('select') {
+                      <select
+                        [id]="'param-input-' + row.key"
+                        [attr.aria-describedby]="'param-desc-' + row.key"
+                        [disabled]="row.locked || row.disabledByConflict"
+                        (change)="onParamSelectChange(row, $event)"
+                        class="w-40 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0">
+                        <option value="" [selected]="row.value === null || row.value === undefined">Use admin default</option>
+                        @for (lvl of row.spec.allowed ?? []; track lvl) {
+                          <option [value]="lvl" [selected]="row.value === lvl">{{ lvl }}</option>
+                        }
+                      </select>
                     }
                     @default {
                       <input

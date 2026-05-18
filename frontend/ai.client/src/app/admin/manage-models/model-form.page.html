@@ -552,6 +552,37 @@
                         Default to enabled
                       </label>
                     </div>
+                  } @else if (meta.kind === 'select') {
+                    <div class="md:col-span-2">
+                      <span class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">
+                        Levels this model supports
+                      </span>
+                      <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                        @for (lvl of meta.options ?? []; track lvl) {
+                          <label class="flex items-center gap-2 text-xs/5 text-gray-700 dark:text-gray-300">
+                            <input
+                              type="checkbox"
+                              [checked]="isParamAllowed(i, lvl)"
+                              (change)="toggleParamAllowed(i, lvl)"
+                              class="size-4 rounded-xs border-gray-300 text-blue-600 focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700"
+                            />
+                            {{ lvl }}
+                          </label>
+                        }
+                      </div>
+                    </div>
+                    <div>
+                      <label class="block text-xs/5 font-medium text-gray-600 dark:text-gray-400">Default</label>
+                      <select
+                        formControlName="defaultValue"
+                        class="mt-1 block w-full rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                      >
+                        <option [ngValue]="null">— none (API default) —</option>
+                        @for (lvl of paramRowGroup(i).controls.allowed.value ?? []; track lvl) {
+                          <option [ngValue]="lvl">{{ lvl }}</option>
+                        }
+                      </select>
+                    </div>
                   }
                   <div>
                     <label class="flex items-center gap-2 pt-5 text-xs/5 font-medium text-gray-600 dark:text-gray-400">

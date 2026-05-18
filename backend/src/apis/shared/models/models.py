@@ -21,10 +21,19 @@ class ModelParamSpec(BaseModel):
     supported: bool = True
     min: Optional[float] = None
     max: Optional[float] = None
+    allowed: Optional[list[Any]] = Field(
+        None,
+        description="Permissible values for enum-style params (e.g. `effort`: "
+                    "low/medium/high/xhigh/max). When set, `default` and any "
+                    "user override must be a member; `min`/`max` don't apply. "
+                    "Keep ordered low->high so future clamping (request `max`, "
+                    "model caps at `high`) can degrade gracefully."
+    )
     default: Optional[Any] = Field(
         None,
         description="Value sent when the user doesn't override. Type depends on the param "
-                    "(number for temperature/top_p, bool for thinking, etc.)."
+                    "(number for temperature/top_p, int budget for thinking, "
+                    "string for effort, etc.)."
     )
     locked: bool = Field(
         False,
@@ -41,6 +50,11 @@ class ModelParamSpec(BaseModel):
                 raise ValueError("default must be >= min")
             if self.max is not None and self.default > self.max:
                 raise ValueError("default must be <= max")
+        if self.allowed is not None:
+            if not self.allowed:
+                raise ValueError("allowed must be non-empty when set")
+            if self.default is not None and self.default not in self.allowed:
+                raise ValueError("default must be one of allowed")
         return self
 
 
@@ -54,8 +68,11 @@ class SupportedParams(BaseModel):
 
     For ``thinking``, ``ModelParamSpec.default`` carries the budget in
     tokens (int >= 1024, or 0/None to disable). The provider translator
-    wraps it into the Anthropic ``{type: "enabled", budget_tokens: N}``
-    shape on the way out.
+    wraps a truthy value into the Anthropic ``{type: "enabled",
+    budget_tokens: N}`` shape on older models, or ``{type: "adaptive"}``
+    on models that require adaptive thinking (Opus 4.6/4.7, Sonnet 4.6) —
+    where the int just means "thinking on" and depth is governed by the
+    separate ``effort`` param.
     """
     model_config = ConfigDict(populate_by_name=True)
 

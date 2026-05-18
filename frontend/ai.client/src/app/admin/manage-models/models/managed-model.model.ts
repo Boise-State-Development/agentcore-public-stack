@@ -20,6 +20,13 @@ export interface ModelParamSpec {
   supported: boolean;
   min?: number | null;
   max?: number | null;
+  /**
+   * Permissible values for enum-style params (e.g. `effort`). When set,
+   * `default` and any user override must be a member; `min`/`max` don't
+   * apply. The per-model difference (Sonnet 4.6 vs Opus 4.7 effort tiers)
+   * lives here as data — no model-family branching in code.
+   */
+  allowed?: (string | number)[] | null;
   default?: number | boolean | string | null;
   locked?: boolean;
 }
@@ -165,7 +172,13 @@ export interface KnownParamMeta {
    * stored value is `null` (off) or an int budget (on). The runtime
    * translator wraps the int into the provider-native shape.
    */
-  kind: 'number' | 'integer' | 'toggle' | 'thinkingBudget';
+  kind: 'number' | 'integer' | 'toggle' | 'thinkingBudget' | 'select';
+  /**
+   * Universe of selectable values for `kind: 'select'`. The admin checks the
+   * subset this model supports (stored as `ModelParamSpec.allowed`); the
+   * default is chosen from that subset. Ordered low->high.
+   */
+  options?: string[];
   /** Catalog-wide fallback range, used when no provider-specific entry applies. */
   defaultMin?: number;
   defaultMax?: number;
@@ -235,6 +248,17 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     defaultMin: 1024,
     providers: ['bedrock', 'gemini'],
     incompatibleWith: ['temperature', 'top_p', 'top_k'],
+  },
+  {
+    key: 'effort',
+    label: 'Effort',
+    description:
+      'Reasoning/output effort (Anthropic output_config.effort). Higher = ' +
+      'more thorough, more tokens. On adaptive-thinking models it governs ' +
+      'thinking depth. Check the levels this model supports; pick a default.',
+    kind: 'select',
+    options: ['low', 'medium', 'high', 'xhigh', 'max'],
+    providers: ['bedrock'],
   },
   {
     key: 'reasoning_effort',

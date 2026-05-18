@@ -79,3 +79,45 @@ class TestThinkingGuardFloatInput:
         )
 
         assert "thinking" not in merged
+
+
+class TestEffortAllowedGating:
+    """`effort` is enum-gated: a request override must be a member of the
+    admin-declared `allowed` set, else it falls back to the default. The
+    per-model effort-tier difference (Sonnet 4.6 vs Opus 4.7) is data on
+    `ModelParamSpec.allowed`, not model-family code."""
+
+    _SONNET_EFFORT = ModelParamSpec(
+        supported=True, allowed=["low", "medium", "high"], default="high"
+    )
+    _OPUS_EFFORT = ModelParamSpec(
+        supported=True, allowed=["low", "medium", "high", "xhigh", "max"], default="high"
+    )
+
+    def test_in_domain_override_is_kept(self):
+        model = _model(effort=self._SONNET_EFFORT)
+        merged = _merge_inference_params(model, {"effort": "low"})
+        assert merged["effort"] == "low"
+
+    def test_out_of_domain_override_falls_back_to_default(self):
+        # `xhigh` is Opus-4.7-only; on a Sonnet-4.6-shaped spec it's rejected
+        # and the admin default wins instead of erroring mid-stream.
+        model = _model(effort=self._SONNET_EFFORT)
+        merged = _merge_inference_params(model, {"effort": "xhigh"})
+        assert merged["effort"] == "high"
+
+    def test_xhigh_allowed_on_opus_spec(self):
+        model = _model(effort=self._OPUS_EFFORT)
+        merged = _merge_inference_params(model, {"effort": "xhigh"})
+        assert merged["effort"] == "xhigh"
+
+    def test_no_override_uses_default(self):
+        model = _model(effort=self._SONNET_EFFORT)
+        merged = _merge_inference_params(model, {})
+        assert merged["effort"] == "high"
+
+    def test_out_of_domain_with_no_default_is_dropped(self):
+        spec = ModelParamSpec(supported=True, allowed=["low", "medium", "high"])
+        model = _model(effort=spec)
+        merged = _merge_inference_params(model, {"effort": "max"})
+        assert "effort" not in merged

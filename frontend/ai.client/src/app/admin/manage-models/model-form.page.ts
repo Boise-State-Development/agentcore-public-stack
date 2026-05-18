@@ -37,6 +37,12 @@ interface ParamRowGroup {
   supported: FormControl<boolean>;
   min: FormControl<number | null>;
   max: FormControl<number | null>;
+  /**
+   * Selectable subset for `kind: 'select'` params (e.g. `effort`). `null`
+   * on numeric/toggle rows. The per-model effort tier difference lives
+   * here as data, mirroring `ModelParamSpec.allowed` on the backend.
+   */
+  allowed: FormControl<(string | number)[] | null>;
   defaultValue: FormControl<number | boolean | string | null>;
   locked: FormControl<boolean>;
 }
@@ -75,6 +81,17 @@ function paramRowBoundsValidator(group: AbstractControl): ValidationErrors | nul
   if (typeof def === 'number') {
     if (typeof min === 'number' && def < min) errors['defaultBelowMin'] = true;
     if (typeof max === 'number' && def > max) errors['defaultAboveMax'] = true;
+  }
+  // Enum rows (`kind: 'select'`, e.g. effort) carry an `allowed` array
+  // instead of min/max. The model must support at least one level, and the
+  // default has to be one of them. Mirrors `ModelParamSpec._check_bounds`.
+  const allowed = group.get('allowed')?.value;
+  if (Array.isArray(allowed)) {
+    if (allowed.length === 0) {
+      errors['allowedEmpty'] = true;
+    } else if (def !== null && def !== undefined && def !== '' && !allowed.includes(def)) {
+      errors['defaultNotAllowed'] = true;
+    }
   }
   return Object.keys(errors).length > 0 ? errors : null;
 }
@@ -412,6 +429,7 @@ export class ModelFormPage implements OnInit {
           supported: fromExisting.supported,
           min: fromExisting.min ?? row.controls.min.value,
           max: fromExisting.max ?? row.controls.max.value,
+          allowed: fromExisting.allowed ?? row.controls.allowed.value,
           defaultValue: fromExisting.default ?? null,
           locked: fromExisting.locked,
         });
@@ -455,6 +473,7 @@ export class ModelFormPage implements OnInit {
           supported: spec.supported,
           min: spec.min ?? row.controls.min.value,
           max: spec.max ?? row.controls.max.value,
+          allowed: spec.allowed ?? row.controls.allowed.value,
           defaultValue: spec.default ?? null,
           locked: spec.locked,
         });
@@ -520,6 +539,9 @@ export class ModelFormPage implements OnInit {
         supported: this.fb.control(seed?.supported ?? true, { nonNullable: true }),
         min: this.fb.control<number | null>(seed?.min ?? null),
         max: this.fb.control<number | null>(seed?.max ?? null),
+        // Custom rows have no catalog kind, so they're never enum-select;
+        // round-trip a persisted `allowed` if one was stored, else null.
+        allowed: this.fb.control<(string | number)[] | null>(seed?.allowed ?? null),
         defaultValue: this.fb.control<number | boolean | string | null>(seed?.default ?? null),
         locked: this.fb.control(seed?.locked ?? false, { nonNullable: true }),
       },
@@ -575,6 +597,11 @@ export class ModelFormPage implements OnInit {
     const providerBounds = meta.defaults?.[provider];
     const seedMin = seed?.min ?? providerBounds?.min ?? meta.defaultMin ?? null;
     const seedMax = seed?.max ?? providerBounds?.max ?? meta.defaultMax ?? null;
+    // Enum-select rows (e.g. effort) carry an `allowed` subset instead of
+    // min/max. Empty array on a fresh row marks it as "select kind" for the
+    // validator/template and forces the admin to opt into levels explicitly.
+    const seedAllowed: (string | number)[] | null =
+      meta.kind === 'select' ? (seed?.allowed ?? []) : null;
     return this.fb.group<ParamRowGroup>(
       {
         // Catalog key is fixed for known rows — no validators, just a read-only
@@ -583,6 +610,7 @@ export class ModelFormPage implements OnInit {
         supported: this.fb.control(seed?.supported ?? false, { nonNullable: true }),
         min: this.fb.control<number | null>(seedMin),
         max: this.fb.control<number | null>(seedMax),
+        allowed: this.fb.control<(string | number)[] | null>(seedAllowed),
         defaultValue: this.fb.control<number | boolean | string | null>(seed?.default ?? null),
         locked: this.fb.control(seed?.locked ?? false, { nonNullable: true }),
       },
@@ -596,6 +624,7 @@ export class ModelFormPage implements OnInit {
       supported: v.supported,
       min: v.min,
       max: v.max,
+      allowed: v.allowed,
       default: v.defaultValue,
       locked: v.locked,
     };
@@ -678,7 +707,40 @@ export class ModelFormPage implements OnInit {
         out.push(`Default must be ≤ the model's Max Output Tokens (${ceiling}).`);
       }
     }
+    if (row.errors['allowedEmpty']) {
+      out.push('Select at least one level this model supports.');
+    }
+    if (row.errors['defaultNotAllowed']) {
+      out.push('Default must be one of the selected levels.');
+    }
     return out;
+  }
+
+  /**
+   * Whether `value` is in the enum-select row's `allowed` subset. Backs the
+   * per-level checkboxes for `kind: 'select'` params (e.g. effort).
+   */
+  isParamAllowed(index: number, value: string): boolean {
+    return (this.paramRowGroup(index).controls.allowed.value ?? []).includes(value);
+  }
+
+  /**
+   * Toggle a level in the enum-select row's `allowed` subset. Clears the
+   * row default if the level backing it was just removed so the
+   * default-in-allowed invariant can't be left stale.
+   */
+  toggleParamAllowed(index: number, value: string): void {
+    const row = this.paramRowGroup(index);
+    const current = row.controls.allowed.value ?? [];
+    const next = current.includes(value)
+      ? current.filter(v => v !== value)
+      : [...current, value];
+    row.controls.allowed.setValue(next);
+    row.controls.allowed.markAsDirty();
+    if (row.controls.defaultValue.value != null && !next.includes(row.controls.defaultValue.value as string)) {
+      row.controls.defaultValue.setValue(null);
+    }
+    row.controls.allowed.updateValueAndValidity();
   }
 
   /**

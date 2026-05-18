@@ -134,3 +134,47 @@ class TestMaxTokensCeiling:
                 maxOutputTokens=4096,
                 supportedParams={"params": {"max_tokens": {"supported": True, "default": 8192}}},
             )
+
+
+class TestEffortAllowed:
+    """Enum params carry an `allowed` set; `default` must be a member.
+
+    This is the per-model representation of the effort-tier difference
+    (Sonnet 4.6 vs Opus 4.7) — data, not model-family branching in code.
+    """
+
+    def test_default_in_allowed_ok(self):
+        m = _make_model_data(
+            supportedParams={"params": {"effort": {
+                "supported": True, "allowed": ["low", "medium", "high"], "default": "high",
+            }}},
+        )
+        spec = m.supported_params.params["effort"]
+        assert spec.allowed == ["low", "medium", "high"]
+        assert spec.default == "high"
+
+    def test_default_not_in_allowed_rejected(self):
+        with pytest.raises(Exception):
+            _make_model_data(
+                supportedParams={"params": {"effort": {
+                    "supported": True, "allowed": ["low", "medium", "high"], "default": "xhigh",
+                }}},
+            )
+
+    def test_empty_allowed_rejected(self):
+        with pytest.raises(Exception):
+            _make_model_data(
+                supportedParams={"params": {"effort": {
+                    "supported": True, "allowed": [], "default": None,
+                }}},
+            )
+
+    def test_allowed_without_default_ok(self):
+        # No default is valid — runtime sends nothing, model uses its own
+        # API default (effort "high").
+        m = _make_model_data(
+            supportedParams={"params": {"effort": {
+                "supported": True, "allowed": ["low", "medium", "high", "xhigh", "max"],
+            }}},
+        )
+        assert m.supported_params.params["effort"].default is None
