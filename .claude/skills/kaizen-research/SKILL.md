@@ -25,8 +25,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 ### External (web — last 7 days unless noted)
 
 1. **AWS Bedrock + AgentCore "What's New"**
-   - https://aws.amazon.com/about-aws/whats-new/recent/feed/
-   - https://aws.amazon.com/bedrock/whats-new/
+   - https://aws.amazon.com/about-aws/whats-new/recent/feed/ (canonical AWS What's New RSS — filter entries for Bedrock/AgentCore)
    - https://aws.amazon.com/blogs/machine-learning/ (filter: bedrock, agentcore)
    - Filter to: Bedrock, AgentCore, Bedrock Agents, Knowledge Bases, Guardrails, model availability/region/quota changes.
 
@@ -71,7 +70,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 
 6. **Agent harness patterns**
    - https://www.anthropic.com/engineering (Claude Code, agent design posts)
-   - https://docs.claude.com/en/docs/claude-code/release-notes
+   - https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
    - LangChain / LlamaIndex / Pydantic-AI release notes — for ideas, not adoption.
 
 7. **AWS Bedrock pricing + quota**
@@ -79,17 +78,16 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - Note any model price/quota changes that could shift architecture choices in this repo (e.g., model selection in `inference_api`).
 
 8. **AgentCore SDK / starter-toolkit issues**
-   - https://github.com/aws/amazon-bedrock-agentcore-sdk-python/issues
-   - https://github.com/aws/amazon-bedrock-agentcore-starter-toolkit/issues
+   - https://github.com/aws/bedrock-agentcore-sdk-python/issues
+   - https://github.com/aws/bedrock-agentcore-starter-toolkit/issues
    - Early-signal bugs/limits other users hit before we do.
 
 9. **Community signal (filtered)**
    - HN search: `site:news.ycombinator.com bedrock OR agentcore OR strands OR "claude code"` (last 7 days)
    - r/LocalLLaMA, r/MachineLearning — agent-harness critiques and patterns surface here before vendor blogs.
 
-10. **Anthropic cookbook + courses**
+10. **Anthropic cookbook**
     - https://github.com/anthropics/anthropic-cookbook
-    - https://github.com/anthropics/courses
     - Worked examples often outpace docs — especially for caching, tool use, and agent loops.
 
 11. **Seasonal sources** (only when in window)
