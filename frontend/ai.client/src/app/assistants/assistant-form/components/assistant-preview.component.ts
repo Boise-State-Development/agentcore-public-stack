@@ -69,6 +69,7 @@ import { AssistantCardComponent } from '../../components/assistant-card.componen
                 [sessionId]="previewChatService.sessionId()"
                 [isChatLoading]="previewChatService.isLoading()"
                 [showFileControls]="false"
+                [autoFocus]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
               />

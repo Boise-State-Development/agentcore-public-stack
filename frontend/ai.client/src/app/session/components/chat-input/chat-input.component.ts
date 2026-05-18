@@ -1,4 +1,15 @@
-import { Component, signal, output, inject, input, computed } from '@angular/core';
+import {
+  Component,
+  signal,
+  output,
+  inject,
+  input,
+  computed,
+  viewChild,
+  effect,
+  afterNextRender,
+  ElementRef,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -62,6 +73,12 @@ export class ChatInputComponent {
 
   // Input: show file attachment controls (defaults to true)
   readonly showFileControls = input<boolean>(true);
+
+  // Input: auto-focus the textarea on load and session change (defaults to true).
+  // Disabled where the input sits beside an editable form (e.g. assistant preview).
+  readonly autoFocus = input<boolean>(true);
+
+  private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
 
   // Use the input directly - parent controls loading state
   protected readonly isLoading = computed(() => this.isChatLoading());
@@ -139,6 +156,24 @@ export class ChatInputComponent {
       default: return 'Voice mode';
     }
   });
+
+  constructor() {
+    // Focus the textarea on first mount...
+    afterNextRender(() => this.focusInput());
+    // ...and whenever the session changes (new or existing). When switching
+    // between sessions in the messages view the component instance is reused,
+    // so afterNextRender alone would not refocus.
+    effect(() => {
+      this.sessionId();
+      this.focusInput();
+    });
+  }
+
+  private focusInput(): void {
+    if (this.autoFocus()) {
+      this.messageInput()?.nativeElement.focus();
+    }
+  }
 
   onSubmit() {
     if (this.isLoading()) {
