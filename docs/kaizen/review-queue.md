@@ -4,34 +4,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ## Open
 
-### [2026-05-15] Bump `bedrock-agentcore` 1.6.4 → 1.9.1 (re-prioritized — lag widened 3 → 4)
-- **Source**: research/2026-05-15.md ▸ Top 5 #1. Re-surfacing of the 2026-05-10 queue item — lag widened and Dependabot version-updates were disabled in #293 (May 13), so this won't get there on its own.
-- **Surface**: backend (`backend/pyproject.toml`, `backend/uv.lock`)
-- **Effort × Impact**: L × M-H
-- **Subtracts**: no — pure dep bump (justified: 4 versions of upstream fixes, latest 2026-05-12; sets up adoption of PR #478 `async_mode` once 1.10.0 ships)
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #1 (Ship)
-
-### [2026-05-15] Audit and fix `/ping` to emit `time_of_last_update` (AgentCore SDK issue #471)
-- **Source**: research/2026-05-15.md ▸ Top 5 #2 — https://github.com/aws/bedrock-agentcore-sdk-python/issues/471
-- **Surface**: backend (`backend/src/apis/inference_api/` `/ping` handler — one of the two routes the AgentCore Runtime data plane actually serves)
-- **Effort × Impact**: L × M-H
-- **Subtracts**: no — defensive against silent microVM reaping on long generations
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #2 (Ship)
-
-### [2026-05-15] Strands 1.39 → 1.40 bump, gated on `use_native_token_count` audit + proactive-compression double-fire check
-- **Source**: research/2026-05-15.md ▸ Top 5 #3 — Strands v1.40.0 release notes + breaking PR #2284
-- **Surface**: backend (`backend/pyproject.toml`, `apis/shared/` token-metric reads, `agents/main_agent/streaming/`, `TurnBasedSessionManager`)
-- **Effort × Impact**: M × M-H
-- **Subtracts**: **yes — library-native subtraction.** Strands' proactive context compression (PR #2239) reduces the surface area of our custom session-manager compaction logic.
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #6 (Ship)
-
-### [2026-05-15] Defensive A2A AgentCard `capabilities={"streaming": True}` check
-- **Source**: research/2026-05-15.md ▸ Top 5 #4 — aws-samples/sample-strands-agent-with-agentcore commit `50c9112`
-- **Surface**: backend (A2A AgentCard construction sites)
-- **Effort × Impact**: L × M
-- **Subtracts**: no — defensive against silent 40-min A2A-client timeouts
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #4 (Ship)
-
 ### [2026-05-15] Wire per-tool `duration_ms` into `tool_result` SSE
 - **Source**: research/2026-05-15.md ▸ Top 5 #5 — Claude Code 2.1.141 hook pattern
 - **Surface**: backend (Strands `AfterToolCall` hook) + frontend (`<tool-result>` component — inline timing badge for `> 250ms`)
@@ -40,14 +12,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**:
   - Per-tool timing visibility in the UI (which slow tool is the bottleneck on this turn?)
   - Data substrate for the planned context-attribution prototype — separates tool latency from token cost
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #3 (Ship)
+- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #3 (Ship); no decision logged yet
 
 ### [2026-05-15] Investigate inference-api deploy — new images reach ECR but Runtime isn't rolled (issue #288)
 - **Source**: reviews/2026-05-15.md ▸ Proposal #10 (new from internal friction, issue #288 May 12). Pairs with the 1.6.4 → 1.9.1 bump (same SDK package owns `update_agent_runtime`).
 - **Surface**: cross-cutting — `.github/workflows/deploy-inference-api.yml` + bedrock-agentcore SDK `update_agent_runtime` call shape
 - **Effort × Impact**: L-M × M-H
 - **Subtracts**: possibly — removes the manual-redeploy band-aid that's been the workaround
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #10 (Ship)
+- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #10 (Ship — recommended ship-first); no decision logged yet. **Friction intensifying**: 6+ "Deploy Inference API" failures May 15–17; a new "Deploy App API" failure cluster (8× May 16–17) may share a root cause.
 
 ### [2026-05-10] Scope AgentCore Runtime BYO filesystem (S3 Files / EFS) for persistent agent workspaces
 - **Source**: research/2026-05-10.md ▸ AWS Bedrock / AgentCore (re-evaluated 2026-05-10 via strategic-lens follow-up — original framing under-weighted the capability-unlock angle)
@@ -63,26 +35,12 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Open questions**: GA vs preview status (March 2026 managed session storage was preview; May 2026 BYO needs verification); VPC requirement is a new architectural surface for the runtime; multi-tenancy isolation strategy (per-user S3 prefix vs per-user EFS access point); RBAC mount-path layout; runtime data plane still only proxies `/invocations` + `/ping` so this doesn't unlock new HTTP routes
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). MCP Apps host renderer is the dominant strategic initiative this cycle; layering another ADR-worthy bet on top would double the open architectural surface.
 
-### [2026-05-10] Promote tool-result rendering to a per-tool renderer registry (PR #0 of MCP Apps host sequence)
-- **Source**: research/2026-05-10.md ▸ Top 6 #3 ▸ Agentic UI/UX (AI SDK + Cursor). Locked in as PR #0 of the MCP Apps host renderer sequence (`docs/kaizen/scoping/mcp-apps-host-renderer.md`, PR #296).
-- **Surface**: frontend (`<tool-result>` component + new `ToolRendererRegistry` service)
-- **Effort × Impact**: M × M-H
-- **Subtracts**: partial — replaces implicit switch with explicit registry; absorbs scattered tool-specific UI logic. Pre-paves MCP Apps PR #4.
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #5 (Ship)
-
 ### [2026-05-10] Audit `BedrockModel.stream` cancellation path against Strands #2266
 - **Source**: research/2026-05-10.md ▸ Top 6 #4
 - **Surface**: backend
 - **Effort × Impact**: L × M-H
 - **Subtracts**: no — defensive (SSE-disconnect path is hot)
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #8 (Ship)
-
-### [2026-05-10] Close issues #266 and #267 — features already in our Strands 1.39 pin
-- **Source**: research/2026-05-10.md ▸ Top 6 #5
-- **Surface**: cross-cutting
-- **Effort × Impact**: L × M
-- **Subtracts**: **yes — library-native subtraction; retires 2 build-from-scratch issues**
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #7 (Ship)
+- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #8 (Ship); no decision logged yet
 
 ### [2026-05-10] Audit `oauth_required` SSE flow against ref-repo's mid-tool-call 401/403 handling
 - **Source**: research/2026-05-10.md ▸ Risks
@@ -98,21 +56,47 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — additive but pattern-validated across Linear/ChatGPT/Cursor
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
-### [2026-05-10] Replace dead source URLs in `kaizen-research` skill (+ AgentCore starter-toolkit slug typo)
-- **Source**: research/2026-05-10.md ▸ Retirement candidates + research/2026-05-15.md ▸ Retirement candidates (starter-toolkit slug)
-- **Surface**: skills (`.claude/skills/kaizen-research/SKILL.md`)
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — replaces 2 broken URLs (`bedrock/whats-new/` 404, `docs.claude.com/.../release-notes` 404) with working ones; drops `anthropics/courses` (quiet since Nov 2025); fixes `aws/amazon-bedrock-agentcore-starter-toolkit` → `aws/bedrock-agentcore-starter-toolkit` slug
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #9 (Ship)
-
-### [2026-05-10] Add Reddit `.rss` or Reddit MCP to `kaizen-research`
-- **Source**: research/2026-05-10.md ▸ Risks ▸ "Reddit blocked from WebFetch"
-- **Surface**: skills (`.claude/skills/kaizen-research/SKILL.md`)
-- **Effort × Impact**: L × L
-- **Subtracts**: no — restores a half-blind source
-- **Status**: open — research/2026-05-15.md confirmed Reddit is blocked at the *domain* level via WebFetch (not just the HTML path), so the proposal as scoped is infeasible. reviews/2026-05-15.md ▸ Retirement Candidates recommends **Decline**; move to Resolved + log in `docs/kaizen/decisions.md` after Phil's mark.
-
 ## Resolved
+
+### [2026-05-15] Strands 1.39 → 1.40 bump (token-count audit + compaction double-fire check) → RESOLVED — shipped
+- **Decision**: Ship — reviews/2026-05-15.md ▸ Proposal #6
+- **Reasoning**: Shipped in PR #340 (`chore(deps): bump strands-agents 1.39.0 → 1.40.0`, merged 2026-05-18). Audit outcome: **accept the new `use_native_token_count=False` default** — the flag gates only `BedrockModel.count_tokens()`, which nothing in our cost / context-% paths reads (those read native Bedrock Converse `usage`); pinning `True` would add a redundant CountTokens API call per invocation. Compaction double-fire **confirmed absent** — Strands proactive compression is opt-in (`proactive_compression=None` default), operates on `ConversationManager` not our `TurnBasedSessionManager`; the `compaction` SSE event still emits exactly once (PR #243 invariant preserved; new regression test `test_compaction_sse_emit_once.py`). Full local backend suite: 2887 passed / 3 skipped on 1.40.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #6
+
+### [2026-05-10] Promote tool-result rendering to a per-tool renderer registry (MCP Apps PR #0) → RESOLVED — shipped
+- **Decision**: Ship — reviews/2026-05-15.md ▸ Proposal #5
+- **Reasoning**: Shipped in PR #339 (`refactor(chat): tool-result renderer registry (MCP Apps PR #0)`, merged 2026-05-18). Pure refactor — implicit text/JSON/image switch lifted into a signal-backed `ToolRendererRegistryService` keyed by tool name; `DefaultToolResultComponent` reproduces prior markup verbatim (zero user-visible change); `calculator` / `fetch_url_content` / `create_visualization` migrated as proof points. 1014/1014 frontend tests green (14 new, DI-token overrides not `vi.mock`). Unblocks MCP Apps PR #1; the PR #4 MCP App renderer now plugs in as just-another-registered-renderer.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #5
+
+### [2026-05-15] Bump `bedrock-agentcore` 1.6.4 → 1.9.1 → RESOLVED — shipped
+- **Decision**: Ship — reviews/2026-05-15.md ▸ Proposal #1
+- **Reasoning**: Shipped in PR #337 (`chore(deps): bump bedrock-agentcore 1.6.4 → 1.9.1 (+ coupled boto3 1.43.9)`, merged 2026-05-18). Closes the structural version-pin lag now that Dependabot version-updates are disabled (#293); first proof the kaizen loop catches lag without Dependabot.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #1
+
+### [2026-05-15] Audit and fix `/ping` to emit `time_of_last_update` (#471) → RESOLVED — shipped
+- **Decision**: Ship — reviews/2026-05-15.md ▸ Proposal #2
+- **Reasoning**: Shipped in PR #338 (kaizen bundle, merged 2026-05-18). `/ping` now emits an integer `time_of_last_update` + corrected `Healthy` casing. Accepted trade-off documented in the PR: a fresh per-ping timestamp disables ping-based idle reaping for this runtime — we can't report `HealthyBusy` without async-task busy tracking (deferred `async_mode` work).
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #2
+
+### [2026-05-15] Defensive A2A AgentCard `capabilities={"streaming": True}` check → RESOLVED — guard documented
+- **Decision**: Ship (docs-only) — reviews/2026-05-15.md ▸ Proposal #4
+- **Reasoning**: Resolved in PR #338 (merged 2026-05-18). A2A is client-only today (no server `AgentCard` exists), so there is no code site to patch. Added a forward-looking guard to `CLAUDE.md`: the first A2A server construct MUST advertise `capabilities` with `streaming=True`, else A2A clients hang ~40 min (ref-repo `50c9112`).
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #4
+
+### [2026-05-10] Close issues #266 and #267 — features already in our Strands 1.39 pin → RESOLVED — decided (NOT closed; premise corrected)
+- **Decision**: Decided, premise corrected — reviews/2026-05-15.md ▸ Proposal #7 (via PR #338)
+- **Reasoning**: The review's "phantom tech debt — close them" framing was **wrong**. #266 (large tool-result offload) and #267 (context-window lookup fallback) are live, well-specified Strands adoption/wiring tasks whose 1.39 precondition is now met. Decision (PR #338, GitHub-only): posted "unblocked, keep open" comments on both — NOT closed. Logged in decisions.md so future research does not re-propose closing them.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #7
+
+### [2026-05-10] Replace dead source URLs in `kaizen-research` skill (+ starter-toolkit slug) → RESOLVED — shipped
+- **Decision**: Ship — reviews/2026-05-15.md ▸ Proposal #9
+- **Reasoning**: Shipped in PR #338 (merged 2026-05-18). Replaced/dropped dead source URLs in `kaizen-research/SKILL.md`; fixed `aws/amazon-bedrock-agentcore-*` → `aws/bedrock-agentcore-*` slug — the review flagged the starter-toolkit; the sdk-python line had the same typo and was also fixed.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #9
+
+### [2026-05-10] Add Reddit `.rss` or Reddit MCP to `kaizen-research` → RESOLVED — declined
+- **Decision**: Decline — reviews/2026-05-15.md ▸ Retirement Candidates
+- **Reasoning**: research/2026-05-15.md confirmed Reddit is blocked at the *domain* level via WebFetch (not just the HTML path), so the proposal as scoped is infeasible. Logged in decisions.md; revisit only if a Reddit MCP or `curl`-via-Bash-with-UA-header path becomes available.
+- **Reviewed-in**: reviews/2026-05-15.md ▸ Retirement Candidates
 
 ### [2026-05-10] Scope an MCP Apps host renderer in our chat (multi-PR initiative) → RESOLVED — scoping landed
 - **Decision**: Ship (scope only) — reviews/2026-05-10.md ▸ Proposal #1
@@ -126,6 +110,5 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ### [2026-05-10] Bump `bedrock-agentcore` 1.6.4 → 1.9.0 → RESOLVED — superseded
 - **Decision**: Superseded
-- **Reasoning**: Replaced by the 2026-05-15 re-prioritized entry (`1.6.4 → 1.9.1`) — lag widened from 3 → 4 versions in window, and Dependabot version-updates were disabled by #293 (May 13), so the lag is now structural rather than incidental.
+- **Reasoning**: Replaced by the 2026-05-15 re-prioritized entry (`1.6.4 → 1.9.1`) — lag widened from 3 → 4 versions in window, and Dependabot version-updates were disabled by #293 (May 13), so the lag is now structural rather than incidental. The re-prioritized entry shipped in PR #337.
 - **Reviewed-in**: reviews/2026-05-15.md ▸ Proposal #1
-
