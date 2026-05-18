@@ -3,17 +3,20 @@ import {
   input,
   signal,
   computed,
+  inject,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { NgComponentOutlet } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from './json-syntax-highlight.pipe';
-import { ContentBlock, ToolUseData, ToolResultContent } from '../../../../services/models/message.model';
+import { ContentBlock, ToolUseData } from '../../../../services/models/message.model';
+import { ToolRendererRegistryService } from './tool-renderer-registry.service';
 
 @Component({
   selector: 'app-tool-use',
   templateUrl: './tool-use.component.html',
   styleUrl: './tool-use.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [JsonSyntaxHighlightPipe],
+  imports: [JsonSyntaxHighlightPipe, NgComponentOutlet],
 })
 export class ToolUseComponent {
   /** The content block containing tool use data */
@@ -24,6 +27,8 @@ export class ToolUseComponent {
 
   /** Whether the details section is expanded (both input and output) */
   isDetailsExpanded = signal(false);
+
+  private readonly rendererRegistry = inject(ToolRendererRegistryService);
 
   /** Extract tool use data from the content block */
   toolUseData = computed(() => {
@@ -59,6 +64,19 @@ export class ToolUseComponent {
   hasResult = computed(() => {
     return !!this.toolResult();
   });
+
+  /**
+   * Result-renderer component for this tool, resolved from the registry.
+   * Unregistered tools fall back to the default text/JSON/image renderer.
+   * Reads the registry signal, so it stays reactive to late registrations.
+   */
+  resultRenderer = computed(() => this.rendererRegistry.resolve(this.toolName()));
+
+  /** Inputs bound onto the resolved renderer via NgComponentOutlet. */
+  rendererInputs = computed(() => ({
+    result: this.toolResult(),
+    minimized: this.minimized(),
+  }));
 
   /** Preview of input keys for collapsed state */
   inputKeysPreview = computed(() => {
@@ -96,35 +114,6 @@ export class ToolUseComponent {
     if (status === 'error') return 'text-red-600 dark:text-red-400';
     return 'text-blue-600 dark:text-blue-400';
   });
-
-  /** Get result text content */
-  resultTextContent = computed(() => {
-    const result = this.toolResult();
-    if (!result) return [];
-
-    return result.content.filter(item => item.text || item.json);
-  });
-
-  /** Get result image content */
-  resultImageContent = computed(() => {
-    const result = this.toolResult();
-    if (!result) return [];
-
-    return result.content.filter(item => item.image);
-  });
-
-  /** Format result content for display */
-  formatResultContent(item: ToolResultContent): string {
-    if (item.text) return item.text;
-    if (item.json) return JSON.stringify(item.json, null, 2);
-    return '';
-  }
-
-  /** Get image data URL */
-  getImageDataUrl(item: ToolResultContent): string {
-    if (!item.image) return '';
-    return `data:image/${item.image.format};base64,${item.image.data}`;
-  }
 
   /** Toggle the details expanded state */
   toggleDetailsExpanded(): void {

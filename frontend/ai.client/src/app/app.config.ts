@@ -9,6 +9,7 @@ import { withCredentialsInterceptor } from './auth/with-credentials.interceptor'
 import { MARKED_OPTIONS, MarkedOptions, MarkedRenderer, provideMarkdown } from 'ngx-markdown';
 import { SessionService } from './auth/session.service';
 import { ThemeService } from './components/topnav/components/theme-toggle/theme.service';
+import { provideBuiltInToolRenderers } from './session/components/message-list/components/tool-use/built-in-renderers';
 
 function markedOptionsFactory(): MarkedOptions {
   const renderer = new MarkedRenderer();
@@ -56,5 +57,10 @@ export const appConfig: ApplicationConfig = {
     // dormant. Inject it at bootstrap so the lava-lamp backdrop honors the
     // user's preference (and prefers-color-scheme) on every route.
     provideAppInitializer(() => { inject(ThemeService); }),
+
+    // Register the built-in tool-result renderers (text/JSON/image default
+    // plus the migrated proof-point renderers) into the renderer registry
+    // before the first message renders.
+    provideBuiltInToolRenderers(),
   ]
 };
