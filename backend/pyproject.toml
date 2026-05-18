@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn[standard]==0.46.0",
 
     # AWS and cloud services
-    "boto3==1.42.96",
+    "boto3==1.43.9",
 
     # Utilities
     "python-dotenv==1.2.2",
@@ -52,7 +52,7 @@ agentcore = [
     "strands-agents-tools==0.5.2",
 
     "aws-opentelemetry-distro==0.17.0",
-    "bedrock-agentcore==1.6.4",
+    "bedrock-agentcore==1.9.1",
     # Multi-provider LLM support
     "openai==2.32.0",  # For OpenAI models
     "google-genai==1.73.1",  # For Google Gemini models
