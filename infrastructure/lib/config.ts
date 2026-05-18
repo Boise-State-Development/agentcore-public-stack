@@ -34,8 +34,36 @@ export interface AppConfig {
   ragIngestion: RagIngestionConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
+  mcpSandbox: McpSandboxConfig;
   appVersion: string;
   tags: { [key: string]: string };
+}
+
+/**
+ * MCP Apps host renderer — sandbox-proxy origin (PR #1 of the
+ * docs/kaizen/scoping/mcp-apps-host-renderer.md sequence).
+ *
+ * Provisions a dedicated cross-origin shell (mcp-sandbox.{domainName}) that
+ * later PRs (#4+) point the SPA's <mcp-app-frame> at. Standing this stack up
+ * is inert: nothing consumes its SSM origin export until the frontend wiring
+ * lands, and the whole host renderer stays behind MCP_APPS_HOST_ENABLED
+ * (flipped in PR #7).
+ */
+export interface McpSandboxConfig {
+  // When false the stack is not instantiated at all (bin/infrastructure.ts
+  // skips it). Default false — the origin is opt-in per environment and the
+  // initiative is gated end-to-end until PR #7.
+  enabled: boolean;
+  // ACM certificate ARN for the proxy origin (mcp-sandbox.{domainName}).
+  // MUST be in us-east-1 — CloudFront requires its viewer certs there.
+  // Required (and region-validated) only when enabled; without it the stack
+  // still synthesizes on the CloudFront default domain so unit/synth tests
+  // and domain-less local stacks work.
+  certificateArn?: string;
+  // Extra origins (beyond https://{domainName}) allowed to embed the proxy
+  // iframe via CSP frame-ancestors — e.g. http://localhost:4200 for a local
+  // SPA pointed at this deployment. Empty on prod.
+  extraFrameAncestors: string[];
 }
 
 export interface ArtifactsConfig {
@@ -285,6 +313,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('artifacts')?.extraFrameAncestors
         || [],
     },
+    mcpSandbox: {
+      enabled: parseBooleanEnv(process.env.CDK_MCP_SANDBOX_ENABLED) ?? scope.node.tryGetContext('mcpSandbox')?.enabled ?? false,
+      certificateArn: process.env.CDK_MCP_SANDBOX_CERTIFICATE_ARN || scope.node.tryGetContext('mcpSandbox')?.certificateArn,
+      extraFrameAncestors: process.env.CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS?.split(',')
+        .map((s) => s.trim()).filter(Boolean)
+        || scope.node.tryGetContext('mcpSandbox')?.extraFrameAncestors
+        || [],
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -302,6 +338,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   Gateway Enabled: ${config.gateway.enabled}`);
   console.log(`   Fine-Tuning Enabled: ${config.fineTuning.enabled}`);
   console.log(`   Artifacts Enabled: ${config.artifacts.enabled}`);
+  console.log(`   MCP Sandbox Enabled: ${config.mcpSandbox.enabled}`);
   console.log(`   App Version: ${config.appVersion}`);
 
   // Validate configuration
@@ -563,6 +600,36 @@ function validateConfig(config: AppConfig): void {
     if (config.artifacts.retentionDays < 1 || config.artifacts.retentionDays > 3650) {
       throw new Error(
         `Artifacts retentionDays must be between 1 and 3650. Got: ${config.artifacts.retentionDays}`
+      );
+    }
+  }
+
+  if (config.mcpSandbox.enabled) {
+    if (!config.domainName) {
+      throw new Error(
+        'MCP Sandbox stack requires CDK_DOMAIN_NAME to be set — the proxy origin ' +
+        'is derived as mcp-sandbox.{CDK_DOMAIN_NAME} and the CSP frame-ancestors ' +
+        'is locked to the SPA origin https://{CDK_DOMAIN_NAME}.'
+      );
+    }
+    if (!config.infrastructureHostedZoneDomain) {
+      throw new Error(
+        'MCP Sandbox stack requires CDK_HOSTED_ZONE_DOMAIN to be set — used to ' +
+        'look up the Route53 zone where the mcp-sandbox subdomain record is created.'
+      );
+    }
+    if (!config.mcpSandbox.certificateArn) {
+      throw new Error(
+        'MCP Sandbox stack requires CDK_MCP_SANDBOX_CERTIFICATE_ARN — an ACM cert ' +
+        'in us-east-1 for the mcp-sandbox.{domain} CloudFront distribution.'
+      );
+    }
+    // CloudFront requires the viewer cert in us-east-1. Catch the most common
+    // misconfiguration up front rather than letting CloudFormation reject it.
+    if (!/^arn:aws:acm:us-east-1:/.test(config.mcpSandbox.certificateArn)) {
+      throw new Error(
+        `MCP Sandbox certificate must be in us-east-1 (CloudFront requirement). ` +
+        `Got: ${config.mcpSandbox.certificateArn}`
       );
     }
   }

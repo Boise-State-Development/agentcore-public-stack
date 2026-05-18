@@ -82,6 +82,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       retentionDays: 90,
       extraFrameAncestors: [],
     },
+    mcpSandbox: {
+      enabled: false,
+      extraFrameAncestors: [],
+    },
     cognito: {
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,
@@ -121,6 +125,7 @@ const SSM_READS_BY_STACK: Record<string, string[]> = {
   ArtifactsStack: [
     'artifacts/render-token-key-arn',
   ],
+  McpSandboxStack: [],
   InferenceApiStack: [
     'inference-api/image-tag',
     'oauth/client-secrets-arn',

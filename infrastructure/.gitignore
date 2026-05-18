@@ -3,6 +3,11 @@
 *.d.ts
 node_modules
 
+# Hand-written static assets deployed verbatim to S3 (e.g. the MCP Apps
+# sandbox-proxy shell) are SOURCE, not compiled CDK output — keep them tracked.
+!assets/
+!assets/**
+
 # CDK asset staging directory
 .cdk.staging
 cdk.out

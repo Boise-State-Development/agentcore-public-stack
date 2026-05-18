@@ -10,7 +10,7 @@
 
 ---
 
-Now for the fun part. You'll trigger up to 8 GitHub Actions workflows in order. Each one deploys a different layer of the stack. Workflows that share the same step number can be run in parallel — just wait for the previous step to finish first.
+Now for the fun part. You'll trigger up to 9 GitHub Actions workflows in order. Each one deploys a different layer of the stack. Workflows that share the same step number can be run in parallel — just wait for the previous step to finish first.
 
 ## What you'll need for this step
 
@@ -42,6 +42,7 @@ Now for the fun part. You'll trigger up to 8 GitHub Actions workflows in order. 
 | 2 | **Deploy RAG Ingestion** | Document ingestion pipeline for retrieval-augmented generation |
 | 2 | **Deploy SageMaker Fine-Tuning** *(optional)* | SageMaker training/inference resources, S3 bucket, DynamoDB tables. Requires `CDK_FINE_TUNING_ENABLED=true` ([Step 3](./step-03-github-config.md#optional-features)). |
 | 2 | **Deploy Artifacts** *(optional)* | DynamoDB metadata + S3 content + CloudFront at `artifacts.{domain}` + Lambda render service. Requires `CDK_ARTIFACTS_ENABLED=true` and `CDK_ARTIFACTS_CERTIFICATE_ARN` (cert MUST be in `us-east-1`). |
+| 2 | **Deploy MCP Sandbox** *(optional)* | S3 + CloudFront at `mcp-sandbox.{domain}` + Route53 serving the MCP Apps sandbox-proxy shell. Requires `CDK_MCP_SANDBOX_ENABLED=true` and `CDK_MCP_SANDBOX_CERTIFICATE_ARN` (cert MUST be in `us-east-1`). Inert until later MCP Apps host-renderer PRs wire the SPA to it. |
 | 3 | **Deploy Inference API** | Strands Agent runtime container on ECS (Bedrock AgentCore) |
 | 4 | **Deploy App API** | Backend REST API container on ECS |
 | 5 | **Deploy Frontend** | Angular app to S3 + CloudFront distribution |
@@ -61,6 +62,7 @@ You can monitor the current state of each workflow:
 | Deploy RAG Ingestion | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/rag-ingestion.yml) |
 | Deploy SageMaker Fine-Tuning *(optional)* | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/sagemaker-fine-tuning.yml) |
 | Deploy Artifacts *(optional)* | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/artifacts.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/artifacts.yml) |
+| Deploy MCP Sandbox *(optional)* | [![2.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/mcp-sandbox.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/mcp-sandbox.yml) |
 | Deploy Inference API | [![3.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/inference-api.yml) |
 | Deploy App API | [![4.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/app-api.yml) |
 | Deploy Frontend | [![5.](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/frontend.yml) |
@@ -147,6 +149,27 @@ To enable, set these GitHub environment variables before running:
 - `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` *(optional, default none)* — comma-separated extra origins allowed to embed artifact iframes via CSP `frame-ancestors`, on top of `https://{domain}`. Set to `http://localhost:4200` to point a local SPA at this environment. **Leave unset in production** — every listed origin can frame users' artifacts. Prefer a one-off targeted `cdk deploy '*ArtifactsStack*'` with this var exported over committing it as a CI variable, so localhost never lands in automated shared-env deploys.
 
 The artifact origin is intentionally a sibling subdomain (not the SPA origin) so artifact JS runs cross-origin and cannot access the `__Host-` session cookies, `localStorage`, or the app API. Defense in depth via strict CSP (`connect-src 'none'`, pinned `frame-ancestors`) is enforced both at the Lambda response and at the CloudFront response-headers policy.
+
+</details>
+
+<details>
+<summary>2. Deploy MCP Sandbox (Optional)</summary>
+
+Provisions the MCP Apps **sandbox-proxy origin** — a dedicated cross-origin shell that the SPA's MCP App iframe is pointed at, so interactive MCP App UIs run isolated from the `ai.client` origin. This is PR #1 of the MCP Apps host-renderer initiative (`docs/kaizen/scoping/mcp-apps-host-renderer.md`). Skip if you don't need MCP Apps; the rest of the stack works without it.
+
+Creates:
+- S3 bucket (private, OAC-only) holding the static `proxy.html` + `proxy.js` shell
+- CloudFront distribution serving `mcp-sandbox.{CDK_DOMAIN_NAME}`
+- Route 53 A record for the sandbox subdomain
+- A CloudFront response-headers policy that stamps `Content-Security-Policy: frame-ancestors <SPA origin only>`
+
+To enable, set these GitHub environment variables before running:
+
+- `CDK_MCP_SANDBOX_ENABLED=true`
+- `CDK_MCP_SANDBOX_CERTIFICATE_ARN` — ACM cert ARN that covers `mcp-sandbox.{domain}`. **Must be in `us-east-1`** (CloudFront requirement). The same wildcard-depth caveat as Artifacts applies: a `*.example.com` cert covers `mcp-sandbox.example.com` but **not** `mcp-sandbox.alpha.example.com`. If `CDK_DOMAIN_NAME` is a subdomain, issue a dedicated `us-east-1` cert for `*.{CDK_DOMAIN_NAME}`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates).
+- `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` *(optional, default none)* — comma-separated extra origins allowed to embed the proxy iframe via CSP `frame-ancestors`, on top of `https://{domain}`. Set to `http://localhost:4200` to point a local SPA at this environment. **Leave unset in production** — every listed origin can frame the proxy. Prefer a one-off targeted `cdk deploy '*McpSandboxStack*'` with this var exported over committing it as a CI variable, so localhost never lands in automated shared-env deploys.
+
+The sandbox origin is intentionally a sibling subdomain (not the SPA origin), matching the Artifacts pattern: it is the **outer** half of the spec's Sandbox Proxy pattern, giving a stable cross-origin boundary so the inner MCP App content frame's `allow-same-origin` never reaches the SPA's cookies/`localStorage`/app API. **This stack is inert on its own** — nothing consumes its `/mcp-sandbox/origin` SSM export until the frontend `<mcp-app-frame>` lands in a later PR, and the whole feature stays behind `MCP_APPS_HOST_ENABLED` until the initiative's final PR. Standing it up early is safe and changes nothing user-facing.
 
 </details>
 

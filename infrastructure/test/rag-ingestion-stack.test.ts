@@ -88,6 +88,10 @@ describe('RagIngestionStack', () => {
         retentionDays: 90,
         extraFrameAncestors: [],
       },
+      mcpSandbox: {
+        enabled: false,
+        extraFrameAncestors: [],
+      },
       cognito: {
         domainPrefix: 'test-project',
         passwordMinLength: 8,

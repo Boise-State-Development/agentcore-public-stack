@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<!--
+  MCP Apps host renderer — Sandbox Proxy shell (OUTER iframe)
+
+  PR #1 of docs/kaizen/scoping/mcp-apps-host-renderer.md.
+
+  This is the static shell served at mcp-sandbox.{domain}/proxy.html. It is
+  the OUTER half of the spec's "Sandbox Proxy pattern" for web hosts:
+
+    ai.client (SPA)
+      └─ <iframe src="https://mcp-sandbox.{domain}/proxy.html">   ← THIS FILE
+           └─ <iframe srcdoc="...">  inner content frame (created here)
+
+  Why two iframes: this outer page is a stable cross-origin boundary against
+  the host page, so `allow-same-origin` on the INNER frame never grants the
+  MCP App access to the SPA origin (cookies / localStorage / app API). The
+  inner frame takes the strict per-resource CSP from `_meta.ui.csp` — that
+  composition lands in PR #4.
+
+  SCOPE OF THIS PR: stand up the origin + the static shell only. There is NO
+  MCP server wiring and NO JSON-RPC postMessage protocol here yet — the shell
+  only answers a liveness handshake so the SPA can prove it can reach this
+  origin. The full host bridge (ui/initialize, tool-input, resource-teardown,
+  per-frame nonce auth, etc.) is PR #4. Until PR #7 flips
+  MCP_APPS_HOST_ENABLED nothing in the SPA points at this page, so deploying
+  this stack is inert.
+
+  CSP NOTE: the security-critical control for this PR is the response
+  `Content-Security-Policy: frame-ancestors <SPA origin only>` stamped by the
+  CloudFront ResponseHeadersPolicy in mcp-sandbox-stack.ts — that is what
+  prevents any site other than the SPA from embedding this proxy. This
+  document loads no inline scripts/styles so the served CSP can stay
+  `script-src 'self'` with no `'unsafe-inline'`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>MCP Apps Sandbox Proxy</title>
+  </head>
+  <body>
+    <!--
+      The inner content frame is created at runtime by proxy.js (via srcdoc),
+      not declared here, because in later PRs its srcdoc / sandbox / CSP are
+      derived per-resource from the `ui_resource` SSE event. For PR #1 it is
+      an empty placeholder so the two-iframe structure is observable.
+    -->
+    <script src="proxy.js"></script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { loadConfig, buildCorsOrigins, AppConfig } from '../lib/config';
+import { buildMcpSandboxFrameAncestors } from '../lib/mcp-sandbox-stack';
 import { createMockConfig } from './helpers/mock-config';
 
 /**
@@ -254,5 +255,57 @@ describe('loadConfig CORS derivation', () => {
     const config = loadConfig(app);
     const origins = buildCorsOrigins(config);
     expect(origins).toEqual(['http://localhost:4200']);
+  });
+});
+
+// ============================================================
+// MCP Apps sandbox-proxy origin allowlisting (PR #1)
+//
+// The proxy is not a CORS consumer (buildCorsOrigins) — it is an origin
+// whose CSP frame-ancestors must permit ONLY the SPA. Per the
+// cors-deployment skill, every new env var that names this origin /
+// allowlists it flows through this file: these tests pin that the proxy's
+// framing allowlist is derived from the SAME domainName the CORS model is
+// centred on, so the two allowlists can never silently drift apart.
+// ============================================================
+
+describe('MCP sandbox proxy frame-ancestors vs CORS domain', () => {
+  test('frame-ancestors matches the domain-derived SPA CORS origin', () => {
+    const config = createMockConfig({
+      corsOrigins: 'https://alpha.example.com',
+      domainName: 'alpha.example.com',
+    });
+    const corsOrigins = buildCorsOrigins(config);
+    const frameAncestors = buildMcpSandboxFrameAncestors(
+      config.domainName,
+      config.mcpSandbox.extraFrameAncestors,
+    );
+    // The single SPA origin the CORS layer allows is exactly the single
+    // origin permitted to frame the proxy.
+    expect(corsOrigins).toContain('https://alpha.example.com');
+    expect(frameAncestors).toBe('https://alpha.example.com');
+  });
+
+  test('never widens to * and denies framing when there is no SPA origin', () => {
+    const config = createMockConfig({ corsOrigins: '', domainName: undefined });
+    const frameAncestors = buildMcpSandboxFrameAncestors(
+      config.domainName,
+      config.mcpSandbox.extraFrameAncestors,
+    );
+    expect(frameAncestors).toBe("'none'");
+    expect(frameAncestors).not.toContain('*');
+  });
+
+  test('extra frame ancestors (e.g. localhost SPA) are additive, like CDK_CORS_ORIGINS', () => {
+    const config = createMockConfig({
+      corsOrigins: 'https://alpha.example.com,http://localhost:4200',
+      domainName: 'alpha.example.com',
+      mcpSandbox: { enabled: true, extraFrameAncestors: ['http://localhost:4200'] },
+    });
+    const frameAncestors = buildMcpSandboxFrameAncestors(
+      config.domainName,
+      config.mcpSandbox.extraFrameAncestors,
+    );
+    expect(frameAncestors).toBe('https://alpha.example.com http://localhost:4200');
   });
 });
