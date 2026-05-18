@@ -5,7 +5,7 @@ import {
   signal,
   computed,
 } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -13,268 +13,382 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroMagnifyingGlass,
+  heroChevronDown,
   heroPencilSquare,
   heroTrash,
   heroUserGroup,
-  heroXMark,
   heroGlobeAlt,
-  heroCheck,
-  heroXCircle,
-  heroArrowLeft,
 } from '@ng-icons/heroicons/outline';
+import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { AdminToolService } from '../services/admin-tool.service';
-import { AdminTool, TOOL_CATEGORIES, TOOL_STATUSES } from '../models/admin-tool.model';
+import {
+  AdminTool,
+  TOOL_CATEGORIES,
+  TOOL_STATUSES,
+  TOOL_PROTOCOLS,
+} from '../models/admin-tool.model';
+import { AppRolesService } from '../../roles/services/app-roles.service';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
-import { TooltipDirective } from '../../../components/tooltip';
 
 @Component({
   selector: 'app-tool-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon, TooltipDirective],
+  imports: [RouterLink, FormsModule, NgIcon],
   providers: [
     provideIcons({
       heroPlus,
       heroMagnifyingGlass,
+      heroChevronDown,
       heroPencilSquare,
       heroTrash,
       heroUserGroup,
-      heroXMark,
       heroGlobeAlt,
-      heroCheck,
-      heroXCircle,
-      heroArrowLeft,
+      heroStarSolid,
     }),
   ],
-  host: {
-    class: 'block p-6',
-  },
   template: `
-    <div class="mb-6 flex items-center justify-between">
-      <div>
-        <h1 class="text-3xl/9 font-bold">Tool Catalog</h1>
-        <p class="text-gray-600 dark:text-gray-400">
-          Manage tool metadata and role assignments.
-        </p>
-      </div>
-      <div class="flex gap-2">
-        <a
-          routerLink="/admin/tools/new"
-          class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:bg-blue-500 dark:hover:bg-blue-600"
-        >
-          <ng-icon name="heroPlus" class="size-5" />
-          Add Tool
-        </a>
-      </div>
-    </div>
-
-    <!-- Filters -->
-    <div class="mb-6 flex flex-wrap items-center gap-4">
-      <div class="relative flex-1 min-w-64">
-        <ng-icon
-          name="heroMagnifyingGlass"
-          class="absolute left-3 top-1/2 -translate-y-1/2 size-5 text-gray-400"
-        />
-        <input
-          type="text"
-          [(ngModel)]="searchQuery"
-          placeholder="Search by name or ID..."
-          class="w-full pl-10 pr-10 py-2 bg-white border border-gray-300 rounded-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-800 dark:border-gray-500 dark:text-white dark:placeholder-gray-400"
-        />
-        @if (searchQuery()) {
-          <button
-            (click)="searchQuery.set('')"
-            class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+    <div class="min-h-dvh">
+      <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <!-- Page Header -->
+        <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Tool Catalog</h1>
+            <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+              Manage tool metadata and role assignments.
+            </p>
+          </div>
+          <a
+            routerLink="/admin/tools/new"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
           >
-            <ng-icon name="heroXMark" class="size-5" />
-          </button>
-        }
-      </div>
-
-      <select
-        [ngModel]="statusFilter()"
-        (ngModelChange)="statusFilter.set($event)"
-        class="px-3 py-2 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-500 dark:text-white"
-      >
-        <option value="">All Statuses</option>
-        @for (status of statuses; track status.value) {
-          <option [value]="status.value">{{ status.label }}</option>
-        }
-      </select>
-
-      <select
-        [ngModel]="categoryFilter()"
-        (ngModelChange)="categoryFilter.set($event)"
-        class="px-3 py-2 bg-white border border-gray-300 rounded-sm dark:bg-gray-800 dark:border-gray-500 dark:text-white"
-      >
-        <option value="">All Categories</option>
-        @for (cat of categories; track cat.value) {
-          <option [value]="cat.value">{{ cat.label }}</option>
-        }
-      </select>
-
-      @if (hasActiveFilters()) {
-        <button
-          (click)="resetFilters()"
-          class="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-        >
-          Clear Filters
-        </button>
-      }
-    </div>
-
-    <!-- Loading State -->
-    @if (toolsResource.isLoading() && tools().length === 0) {
-      <div class="flex items-center justify-center h-64">
-        <div class="flex flex-col items-center gap-4">
-          <div
-            class="animate-spin rounded-full size-12 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400"
-          ></div>
-          <p class="text-sm text-gray-500 dark:text-gray-400">
-            Loading tools...
-          </p>
+            <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+            Add Tool
+          </a>
         </div>
-      </div>
-    }
 
-    <!-- Error State -->
-    @if (toolsResource.error()) {
-      <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200">
-        <p>Failed to load tools. Please try again.</p>
-        <button
-          (click)="adminToolService.reload()"
-          class="mt-2 text-sm underline hover:no-underline"
-        >
-          Retry
-        </button>
-      </div>
-    }
+        <!-- Toolbar: search + filters inline -->
+        <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div class="relative flex-1">
+            <ng-icon
+              name="heroMagnifyingGlass"
+              class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+              aria-hidden="true"
+            />
+            <label for="search" class="sr-only">Search tools</label>
+            <input
+              type="text"
+              id="search"
+              [ngModel]="searchQuery()"
+              (ngModelChange)="searchQuery.set($event)"
+              placeholder="Search by name, ID, or description…"
+              class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+            />
+          </div>
 
-    <!-- Tools Table -->
-    @if (!toolsResource.isLoading() || tools().length > 0) {
-      <div class="bg-white dark:bg-gray-800 rounded-sm shadow-xs overflow-hidden border border-gray-200 dark:border-gray-700">
-        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead class="bg-gray-50 dark:bg-gray-700">
-            <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Tool
-              </th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Category
-              </th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Access
-              </th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Default
-              </th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Status
-              </th>
-              <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            @for (tool of filteredTools(); track tool.toolId) {
-              <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
-                <td class="px-6 py-4">
-                  <div>
-                    <div class="font-medium">{{ tool.displayName }}</div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400">{{ tool.toolId }}</div>
-                  </div>
-                </td>
-                <td class="px-6 py-4">
-                  <span class="px-2 py-1 text-xs rounded-xs bg-gray-100 dark:bg-gray-600 capitalize">
-                    {{ tool.category }}
-                  </span>
-                </td>
-                <td class="px-6 py-4">
-                  @if (tool.isPublic) {
-                    <span class="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
-                      <ng-icon name="heroGlobeAlt" class="size-4" />
-                      Public
-                    </span>
-                  } @else {
-                    <span class="text-gray-600 dark:text-gray-400">
-                      {{ tool.allowedAppRoles.length }} roles
-                    </span>
-                  }
-                </td>
-                <td class="px-6 py-4">
-                  @if (tool.enabledByDefault) {
-                    <ng-icon name="heroCheck" class="size-5 text-green-600 dark:text-green-400" />
-                  } @else {
-                    <ng-icon name="heroXCircle" class="size-5 text-gray-400" />
-                  }
-                </td>
-                <td class="px-6 py-4">
-                  <span [class]="getStatusClass(tool.status)">
-                    {{ tool.status }}
-                  </span>
-                </td>
-                <td class="px-6 py-4 text-right">
-                  <div class="flex items-center justify-end gap-1">
-                    <button
-                      (click)="openRoleDialog(tool)"
-                      class="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-600"
-                      [appTooltip]="'Manage Role Access'"
-                      appTooltipPosition="top"
-                    >
-                      <ng-icon name="heroUserGroup" class="size-5" />
-                    </button>
-                    <a
-                      [routerLink]="['/admin/tools/edit', tool.toolId]"
-                      class="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-600"
-                      [appTooltip]="'Edit Tool'"
-                      appTooltipPosition="top"
-                    >
-                      <ng-icon name="heroPencilSquare" class="size-5" />
-                    </a>
-                    <button
-                      (click)="deleteTool(tool)"
-                      class="p-2 text-gray-500 hover:text-red-600 hover:bg-gray-100 rounded-sm dark:hover:bg-gray-600"
-                      [appTooltip]="'Delete Tool'"
-                      appTooltipPosition="top"
-                    >
-                      <ng-icon name="heroTrash" class="size-5" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
+          <label for="status" class="sr-only">Filter by status</label>
+          <select
+            id="status"
+            [ngModel]="statusFilter()"
+            (ngModelChange)="statusFilter.set($event)"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          >
+            <option value="">All statuses</option>
+            @for (status of statuses; track status.value) {
+              <option [value]="status.value">{{ status.label }}</option>
             }
-          </tbody>
-        </table>
-      </div>
+          </select>
 
-      <!-- Empty State -->
-      @if (filteredTools().length === 0 && !toolsResource.isLoading()) {
-        <div class="text-center py-12 text-gray-500">
-          <ng-icon name="heroPlus" class="size-12 mx-auto mb-4 text-gray-300" />
+          <label for="category" class="sr-only">Filter by category</label>
+          <select
+            id="category"
+            [ngModel]="categoryFilter()"
+            (ngModelChange)="categoryFilter.set($event)"
+            class="rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+          >
+            <option value="">All categories</option>
+            @for (cat of categories; track cat.value) {
+              <option [value]="cat.value">{{ cat.label }}</option>
+            }
+          </select>
+
           @if (hasActiveFilters()) {
-            <p class="text-lg/7">No tools match your filters</p>
-            <p class="text-sm/6">Try adjusting your search or filter criteria</p>
-          } @else {
-            <p class="text-lg/7">No tools in catalog</p>
-            <p class="text-sm/6 mb-4">Add a tool to get started.</p>
-            <a
-              routerLink="/admin/tools/new"
-              class="inline-flex items-center gap-2 rounded-sm bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700"
+            <button
+              (click)="resetFilters()"
+              class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
             >
-              <ng-icon name="heroPlus" class="size-5" />
-              Add Tool
-            </a>
+              Reset
+            </button>
           }
         </div>
-      }
-    }
+
+        <!-- Count -->
+        <div class="mb-3 text-xs/5 text-gray-500 dark:text-gray-400">
+          {{ filteredTools().length }} tool{{ filteredTools().length !== 1 ? 's' : '' }}
+        </div>
+
+        <!-- Loading State -->
+        @if (toolsResource.isLoading() && tools().length === 0) {
+          <div class="flex h-64 items-center justify-center">
+            <div class="flex flex-col items-center gap-4">
+              <div
+                class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+              ></div>
+              <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading tools…</p>
+            </div>
+          </div>
+        }
+
+        <!-- Error State -->
+        @if (toolsResource.error()) {
+          <div class="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+            <p class="text-sm/6">Failed to load tools. Please try again.</p>
+            <button
+              (click)="adminToolService.reload()"
+              class="mt-2 text-sm/6 font-medium underline hover:no-underline"
+            >
+              Retry
+            </button>
+          </div>
+        }
+
+        <!-- Tools List -->
+        @if (!toolsResource.isLoading() || tools().length > 0) {
+          @if (filteredTools().length === 0) {
+            <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+              @if (hasActiveFilters()) {
+                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                  No tools match the current filters.
+                </p>
+              } @else {
+                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                  No tools in catalog yet.
+                </p>
+                <a
+                  routerLink="/admin/tools/new"
+                  class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+                >
+                  <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+                  Add Tool
+                </a>
+              }
+            </div>
+          } @else {
+            <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+              @for (tool of filteredTools(); track tool.toolId) {
+                <li>
+                  <!-- Row -->
+                  <div class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+                    <!-- Expand toggle -->
+                    <button
+                      type="button"
+                      (click)="toggleExpand(tool.toolId)"
+                      [attr.aria-expanded]="isExpanded(tool.toolId)"
+                      [attr.aria-controls]="'tool-detail-' + tool.toolId"
+                      [attr.aria-label]="(isExpanded(tool.toolId) ? 'Hide' : 'Show') + ' details for ' + tool.displayName"
+                      class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                    >
+                      <ng-icon
+                        name="heroChevronDown"
+                        class="size-4 transition-transform duration-150"
+                        [class.rotate-180]="isExpanded(tool.toolId)"
+                        aria-hidden="true"
+                      />
+                    </button>
+
+                    <!-- Name + tool id -->
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5">
+                        <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                          {{ tool.displayName }}
+                        </span>
+                        @if (tool.enabledByDefault) {
+                          <ng-icon
+                            name="heroStarSolid"
+                            class="size-4 shrink-0 text-amber-500 dark:text-amber-400"
+                            aria-label="Enabled by default"
+                          />
+                        }
+                      </div>
+                      <p class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400">
+                        {{ tool.toolId }}
+                      </p>
+                    </div>
+
+                    <!-- Category -->
+                    <span class="hidden shrink-0 rounded-2xl bg-gray-100 px-2.5 py-0.5 text-xs/5 font-medium capitalize text-gray-600 sm:inline-block dark:bg-gray-700 dark:text-gray-300">
+                      {{ getCategoryLabel(tool.category) }}
+                    </span>
+
+                    <!-- Access -->
+                    <span class="hidden w-20 shrink-0 justify-end text-right text-xs/5 sm:flex">
+                      @if (tool.isPublic) {
+                        <span class="inline-flex items-center gap-1 font-medium text-green-700 dark:text-green-400">
+                          <ng-icon name="heroGlobeAlt" class="size-4" aria-hidden="true" />
+                          Public
+                        </span>
+                      } @else {
+                        <span class="text-gray-500 dark:text-gray-400">
+                          {{ tool.allowedAppRoles.length }} role{{ tool.allowedAppRoles.length !== 1 ? 's' : '' }}
+                        </span>
+                      }
+                    </span>
+
+                    <!-- Status -->
+                    <span [class]="getStatusClass(tool.status)">
+                      {{ tool.status }}
+                    </span>
+
+                    <!-- Actions -->
+                    <div class="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        (click)="openRoleDialog(tool)"
+                        [attr.aria-label]="'Manage role access for ' + tool.displayName"
+                        [title]="'Manage role access for ' + tool.displayName"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                      >
+                        <ng-icon name="heroUserGroup" class="size-4" aria-hidden="true" />
+                      </button>
+                      <a
+                        [routerLink]="['/admin/tools/edit', tool.toolId]"
+                        [attr.aria-label]="'Edit ' + tool.displayName"
+                        [title]="'Edit ' + tool.displayName"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                      >
+                        <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                      </a>
+                      <button
+                        type="button"
+                        (click)="deleteTool(tool)"
+                        [attr.aria-label]="'Delete ' + tool.displayName"
+                        [title]="'Delete ' + tool.displayName"
+                        class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                      >
+                        <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Expanded detail -->
+                  @if (isExpanded(tool.toolId)) {
+                    <div
+                      [id]="'tool-detail-' + tool.toolId"
+                      class="border-t border-gray-100 bg-gray-50 px-4 py-3 sm:pl-14 dark:border-gray-700/60 dark:bg-gray-900/40"
+                    >
+                      <dl class="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-3">
+                        <div class="sm:col-span-3">
+                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Description
+                          </dt>
+                          <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                            {{ tool.description || 'No description provided.' }}
+                          </dd>
+                        </div>
+
+                        <div>
+                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Protocol
+                          </dt>
+                          <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                            {{ getProtocolLabel(tool.protocol) }}
+                          </dd>
+                        </div>
+
+                        <div>
+                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Default
+                          </dt>
+                          <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                            {{ tool.enabledByDefault ? 'On by default' : 'Off by default' }}
+                          </dd>
+                        </div>
+
+                        <div>
+                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            OAuth
+                          </dt>
+                          <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                            {{ tool.requiresOauthProvider || 'None' }}
+                            @if (tool.forwardAuthToken) {
+                              <span class="text-gray-400 dark:text-gray-500">· forwards auth token</span>
+                            }
+                          </dd>
+                        </div>
+
+                        <div class="sm:col-span-3">
+                          <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Access
+                          </dt>
+                          @if (tool.isPublic) {
+                            <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                              Public — available to all authenticated users.
+                            </dd>
+                          } @else {
+                            <dd class="mt-1 flex flex-wrap gap-1.5">
+                              @if (tool.allowedAppRoles.length > 0) {
+                                @for (roleId of tool.allowedAppRoles; track roleId) {
+                                  <span
+                                    class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                                    [title]="roleId"
+                                  >
+                                    {{ getRoleDisplayName(roleId) }}
+                                  </span>
+                                }
+                              } @else {
+                                <span class="text-xs/5 italic text-gray-500 dark:text-gray-400">No roles assigned</span>
+                              }
+                            </dd>
+                          }
+                        </div>
+
+                        @if (tool.mcpConfig) {
+                          <div class="sm:col-span-3">
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              MCP server
+                            </dt>
+                            <dd class="mt-0.5 space-y-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                              <p class="break-all font-mono text-xs/5">{{ tool.mcpConfig.serverUrl }}</p>
+                              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                                {{ tool.mcpConfig.transport }} · auth: {{ tool.mcpConfig.authType }} ·
+                                {{ tool.mcpConfig.tools.length }} tool{{ tool.mcpConfig.tools.length !== 1 ? 's' : '' }}
+                              </p>
+                            </dd>
+                          </div>
+                        }
+
+                        @if (tool.a2aConfig) {
+                          <div class="sm:col-span-3">
+                            <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              A2A agent
+                            </dt>
+                            <dd class="mt-0.5 space-y-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                              <p class="break-all font-mono text-xs/5">{{ tool.a2aConfig.agentUrl }}</p>
+                              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                                auth: {{ tool.a2aConfig.authType }}
+                                @if (tool.a2aConfig.capabilities.length > 0) {
+                                  · {{ tool.a2aConfig.capabilities.join(', ') }}
+                                }
+                              </p>
+                            </dd>
+                          </div>
+                        }
+                      </dl>
+                    </div>
+                  }
+                </li>
+              }
+            </ul>
+          }
+        }
+      </div>
+    </div>
   `,
 })
 export class ToolListPage {
   adminToolService = inject(AdminToolService);
-  private router = inject(Router);
   private dialog = inject(Dialog);
+  private appRolesService = inject(AppRolesService);
 
   readonly toolsResource = this.adminToolService.toolsResource;
   readonly categories = TOOL_CATEGORIES;
@@ -284,6 +398,9 @@ export class ToolListPage {
   searchQuery = signal('');
   statusFilter = signal('');
   categoryFilter = signal('');
+
+  // Row detail expansion state (set of tool ids currently expanded)
+  private expandedIds = signal<ReadonlySet<string>>(new Set());
 
   // Computed
   readonly tools = computed(() => this.adminToolService.getTools());
@@ -329,18 +446,53 @@ export class ToolListPage {
     this.categoryFilter.set('');
   }
 
+  isExpanded(toolId: string): boolean {
+    return this.expandedIds().has(toolId);
+  }
+
+  toggleExpand(toolId: string): void {
+    this.expandedIds.update(current => {
+      const next = new Set(current);
+      if (next.has(toolId)) {
+        next.delete(toolId);
+      } else {
+        next.add(toolId);
+      }
+      return next;
+    });
+  }
+
+  getCategoryLabel(category: string): string {
+    return this.categories.find(c => c.value === category)?.label ?? category;
+  }
+
+  getProtocolLabel(protocol: string): string {
+    return TOOL_PROTOCOLS.find(p => p.value === protocol)?.label ?? protocol;
+  }
+
+  /**
+   * Get the display name for a role ID.
+   * Falls back to the role ID if not found.
+   */
+  getRoleDisplayName(roleId: string): string {
+    const role = this.appRolesService.getRoleById(roleId);
+    return role?.displayName ?? roleId;
+  }
+
   getStatusClass(status: string): string {
+    const base =
+      'shrink-0 rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
     switch (status) {
       case 'active':
-        return 'px-2 py-1 text-xs rounded-xs bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+        return `${base} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`;
       case 'deprecated':
-        return 'px-2 py-1 text-xs rounded-xs bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
+        return `${base} bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300`;
       case 'disabled':
-        return 'px-2 py-1 text-xs rounded-xs bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+        return `${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`;
       case 'coming_soon':
-        return 'px-2 py-1 text-xs rounded-xs bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+        return `${base} bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300`;
       default:
-        return 'px-2 py-1 text-xs rounded-xs bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+        return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
     }
   }
 
