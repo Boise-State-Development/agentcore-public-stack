@@ -410,6 +410,26 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "isPublic": False,
         "forwardAuthToken": False,
     },
+    {
+        "toolId": "create_artifact",
+        "displayName": "Create Artifact",
+        "description": "Save standalone HTML or Markdown documents as versioned artifacts the user can open and iterate on.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "update_artifact",
+        "displayName": "Update Artifact",
+        "description": "Replace an existing artifact's content, creating a new immutable version.",
+        "category": "document",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+    },
 ]
 
 
