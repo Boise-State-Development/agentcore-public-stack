@@ -7,7 +7,7 @@ Integrates with the existing AppRole RBAC system.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -281,6 +281,79 @@ class A2AAgentConfig(BaseModel):
 
 
 # =============================================================================
+# MCP Apps — tool UI metadata (SEP-1865)
+# =============================================================================
+
+# Spec values for `_meta.ui.visibility`. "model" = the model may see/call the
+# tool; "app" = an embedded MCP App may call it. Default per spec is both.
+ToolVisibility = Literal["model", "app"]
+DEFAULT_TOOL_VISIBILITY: List[ToolVisibility] = ["model", "app"]
+
+
+class ToolUIMetadata(BaseModel):
+    """Parsed `_meta.ui` from an MCP `tools/list` entry (MCP Apps / SEP-1865).
+
+    PR #2 of the MCP Apps host-renderer initiative only consumes
+    `resource_uri` and `visibility`. The full `_meta.ui` payload is retained
+    verbatim in `raw` so later PRs (the `resources/read` fetch path, CSP /
+    permissions handling, the postMessage bridge) can read it without another
+    server round-trip. `_meta` is discovered live from the server, not
+    admin-configured, so this never round-trips through DynamoDB.
+    """
+
+    resource_uri: Optional[str] = Field(
+        None,
+        description="The `ui://` URI from `_meta.ui.resourceUri` (fetched via "
+        "`resources/read` in a later PR; never inlined).",
+    )
+    visibility: List[ToolVisibility] = Field(
+        default_factory=lambda: list(DEFAULT_TOOL_VISIBILITY),
+        description="Surfaces allowed to see/invoke the tool. Defaults to "
+        "['model', 'app'] when the server omits `visibility`.",
+    )
+    raw: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Verbatim `_meta.ui` payload as returned by the server.",
+    )
+
+    model_config = {"use_enum_values": True}
+
+    @classmethod
+    def from_meta(cls, meta: Optional[Dict[str, Any]]) -> Optional["ToolUIMetadata"]:
+        """Parse a tool's `_meta` dict into `ToolUIMetadata`.
+
+        Returns None when the tool carries no `_meta.ui` block (an ordinary,
+        non-UI tool). An absent `visibility` defaults to the spec default
+        (`['model', 'app']`); an explicitly present `visibility` is honored
+        as-is (so `[]` or `['app']` correctly hides the tool from the model).
+        """
+        if not isinstance(meta, dict):
+            return None
+        ui = meta.get("ui")
+        if not isinstance(ui, dict):
+            return None
+
+        raw_visibility = ui.get("visibility")
+        if isinstance(raw_visibility, list):
+            visibility: List[ToolVisibility] = [
+                v for v in raw_visibility if v in ("model", "app")
+            ]
+        else:
+            visibility = list(DEFAULT_TOOL_VISIBILITY)
+
+        resource_uri = ui.get("resourceUri")
+        return cls(
+            resource_uri=resource_uri if isinstance(resource_uri, str) else None,
+            visibility=visibility,
+            raw=dict(ui),
+        )
+
+    def visible_to_model(self) -> bool:
+        """True if the model is allowed to see/call this tool."""
+        return "model" in self.visibility
+
+
+# =============================================================================
 # Database Models (stored in DynamoDB)
 # =============================================================================
 
@@ -344,6 +417,21 @@ class ToolDefinition(BaseModel):
     a2a_config: Optional[A2AAgentConfig] = Field(
         None,
         description="A2A agent configuration (required when protocol is 'a2a')",
+    )
+
+    # MCP Apps (SEP-1865) — derived live from the MCP server's `tools/list`
+    # `_meta.ui`, not admin-configured, so these are intentionally NOT
+    # round-tripped through DynamoDB. Defaults make the field inert for every
+    # existing tool (full visibility, no UI resource).
+    visibility: List[ToolVisibility] = Field(
+        default_factory=lambda: list(DEFAULT_TOOL_VISIBILITY),
+        description="Surfaces allowed to see/invoke this tool, from "
+        "`_meta.ui.visibility`. Defaults to ['model', 'app'].",
+    )
+    ui_metadata: Optional[ToolUIMetadata] = Field(
+        None,
+        description="Parsed `_meta.ui` block when the tool ships an MCP App "
+        "UI resource; None for ordinary tools.",
     )
 
     # Audit

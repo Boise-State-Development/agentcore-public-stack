@@ -11,6 +11,11 @@ from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
+from agents.main_agent.integrations.mcp_apps import (
+    UICapableMCPClient,
+    ensure_ui_extension_session_patch,
+    record_and_filter_ui_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,9 @@ class FilteredMCPClient(MCPClient):
             enabled_tool_ids: List of tool IDs that should be enabled
             prefix: Prefix used for tool IDs (default: 'gateway')
         """
+        # Advertise the MCP Apps UI extension on this client's initialize
+        # (inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
+        ensure_ui_extension_session_patch()
         super().__init__(client_factory)
         self.enabled_tool_ids = enabled_tool_ids
         self.prefix = prefix
@@ -79,6 +87,10 @@ class FilteredMCPClient(MCPClient):
         logger.info(f"✅ Filtered {len(filtered_tools)} tools from {len(paginated_result)} available")
         logger.info(f"   Enabled tool IDs: {self.enabled_tool_ids}")
         logger.info(f"   Filtered tool names: {[t.tool_name for t in filtered_tools]}")
+
+        # Record `_meta.ui` into the catalog and drop app-only tools so the
+        # model never sees them (no-op unless the host flag is enabled).
+        filtered_tools = record_and_filter_ui_tools(filtered_tools)
 
         return PaginatedList(filtered_tools, token=paginated_result.pagination_token)
 
@@ -163,8 +175,10 @@ def create_gateway_mcp_client(
 
     # Create MCP client with streamable HTTP transport
     # Note: prefix and tool_filters are no longer supported in MCPClient constructor
-    # We'll filter tools manually after listing them
-    mcp_client = MCPClient(
+    # We'll filter tools manually after listing them.
+    # UICapableMCPClient advertises the MCP Apps UI extension on initialize and
+    # records/filters `_meta.ui` tools (inert unless the host flag is enabled).
+    mcp_client = UICapableMCPClient(
         lambda: streamablehttp_client(
             gateway_url,
             auth=auth  # httpx Auth class for automatic SigV4 signing

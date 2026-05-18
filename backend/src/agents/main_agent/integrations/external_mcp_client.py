@@ -27,6 +27,7 @@ from apis.shared.tools.models import (
     ToolDefinition,
 )
 from agents.main_agent.integrations import oauth_token_cache
+from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.oauth_auth import (
     CompositeAuth,
@@ -182,7 +183,10 @@ def create_external_mcp_client(
             transport = MCPTransport(transport)
 
         if transport == MCPTransport.STREAMABLE_HTTP:
-            mcp_client = MCPClient(
+            # UICapableMCPClient advertises the MCP Apps UI extension on
+            # initialize and filters app-only tools out of the model's tool
+            # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
+            mcp_client = UICapableMCPClient(
                 lambda url=config.server_url, auth=auth: streamablehttp_client(
                     url,
                     auth=auth

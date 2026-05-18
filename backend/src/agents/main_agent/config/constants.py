@@ -49,6 +49,9 @@ class EnvVars:
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = "AGENTCORE_GATEWAY_MCP_ENABLED"
 
+    # --- MCP Apps (host renderer initiative) ---
+    MCP_APPS_HOST_ENABLED = "AGENTCORE_MCP_APPS_HOST_ENABLED"
+
     # --- Frontend ---
     FRONTEND_URL = "FRONTEND_URL"
 
@@ -103,6 +106,11 @@ class Defaults:
 
     # --- Gateway ---
     GATEWAY_MCP_ENABLED = True
+
+    # --- MCP Apps (host renderer initiative) ---
+    # Gates the entire MCP Apps host surface. Stays False until PR #7 of
+    # docs/kaizen/scoping/mcp-apps-host-renderer.md flips it on.
+    MCP_APPS_HOST_ENABLED = False
 
     # --- Voice Agent ---
     NOVA_SONIC_MODEL_ID = "amazon.nova-2-sonic-v1:0"
