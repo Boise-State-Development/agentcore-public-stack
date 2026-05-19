@@ -125,6 +125,18 @@ describe('McpSandboxStack', () => {
     expect(comment.length).toBeLessThanOrEqual(128);
   });
 
+  test('ResponseHeadersPolicy comment fits within the AWS-enforced 128-char limit', () => {
+    // ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Comment shares
+    // the same 128-char cap. The 2026-05-19 alpha redeploy hit this
+    // (generic "Invalid request" — AWS doesn't echo the field name) so
+    // we lock both sibling Comments in the stack down with the same
+    // guard.
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const policy = Object.values(policies)[0] as any;
+    const comment = policy.Properties.ResponseHeadersPolicyConfig.Comment as string;
+    expect(comment.length).toBeLessThanOrEqual(128);
+  });
+
   test('CFN function is wired to viewer-response on the default behavior', () => {
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({

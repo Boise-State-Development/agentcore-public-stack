@@ -210,7 +210,10 @@ export class McpSandboxStack extends cdk.Stack {
       'McpSandboxResponseHeaders',
       {
         responseHeadersPolicyName: getResourceName(config, 'mcp-sandbox-headers'),
-        comment: 'Security headers (HSTS, Referrer-Policy, X-Content-Type-Options) for the MCP Apps sandbox proxy. CSP is composed per-request by the dynamic-CSP CloudFront Function.',
+        // AWS caps ResponseHeadersPolicy `Comment` at 128 chars (same as
+        // CloudFront::Function). Full rationale lives in the code comments
+        // above; this field is just the AWS-visible label.
+        comment: 'HSTS + Referrer-Policy + X-Content-Type-Options for MCP Apps sandbox proxy. CSP via dynamic CloudFront Function.',
         securityHeadersBehavior: {
           contentTypeOptions: { override: true },
           // Intentionally NOT setting frameOptions — `frame-ancestors`
