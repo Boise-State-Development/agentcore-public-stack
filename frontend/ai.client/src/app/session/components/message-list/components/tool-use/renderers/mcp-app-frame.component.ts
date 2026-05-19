@@ -22,6 +22,7 @@ import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
+import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import type { CapabilityKey } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
@@ -148,12 +149,17 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * value from our authenticated backend (SSM-sourced); the imperative
    * sandbox attribute + the proxy's per-resource CSP are the real
    * containment, same justification as the artifact panel.
+   *
+   * The `?csp=` query the proxy CFN reads is built from the resource's
+   * declared `_meta.ui.csp` (`buildProxyUrl`). Apps that declare nothing
+   * get the bare URL and the proxy's default CSP — no cache fragmentation
+   * for the no-declaration majority.
    */
   protected readonly proxyUrl = computed<string | null>(() => {
     const res = this.resource();
     if (!res || !res.sandboxOrigin) return null;
     if (!this.capabilitiesResolved()) return null;
-    return `${res.sandboxOrigin.replace(/\/$/, '')}/proxy.html`;
+    return buildProxyUrl(res.sandboxOrigin, res.csp);
   });
 
   /** Permissions-Policy `allow` for the outer frame (delegates to inner). */

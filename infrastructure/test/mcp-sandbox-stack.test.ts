@@ -2,7 +2,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import {
   McpSandboxStack,
   buildMcpSandboxFrameAncestors,
-  buildMcpSandboxProxyCsp,
+  loadMcpSandboxCspFunctionCode,
   MCP_SANDBOX_SUBDOMAIN_LABEL,
 } from '../lib/mcp-sandbox-stack';
 import { createMockConfig, createMockApp, mockEnv } from './helpers/mock-config';
@@ -66,27 +66,67 @@ describe('McpSandboxStack', () => {
     });
   });
 
-  test('ResponseHeadersPolicy CSP locks frame-ancestors to the SPA origin only', () => {
+  test('ResponseHeadersPolicy keeps non-CSP security headers but does NOT emit CSP (CSP is now per-request via the CloudFront Function)', () => {
+    // CSP via the response-headers-policy would be a SECOND `Content-
+    // Security-Policy` header alongside the dynamic one from the CFN;
+    // browsers intersect them, which would silently re-deny anything an
+    // App legitimately declared in `_meta.ui.csp`. So the policy carries
+    // only the headers that don't vary per resource.
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
         SecurityHeadersConfig: Match.objectLike({
-          ContentSecurityPolicy: Match.objectLike({
-            Override: true,
-            ContentSecurityPolicy: Match.stringLikeRegexp(
-              'frame-ancestors https://test\\.example\\.com http://localhost:4200',
-            ),
-          }),
           StrictTransportSecurity: Match.objectLike({ Override: true }),
+          ReferrerPolicy: Match.objectLike({ Override: true }),
+          ContentTypeOptions: Match.objectLike({ Override: true }),
         }),
       }),
     });
+
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const policy = Object.values(policies)[0] as any;
+    const security = policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
+    expect(security.ContentSecurityPolicy).toBeUndefined();
   });
 
-  test('does NOT set legacy X-Frame-Options (frame-ancestors is the control)', () => {
+  test('does NOT set legacy X-Frame-Options (frame-ancestors via the CSP function is the control)', () => {
     const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
     const policy = Object.values(policies)[0] as any;
     const security = policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig;
     expect(security.FrameOptions).toBeUndefined();
+  });
+
+  test('creates exactly one CloudFront Function for dynamic CSP, on the JS_2_0 runtime', () => {
+    template.resourceCountIs('AWS::CloudFront::Function', 1);
+    template.hasResourceProperties('AWS::CloudFront::Function', {
+      FunctionConfig: Match.objectLike({
+        Runtime: 'cloudfront-js-2.0',
+      }),
+    });
+  });
+
+  test('CFN function body has the frame-ancestors placeholder substituted with the real source list', () => {
+    const fns = template.findResources('AWS::CloudFront::Function');
+    const fn = Object.values(fns)[0] as any;
+    const code = fn.Properties.FunctionCode as string;
+    expect(code).toContain('https://test.example.com http://localhost:4200');
+    // The substitutable JS literal must be gone; the bare token still
+    // appears in a top-of-file comment and that's intentional.
+    expect(code).not.toContain("'__INJECT_FRAME_ANCESTORS__'");
+  });
+
+  test('CFN function is wired to viewer-response on the default behavior', () => {
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        DefaultCacheBehavior: Match.objectLike({
+          FunctionAssociations: Match.arrayWith([
+            Match.objectLike({
+              EventType: 'viewer-response',
+              FunctionARN: Match.anyValue(),
+            }),
+          ]),
+        }),
+      }),
+    });
   });
 
   test('bakes the shell in via a BucketDeployment with CloudFront invalidation', () => {
@@ -107,7 +147,7 @@ describe('McpSandboxStack', () => {
     template.resourceCountIs('AWS::Route53::RecordSet', 0);
   });
 
-  test('domain-less config denies all framing (frame-ancestors none)', () => {
+  test('domain-less config bakes "frame-ancestors none" into the CSP function code', () => {
     const config = createMockConfig({
       domainName: undefined,
       mcpSandbox: { enabled: true, extraFrameAncestors: [] },
@@ -118,15 +158,13 @@ describe('McpSandboxStack', () => {
       env: mockEnv(config),
     });
     const t = Template.fromStack(stack);
-    t.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
-      ResponseHeadersPolicyConfig: Match.objectLike({
-        SecurityHeadersConfig: Match.objectLike({
-          ContentSecurityPolicy: Match.objectLike({
-            ContentSecurityPolicy: Match.stringLikeRegexp("frame-ancestors 'none'"),
-          }),
-        }),
-      }),
-    });
+    const fns = t.findResources('AWS::CloudFront::Function');
+    const fn = Object.values(fns)[0] as any;
+    const code = fn.Properties.FunctionCode as string;
+    // JSON.stringify wraps single-quoted CSP keywords in double quotes —
+    // the resulting JS literal is `"'none'"` (no escaping needed since
+    // JSON.stringify never emits backslashed single quotes).
+    expect(code).toContain('var FRAME_ANCESTORS = "\'none\'";');
   });
 });
 
@@ -160,33 +198,39 @@ describe('buildMcpSandboxFrameAncestors', () => {
   });
 });
 
-describe('buildMcpSandboxProxyCsp', () => {
-  test('carries the given frame-ancestors + non-overridable hardening', () => {
-    const csp = buildMcpSandboxProxyCsp('https://alpha.example.com');
-    expect(csp).toContain('frame-ancestors https://alpha.example.com');
-    // Hardening directives that proxy.html shouldn't ever want to relax,
-    // even though most of the rest is intentionally broad.
-    expect(csp).toContain("base-uri 'none'");
-    expect(csp).toContain("form-action 'none'");
-    expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("frame-src 'none'");
-    expect(csp).toContain("connect-src 'self'");
+describe('loadMcpSandboxCspFunctionCode', () => {
+  test('substitutes the FRAME_ANCESTORS placeholder with the real source list (as a JSON-escaped JS literal)', () => {
+    const code = loadMcpSandboxCspFunctionCode('https://alpha.example.com');
+    expect(code).toContain('var FRAME_ANCESTORS = "https://alpha.example.com";');
+    // The replaceable quoted literal must be gone; the bare token may
+    // still appear in a comment, which is fine.
+    expect(code).not.toContain("'__INJECT_FRAME_ANCESTORS__'");
   });
 
-  test('matches the ext-apps reference defaults so typical bundled Apps run', () => {
-    // The inner App iframe inherits this CSP (CSP3 local-scheme rule applies
-    // to srcdoc / blob: / document.write()-populated about:blank alike). The
-    // modelcontextprotocol/ext-apps basic-host reference ships its outer CSP
-    // with these tokens baked in for the same reason — bundled-App inline
-    // scripts/styles/eval need to actually run. See mcp-sandbox-stack.ts
-    // docstring for the security rationale.
-    const csp = buildMcpSandboxProxyCsp("'none'");
-    expect(csp).toContain(
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+  test('preserves the runtime helpers (sanitize / build / parse / handler)', () => {
+    const code = loadMcpSandboxCspFunctionCode("'none'");
+    expect(code).toContain('function sanitizeCspDomains(');
+    expect(code).toContain('function buildCspHeader(');
+    expect(code).toContain('function parseCspParam(');
+    expect(code).toContain('function handler(');
+  });
+
+  test('handles the deny-all frame-ancestors value without producing invalid JS', () => {
+    const code = loadMcpSandboxCspFunctionCode("'none'");
+    // JSON.stringify yields `"'none'"` (double-quoted, inner single
+    // quotes unescaped) — a valid JS string literal that decodes back to
+    // the CSP source `'none'` at runtime. Without this escaping the
+    // naive replace would produce `''none''`, a syntax error.
+    expect(code).toContain('var FRAME_ANCESTORS = "\'none\'";');
+  });
+
+  test('handles multiple space-separated source list entries (the common production shape)', () => {
+    const code = loadMcpSandboxCspFunctionCode(
+      'https://alpha.example.com http://localhost:4200',
     );
-    expect(csp).toContain("style-src 'self' 'unsafe-inline' blob: data:");
-    expect(csp).toContain("worker-src 'self' blob:");
-    expect(csp).toContain("default-src 'self' 'unsafe-inline'");
+    expect(code).toContain(
+      'var FRAME_ANCESTORS = "https://alpha.example.com http://localhost:4200";',
+    );
   });
 });
 

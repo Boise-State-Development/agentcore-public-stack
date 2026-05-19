@@ -8,6 +8,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   AppConfig,
@@ -16,6 +17,46 @@ import {
   getRemovalPolicy,
   getResourceName,
 } from './config';
+
+/**
+ * The full JS string literal in `assets/mcp-sandbox/csp-function.js` that
+ * we substitute at synth time. Matching the *quoted* literal (not the
+ * inner identifier) lets us replace it with `JSON.stringify(value)`,
+ * which handles quote-escaping correctly for any `frame-ancestors` source
+ * list — including `'none'` (which would otherwise produce `''none''`,
+ * a JS syntax error).
+ *
+ * The CFN unit tests don't depend on the substitution: they pass
+ * `frameAncestors` directly to `buildCspHeader`, so the unsubstituted
+ * source file is valid JS for `require()` to load.
+ */
+const FRAME_ANCESTORS_PLACEHOLDER_LITERAL = "'__INJECT_FRAME_ANCESTORS__'";
+
+/**
+ * Load the dynamic-CSP CloudFront Function source and inject the real
+ * `frame-ancestors` source list as a properly-escaped JS string literal.
+ * Asserts the placeholder is present exactly once so a future refactor
+ * that loses the marker fails loudly at synth, not at edge runtime.
+ *
+ * Exported for unit testing.
+ */
+export function loadMcpSandboxCspFunctionCode(frameAncestors: string): string {
+  const filePath = path.resolve(
+    __dirname,
+    '..',
+    'assets',
+    'mcp-sandbox',
+    'csp-function.js',
+  );
+  const source = fs.readFileSync(filePath, 'utf8');
+  const occurrences = source.split(FRAME_ANCESTORS_PLACEHOLDER_LITERAL).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      `Expected exactly one occurrence of ${FRAME_ANCESTORS_PLACEHOLDER_LITERAL} in csp-function.js, found ${occurrences}. Did the marker get renamed or duplicated?`,
+    );
+  }
+  return source.replace(FRAME_ANCESTORS_PLACEHOLDER_LITERAL, JSON.stringify(frameAncestors));
+}
 
 export interface McpSandboxStackProps extends cdk.StackProps {
   config: AppConfig;
@@ -63,74 +104,6 @@ export function buildMcpSandboxFrameAncestors(
     }
   }
   return sources.length > 0 ? sources.join(' ') : `'none'`;
-}
-
-/**
- * Assemble the Content-Security-Policy served with `proxy.html`.
- *
- * `frame-ancestors` is the security-critical directive (who may embed the
- * proxy — the SPA only). The rest is deny-by-default hardening for the inert
- * PR #1 shell:
- *
- *   - `script-src 'self'`  — proxy.js only; no inline script, no
- *     `'unsafe-inline'` (proxy.html ships zero inline script/style on
- *     purpose so this stays clean).
- *   - This CSP is **inherited by the inner App iframe**. All three plausible
- *     mounts (srcdoc, blob:, document.write()) leave the inner document at
- *     a "local scheme" under CSP3 §"Initialize a Document's CSP list", so it
- *     inherits the embedder's HTTP CSP. That is why this policy isn't just
- *     the proxy shell's own bound — it's the *superset bound* on every App
- *     we render. The ext-apps reference implementation
- *     (`modelcontextprotocol/ext-apps/examples/basic-host/src/sandbox.ts`)
- *     treats this as a feature, not a bug ("CSP is enforced via HTTP
- *     headers ... tamper-proof unlike meta tags") and ships its outer CSP
- *     with `'unsafe-inline' 'unsafe-eval' blob: data:` baked in so typical
- *     bundled Apps can actually run. We mirror that default below.
- *   - proxy.html itself ships **zero inline content** (proxy.js is external),
- *     so `'unsafe-inline'`/`'unsafe-eval'` on the shell can't be exploited
- *     unless an attacker can already inject HTML into the static asset — a
- *     much larger compromise than this directive's scope. The real
- *     containment boundary for untrusted App HTML remains the inner iframe's
- *     `sandbox` attribute (cross-origin to the SPA, App declares the rest).
- *   - The reference implementation supports tighter per-resource CSPs via a
- *     dynamic origin that reads `?csp=` and stamps headers per-request. We
- *     do not (CloudFront static asset, one CSP for all resources). Apps
- *     that need declared `connectDomains`/`resourceDomains`/`frameDomains`
- *     can't get them honored here — that's a follow-up if/when we onboard
- *     an App that needs it.
- *
- * Exported for direct unit testing.
- */
-export function buildMcpSandboxProxyCsp(frameAncestors: string): string {
-  return [
-    // 'self' + 'unsafe-inline' for everything default-routed; matches the
-    // ext-apps reference's default-src and lets the inner App's misc fetches
-    // resolve when not explicitly directive-typed.
-    `default-src 'self' 'unsafe-inline'`,
-    // Scripts: same-origin + inline + eval (many bundled apps need eval) +
-    // blob: (dynamic workers, Web Workers from blob URLs) + data:.
-    `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:`,
-    // Styles: same-origin + inline + blob:/data:.
-    `style-src 'self' 'unsafe-inline' blob: data:`,
-    // Static-resource directives — blob:/data: are common for bundled assets.
-    `img-src 'self' data: blob:`,
-    `font-src 'self' data: blob:`,
-    `media-src 'self' data: blob:`,
-    // Network: same-origin only. Apps that need external API access need the
-    // dynamic-CSP follow-up; we explicitly do not allow `https:` here so a
-    // dogfood App can't silently exfiltrate to arbitrary origins.
-    `connect-src 'self'`,
-    // Workers: same-origin + blob: for dynamically-constructed worker scripts
-    // (CesiumJS / Three.js / etc. rely on this).
-    `worker-src 'self' blob:`,
-    // Nested iframes inside the App: blocked. Most dogfood Apps are leaf UIs;
-    // Apps needing nested frames need the dynamic-CSP follow-up.
-    `frame-src 'none'`,
-    `frame-ancestors ${frameAncestors}`,
-    `base-uri 'none'`,
-    `form-action 'none'`,
-    `object-src 'none'`,
-  ].join('; ');
 }
 
 /**
@@ -194,7 +167,6 @@ export class McpSandboxStack extends cdk.Stack {
       domainName,
       config.mcpSandbox.extraFrameAncestors,
     );
-    const proxyCsp = buildMcpSandboxProxyCsp(frameAncestors);
 
     // ============================================================
     // S3 — holds the static proxy shell (private, OAC-only)
@@ -213,24 +185,38 @@ export class McpSandboxStack extends cdk.Stack {
     });
 
     // ============================================================
-    // CloudFront — terminates TLS, stamps the CSP
+    // CloudFront — terminates TLS, runs the dynamic-CSP function
     // ============================================================
+    // The CSP itself is composed PER-REQUEST by a CloudFront Function on
+    // viewer-response (see `assets/mcp-sandbox/csp-function.js`). The
+    // function reads the `?csp=` query param the SPA appends when framing
+    // proxy.html — the JSON shape matches the spec's `McpUiResourceCsp`
+    // (`_meta.ui.csp`) and the function honors declared
+    // `connectDomains`/`resourceDomains`/`frameDomains`/`baseUriDomains`.
+    // Apps that omit `_meta.ui.csp` fall through to the same reference-
+    // matching default the previous static CSP shipped, so the 22/25
+    // example servers that worked before continue to work.
+    //
+    // The ResponseHeadersPolicy is left intentionally CSP-less. Doing
+    // both (static via RHP + dynamic via function) would mean every
+    // response carries two `Content-Security-Policy` headers; browsers
+    // intersect them, which would silently re-deny anything an App
+    // legitimately declared. The CFN is the single source of truth for
+    // the CSP directive; other security headers (HSTS, Referrer-Policy,
+    // X-Content-Type-Options) remain on the RHP since they don't vary
+    // per resource.
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
       this,
       'McpSandboxResponseHeaders',
       {
         responseHeadersPolicyName: getResourceName(config, 'mcp-sandbox-headers'),
-        comment: 'CSP (frame-ancestors = SPA origin only) + security headers for the MCP Apps sandbox proxy',
+        comment: 'Security headers (HSTS, Referrer-Policy, X-Content-Type-Options) for the MCP Apps sandbox proxy. CSP is composed per-request by the dynamic-CSP CloudFront Function.',
         securityHeadersBehavior: {
-          contentSecurityPolicy: {
-            contentSecurityPolicy: proxyCsp,
-            override: true,
-          },
           contentTypeOptions: { override: true },
-          // Intentionally NOT setting frameOptions — `frame-ancestors` in the
-          // CSP above is the modern, cross-browser-enforced equivalent and is
-          // the control this PR is about. Setting X-Frame-Options too would
-          // only add a legacy, less expressive duplicate.
+          // Intentionally NOT setting frameOptions — `frame-ancestors`
+          // in the dynamic CSP is the modern equivalent and the control
+          // we care about. Setting X-Frame-Options too would only add a
+          // legacy, less expressive duplicate.
           referrerPolicy: {
             referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER,
             override: true,
@@ -243,6 +229,19 @@ export class McpSandboxStack extends cdk.Stack {
         },
       },
     );
+
+    // Dynamic-CSP CloudFront Function. The source ships the FRAME_ANCESTORS
+    // placeholder string; we substitute it for the real source list here
+    // so unit tests can run the file as-is. JS_2_0 runtime is required —
+    // the function uses ES2017 features (regex literals, template
+    // strings, JSON.parse) that the legacy JS_1_0 runtime doesn't accept.
+    const cspFunctionCode = loadMcpSandboxCspFunctionCode(frameAncestors);
+    const cspFunction = new cloudfront.Function(this, 'McpSandboxCspFunction', {
+      functionName: getResourceName(config, 'mcp-sandbox-csp'),
+      comment: 'Composes the per-resource Content-Security-Policy header from the ?csp= query parameter (matching modelcontextprotocol/ext-apps basic-host/serve.ts).',
+      runtime: cloudfront.FunctionRuntime.JS_2_0,
+      code: cloudfront.FunctionCode.fromInline(cspFunctionCode),
+    });
 
     // Static shell: a short cache is fine and BucketDeployment invalidates on
     // every deploy so shell changes propagate immediately. No cookies / query
@@ -272,6 +271,17 @@ export class McpSandboxStack extends cdk.Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
         compress: true,
+        // The CSP function runs on viewer-response — including cache hits —
+        // so the CSP is composed fresh from the request's `?csp=` query
+        // every time. That lets us keep the cache key simple (no `?csp=`
+        // included) while still emitting per-resource CSPs: one cached
+        // body, dynamic header.
+        functionAssociations: [
+          {
+            function: cspFunction,
+            eventType: cloudfront.FunctionEventType.VIEWER_RESPONSE,
+          },
+        ],
       },
       // Cheapest price class — the shell is tiny and not latency-critical.
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
