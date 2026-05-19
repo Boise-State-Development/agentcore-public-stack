@@ -29,6 +29,7 @@ from agents.main_agent.integrations.mcp_apps import (
 from agents.main_agent.streaming.stream_coordinator import StreamCoordinator
 
 _ENV_FLAG = "AGENTCORE_MCP_APPS_HOST_ENABLED"
+_ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
 
 
 @pytest.fixture
@@ -40,6 +41,7 @@ def coord() -> StreamCoordinator:
 def catalog_clean(monkeypatch):
     get_ui_tool_catalog().clear()
     monkeypatch.delenv(_ENV_FLAG, raising=False)
+    monkeypatch.delenv(_ENV_SANDBOX_ORIGIN, raising=False)
     try:
         yield
     finally:
@@ -75,7 +77,7 @@ def _html_result(text="<h1>hi</h1>"):
                 _meta={
                     MCP_APPS_UI_EXTENSION_KEY: {
                         "csp": {"connectDomains": ["https://api.test"]},
-                        "permissions": ["clipboard-write"],
+                        "permissions": {"clipboardWrite": {}},
                     }
                 },
             )
@@ -131,7 +133,8 @@ async def test_emits_ui_resource_with_inline_html(
         "html": "<main>app</main>",
         "mimeType": MCP_APPS_UI_MIME_TYPE,
         "csp": {"connectDomains": ["https://api.test"]},
-        "permissions": ["clipboard-write"],
+        "permissions": {"clipboardWrite": {}},
+        "sandboxOrigin": "",
     }
 
 

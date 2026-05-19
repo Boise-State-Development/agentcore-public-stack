@@ -63,6 +63,20 @@ def is_mcp_apps_host_enabled() -> bool:
     return raw.strip().lower() == "true"
 
 
+def mcp_apps_sandbox_origin() -> str:
+    """Origin of the sandbox-proxy the SPA frames an MCP App in.
+
+    Read on every call (not cached), same as the host flag. Empty string
+    until the PR #1 mcp-sandbox stack is deployed and the deploy pipeline
+    wires its SSM origin into the env — benign because the whole surface is
+    inert behind the host flag. Surfaced to the SPA on the `ui_resource`
+    event so the frontend needs no separate config fetch.
+    """
+    return os.environ.get(
+        EnvVars.MCP_APPS_SANDBOX_ORIGIN, Defaults.MCP_APPS_SANDBOX_ORIGIN
+    ).strip()
+
+
 # =============================================================================
 # In-process UI tool catalog
 # =============================================================================
@@ -247,7 +261,7 @@ def _extract_html_content(result: Any) -> Tuple[Optional[str], str]:
 
 def _extract_csp_permissions(
     result: Any, ui_metadata: ToolUIMetadata
-) -> Tuple[Dict[str, Any], List[Any]]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Resolve `csp` / `permissions` for the `ui_resource` event.
 
     The spec declares these on the resource's `_meta.ui` (per-content first,
@@ -255,6 +269,12 @@ def _extract_csp_permissions(
     PR #2 retained verbatim in `ToolUIMetadata.raw` so a server that declares
     them only on `tools/list` still works. PR #3 passes them through opaquely;
     building the actual CSP (deny-by-default) is the frontend's job (PR #4).
+
+    Both are objects per SEP-1865: `csp` is `McpUiResourceCsp`
+    (`{connectDomains, resourceDomains, frameDomains, baseUriDomains}`) and
+    `permissions` is `{camera?, microphone?, geolocation?, clipboardWrite?}`
+    (each an empty object when requested) — NOT a list. The sandbox proxy
+    maps the permission keys onto the inner iframe's `allow` attribute.
     """
     sources: List[Dict[str, Any]] = []
     for item in getattr(result, "contents", None) or []:
@@ -267,11 +287,11 @@ def _extract_csp_permissions(
     sources.append(ui_metadata.raw or {})
 
     csp: Dict[str, Any] = {}
-    permissions: List[Any] = []
+    permissions: Dict[str, Any] = {}
     for block in sources:
         if not csp and isinstance(block.get("csp"), dict):
             csp = block["csp"]
-        if not permissions and isinstance(block.get("permissions"), list):
+        if not permissions and isinstance(block.get("permissions"), dict):
             permissions = block["permissions"]
     return csp, permissions
 
@@ -342,6 +362,10 @@ def fetch_ui_resource(
         "mimeType": mime_type or MCP_APPS_UI_MIME_TYPE,
         "csp": csp,
         "permissions": permissions,
+        # Origin the SPA frames the sandbox-proxy at (PR #1's proxy.html).
+        # Carried on the event so the frontend needs no separate config
+        # fetch. Empty until the mcp-sandbox stack is deployed + wired.
+        "sandboxOrigin": mcp_apps_sandbox_origin(),
     }
 
 

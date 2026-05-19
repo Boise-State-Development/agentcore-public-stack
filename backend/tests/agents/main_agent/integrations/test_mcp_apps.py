@@ -41,6 +41,7 @@ from agents.main_agent.integrations.gateway_mcp_client import FilteredMCPClient
 from apis.shared.tools.models import DEFAULT_TOOL_VISIBILITY, ToolUIMetadata
 
 _ENV_FLAG = "AGENTCORE_MCP_APPS_HOST_ENABLED"
+_ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
 
 
 @pytest.fixture
@@ -49,6 +50,7 @@ def mcp_apps_clean(monkeypatch):
     get_ui_tool_catalog().clear()
     original_session = strands_mcp_client_mod.ClientSession
     monkeypatch.delenv(_ENV_FLAG, raising=False)
+    monkeypatch.delenv(_ENV_SANDBOX_ORIGIN, raising=False)
     try:
         yield
     finally:
@@ -354,7 +356,8 @@ class TestFetchUIResource:
             result=_html_resource(
                 ui_meta={
                     "csp": {"connectDomains": ["https://api.test"]},
-                    "permissions": ["clipboard-write"],
+                    # SEP-1865: permissions is an OBJECT, not a list.
+                    "permissions": {"clipboardWrite": {}},
                 }
             )
         )
@@ -376,8 +379,24 @@ class TestFetchUIResource:
             "html": "<h1>widget</h1>",
             "mimeType": MCP_APPS_UI_MIME_TYPE,
             "csp": {"connectDomains": ["https://api.test"]},
-            "permissions": ["clipboard-write"],
+            "permissions": {"clipboardWrite": {}},
+            # Empty when the mcp-sandbox stack origin isn't wired into env.
+            "sandboxOrigin": "",
         }
+
+    def test_carries_sandbox_origin_from_env(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        client = _FakeMCPClient(result=_html_resource())
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+        monkeypatch.setenv(
+            _ENV_SANDBOX_ORIGIN, "https://mcp-sandbox.example.com"
+        )
+
+        payload = fetch_ui_resource("widget", "tu-1")
+        assert payload["sandboxOrigin"] == "https://mcp-sandbox.example.com"
 
     def test_inert_when_flag_disabled(self, mcp_apps_clean, monkeypatch):
         client = _FakeMCPClient(result=_html_resource())
@@ -444,7 +463,7 @@ class TestFetchUIResource:
             ui={
                 "resourceUri": "ui://srv/widget",
                 "csp": {"frameDomains": ["https://embed.test"]},
-                "permissions": ["geolocation"],
+                "permissions": {"geolocation": {}},
             },
             client=client,
         )
@@ -452,7 +471,7 @@ class TestFetchUIResource:
         payload = fetch_ui_resource("widget", "tu-9")
         assert payload is not None
         assert payload["csp"] == {"frameDomains": ["https://embed.test"]}
-        assert payload["permissions"] == ["geolocation"]
+        assert payload["permissions"] == {"geolocation": {}}
 
     def test_prefers_mcp_app_mime_when_multiple_text_contents(
         self, mcp_apps_clean, monkeypatch

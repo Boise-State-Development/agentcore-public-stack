@@ -47,7 +47,7 @@ npx cdk deploy --all
 | `content_block_start/delta/stop` | Streaming content |
 | `message_stop` | End of message |
 | `tool_use` / `tool_result` | Tool invocation and result |
-| `ui_resource` | MCP App UI for a tool result (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions}`, emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. HTML fetched server-side via `resources/read` and inlined. Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default false) |
+| `ui_resource` | MCP App UI for a tool result (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}`, emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. HTML fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty until the mcp-sandbox stack is deployed). Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default false) |
 | `stream_error` | Conversational error |
 | `oauth_required` | External MCP tool needs user consent — payload `{providerId, authorizationUrl}`, one event per provider emitted after `message_stop` |
 | `compaction` | Backend rolled older turns into a summary on this turn — payload `{previousCheckpoint, newCheckpoint, summarizedTurns, inputTokens}`, emitted after the final `metadata` event so the badge updates first, before `done` |
