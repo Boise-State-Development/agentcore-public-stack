@@ -7,10 +7,13 @@ import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
 import { OAuthConsentPromptComponent } from './oauth-consent-prompt/oauth-consent-prompt.component';
+import { McpAppFrameComponent } from './tool-use/renderers/mcp-app-frame.component';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
 } from '../../../../services/oauth-consent/oauth-consent.service';
+import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
 
 // ──────────────────────────────────────────────────────────────
 // 🔧 MOCK FLAG — set to true to render 10 fake tool calls
@@ -108,6 +111,7 @@ interface DisplayBlock {
     | 'tool_group'
     | 'tool_use_minimized'
     | 'promoted_visual'
+    | 'mcp_app_frame'
     | 'reasoningContent'
     | 'oauth_required';
   data?: ContentBlock;
@@ -117,6 +121,8 @@ interface DisplayBlock {
   uiType?: string;
   payload?: unknown;
   toolUseId?: string;
+  // For MCP App frames (SEP-1865): the tool result re-shaped for the renderer.
+  mcpResult?: ToolResultData;
   // For inline OAuth consent prompts
   oauthRequest?: OAuthConsentRequest;
 }
@@ -131,6 +137,7 @@ interface DisplayBlock {
     StreamingTextComponent,
     InlineVisualComponent,
     OAuthConsentPromptComponent,
+    McpAppFrameComponent,
   ],
   template: `
     <div class="block-container">
@@ -192,6 +199,18 @@ interface DisplayBlock {
               <app-inline-visual
                 [uiType]="block.uiType!"
                 [payload]="block.payload"
+                [toolUseId]="block.toolUseId!"
+              />
+            </div>
+          }
+          @case ('mcp_app_frame') {
+            <div
+              class="message-block visual-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-mcp-app-frame
+                class="block w-full"
+                [result]="block.mcpResult!"
                 [toolUseId]="block.toolUseId!"
               />
             </div>
@@ -259,6 +278,7 @@ export class AssistantMessageComponent {
   isStreaming = input<boolean>(false);
 
   private consentService = inject(OAuthConsentService);
+  private mcpAppState = inject(McpAppStateService);
 
   /**
    * Transforms content blocks into display blocks.
@@ -321,9 +341,23 @@ export class AssistantMessageComponent {
       if ((block.type === 'toolUse' || block.type === 'tool_use') && block.toolUse) {
         const toolUse = block.toolUse as ToolUseData;
         const promotedVisual = this.extractPromotedVisual(toolUse);
+        // An MCP App tool (SEP-1865) renders its sandbox-proxy iframe inside
+        // <app-tool-use> via the resultRenderer computed there, so it must
+        // escape the collapsed tool_group exactly like a promoted visual.
+        // `extractPromotedVisual` only fires on the legacy in-result
+        // `ui_type`/`ui_display` marker; MCP Apps deliver UI via a separate
+        // `ui_resource` SSE event that arrives *after* `tool_result` and
+        // their tool result content carries no inline marker. Reading the
+        // signal here keeps `displayBlocks` reactive to a late-arriving
+        // `ui_resource` — the computed re-runs when McpAppStateService
+        // updates and the tool gets promoted retroactively (vs. staying
+        // folded into the group forever).
+        const hasMcpAppResource = this.mcpAppState.has(toolUse.toolUseId);
 
-        if (promotedVisual) {
-          // Promoted visuals break the tool group and render separately
+        if (promotedVisual || hasMcpAppResource) {
+          // Promoted visuals and MCP Apps both need their own first-class
+          // sibling block (the iframe is not "tool output", it's a primary
+          // UI surface); break the tool group here.
           flushToolGroup();
 
           result.push({
@@ -332,12 +366,22 @@ export class AssistantMessageComponent {
             toolUseId: toolUse.toolUseId
           });
 
-          result.push({
-            type: 'promoted_visual',
-            uiType: promotedVisual.uiType,
-            payload: promotedVisual.payload,
-            toolUseId: toolUse.toolUseId
-          });
+          if (promotedVisual) {
+            result.push({
+              type: 'promoted_visual',
+              uiType: promotedVisual.uiType,
+              payload: promotedVisual.payload,
+              toolUseId: toolUse.toolUseId
+            });
+          }
+
+          if (hasMcpAppResource) {
+            result.push({
+              type: 'mcp_app_frame',
+              toolUseId: toolUse.toolUseId,
+              mcpResult: this.toResultData(toolUse),
+            });
+          }
         } else {
           // Accumulate into the current tool group. A tool_use with no result
           // on a message that has a pending OAuth interrupt is the row that
@@ -374,6 +418,16 @@ export class AssistantMessageComponent {
 
     return result;
   });
+
+  /**
+   * Reshape a tool-use's `result` into the renderer's `ToolResultData`
+   * contract. Until the `tool_result` event arrives we pass an empty
+   * success stub — the renderer holds the iframe until the result comes
+   * in (and re-pushes it via the `refreshToolResult` effect).
+   */
+  private toResultData(toolUse: ToolUseData): ToolResultData {
+    return toolUse.result ?? { content: [], status: 'success' };
+  }
 
   /**
    * Extract promoted visual data from a tool use result.

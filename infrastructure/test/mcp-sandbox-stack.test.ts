@@ -165,7 +165,10 @@ describe('buildMcpSandboxProxyCsp', () => {
     const csp = buildMcpSandboxProxyCsp('https://alpha.example.com');
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'self'");
-    expect(csp).toContain("frame-src 'self'");
+    // Inner App iframe mounts from a blob: URL (not srcdoc) to escape the
+    // local-scheme CSP inheritance that would intersect the App's own CSP
+    // with proxy.html's strict outer policy. frame-src must permit blob:.
+    expect(csp).toContain("frame-src 'self' blob:");
     expect(csp).toContain('frame-ancestors https://alpha.example.com');
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("form-action 'none'");

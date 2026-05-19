@@ -150,20 +150,30 @@
     inner.setAttribute('referrerpolicy', 'no-referrer');
     inner.style.cssText =
       'border:0;width:100%;height:100%;display:block;background:#fff';
+    // Build the App document and hand it to the inner iframe as a blob URL.
+    // srcdoc / data: / about:blank are "local schemes" that inherit the
+    // embedder's HTTP CSP (CSP3 §"Initialize a Document's CSP list"); blob:
+    // is NOT, so the inner doc's effective CSP is exactly what composeCsp
+    // emits via the injected <meta> tag — no intersection with proxy.html's
+    // strict `script-src 'self'`. Null-origin is unaffected: it comes from
+    // `sandbox` without `allow-same-origin`, regardless of URL scheme. The
+    // per-frame nonce is still the real channel auth.
+    var blob = new Blob(
+      [withCsp(String(params.html || ''), composeCsp(params.csp))],
+      { type: 'text/html' }
+    );
+    var blobUrl = URL.createObjectURL(blob);
     inner.addEventListener('load', function () {
+      // Release the blob backing store as soon as the doc is loaded —
+      // keeping it would pin memory for the iframe's lifetime.
+      URL.revokeObjectURL(blobUrl);
       innerReady = true;
       var queued = pendingToInner.splice(0, pendingToInner.length);
       for (var i = 0; i < queued.length; i++) {
         postToInner(queued[i]);
       }
     });
-    // srcdoc keeps the document at an opaque ("null") origin — no
-    // allow-same-origin — so it cannot reach the mcp-sandbox origin's
-    // storage; the per-frame nonce is the real channel auth.
-    inner.setAttribute(
-      'srcdoc',
-      withCsp(String(params.html || ''), composeCsp(params.csp))
-    );
+    inner.src = blobUrl;
     document.body.appendChild(inner);
   }
 

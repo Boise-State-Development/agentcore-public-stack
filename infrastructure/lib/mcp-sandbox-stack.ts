@@ -75,14 +75,14 @@ export function buildMcpSandboxFrameAncestors(
  *   - `script-src 'self'`  — proxy.js only; no inline script, no
  *     `'unsafe-inline'` (proxy.html ships zero inline script/style on
  *     purpose so this stays clean).
- *   - `frame-src 'self'`   — permits the inner `srcdoc` content frame the
- *     shell creates. The strict PER-RESOURCE inner CSP composed from
- *     `_meta.ui.csp` is PR #4's job (and is browser-verifiable there, once
- *     real content actually loads); this outer policy is intentionally
- *     provisional until then. Nested-CSP / `frame-ancestors` interplay has
- *     no prior art in this stack — flagged as expected debugging in the
- *     scoping doc; deferring the inner-frame tuning to the PR where it can
- *     be exercised in a browser is the safe sequencing.
+ *   - `frame-src 'self' blob:` — permits the inner content frame the shell
+ *     creates. The shell mounts that frame from a `blob:` URL (NOT srcdoc):
+ *     blob URLs are not "local schemes" under CSP3, so the inner App
+ *     document's effective CSP is exactly what proxy.js composes from
+ *     `_meta.ui.csp`, with no inheritance/intersection from this outer
+ *     policy. Modern browsers match blob: against `'self'` when the blob
+ *     was created same-origin, but `blob:` is listed explicitly for
+ *     durability across engines.
  *   - everything else denied via `default-src 'none'`.
  *
  * Exported for direct unit testing.
@@ -91,7 +91,7 @@ export function buildMcpSandboxProxyCsp(frameAncestors: string): string {
   return [
     `default-src 'none'`,
     `script-src 'self'`,
-    `frame-src 'self'`,
+    `frame-src 'self' blob:`,
     `frame-ancestors ${frameAncestors}`,
     `base-uri 'none'`,
     `form-action 'none'`,

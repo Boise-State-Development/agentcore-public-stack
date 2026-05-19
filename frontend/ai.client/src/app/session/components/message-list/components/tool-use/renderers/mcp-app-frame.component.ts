@@ -11,7 +11,6 @@ import {
   viewChild,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
-import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import type {
   ToolResultData,
   ToolResultRenderer,
@@ -23,6 +22,7 @@ import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
+import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import type { CapabilityKey } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
 import { SessionService } from '../../../../../services/session/session.service';
@@ -47,25 +47,19 @@ import { SessionService } from '../../../../../services/session/session.service'
 @Component({
   selector: 'app-mcp-app-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [McpAppConsentPromptComponent],
   styles: ':host { display: block; }',
   template: `
-    @if (safeProxyUrl(); as url) {
-      <div
-        class="overflow-hidden rounded-sm border border-gray-300 dark:border-gray-600 bg-white"
-      >
-        <iframe
-          #frame
-          [src]="url"
-          [style.height.px]="frameHeight()"
-          [attr.allow]="allowAttr()"
-          class="block w-full border-0 bg-white"
-          title="MCP App"
-          sandbox="allow-scripts allow-same-origin"
-          referrerpolicy="no-referrer"
-          loading="lazy"
-          (load)="onProxyLoad()"
-        ></iframe>
+    @if (currentPrompt(); as prompt) {
+      <div class="mb-2 flex justify-start">
+        <app-mcp-app-consent-prompt [prompt]="prompt" />
       </div>
+    }
+    @if (proxyUrl(); as url) {
+      <div
+        #host
+        class="overflow-hidden rounded-sm border border-gray-300 dark:border-gray-600 bg-white"
+      ></div>
     }
   `,
 })
@@ -84,12 +78,13 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   private readonly conversation = inject(SessionService);
   private readonly streamParser = inject(StreamParserService);
   private readonly theme = inject(ThemeService);
-  private readonly sanitizer = inject(DomSanitizer);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly win = inject(DOCUMENT).defaultView;
+  private readonly doc = inject(DOCUMENT);
+  private readonly win = this.doc.defaultView;
 
-  private readonly frameRef =
-    viewChild<ElementRef<HTMLIFrameElement>>('frame');
+  private readonly hostRef =
+    viewChild<ElementRef<HTMLDivElement>>('host');
+  private iframeEl: HTMLIFrameElement | null = null;
 
   /** Initial height; the App drives it via `ui/notifications/size-changed`. */
   protected readonly frameHeight = signal(360);
@@ -125,6 +120,16 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   private readonly capabilityGrant = signal<boolean | null>(null);
   private capabilityAsked = false;
 
+  /** Id of this frame's currently-open consent prompt (capability ask or
+   *  open-link), used to render it inline above the iframe instead of in
+   *  an unanchored message-list strip. */
+  private readonly openPromptId = signal<string | null>(null);
+  protected readonly currentPrompt = computed(() => {
+    const id = this.openPromptId();
+    if (!id) return null;
+    return this.mcpAppConsent.pending().find((p) => p.id === id) ?? null;
+  });
+
   /** True once requested capabilities are decided (or none were asked). */
   private readonly capabilitiesResolved = computed(
     () => this.requestedCaps().length === 0 || this.capabilityGrant() !== null,
@@ -137,18 +142,18 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return this.capabilityGrant() ? declared : {};
   });
 
-  protected readonly safeProxyUrl = computed<SafeResourceUrl | null>(() => {
+  /**
+   * Plain string URL the iframe `src` is set to. Stays null until consent
+   * resolves so the @if-gated host div doesn't appear. Trusted single
+   * value from our authenticated backend (SSM-sourced); the imperative
+   * sandbox attribute + the proxy's per-resource CSP are the real
+   * containment, same justification as the artifact panel.
+   */
+  protected readonly proxyUrl = computed<string | null>(() => {
     const res = this.resource();
     if (!res || !res.sandboxOrigin) return null;
-    // Hold the frame until the user has answered the capability prompt —
-    // building it later would race the proxy's sandbox-resource-ready.
     if (!this.capabilitiesResolved()) return null;
-    // Trusted single value from our authenticated backend (SSM-sourced);
-    // the sandbox attribute + the proxy's per-resource CSP are the real
-    // containment, same justification as the artifact panel.
-    return this.sanitizer.bypassSecurityTrustResourceUrl(
-      `${res.sandboxOrigin.replace(/\/$/, '')}/proxy.html`,
-    );
+    return `${res.sandboxOrigin.replace(/\/$/, '')}/proxy.html`;
   });
 
   /** Permissions-Policy `allow` for the outer frame (delegates to inner). */
@@ -179,15 +184,60 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       const caps = this.requestedCaps();
       if (caps.length === 0 || this.capabilityAsked) return;
       this.capabilityAsked = true;
-      this.mcpAppConsent
-        .request({ kind: 'capabilities', capabilities: caps })
-        .then((granted) => this.capabilityGrant.set(granted))
-        .catch(() => this.capabilityGrant.set(false));
+      const { id, granted } = this.mcpAppConsent.request({
+        kind: 'capabilities',
+        capabilities: caps,
+      });
+      this.openPromptId.set(id);
+      granted
+        .then((g) => this.capabilityGrant.set(g))
+        .catch(() => this.capabilityGrant.set(false))
+        .finally(() => this.openPromptId.set(null));
+    });
+    // Imperatively create the iframe once the host div mounts and consent
+    // is resolved. Angular 21 forbids dynamic `[attr.allow]` on <iframe>
+    // (NG0910), so we build the element by hand with all attributes set
+    // before src — the browser only consults `allow` at load-start.
+    effect(() => {
+      const host = this.hostRef();
+      const url = this.proxyUrl();
+      if (!host || !url) {
+        if (this.iframeEl) {
+          this.iframeEl.remove();
+          this.iframeEl = null;
+        }
+        return;
+      }
+      if (this.iframeEl) return;
+      const iframe = this.doc.createElement('iframe');
+      iframe.setAttribute('title', 'MCP App');
+      iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+      iframe.setAttribute('referrerpolicy', 'no-referrer');
+      iframe.setAttribute('loading', 'lazy');
+      const allow = this.allowAttr();
+      if (allow) iframe.setAttribute('allow', allow);
+      iframe.className = 'block w-full border-0 bg-white';
+      iframe.style.height = `${this.frameHeight()}px`;
+      // Append BEFORE setting src so contentWindow exists, then start the
+      // bridge so the host listener is registered before the proxy script
+      // posts its `sandbox-proxy-ready` notification. Doing this in the
+      // (load) callback races: the proxy fires ready as soon as its IIFE
+      // runs, which is before the host's load event handler dispatches —
+      // miss that and the inner App iframe is never mounted (blank frame).
+      host.nativeElement.appendChild(iframe);
+      this.iframeEl = iframe;
+      this.startBridge();
+      iframe.src = url;
+    });
+    // Keep the iframe height in sync as the App reports size changes.
+    effect(() => {
+      const h = this.frameHeight();
+      if (this.iframeEl) this.iframeEl.style.height = `${h}px`;
     });
     this.destroyRef.onDestroy(() => this.bridge?.dispose('component-destroyed'));
   }
 
-  protected onProxyLoad(): void {
+  private startBridge(): void {
     const res = this.resource();
     if (!res || this.bridge || !this.win) return;
     // Hand the bridge a resource whose permissions are already narrowed to
@@ -197,7 +247,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     const effectiveRes = { ...res, permissions: this.effectivePermissions() };
     this.bridge = new McpAppBridge({
       hostWindow: this.win,
-      getProxyWindow: () => this.frameRef()?.nativeElement.contentWindow ?? null,
+      getProxyWindow: () => this.iframeEl?.contentWindow ?? null,
       sandboxOrigin: res.sandboxOrigin.replace(/\/$/, ''),
       resource: effectiveRes,
       nonce: this.nonce,
@@ -224,7 +274,11 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         ),
       updateModelContext: (payload) =>
         this.mcpAppMessage.updateModelContext(res.resourceUri, payload),
-      requestConsent: (req) => this.mcpAppConsent.request(req),
+      requestConsent: (req) => {
+        const { id, granted } = this.mcpAppConsent.request(req);
+        this.openPromptId.set(id);
+        return granted.finally(() => this.openPromptId.set(null));
+      },
     });
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));

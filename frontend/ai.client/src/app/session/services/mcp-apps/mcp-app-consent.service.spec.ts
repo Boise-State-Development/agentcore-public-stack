@@ -9,23 +9,27 @@ describe('McpAppConsentService', () => {
   });
 
   it('surfaces a pending prompt and resolves it on answer(true)', async () => {
-    const p = svc.request({ kind: 'open-link', url: 'https://x.test' });
+    const { id, granted } = svc.request({
+      kind: 'open-link',
+      url: 'https://x.test',
+    });
     expect(svc.pending()).toHaveLength(1);
     const entry = svc.pending()[0];
+    expect(entry.id).toBe(id);
     expect(entry.request).toEqual({ kind: 'open-link', url: 'https://x.test' });
 
     svc.answer(entry.id, true);
-    await expect(p).resolves.toBe(true);
+    await expect(granted).resolves.toBe(true);
     expect(svc.pending()).toHaveLength(0);
   });
 
   it('resolves false on deny', async () => {
-    const p = svc.request({
+    const { granted } = svc.request({
       kind: 'capabilities',
       capabilities: ['microphone'],
     });
     svc.answer(svc.pending()[0].id, false);
-    await expect(p).resolves.toBe(false);
+    await expect(granted).resolves.toBe(false);
   });
 
   it('answer() on an unknown id is a no-op', () => {
@@ -41,8 +45,8 @@ describe('McpAppConsentService', () => {
 
     svc.reset();
     expect(svc.pending()).toHaveLength(0);
-    await expect(a).resolves.toBe(false);
-    await expect(b).resolves.toBe(false);
+    await expect(a.granted).resolves.toBe(false);
+    await expect(b.granted).resolves.toBe(false);
   });
 
   it('keeps multiple prompts independently addressable', async () => {
@@ -51,11 +55,11 @@ describe('McpAppConsentService', () => {
     const [ea, eb] = svc.pending();
 
     svc.answer(eb.id, true);
-    await expect(b).resolves.toBe(true);
+    await expect(b.granted).resolves.toBe(true);
     expect(svc.pending()).toHaveLength(1);
     expect(svc.pending()[0].id).toBe(ea.id);
 
     svc.answer(ea.id, false);
-    await expect(a).resolves.toBe(false);
+    await expect(a.granted).resolves.toBe(false);
   });
 });

@@ -38,12 +38,14 @@ export class McpAppConsentService {
 
   /**
    * Surface a consent prompt and resolve once the user answers. The bridge
-   * awaits this before opening a link. If the conversation changes while a
-   * prompt is open, `reset()` resolves it as denied (fail-closed).
+   * awaits `granted` before opening a link; the frame uses `id` to render
+   * the prompt inline next to its own iframe (PR #6 follow-up — replaces
+   * the unanchored message-list strip). If the conversation changes while
+   * a prompt is open, `reset()` resolves it as denied (fail-closed).
    */
-  request(request: ConsentRequest): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      const id = `mcp-consent-${++this.seq}`;
+  request(request: ConsentRequest): { id: string; granted: Promise<boolean> } {
+    const id = `mcp-consent-${++this.seq}`;
+    const granted = new Promise<boolean>((resolve) => {
       const entry: PendingConsent = {
         id,
         request,
@@ -52,6 +54,7 @@ export class McpAppConsentService {
       };
       this.pendingSignal.set([...this.pendingSignal(), entry]);
     });
+    return { id, granted };
   }
 
   /** User answered a prompt (Allow/Deny). Idempotent. */

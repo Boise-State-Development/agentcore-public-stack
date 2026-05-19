@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { provideMarkdown, MarkdownService } from 'ngx-markdown';
 import { AssistantMessageComponent } from './assistant-message.component';
 import { Message, ContentBlock } from '../../../services/models/message.model';
+import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import { UiResourceEvent } from '../../../../shared/utils/stream-parser/stream-parser-types';
 
 function makeMessage(content: ContentBlock[]): Message {
   return {
@@ -209,6 +211,104 @@ describe('AssistantMessageComponent', () => {
       expect(blocks[2].type).toBe('promoted_visual');
       expect(blocks[3].type).toBe('tool_group');
       expect(blocks[3].group!.calls.length).toBe(2);
+    });
+  });
+
+  // Regression: a tool whose result content carries no inline ui_type/ui_display
+  // marker (i.e. not a legacy promoted-visual tool) was being folded into the
+  // collapsed tool_group, so no <app-tool-use> ever existed for it — and the
+  // MCP App frame (which lives inside <app-tool-use>) never instantiated even
+  // though the backend correctly emitted ui_resource. Surfaced dogfooding the
+  // excalidraw-mcp server, whose `create_view` returns plain text. The fix
+  // promotes any tool whose toolUseId is recorded in McpAppStateService.
+  describe('MCP Apps promote tool out of tool_group', () => {
+    function makeUiResource(toolUseId: string): UiResourceEvent {
+      return {
+        type: 'ui_resource',
+        toolUseId,
+        resourceUri: 'ui://example/app.html',
+        html: '<!doctype html><html><body>app</body></html>',
+        mimeType: 'text/html;profile=mcp-app',
+        csp: {},
+        permissions: {},
+        sandboxOrigin: 'https://mcp-sandbox.example.com',
+      };
+    }
+
+    it('folds a plain-text-result tool into tool_group when there is no ui_resource', () => {
+      const tool = makeToolBlock('create_view', {
+        result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
+      });
+      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('tool_group');
+      expect(blocks[0].group!.calls.length).toBe(1);
+    });
+
+    it('promotes the same tool to tool_use_minimized when its toolUseId is in McpAppStateService', () => {
+      const mcpAppState = TestBed.inject(McpAppStateService);
+      const tool = makeToolBlock('create_view', {
+        toolUseId: 'tooluse_mcp_app_1',
+        result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
+      });
+      mcpAppState.recordLive(makeUiResource('tooluse_mcp_app_1'));
+
+      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      // Two blocks: the minimized tool card (provenance) plus a sibling
+      // mcp_app_frame block that hosts the iframe at the same level as
+      // text/visuals. No `promoted_visual` — MCP Apps have their own type.
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].type).toBe('tool_use_minimized');
+      expect(blocks[1].type).toBe('mcp_app_frame');
+      expect(blocks[1].toolUseId).toBe('tooluse_mcp_app_1');
+      expect(blocks.some((b) => b.type === 'promoted_visual')).toBe(false);
+
+      mcpAppState.reset();
+    });
+
+    it('retroactively promotes when ui_resource arrives AFTER tool_result (late-arrival reactivity)', () => {
+      const mcpAppState = TestBed.inject(McpAppStateService);
+      const tool = makeToolBlock('create_view', {
+        toolUseId: 'tooluse_mcp_app_2',
+        result: { status: 'success', content: [{ text: 'Diagram displayed!' }] },
+      });
+
+      // Initial render: ui_resource hasn't arrived yet → tool folded into group.
+      fixture.componentRef.setInput('message', makeMessage([tool]));
+      fixture.detectChanges();
+      expect(component.displayBlocks()[0].type).toBe('tool_group');
+
+      // ui_resource arrives ~40ms after tool_result on the wire. The
+      // displayBlocks computed must re-run on the McpAppStateService signal
+      // update, or the tool stays folded forever.
+      mcpAppState.recordLive(makeUiResource('tooluse_mcp_app_2'));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].type).toBe('tool_use_minimized');
+      expect(blocks[1].type).toBe('mcp_app_frame');
+
+      mcpAppState.reset();
+    });
+
+    it('promoted-visual tool still emits both tool_use_minimized AND promoted_visual blocks', () => {
+      // Sanity: the new gate must not regress the legacy promoted-visual path.
+      fixture.componentRef.setInput('message', makeMessage([
+        makePromotedVisualToolBlock('chart_tool'),
+      ]));
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].type).toBe('tool_use_minimized');
+      expect(blocks[1].type).toBe('promoted_visual');
     });
   });
 
