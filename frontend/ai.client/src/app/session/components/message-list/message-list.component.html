@@ -94,6 +94,31 @@
     </div>
   }
 
+  <!-- Frontend-only consent for App-initiated open-link / capability
+       requests (PR #6). These originate from a postMessage on the embedded
+       App, not a backend turn, so they live entirely client-side and are
+       not persisted (transient interaction gates). -->
+  @for (prompt of mcpConsentPrompts(); track prompt.id) {
+    <div class="flex justify-start">
+      <app-mcp-app-consent-prompt [prompt]="prompt" />
+    </div>
+  }
+
+  <!-- Static historical cards for app-initiated tool calls (PR #6,
+       Option A). The PR #5 broker is in-memory, so on reload the live
+       tool_use/tool_result are gone; these replay them as a read-only
+       record at the end of the conversation. -->
+  @if (hasMcpAppCards()) {
+    <section
+      class="mt-3 flex flex-col gap-2"
+      aria-label="Tool calls run by embedded apps in this conversation"
+    >
+      @for (card of mcpAppCards(); track card.cardId) {
+        <app-mcp-app-card [card]="card" />
+      }
+    </section>
+  }
+
   <!-- Per-tool approval prompts (catalog-flagged needs_approval). Tied to
        the live SSE turn; refresh during the prompt orphans it. -->
   @for (request of pendingToolApprovals(); track request.interruptId) {

@@ -22,16 +22,22 @@
  * accessor are injected so specs drive it with plain fakes (no vi.mock of
  * globals — house rule).
  *
- * Out of scope for PR #4 (owned by PR #5/#6, answered with JSON-RPC errors
- * so Apps degrade gracefully): app-initiated `tools/call` proxying,
- * `ui/message`, `ui/update-model-context`, and `ui/open-link` consent
- * gating (PR #4 opens links directly via the injected opener).
+ * PR #6 implements the remaining View→host methods: `ui/message` (relayed
+ * to the chat send path — a real streaming turn, identical to a typed
+ * message), `ui/update-model-context` (relayed to app-api → stashed on the
+ * agent's Strands state for the next turn), and `ui/open-link` consent
+ * gating (frontend-only — the request originates here, so there is no
+ * backend turn to pause; the host obtains an inline in-thread consent
+ * before opening). Each new dep is optional: when absent the bridge keeps
+ * PR #4/#5 behavior (method-not-found / direct open) so older hosts and
+ * specs degrade gracefully.
  */
 
 import type {
   UiResourceEvent,
 } from '../../../shared/utils/stream-parser';
 import {
+  ConsentRequest,
   HostContext,
   JsonRpcId,
   JsonRpcMessage,
@@ -55,7 +61,9 @@ import {
   M_UI_INITIALIZED,
   M_UPDATE_MODEL_CONTEXT,
   MCP_UI_PROTOCOL_VERSION,
+  MessageParams,
   SizeChangedParams,
+  UpdateModelContextParams,
   isJsonRpc,
   isRequest,
 } from './mcp-app-protocol';
@@ -89,7 +97,7 @@ export interface McpAppBridgeDeps {
   getToolResult: () => unknown | null;
   /** Current host UI context (theme, displayMode, …). */
   getHostContext: () => HostContext;
-  /** Open an external URL (PR #4: direct; PR #6 adds consent). */
+  /** Open an external URL once consent (if wired) is granted. */
   openLink: (url: string) => void;
   /**
    * Proxy an App-initiated `tools/call` to the MCP server (PR #5) via
@@ -101,6 +109,29 @@ export interface McpAppBridgeDeps {
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<{ content: unknown[]; isError: boolean }>;
+  /**
+   * Relay `ui/message` as a real user turn (PR #6). The host treats it
+   * identically to a typed message — it starts a normal streaming turn.
+   * Absent (older hosts / specs) ⇒ `ui/message` is method-not-found.
+   */
+  sendMessage?: (text: string) => Promise<void>;
+  /**
+   * Relay `ui/update-model-context` (PR #6) to app-api, which stashes it
+   * on the conversation agent's state for the next turn. Resolves on
+   * acceptance; rejects with a safe Error message. Absent ⇒
+   * `ui/update-model-context` is method-not-found.
+   */
+  updateModelContext?: (
+    payload: UpdateModelContextParams,
+  ) => Promise<void>;
+  /**
+   * Obtain user consent for an App-initiated action (PR #6, frontend-only
+   * — no backend turn to pause). Resolves `true` to proceed. Absent ⇒ the
+   * bridge keeps PR #4 behavior and opens links directly (back-compat for
+   * older hosts / specs). Capability consent is handled host-side before
+   * the frame renders, so the bridge only ever asks for `open-link`.
+   */
+  requestConsent?: (req: ConsentRequest) => Promise<boolean>;
   /** Non-fatal diagnostics (validation drops, protocol slips). */
   onWarn?: (message: string) => void;
 }
@@ -276,9 +307,36 @@ export class McpAppBridge {
           this.respondError(msg.id, JSONRPC_IMPL_ERROR, 'Invalid URL');
           return;
         }
-        // PR #4 opens directly; per-link consent is PR #6.
-        this.d.openLink(url);
-        this.respond(msg.id, {});
+        const reqId = msg.id;
+        if (!this.d.requestConsent) {
+          // No consent gate wired (older host / specs): PR #4 behavior.
+          this.d.openLink(url);
+          this.respond(reqId, {});
+          return;
+        }
+        // PR #6: frontend-only consent. Hold the JSON-RPC response open
+        // until the user answers the inline in-thread prompt.
+        this.d
+          .requestConsent({ kind: 'open-link', url })
+          .then((granted) => {
+            if (granted) {
+              this.d.openLink(url);
+              this.respond(reqId, {});
+            } else {
+              this.respondError(
+                reqId,
+                JSONRPC_IMPL_ERROR,
+                'User declined to open the link',
+              );
+            }
+          })
+          .catch(() =>
+            this.respondError(
+              reqId,
+              JSONRPC_IMPL_ERROR,
+              'Consent could not be obtained',
+            ),
+          );
         return;
       }
 
@@ -290,17 +348,93 @@ export class McpAppBridge {
         return;
       }
 
-      case M_MESSAGE:
-      case M_UPDATE_MODEL_CONTEXT:
-        // Owned by PR #6. Answer per JSON-RPC so Apps degrade gracefully.
-        if (isRequest(msg)) {
+      case M_MESSAGE: {
+        if (!isRequest(msg)) return;
+        // Capability check before params: a host without the dep simply
+        // doesn't support the method (older host / tests degrade per
+        // JSON-RPC, regardless of payload).
+        if (!this.d.sendMessage) {
           this.respondError(
             msg.id,
             JSONRPC_METHOD_NOT_FOUND,
-            `${method} not supported yet (PR #6)`,
+            'ui/message not supported by this host',
           );
+          return;
         }
+        const p = msg.params as Partial<MessageParams> | undefined;
+        const text =
+          p?.role === 'user' &&
+          p?.content?.type === 'text' &&
+          typeof p.content.text === 'string'
+            ? p.content.text.trim()
+            : '';
+        if (!text) {
+          this.respondError(
+            msg.id,
+            JSONRPC_IMPL_ERROR,
+            'Invalid ui/message params',
+          );
+          return;
+        }
+        const reqId = msg.id;
+        // Treated identically to a typed message: a real streaming turn.
+        this.d
+          .sendMessage(text)
+          .then(() => this.respond(reqId, {}))
+          .catch((err: unknown) =>
+            this.respondError(
+              reqId,
+              JSONRPC_IMPL_ERROR,
+              err instanceof Error ? err.message : 'Failed to send message',
+            ),
+          );
         return;
+      }
+
+      case M_UPDATE_MODEL_CONTEXT: {
+        if (!isRequest(msg)) return;
+        if (!this.d.updateModelContext) {
+          this.respondError(
+            msg.id,
+            JSONRPC_METHOD_NOT_FOUND,
+            'ui/update-model-context not supported by this host',
+          );
+          return;
+        }
+        const p = msg.params as UpdateModelContextParams | undefined;
+        const hasContent =
+          Array.isArray(p?.content) && p!.content!.length > 0;
+        const hasStructured =
+          !!p?.structuredContent &&
+          typeof p.structuredContent === 'object';
+        if (!hasContent && !hasStructured) {
+          this.respondError(
+            msg.id,
+            JSONRPC_IMPL_ERROR,
+            'Invalid ui/update-model-context params',
+          );
+          return;
+        }
+        const reqId = msg.id;
+        this.d
+          .updateModelContext({
+            content: hasContent ? p!.content : undefined,
+            structuredContent: hasStructured
+              ? p!.structuredContent
+              : undefined,
+          })
+          .then(() => this.respond(reqId, {}))
+          .catch((err: unknown) =>
+            this.respondError(
+              reqId,
+              JSONRPC_IMPL_ERROR,
+              err instanceof Error
+                ? err.message
+                : 'Failed to update model context',
+            ),
+          );
+        return;
+      }
 
       default:
         // Unknown request → method-not-found; unknown notification → ignore.

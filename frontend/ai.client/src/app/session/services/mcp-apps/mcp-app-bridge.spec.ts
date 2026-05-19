@@ -61,11 +61,16 @@ interface Harness {
   proxy: FakeProxyWindow;
   openLink: ReturnType<typeof vi.fn>;
   proxyToolCall: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  updateModelContext: ReturnType<typeof vi.fn>;
+  requestConsent: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
   toolResult: { value: unknown | null };
 }
 
-function makeBridge(opts: { withProxy?: boolean } = {}): Harness {
+function makeBridge(
+  opts: { withProxy?: boolean; pr6?: boolean } = {},
+): Harness {
   const host = new FakeHostWindow();
   const proxy = new FakeProxyWindow();
   const openLink = vi.fn();
@@ -73,6 +78,12 @@ function makeBridge(opts: { withProxy?: boolean } = {}): Harness {
     content: [{ type: 'text', text: 'tool-ok' }],
     isError: false,
   }));
+  // PR #6 deps. Wired only when opts.pr6 — otherwise the bridge must
+  // degrade per JSON-RPC (method-not-found / direct open) so older hosts
+  // keep working.
+  const sendMessage = vi.fn(async () => undefined);
+  const updateModelContext = vi.fn(async () => undefined);
+  const requestConsent = vi.fn(async () => true);
   const warn = vi.fn();
   const toolResult: { value: unknown | null } = {
     value: { content: [{ type: 'text', text: 'ok' }], isError: false },
@@ -89,10 +100,22 @@ function makeBridge(opts: { withProxy?: boolean } = {}): Harness {
     openLink,
     // Default harness can proxy; opt out to assert the no-capability path.
     ...(opts.withProxy === false ? {} : { proxyToolCall }),
+    ...(opts.pr6 ? { sendMessage, updateModelContext, requestConsent } : {}),
     onWarn: warn,
   });
   bridge.start();
-  return { bridge, host, proxy, openLink, proxyToolCall, warn, toolResult };
+  return {
+    bridge,
+    host,
+    proxy,
+    openLink,
+    proxyToolCall,
+    sendMessage,
+    updateModelContext,
+    requestConsent,
+    warn,
+    toolResult,
+  };
 }
 
 /** Drive the handshake up to (but not including) `initialized`. */
@@ -252,7 +275,10 @@ describe('McpAppBridge', () => {
     });
   });
 
-  it('answers PR #6 methods (ui/message, ui/update-model-context) with method-not-found', () => {
+  it('degrades ui/message + ui/update-model-context to method-not-found when the host lacks the deps', () => {
+    // Default harness wires no PR #6 deps → an older host that doesn't
+    // support these methods. Per JSON-RPC the App should get -32601 and
+    // fall back, regardless of payload.
     handshake(h);
     for (const [id, method] of [
       ['m1', 'ui/message'],
@@ -264,6 +290,139 @@ describe('McpAppBridge', () => {
       );
       expect(h.proxy.byId(id).error.code).toBe(-32601);
     }
+  });
+
+  describe('PR #6 — implemented (deps wired)', () => {
+    let p: Harness;
+    beforeEach(() => {
+      p = makeBridge({ pr6: true });
+      handshake(p);
+    });
+
+    it('ui/message relays a valid user text as a real turn', async () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'm1',
+          method: 'ui/message',
+          nonce: NONCE,
+          params: { role: 'user', content: { type: 'text', text: '  hi  ' } },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(p.sendMessage).toHaveBeenCalledWith('hi');
+      expect(p.proxy.byId('m1').result).toEqual({});
+    });
+
+    it('ui/message with bad params is invalid-params (-32000), not relayed', () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'm2',
+          method: 'ui/message',
+          nonce: NONCE,
+          params: { role: 'assistant' },
+        },
+        p.proxy,
+      );
+      expect(p.sendMessage).not.toHaveBeenCalled();
+      expect(p.proxy.byId('m2').error.code).toBe(-32000);
+    });
+
+    it('ui/update-model-context relays structuredContent', async () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'c1',
+          method: 'ui/update-model-context',
+          nonce: NONCE,
+          params: { structuredContent: { picked: 'X' } },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(p.updateModelContext).toHaveBeenCalledWith({
+        content: undefined,
+        structuredContent: { picked: 'X' },
+      });
+      expect(p.proxy.byId('c1').result).toEqual({});
+    });
+
+    it('ui/update-model-context with neither content nor structured is -32000', () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'c2',
+          method: 'ui/update-model-context',
+          nonce: NONCE,
+          params: {},
+        },
+        p.proxy,
+      );
+      expect(p.updateModelContext).not.toHaveBeenCalled();
+      expect(p.proxy.byId('c2').error.code).toBe(-32000);
+    });
+
+    it('ui/open-link asks for consent and opens only when granted', async () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'l1',
+          method: 'ui/open-link',
+          nonce: NONCE,
+          params: { url: 'https://example.com/x' },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(p.requestConsent).toHaveBeenCalledWith({
+        kind: 'open-link',
+        url: 'https://example.com/x',
+      });
+      expect(p.openLink).toHaveBeenCalledWith('https://example.com/x');
+      expect(p.proxy.byId('l1').result).toEqual({});
+    });
+
+    it('ui/open-link denied → not opened, JSON-RPC error', async () => {
+      p.requestConsent.mockResolvedValueOnce(false);
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'l2',
+          method: 'ui/open-link',
+          nonce: NONCE,
+          params: { url: 'https://example.com/y' },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(p.openLink).not.toHaveBeenCalled();
+      expect(p.proxy.byId('l2').error.code).toBe(-32000);
+    });
+
+    it('a rejected sendMessage surfaces a JSON-RPC error', async () => {
+      p.sendMessage.mockRejectedValueOnce(new Error('quota exceeded'));
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'm3',
+          method: 'ui/message',
+          nonce: NONCE,
+          params: { role: 'user', content: { type: 'text', text: 'go' } },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      const err = p.proxy.byId('m3').error;
+      expect(err.code).toBe(-32000);
+      expect(err.message).toBe('quota exceeded');
+    });
   });
 
   it('answers ping with an empty result', () => {

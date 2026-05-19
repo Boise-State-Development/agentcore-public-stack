@@ -21,6 +21,11 @@ import { StreamParserService } from '../../../../../services/chat/stream-parser.
 import { ThemeService } from '../../../../../../components/topnav/components/theme-toggle/theme.service';
 import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
+import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
+import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
+import type { CapabilityKey } from '../../../../../services/mcp-apps/mcp-app-protocol';
+import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
+import { SessionService } from '../../../../../services/session/session.service';
 
 /**
  * MCP App renderer (SEP-1865), PR #4 of
@@ -73,6 +78,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   private readonly mcpAppState = inject(McpAppStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
+  private readonly mcpAppMessage = inject(McpAppMessageService);
+  private readonly mcpAppConsent = inject(McpAppConsentService);
+  private readonly chatRequest = inject(ChatRequestService);
+  private readonly conversation = inject(SessionService);
   private readonly streamParser = inject(StreamParserService);
   private readonly theme = inject(ThemeService);
   private readonly sanitizer = inject(DomSanitizer);
@@ -95,9 +104,45 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return id ? this.mcpAppState.get(id) : undefined;
   });
 
+  /** Capabilities the resource declares (`_meta.ui.permissions`). */
+  private readonly requestedCaps = computed<CapabilityKey[]>(() => {
+    const p = this.resource()?.permissions ?? {};
+    const caps: CapabilityKey[] = [];
+    if (p.camera) caps.push('camera');
+    if (p.microphone) caps.push('microphone');
+    if (p.geolocation) caps.push('geolocation');
+    if (p.clipboardWrite) caps.push('clipboardWrite');
+    return caps;
+  });
+
+  /**
+   * Render-time capability consent (PR #6). `null` = undecided. When the
+   * resource requests sensitive sandbox features we hold the frame until
+   * the user answers an inline prompt, then grant only what was approved
+   * (all-or-nothing for v1). Frontend-only — the request never reaches a
+   * backend turn, same justification as `McpAppConsentService`.
+   */
+  private readonly capabilityGrant = signal<boolean | null>(null);
+  private capabilityAsked = false;
+
+  /** True once requested capabilities are decided (or none were asked). */
+  private readonly capabilitiesResolved = computed(
+    () => this.requestedCaps().length === 0 || this.capabilityGrant() !== null,
+  );
+
+  /** Permissions actually applied to the frame: declared ∩ consent. */
+  private readonly effectivePermissions = computed(() => {
+    const declared = this.resource()?.permissions ?? {};
+    if (this.requestedCaps().length === 0) return declared;
+    return this.capabilityGrant() ? declared : {};
+  });
+
   protected readonly safeProxyUrl = computed<SafeResourceUrl | null>(() => {
     const res = this.resource();
     if (!res || !res.sandboxOrigin) return null;
+    // Hold the frame until the user has answered the capability prompt —
+    // building it later would race the proxy's sandbox-resource-ready.
+    if (!this.capabilitiesResolved()) return null;
     // Trusted single value from our authenticated backend (SSM-sourced);
     // the sandbox attribute + the proxy's per-resource CSP are the real
     // containment, same justification as the artifact panel.
@@ -108,7 +153,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   /** Permissions-Policy `allow` for the outer frame (delegates to inner). */
   protected readonly allowAttr = computed(() => {
-    const p = this.resource()?.permissions ?? {};
+    const p = this.effectivePermissions();
     const feats: string[] = [];
     if (p.camera) feats.push('camera');
     if (p.microphone) feats.push('microphone');
@@ -128,17 +173,33 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       this.result();
       this.bridge?.refreshToolResult();
     });
+    // Render-time capability consent: when the resource requests sensitive
+    // sandbox features, ask once and hold the frame until answered.
+    effect(() => {
+      const caps = this.requestedCaps();
+      if (caps.length === 0 || this.capabilityAsked) return;
+      this.capabilityAsked = true;
+      this.mcpAppConsent
+        .request({ kind: 'capabilities', capabilities: caps })
+        .then((granted) => this.capabilityGrant.set(granted))
+        .catch(() => this.capabilityGrant.set(false));
+    });
     this.destroyRef.onDestroy(() => this.bridge?.dispose('component-destroyed'));
   }
 
   protected onProxyLoad(): void {
     const res = this.resource();
     if (!res || this.bridge || !this.win) return;
+    // Hand the bridge a resource whose permissions are already narrowed to
+    // what the user consented to, so sandbox-resource-ready + the
+    // initialize `hostCapabilities.sandbox.permissions` advertise only the
+    // granted subset (consistent with the outer iframe's `allow`).
+    const effectiveRes = { ...res, permissions: this.effectivePermissions() };
     this.bridge = new McpAppBridge({
       hostWindow: this.win,
       getProxyWindow: () => this.frameRef()?.nativeElement.contentWindow ?? null,
       sandboxOrigin: res.sandboxOrigin.replace(/\/$/, ''),
-      resource: res,
+      resource: effectiveRes,
       nonce: this.nonce,
       getToolInput: () => this.lookupToolInput(),
       getToolResult: () => this.toCallToolResult(),
@@ -156,6 +217,14 @@ export class McpAppFrameComponent implements ToolResultRenderer {
           toolName,
           args,
         ),
+      sendMessage: (text) =>
+        this.chatRequest.submitChatRequest(
+          text,
+          this.conversation.currentSession().sessionId || null,
+        ),
+      updateModelContext: (payload) =>
+        this.mcpAppMessage.updateModelContext(res.resourceUri, payload),
+      requestConsent: (req) => this.mcpAppConsent.request(req),
     });
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));

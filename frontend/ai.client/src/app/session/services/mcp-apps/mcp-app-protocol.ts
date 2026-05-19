@@ -142,6 +142,38 @@ export interface RequestDisplayModeParams {
   mode: DisplayMode;
 }
 
+/** Spec shape of `ui/message` params (View → host). */
+export interface MessageParams {
+  role: 'user';
+  content: { type: 'text'; text: string };
+}
+
+/** Spec shape of `ui/update-model-context` params (View → host). */
+export interface UpdateModelContextParams {
+  content?: unknown[];
+  structuredContent?: Record<string, unknown>;
+}
+
+/** Sandbox capability keys an App may request (`_meta.ui.permissions`). */
+export type CapabilityKey =
+  | 'camera'
+  | 'microphone'
+  | 'geolocation'
+  | 'clipboardWrite';
+
+/**
+ * A user-consent decision the host must obtain before acting on an
+ * App-initiated request. PR #6 of
+ * `docs/kaizen/scoping/mcp-apps-host-renderer.md`, decision: consent is
+ * **frontend-only** — these requests originate from a postMessage on a
+ * possibly-idle iframe, so there is no backend agent turn to pause (unlike
+ * the OAuth-tool `oauth_required` SSE family). The host resolves them with
+ * an inline in-thread prompt and gates the bridge response on the answer.
+ */
+export type ConsentRequest =
+  | { kind: 'open-link'; url: string }
+  | { kind: 'capabilities'; capabilities: CapabilityKey[] };
+
 /** Narrowing helpers. */
 export function isJsonRpc(data: unknown): data is JsonRpcMessage {
   return (

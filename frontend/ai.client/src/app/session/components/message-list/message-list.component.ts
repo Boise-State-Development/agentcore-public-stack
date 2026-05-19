@@ -14,6 +14,10 @@ import { CompactionSummaryComponent } from './components/compaction-summary/comp
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
+import { McpAppConsentPromptComponent } from './components/mcp-app-consent-prompt/mcp-app-consent-prompt.component';
+import { McpAppCardComponent } from './components/mcp-app-card/mcp-app-card.component';
+import { McpAppConsentService } from '../../services/mcp-apps/mcp-app-consent.service';
+import { McpAppCardStateService } from '../../services/mcp-apps/mcp-app-card-state.service';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
@@ -39,6 +43,8 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
     CompactionSummaryComponent,
     ArtifactCardComponent,
     ArtifactPanelComponent,
+    McpAppConsentPromptComponent,
+    McpAppCardComponent,
   ],
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
@@ -66,7 +72,15 @@ export class MessageListComponent implements OnDestroy {
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
+  private mcpAppConsent = inject(McpAppConsentService);
+  private mcpAppCardState = inject(McpAppCardStateService);
   private chatStateService = inject(ChatStateService);
+
+  /** Pending frontend-only MCP App consent prompts (PR #6). */
+  protected mcpConsentPrompts = this.mcpAppConsent.pending;
+  /** Persisted app-initiated tool cards, hydrated on reload (PR #6). */
+  protected mcpAppCards = this.mcpAppCardState.cards;
+  protected hasMcpAppCards = this.mcpAppCardState.hasCards;
 
   /** Only the final message of a recoverable max_tokens turn gets the
    *  "Continue" affordance. Live-only state, never shown while a new

@@ -49,6 +49,29 @@ class AppToolCallEntry(BaseModel):
     arguments: Dict[str, Any] = {}
 
 
+class AppContextUpdateEntry(BaseModel):
+    """App-supplied model context pushed via `ui/update-model-context`.
+
+    MCP Apps PR #6. The embedded App's JSON-RPC `ui/update-model-context`
+    is relayed by app-api to `/invocations` with this directive. Like
+    `app_tool_call` it runs NO model turn — it stashes the payload on the
+    conversation agent's Strands `agent.state` under
+    `mcp_apps.context[resource_uri]`. The next real user turn merges any
+    pending entries into that turn's prompt and clears them.
+
+    `resource_uri` is the bound MCP App resource (`ui://...`) and is the
+    dedupe key: the host keeps only the last update per resource between
+    turns (spec: "if multiple updates are received before the next user
+    message, Host SHOULD only send the last"). `content` /
+    `structured_content` mirror the spec's `ui/update-model-context`
+    params; at least one is set.
+    """
+
+    resource_uri: str
+    content: Optional[List[Dict[str, Any]]] = None
+    structured_content: Optional[Dict[str, Any]] = None
+
+
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
@@ -90,6 +113,11 @@ class InvocationRequest(BaseModel):
     # When set, this invocation is an app-initiated tools/call proxied from
     # an embedded MCP App (PR #5). `message` is ignored; no model turn runs.
     app_tool_call: Optional[AppToolCallEntry] = None
+    # When set, this invocation pushes app-supplied model context onto the
+    # conversation agent's state (PR #6, `ui/update-model-context`).
+    # `message` is ignored; no model turn runs. The context is merged into
+    # (and cleared before) the next real user turn's prompt.
+    app_context_update: Optional[AppContextUpdateEntry] = None
 
 
 class InvocationResponse(BaseModel):

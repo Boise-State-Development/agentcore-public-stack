@@ -18,6 +18,9 @@ import { CompactionSummaryService } from './services/chat/compaction-summary.ser
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppStateService } from './services/mcp-apps/mcp-app-state.service';
+import { McpAppCardStateService } from './services/mcp-apps/mcp-app-card-state.service';
+import { McpAppCardHttpService } from './services/mcp-apps/mcp-app-card-http.service';
+import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
@@ -49,6 +52,9 @@ export class ConversationPage implements OnDestroy {
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
+  private mcpAppCardState = inject(McpAppCardStateService);
+  private mcpAppCardHttp = inject(McpAppCardHttpService);
+  private mcpAppConsent = inject(McpAppConsentService);
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
@@ -313,6 +319,12 @@ export class ConversationPage implements OnDestroy {
       // the inline `ui_resource` event only arrives live during a stream.
       this.mcpAppState.reset();
 
+      // Option A (PR #6): app-initiated tool cards DO re-hydrate (the
+      // broker is in-memory). Any open consent prompt for the prior
+      // conversation is dropped fail-closed.
+      this.mcpAppCardState.reset();
+      this.mcpAppConsent.reset();
+
       if (id) {
         // Update the messages signal reference (this triggers reactivity)
         this.messagesSignal.set(this.messageMapService.getMessagesForSession(id));
@@ -335,6 +347,7 @@ export class ConversationPage implements OnDestroy {
         // artifacts feature is off for this environment) or any network
         // error just means no cards — never disrupt the session.
         this.hydrateArtifacts(id);
+        this.hydrateMcpAppCards(id);
       } else {
         // No session selected, clear the session metadata
         this.sessionService.setSessionMetadataId(null);
@@ -366,6 +379,25 @@ export class ConversationPage implements OnDestroy {
       .then(artifacts => {
         if (artifacts.length && this.sessionId() === sessionId) {
           this.artifactState.seedFromHydration(artifacts);
+        }
+      })
+      .catch(() => {
+        // Feature disabled (404) or transient error — no cards, no noise.
+      });
+  }
+
+  /**
+   * Best-effort: pull persisted app-initiated tool cards and seed the
+   * registry so they survive a reload (the PR #5 broker is in-memory).
+   * Mirrors {@link hydrateArtifacts}: non-clobbering, session-guarded,
+   * silent on 404 (MCP Apps host flag off) or transient error.
+   */
+  private hydrateMcpAppCards(sessionId: string): void {
+    this.mcpAppCardHttp
+      .listSessionCards(sessionId)
+      .then(cards => {
+        if (cards.length && this.sessionId() === sessionId) {
+          this.mcpAppCardState.seedFromHydration(cards);
         }
       })
       .catch(() => {

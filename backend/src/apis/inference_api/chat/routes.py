@@ -41,6 +41,11 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
 from apis.shared.user_settings.repository import UserSettingsRepository
 
+from .app_context_dispatch import (
+    AppContextUpdateError,
+    dispatch_app_context_update,
+    merge_and_clear_pending_context,
+)
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
@@ -732,6 +737,49 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.error("app tools/call invocation failed", exc_info=True)
             return JSONResponse({"error": "Internal error"}, status_code=500)
 
+    # App-pushed model context (MCP Apps PR #6, `ui/update-model-context`).
+    # Like app_tool_call it bypasses quota / RAG / file resolution / title
+    # and runs NO model turn — we rebuild the conversation agent (so the
+    # same cached `agent.state` is reused) and stash the payload under
+    # `mcp_apps.context[resource_uri]`. The next real user turn merges and
+    # clears it. Inert behind the host flag (no live App ever calls this).
+    if input_data.app_context_update is not None:
+        acu = input_data.app_context_update
+        try:
+            request_inference_params = dict(input_data.inference_params or {})
+            caching_enabled, inference_params = await _resolve_model_settings(
+                model_id=input_data.model_id,
+                explicit_caching_enabled=input_data.caching_enabled,
+                request_inference_params=request_inference_params,
+            )
+            agent = await get_agent(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                auth_token=auth_token,
+                enabled_tools=input_data.enabled_tools,
+                model_id=input_data.model_id,
+                system_prompt=input_data.system_prompt,
+                caching_enabled=caching_enabled,
+                provider=input_data.provider,
+                inference_params=inference_params,
+                agent_type=input_data.agent_type,
+                is_resume=False,
+            )
+            payload = dispatch_app_context_update(
+                agent,
+                resource_uri=acu.resource_uri,
+                content=acu.content,
+                structured_content=acu.structured_content,
+            )
+            return JSONResponse(payload)
+        except AppContextUpdateError as e:
+            return JSONResponse({"error": e.message}, status_code=e.code)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.error("app context update invocation failed", exc_info=True)
+            return JSONResponse({"error": "Internal error"}, status_code=500)
+
     if input_data.enabled_tools:
         logger.info(f"Enabled tools ({len(input_data.enabled_tools)})")
 
@@ -1324,6 +1372,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 final_message = f"{final_message}\n\n{attachment_guidance}"
             if tabular_inventory:
                 final_message = f"{final_message}\n\n{tabular_inventory}"
+
+            # MCP Apps PR #6: drain any context an embedded App pushed via
+            # `ui/update-model-context` since the last turn and prepend it
+            # to this turn only. Skipped on resume/continuation (Strands
+            # ignores `final_message` there) so a pending update survives
+            # until the next real user turn instead of being silently
+            # cleared. Kept out of persisted history via the
+            # `original_message` path below (cache-prefix-safe).
+            if not is_resume and not is_continuation:
+                pending_ctx_block = merge_and_clear_pending_context(agent)
+                if pending_ctx_block:
+                    final_message = f"{pending_ctx_block}\n\n{final_message}"
 
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
