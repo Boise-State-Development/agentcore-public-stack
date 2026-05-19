@@ -114,6 +114,17 @@ describe('McpSandboxStack', () => {
     expect(code).not.toContain("'__INJECT_FRAME_ANCESTORS__'");
   });
 
+  test('CFN function comment fits within the AWS-enforced 128-char limit', () => {
+    // CloudFront::Function.FunctionConfig.Comment maxes at 128 chars and
+    // CloudFormation rejects the create with a 400 if exceeded — see
+    // alpha deploy 2026-05-19 which rolled back on this. Catching at
+    // synth time prevents another wasted deploy round-trip.
+    const fns = template.findResources('AWS::CloudFront::Function');
+    const fn = Object.values(fns)[0] as any;
+    const comment = fn.Properties.FunctionConfig.Comment as string;
+    expect(comment.length).toBeLessThanOrEqual(128);
+  });
+
   test('CFN function is wired to viewer-response on the default behavior', () => {
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({

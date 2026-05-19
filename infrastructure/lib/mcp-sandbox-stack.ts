@@ -236,9 +236,11 @@ export class McpSandboxStack extends cdk.Stack {
     // the function uses ES2017 features (regex literals, template
     // strings, JSON.parse) that the legacy JS_1_0 runtime doesn't accept.
     const cspFunctionCode = loadMcpSandboxCspFunctionCode(frameAncestors);
+    // AWS caps CloudFront Function `Comment` at 128 chars — design rationale
+    // lives in the docstring above and the scoping doc, not here.
     const cspFunction = new cloudfront.Function(this, 'McpSandboxCspFunction', {
       functionName: getResourceName(config, 'mcp-sandbox-csp'),
-      comment: 'Composes the per-resource Content-Security-Policy header from the ?csp= query parameter (matching modelcontextprotocol/ext-apps basic-host/serve.ts).',
+      comment: 'Composes per-resource CSP header from ?csp= query (mirrors ext-apps basic-host/serve.ts).',
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(cspFunctionCode),
     });
