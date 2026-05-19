@@ -8,27 +8,36 @@
  * This file is served from the dedicated mcp-sandbox origin and runs inside
  * the OUTER iframe the SPA created with sandbox="allow-scripts
  * allow-same-origin". It is the stable cross-origin boundary between the
- * host (ai.client) and the untrusted App View (an inner null-origin srcdoc
- * iframe this script creates).
+ * host (ai.client) and the untrusted App View (an inner iframe this script
+ * creates, mounted via document.write per the ext-apps basic-host
+ * reference). The inner iframe defaults to allow-scripts +
+ * allow-same-origin so document.write can populate it; the App may
+ * override its `_meta.ui.sandbox` to opt back into null-origin (we'll
+ * fall back to srcdoc when contentDocument isn't writable).
  *
  * Responsibilities (spec §"Sandbox proxy"):
  *   3. Announce readiness to the host (ui/notifications/sandbox-proxy-ready).
  *   4. Receive the raw HTML + sandbox/CSP/permissions
  *      (ui/notifications/sandbox-resource-ready).
- *   5. Load the View HTML in the inner iframe with a CSP composed from
- *      _meta.ui.csp plus the spec's deny-by-default fallbacks; map
- *      _meta.ui.permissions onto the inner iframe `allow` attribute.
+ *   5. Load the View HTML in the inner iframe via document.write (falls
+ *      back to srcdoc if the App opted into a stricter cross-origin
+ *      sandbox). Inject a per-resource <meta> CSP composed from
+ *      _meta.ui.csp; map _meta.ui.permissions onto the inner iframe's
+ *      `allow` attribute. NOTE: the inner doc also INHERITS this proxy's
+ *      HTTP CSP (CSP3 local-scheme rule applies to srcdoc + document.write-
+ *      populated about:blank alike); that inherited policy — set in
+ *      mcp-sandbox-stack.ts — is the load-bearing security bound. The
+ *      injected <meta> can only further-restrict via intersection.
  *   6. Forward every JSON-RPC message host<->View whose method does not
  *      start with "ui/notifications/sandbox-". The host enforces the
  *      "no sends before initialized" rule; the proxy is a dumb pipe.
  *
  * Auth: a per-frame nonce, minted by the host and delivered in
- * sandbox-resource-ready, authenticates the host<->proxy leg (the inner
- * View is null-origin, so origin matching is impossible — the nonce is the
- * real check the spec mandates). The proxy adds the nonce on View->host
- * forwards and strips it on host->View forwards (the View speaks plain
- * spec JSON-RPC and never sees transport auth). No inline script: the
- * served CSP can stay script-src 'self'.
+ * sandbox-resource-ready, authenticates the host<->proxy leg. The proxy
+ * adds the nonce on View->host forwards and strips it on host->View
+ * forwards (the View speaks plain spec JSON-RPC and never sees transport
+ * auth). proxy.html itself ships zero inline content so 'unsafe-inline'
+ * on the inherited CSP can't be exploited against the shell.
  */
 (function () {
   'use strict';
@@ -134,10 +143,17 @@
   // --- inner iframe (the View) -------------------------------------------
 
   function mountView(params) {
+    // Default to allow-scripts + allow-same-origin so document.write() can
+    // populate the inner iframe (contentDocument is only accessible when
+    // the inner is same-origin to this proxy, which is fine — the proxy
+    // origin is a static CDN with no shared state). The App can override
+    // via `_meta.ui.sandbox` to opt back into null-origin if it wants
+    // stricter isolation; we'll fall back to srcdoc when contentDocument
+    // isn't writable, matching the ext-apps basic-host reference.
     var sandbox =
       typeof params.sandbox === 'string' && params.sandbox
         ? params.sandbox
-        : 'allow-scripts';
+        : 'allow-scripts allow-same-origin';
     var allow = allowAttr(params.permissions);
 
     inner = document.createElement('iframe');
@@ -150,31 +166,42 @@
     inner.setAttribute('referrerpolicy', 'no-referrer');
     inner.style.cssText =
       'border:0;width:100%;height:100%;display:block;background:#fff';
-    // Build the App document and hand it to the inner iframe as a blob URL.
-    // srcdoc / data: / about:blank are "local schemes" that inherit the
-    // embedder's HTTP CSP (CSP3 §"Initialize a Document's CSP list"); blob:
-    // is NOT, so the inner doc's effective CSP is exactly what composeCsp
-    // emits via the injected <meta> tag — no intersection with proxy.html's
-    // strict `script-src 'self'`. Null-origin is unaffected: it comes from
-    // `sandbox` without `allow-same-origin`, regardless of URL scheme. The
-    // per-frame nonce is still the real channel auth.
-    var blob = new Blob(
-      [withCsp(String(params.html || ''), composeCsp(params.csp))],
-      { type: 'text/html' }
-    );
-    var blobUrl = URL.createObjectURL(blob);
     inner.addEventListener('load', function () {
-      // Release the blob backing store as soon as the doc is loaded —
-      // keeping it would pin memory for the iframe's lifetime.
-      URL.revokeObjectURL(blobUrl);
       innerReady = true;
       var queued = pendingToInner.splice(0, pendingToInner.length);
       for (var i = 0; i < queued.length; i++) {
         postToInner(queued[i]);
       }
     });
-    inner.src = blobUrl;
     document.body.appendChild(inner);
+
+    // Build the App document. Per the ext-apps basic-host reference
+    // (examples/basic-host/src/sandbox.ts): "Use document.write instead
+    // of srcdoc (which the CesiumJS Map won't work with)". The inner
+    // document inherits this proxy's HTTP CSP either way — that's the
+    // load-bearing security boundary (see buildMcpSandboxProxyCsp in
+    // mcp-sandbox-stack.ts). The per-App CSP meta tag we still inject
+    // *intersects* the inherited policy, so Apps can further restrict
+    // but not loosen. Per-frame nonce is the channel auth.
+    var html = withCsp(String(params.html || ''), composeCsp(params.csp));
+    var doc = null;
+    try {
+      doc = inner.contentDocument || (inner.contentWindow && inner.contentWindow.document);
+    } catch (_) {
+      // Cross-origin access throws; we'll fall back to srcdoc below.
+      doc = null;
+    }
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+    } else {
+      // Fallback path: the App opted into a stricter sandbox without
+      // allow-same-origin, so contentDocument is cross-origin. srcdoc
+      // works for the vast majority of Apps; CesiumJS-class outliers
+      // would need to relax their declared sandbox.
+      inner.setAttribute('srcdoc', html);
+    }
   }
 
   // --- message plumbing ---------------------------------------------------

@@ -161,21 +161,32 @@ describe('buildMcpSandboxFrameAncestors', () => {
 });
 
 describe('buildMcpSandboxProxyCsp', () => {
-  test('is deny-by-default and carries the given frame-ancestors', () => {
+  test('carries the given frame-ancestors + non-overridable hardening', () => {
     const csp = buildMcpSandboxProxyCsp('https://alpha.example.com');
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("script-src 'self'");
-    // Inner App iframe mounts from a blob: URL (not srcdoc) to escape the
-    // local-scheme CSP inheritance that would intersect the App's own CSP
-    // with proxy.html's strict outer policy. frame-src must permit blob:.
-    expect(csp).toContain("frame-src 'self' blob:");
     expect(csp).toContain('frame-ancestors https://alpha.example.com');
+    // Hardening directives that proxy.html shouldn't ever want to relax,
+    // even though most of the rest is intentionally broad.
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("connect-src 'self'");
   });
 
-  test('never emits unsafe-inline (proxy ships no inline script/style)', () => {
-    expect(buildMcpSandboxProxyCsp("'none'")).not.toContain('unsafe-inline');
+  test('matches the ext-apps reference defaults so typical bundled Apps run', () => {
+    // The inner App iframe inherits this CSP (CSP3 local-scheme rule applies
+    // to srcdoc / blob: / document.write()-populated about:blank alike). The
+    // modelcontextprotocol/ext-apps basic-host reference ships its outer CSP
+    // with these tokens baked in for the same reason — bundled-App inline
+    // scripts/styles/eval need to actually run. See mcp-sandbox-stack.ts
+    // docstring for the security rationale.
+    const csp = buildMcpSandboxProxyCsp("'none'");
+    expect(csp).toContain(
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+    );
+    expect(csp).toContain("style-src 'self' 'unsafe-inline' blob: data:");
+    expect(csp).toContain("worker-src 'self' blob:");
+    expect(csp).toContain("default-src 'self' 'unsafe-inline'");
   });
 });
 

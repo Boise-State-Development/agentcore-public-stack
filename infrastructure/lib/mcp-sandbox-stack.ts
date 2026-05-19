@@ -75,26 +75,61 @@ export function buildMcpSandboxFrameAncestors(
  *   - `script-src 'self'`  — proxy.js only; no inline script, no
  *     `'unsafe-inline'` (proxy.html ships zero inline script/style on
  *     purpose so this stays clean).
- *   - `frame-src 'self' blob:` — permits the inner content frame the shell
- *     creates. The shell mounts that frame from a `blob:` URL (NOT srcdoc):
- *     blob URLs are not "local schemes" under CSP3, so the inner App
- *     document's effective CSP is exactly what proxy.js composes from
- *     `_meta.ui.csp`, with no inheritance/intersection from this outer
- *     policy. Modern browsers match blob: against `'self'` when the blob
- *     was created same-origin, but `blob:` is listed explicitly for
- *     durability across engines.
- *   - everything else denied via `default-src 'none'`.
+ *   - This CSP is **inherited by the inner App iframe**. All three plausible
+ *     mounts (srcdoc, blob:, document.write()) leave the inner document at
+ *     a "local scheme" under CSP3 §"Initialize a Document's CSP list", so it
+ *     inherits the embedder's HTTP CSP. That is why this policy isn't just
+ *     the proxy shell's own bound — it's the *superset bound* on every App
+ *     we render. The ext-apps reference implementation
+ *     (`modelcontextprotocol/ext-apps/examples/basic-host/src/sandbox.ts`)
+ *     treats this as a feature, not a bug ("CSP is enforced via HTTP
+ *     headers ... tamper-proof unlike meta tags") and ships its outer CSP
+ *     with `'unsafe-inline' 'unsafe-eval' blob: data:` baked in so typical
+ *     bundled Apps can actually run. We mirror that default below.
+ *   - proxy.html itself ships **zero inline content** (proxy.js is external),
+ *     so `'unsafe-inline'`/`'unsafe-eval'` on the shell can't be exploited
+ *     unless an attacker can already inject HTML into the static asset — a
+ *     much larger compromise than this directive's scope. The real
+ *     containment boundary for untrusted App HTML remains the inner iframe's
+ *     `sandbox` attribute (cross-origin to the SPA, App declares the rest).
+ *   - The reference implementation supports tighter per-resource CSPs via a
+ *     dynamic origin that reads `?csp=` and stamps headers per-request. We
+ *     do not (CloudFront static asset, one CSP for all resources). Apps
+ *     that need declared `connectDomains`/`resourceDomains`/`frameDomains`
+ *     can't get them honored here — that's a follow-up if/when we onboard
+ *     an App that needs it.
  *
  * Exported for direct unit testing.
  */
 export function buildMcpSandboxProxyCsp(frameAncestors: string): string {
   return [
-    `default-src 'none'`,
-    `script-src 'self'`,
-    `frame-src 'self' blob:`,
+    // 'self' + 'unsafe-inline' for everything default-routed; matches the
+    // ext-apps reference's default-src and lets the inner App's misc fetches
+    // resolve when not explicitly directive-typed.
+    `default-src 'self' 'unsafe-inline'`,
+    // Scripts: same-origin + inline + eval (many bundled apps need eval) +
+    // blob: (dynamic workers, Web Workers from blob URLs) + data:.
+    `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:`,
+    // Styles: same-origin + inline + blob:/data:.
+    `style-src 'self' 'unsafe-inline' blob: data:`,
+    // Static-resource directives — blob:/data: are common for bundled assets.
+    `img-src 'self' data: blob:`,
+    `font-src 'self' data: blob:`,
+    `media-src 'self' data: blob:`,
+    // Network: same-origin only. Apps that need external API access need the
+    // dynamic-CSP follow-up; we explicitly do not allow `https:` here so a
+    // dogfood App can't silently exfiltrate to arbitrary origins.
+    `connect-src 'self'`,
+    // Workers: same-origin + blob: for dynamically-constructed worker scripts
+    // (CesiumJS / Three.js / etc. rely on this).
+    `worker-src 'self' blob:`,
+    // Nested iframes inside the App: blocked. Most dogfood Apps are leaf UIs;
+    // Apps needing nested frames need the dynamic-CSP follow-up.
+    `frame-src 'none'`,
     `frame-ancestors ${frameAncestors}`,
     `base-uri 'none'`,
     `form-action 'none'`,
+    `object-src 'none'`,
   ].join('; ');
 }
 
