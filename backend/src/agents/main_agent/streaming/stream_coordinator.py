@@ -102,6 +102,30 @@ class StreamCoordinator:
         initial_message_count = self._get_initial_message_count(session_manager)
         logger.info(f"📊 Initial message count before streaming: {initial_message_count}")
 
+        # MCP Apps PR #5: subscribe this conversation stream to the
+        # app-initiated tool-event broker so a `tools/call` proxied from an
+        # embedded MCP App surfaces as a tool_use/tool_result card in the
+        # live thread (and any buffered while no stream was active flush
+        # in here). Inert + zero-cost unless the host flag is on; removed
+        # in the method-level `finally` so a dropped stream can't leak.
+        app_event_queue = None
+        try:
+            from agents.main_agent.integrations.mcp_apps import (
+                is_mcp_apps_host_enabled,
+            )
+
+            if is_mcp_apps_host_enabled():
+                from apis.shared.mcp_apps.broker import (
+                    get_app_tool_event_broker,
+                )
+
+                app_event_queue = get_app_tool_event_broker().add_subscriber(
+                    session_id
+                )
+        except Exception as e:  # noqa: BLE001 - never block the stream
+            logger.warning("MCP Apps broker subscribe failed: %s", e)
+            app_event_queue = None
+
         try:
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
@@ -564,6 +588,20 @@ class StreamCoordinator:
                 sse_event = self._format_sse_event(event)
                 yield sse_event
 
+                # MCP Apps PR #5: interleave any app-initiated tool events
+                # (a `tools/call` proxied from an embedded App, dispatched
+                # out-of-band on /mcp-apps/proxy-call) into the live thread.
+                # Non-blocking drain — never waits on the agent stream.
+                if app_event_queue is not None:
+                    from apis.shared.mcp_apps.broker import (
+                        get_app_tool_event_broker,
+                    )
+
+                    for app_ev in get_app_tool_event_broker().drain(
+                        app_event_queue
+                    ):
+                        yield self._format_sse_event(app_ev)
+
                 # MCP Apps (PR #3): if this tool_result belongs to a
                 # UI-bearing tool, fetch its `ui://` resource via
                 # `resources/read` and emit a `ui_resource` SSE right after
@@ -780,6 +818,23 @@ class StreamCoordinator:
                     logger.info(f"💾 Saved stream error messages to session {session_id}")
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
+        finally:
+            # MCP Apps PR #5: always release the broker subscription —
+            # covers normal completion, the in-loop error `return`, and
+            # the except path, so a dropped stream never leaks a queue.
+            if app_event_queue is not None:
+                try:
+                    from apis.shared.mcp_apps.broker import (
+                        get_app_tool_event_broker,
+                    )
+
+                    get_app_tool_event_broker().remove_subscriber(
+                        session_id, app_event_queue
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "MCP Apps broker unsubscribe failed", exc_info=True
+                    )
 
     async def _persist_paused_turn_snapshot(
         self,

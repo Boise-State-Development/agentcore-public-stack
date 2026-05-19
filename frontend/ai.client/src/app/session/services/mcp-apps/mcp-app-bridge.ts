@@ -47,6 +47,7 @@ import {
   M_SANDBOX_PROXY_READY,
   M_SANDBOX_RESOURCE_READY,
   M_SIZE_CHANGED,
+  M_TOOLS_CALL,
   M_TOOL_CANCELLED,
   M_TOOL_INPUT,
   M_TOOL_RESULT,
@@ -90,6 +91,16 @@ export interface McpAppBridgeDeps {
   getHostContext: () => HostContext;
   /** Open an external URL (PR #4: direct; PR #6 adds consent). */
   openLink: (url: string) => void;
+  /**
+   * Proxy an App-initiated `tools/call` to the MCP server (PR #5) via
+   * app-api. Resolves with the `CallToolResult`; rejects with an Error
+   * whose message is safe to return to the App. Optional so older hosts
+   * (and tests) can omit it — absent ⇒ `tools/call` is method-not-found.
+   */
+  proxyToolCall?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ content: unknown[]; isError: boolean }>;
   /** Non-fatal diagnostics (validation drops, protocol slips). */
   onWarn?: (message: string) => void;
 }
@@ -223,6 +234,41 @@ export class McpAppBridge {
         if (isRequest(msg)) this.respond(msg.id, {});
         return;
 
+      case M_TOOLS_CALL: {
+        if (!isRequest(msg)) return;
+        const p = msg.params as
+          | { name?: string; arguments?: Record<string, unknown> }
+          | undefined;
+        const name = p?.name;
+        if (typeof name !== 'string' || !name) {
+          this.respondError(msg.id, JSONRPC_IMPL_ERROR, 'Invalid tool name');
+          return;
+        }
+        if (!this.d.proxyToolCall) {
+          this.respondError(
+            msg.id,
+            JSONRPC_METHOD_NOT_FOUND,
+            'tools/call not supported by this host',
+          );
+          return;
+        }
+        const reqId = msg.id;
+        // app-api enforces auth + the conversation binding; inference-api
+        // is the authoritative spec-MUST app-visibility gate. We forward
+        // the View's CallToolResult back verbatim (content + isError).
+        this.d
+          .proxyToolCall(name, p?.arguments ?? {})
+          .then((result) => this.respond(reqId, result))
+          .catch((err: unknown) =>
+            this.respondError(
+              reqId,
+              JSONRPC_IMPL_ERROR,
+              err instanceof Error ? err.message : 'Tool call failed',
+            ),
+          );
+        return;
+      }
+
       case M_OPEN_LINK: {
         if (!isRequest(msg)) return;
         const url = (msg.params as { url?: string } | undefined)?.url;
@@ -277,6 +323,9 @@ export class McpAppBridge {
       hostInfo: { name: 'agentcore-public-stack', version: '1.0.0' },
       hostCapabilities: {
         openLinks: {},
+        // Only advertise serverTools when the host can actually proxy
+        // (PR #5). Absent ⇒ the App won't attempt tools/call.
+        ...(this.d.proxyToolCall ? { serverTools: {} } : {}),
         sandbox: {
           permissions: this.d.resource.permissions,
           csp: this.d.resource.csp,

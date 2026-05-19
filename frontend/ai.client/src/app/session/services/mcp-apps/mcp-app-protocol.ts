@@ -71,6 +71,8 @@ export const M_SANDBOX_RESOURCE_READY = 'ui/notifications/sandbox-resource-ready
 export const M_UI_INITIALIZE = 'ui/initialize';
 export const M_UI_INITIALIZED = 'ui/notifications/initialized';
 export const M_PING = 'ping';
+/** Standard MCP method an App calls to invoke a server tool (PR #5). */
+export const M_TOOLS_CALL = 'tools/call';
 
 export const M_TOOL_INPUT = 'ui/notifications/tool-input';
 export const M_TOOL_INPUT_PARTIAL = 'ui/notifications/tool-input-partial';
@@ -91,6 +93,8 @@ export type DisplayMode = 'inline' | 'fullscreen' | 'pip';
 export interface HostCapabilities {
   /** Host can open external links (consent gating lands in PR #6). */
   openLinks?: Record<string, never>;
+  /** Host can proxy the App's `tools/call` to the MCP server (PR #5). */
+  serverTools?: Record<string, never>;
   /** Sandbox config the host applied (mirrors what we asked the proxy for). */
   sandbox?: {
     permissions?: McpUiPermissions;

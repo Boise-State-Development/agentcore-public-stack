@@ -352,6 +352,16 @@ class ToolUIMetadata(BaseModel):
         """True if the model is allowed to see/call this tool."""
         return "model" in self.visibility
 
+    def visible_to_app(self) -> bool:
+        """True if an embedded MCP App may call this tool (SEP-1865).
+
+        PR #5 gates the app-initiated `tools/call` proxy on this at both
+        the app-api boundary and the inference-api dispatch (spec MUST:
+        reject `tools/call` from apps for tools whose visibility excludes
+        `"app"`).
+        """
+        return "app" in self.visibility
+
 
 # =============================================================================
 # Database Models (stored in DynamoDB)

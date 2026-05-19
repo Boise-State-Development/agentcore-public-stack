@@ -29,6 +29,26 @@ class InterruptResponseEntry(BaseModel):
     response: Any = None
 
 
+class AppToolCallEntry(BaseModel):
+    """An app-initiated `tools/call` proxied from an embedded MCP App.
+
+    MCP Apps PR #5. The iframe's JSON-RPC `tools/call` is relayed by
+    app-api to `/invocations` with this directive. When set, the route
+    does NOT run a model turn: it dispatches the single named tool against
+    the conversation's live MCP client (rebuilding the agent like a resume
+    so the client session/auth are wired identically), then returns the
+    `CallToolResult` and publishes synthesized `tool_use`/`tool_result`
+    into the conversation thread via the per-session event broker.
+
+    `tool_use_id` is the originating MCP App's tool-use id; proxied calls
+    inherit that conversation/iframe binding for provenance.
+    """
+
+    tool_use_id: str
+    tool_name: str
+    arguments: Dict[str, Any] = {}
+
+
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
@@ -67,6 +87,9 @@ class InvocationRequest(BaseModel):
     # (MainAgent / ChatAgent) when omitted, so existing clients are unaffected.
     # Pass "skill" to route through SkillAgent's progressive skill disclosure.
     agent_type: Optional[str] = None
+    # When set, this invocation is an app-initiated tools/call proxied from
+    # an embedded MCP App (PR #5). `message` is ignored; no model turn runs.
+    app_tool_call: Optional[AppToolCallEntry] = None
 
 
 class InvocationResponse(BaseModel):

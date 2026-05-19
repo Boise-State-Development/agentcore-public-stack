@@ -60,14 +60,19 @@ interface Harness {
   host: FakeHostWindow;
   proxy: FakeProxyWindow;
   openLink: ReturnType<typeof vi.fn>;
+  proxyToolCall: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
   toolResult: { value: unknown | null };
 }
 
-function makeBridge(): Harness {
+function makeBridge(opts: { withProxy?: boolean } = {}): Harness {
   const host = new FakeHostWindow();
   const proxy = new FakeProxyWindow();
   const openLink = vi.fn();
+  const proxyToolCall = vi.fn(async () => ({
+    content: [{ type: 'text', text: 'tool-ok' }],
+    isError: false,
+  }));
   const warn = vi.fn();
   const toolResult: { value: unknown | null } = {
     value: { content: [{ type: 'text', text: 'ok' }], isError: false },
@@ -82,10 +87,12 @@ function makeBridge(): Harness {
     getToolResult: () => toolResult.value,
     getHostContext: () => ({ theme: 'dark' }),
     openLink,
+    // Default harness can proxy; opt out to assert the no-capability path.
+    ...(opts.withProxy === false ? {} : { proxyToolCall }),
     onWarn: warn,
   });
   bridge.start();
-  return { bridge, host, proxy, openLink, warn, toolResult };
+  return { bridge, host, proxy, openLink, proxyToolCall, warn, toolResult };
 }
 
 /** Drive the handshake up to (but not including) `initialized`. */
@@ -292,5 +299,92 @@ describe('McpAppBridge', () => {
     const hc = h.proxy.byMethod('ui/notifications/host-context-changed');
     expect(hc).toHaveLength(1);
     expect(hc[0].params).toEqual({ theme: 'light' });
+  });
+
+  // ── PR #5: app-initiated tools/call proxying ───────────────────────────
+
+  it('advertises serverTools only when a proxy is available', () => {
+    handshake(h);
+    h.host.deliver(
+      { jsonrpc: '2.0', id: 'i1', method: 'ui/initialize', nonce: NONCE, params: {} },
+      h.proxy,
+    );
+    expect(h.proxy.byId('i1').result.hostCapabilities.serverTools).toBeDefined();
+
+    const noProxy = makeBridge({ withProxy: false });
+    handshake(noProxy);
+    noProxy.host.deliver(
+      { jsonrpc: '2.0', id: 'i2', method: 'ui/initialize', nonce: NONCE, params: {} },
+      noProxy.proxy,
+    );
+    expect(
+      noProxy.proxy.byId('i2').result.hostCapabilities.serverTools,
+    ).toBeUndefined();
+  });
+
+  it('proxies a tools/call and returns the CallToolResult to the View', async () => {
+    handshake(h);
+    h.host.deliver(
+      {
+        jsonrpc: '2.0',
+        id: 'c1',
+        method: 'tools/call',
+        nonce: NONCE,
+        params: { name: 'widget_tool', arguments: { q: 'x' } },
+      },
+      h.proxy,
+    );
+    expect(h.proxyToolCall).toHaveBeenCalledWith('widget_tool', { q: 'x' });
+    // proxyToolCall is async — let the microtask settle.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.proxy.byId('c1').result).toEqual({
+      content: [{ type: 'text', text: 'tool-ok' }],
+      isError: false,
+    });
+  });
+
+  it('answers tools/call with an error when the proxy rejects', async () => {
+    h.proxyToolCall.mockRejectedValueOnce(new Error('not app-visible'));
+    handshake(h);
+    h.host.deliver(
+      {
+        jsonrpc: '2.0',
+        id: 'c2',
+        method: 'tools/call',
+        nonce: NONCE,
+        params: { name: 'blocked', arguments: {} },
+      },
+      h.proxy,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.proxy.byId('c2').error.message).toBe('not app-visible');
+  });
+
+  it('rejects tools/call with no tool name', () => {
+    handshake(h);
+    h.host.deliver(
+      { jsonrpc: '2.0', id: 'c3', method: 'tools/call', nonce: NONCE, params: {} },
+      h.proxy,
+    );
+    expect(h.proxy.byId('c3').error.code).toBe(-32000);
+    expect(h.proxyToolCall).not.toHaveBeenCalled();
+  });
+
+  it('answers tools/call method-not-found when the host cannot proxy', () => {
+    const np = makeBridge({ withProxy: false });
+    handshake(np);
+    np.host.deliver(
+      {
+        jsonrpc: '2.0',
+        id: 'c4',
+        method: 'tools/call',
+        nonce: NONCE,
+        params: { name: 'widget_tool' },
+      },
+      np.proxy,
+    );
+    expect(np.proxy.byId('c4').error.code).toBe(-32601);
   });
 });

@@ -15,7 +15,7 @@ import time
 from typing import AsyncGenerator, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
 from agents.main_agent.session.session_factory import SessionFactory
@@ -41,6 +41,7 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
 from apis.shared.user_settings.repository import UserSettingsRepository
 
+from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
 
@@ -682,6 +683,54 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request received (resume=%s, continue_truncated=%s)" % (is_resume, is_continuation)
     )
     logger.info("Message received")
+
+    # App-initiated tools/call (MCP Apps PR #5). Like resume/continuation it
+    # bypasses quota / RAG / file resolution / title — there is no model
+    # turn. We rebuild the conversation agent (so the MCP client session +
+    # auth are wired exactly as for a model-driven call), dispatch the one
+    # named tool, publish synthesized tool_use/tool_result into the thread
+    # via the per-session broker, and return the CallToolResult as JSON for
+    # app-api to relay back to the iframe. Inert behind the host flag (the
+    # UIToolCatalog is empty, so dispatch rejects every call as not
+    # app-visible).
+    if input_data.app_tool_call is not None:
+        atc = input_data.app_tool_call
+        try:
+            request_inference_params = dict(input_data.inference_params or {})
+            caching_enabled, inference_params = await _resolve_model_settings(
+                model_id=input_data.model_id,
+                explicit_caching_enabled=input_data.caching_enabled,
+                request_inference_params=request_inference_params,
+            )
+            agent = await get_agent(
+                session_id=input_data.session_id,
+                user_id=user_id,
+                auth_token=auth_token,
+                enabled_tools=input_data.enabled_tools,
+                model_id=input_data.model_id,
+                system_prompt=input_data.system_prompt,
+                caching_enabled=caching_enabled,
+                provider=input_data.provider,
+                inference_params=inference_params,
+                agent_type=input_data.agent_type,
+                is_resume=False,
+            )
+            payload = await dispatch_app_tool_call(
+                agent,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                tool_use_id=atc.tool_use_id,
+                tool_name=atc.tool_name,
+                arguments=atc.arguments,
+            )
+            return JSONResponse(payload)
+        except AppToolCallError as e:
+            return JSONResponse({"error": e.message}, status_code=e.code)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.error("app tools/call invocation failed", exc_info=True)
+            return JSONResponse({"error": "Internal error"}, status_code=500)
 
     if input_data.enabled_tools:
         logger.info(f"Enabled tools ({len(input_data.enabled_tools)})")

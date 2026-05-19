@@ -20,6 +20,7 @@ import { McpAppStateService } from '../../../../../services/mcp-apps/mcp-app-sta
 import { StreamParserService } from '../../../../../services/chat/stream-parser.service';
 import { ThemeService } from '../../../../../../components/topnav/components/theme-toggle/theme.service';
 import { McpAppBridge } from '../../../../../services/mcp-apps/mcp-app-bridge';
+import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 
 /**
  * MCP App renderer (SEP-1865), PR #4 of
@@ -71,6 +72,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   readonly toolUseId = input<string>();
 
   private readonly mcpAppState = inject(McpAppStateService);
+  private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly streamParser = inject(StreamParserService);
   private readonly theme = inject(ThemeService);
   private readonly sanitizer = inject(DomSanitizer);
@@ -148,6 +150,12 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       openLink: (url) => {
         this.win?.open(url, '_blank', 'noopener,noreferrer');
       },
+      proxyToolCall: (toolName, args) =>
+        this.mcpAppProxy.proxyToolCall(
+          this.toolUseId() ?? '',
+          toolName,
+          args,
+        ),
     });
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));
