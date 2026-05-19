@@ -44,10 +44,12 @@ export interface AppConfig {
  * docs/kaizen/scoping/mcp-apps-host-renderer.md sequence).
  *
  * Provisions a dedicated cross-origin shell (mcp-sandbox.{domainName}) that
- * later PRs (#4+) point the SPA's <mcp-app-frame> at. Standing this stack up
- * is inert: nothing consumes its SSM origin export until the frontend wiring
- * lands, and the whole host renderer stays behind MCP_APPS_HOST_ENABLED
- * (flipped in PR #7).
+ * the SPA's <mcp-app-frame> is pointed at. When `mcpSandbox.enabled`, the
+ * inference-api stack consumes this stack's SSM origin export into
+ * `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` (conditional-SSM pattern, mirrors
+ * artifacts). The host renderer is gated by MCP_APPS_HOST_ENABLED, flipped
+ * on in PR #7; with this stack disabled the surface stays dormant because
+ * the SPA has no proxy origin to frame an App in.
  */
 export interface McpSandboxConfig {
   // When false the stack is not instantiated at all (bin/infrastructure.ts

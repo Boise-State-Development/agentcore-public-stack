@@ -16,9 +16,9 @@ authoritative spec-MUST "reject tools whose visibility excludes 'app'"
 gate lives in the inference-api dispatch (`dispatch_app_tool_call`). This
 boundary's contribution is auth + request validation + the bearer hand-off.
 
-Inert until PR #7 flips `AGENTCORE_MCP_APPS_HOST_ENABLED`: with the host
-flag off the inference-api catalog is empty and every call is rejected
-there as not app-visible.
+Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7):
+with the host flag off the inference-api catalog is empty and every call
+is rejected there as not app-visible.
 """
 
 from __future__ import annotations

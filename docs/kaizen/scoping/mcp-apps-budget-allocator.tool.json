@@ -1,0 +1,16 @@
+{
+  "_comment": "Example ToolCreateRequest body for registering the modelcontextprotocol/ext-apps `budget-allocator-server` as an MCP-Apps-capable external MCP tool. POST this to `/admin/tools/` on the App API (requires an admin session). The form-style App exercises ui/update-model-context + app-initiated tools/call without 3D/charting backend infra. Run the example server in HTTP mode first (see the runbook in .github/docs/deploy/step-04-deploy.md): `cd examples/budget-allocator-server && npm run start:http` → http://localhost:3001/mcp. Adjust serverUrl for a deployed server. authType `none` is only appropriate for an unauthenticated local/dev server — use aws-iam / api-key / oauth2 for anything real.",
+  "toolId": "budget_allocator",
+  "displayName": "Budget Allocator",
+  "description": "Interactive budget-allocation MCP App (modelcontextprotocol/ext-apps example) — sliders, presets, and benchmarks. Dogfood server for the MCP Apps host renderer.",
+  "category": "data",
+  "protocol": "mcp_external",
+  "status": "active",
+  "isPublic": false,
+  "enabledByDefault": false,
+  "mcpConfig": {
+    "serverUrl": "http://localhost:3001/mcp",
+    "transport": "streamable-http",
+    "authType": "none"
+  }
+}

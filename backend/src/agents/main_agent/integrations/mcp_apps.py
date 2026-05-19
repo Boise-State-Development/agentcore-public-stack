@@ -15,10 +15,10 @@ surface for the MCP Apps extension (SEP-1865):
    Strands agent's tool list — the model must never see app-only tools — while
    the full metadata stays in the catalog.
 
-The entire surface is inert unless `AGENTCORE_MCP_APPS_HOST_ENABLED=true`
-(default false until PR #7 flips it on). When the flag is off, no extension is
-advertised and no tool is filtered or recorded — behavior is byte-for-byte
-unchanged.
+The entire surface is gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default
+true since PR #7; set it to `false` to opt an environment back out). When
+the flag is off, no extension is advertised and no tool is filtered or
+recorded — behavior is byte-for-byte unchanged.
 
 Why a `ClientSession` symbol patch: Strands' `MCPClient` constructs the MCP
 SDK `ClientSession` itself inside its background thread and exposes no hook to

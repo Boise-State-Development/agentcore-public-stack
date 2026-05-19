@@ -72,6 +72,34 @@ The user who completed the first-boot setup is automatically the system admin.
 > [!TIP]
 > To add federated identity providers (Entra ID, Okta, Google, etc.), use the admin dashboard's authentication settings. No redeployment is needed.
 
+### 5. (Optional) MCP Apps dogfood — end-to-end
+
+Run this only if you've enabled the MCP Apps host renderer (MCP Sandbox stack deployed and an MCP-Apps server registered — see [Register an MCP-Apps-capable MCP server](./step-04-deploy.md#register-an-mcp-apps-capable-mcp-server)). It is the manual e2e scenario for the host-renderer initiative and walks every host↔App interaction. Using the `budget-allocator-server` example from the runbook:
+
+**Setup**
+- [ ] `budget-allocator-server` running over Streamable HTTP and registered as an `mcp_external` tool, granted to your role
+- [ ] `AGENTCORE_MCP_APPS_HOST_ENABLED=true` (default) and `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` resolves to the deployed `mcp-sandbox.{domain}` origin
+- [ ] Your SPA origin is in the sandbox's CSP `frame-ancestors`
+
+**Scenario** — in a fresh chat, ask the agent to "help me allocate a budget" (or anything that invokes the tool):
+
+- [ ] **Resource fetch** — a `tool_use` then `tool_result` card appears; backend logs show a server-side `resources/read` for the tool's `ui://…` resource (no client fetch)
+- [ ] **Iframe render** — the App renders *inside* the tool card: a `ui_resource` SSE event arrives with a **non-empty** `sandboxOrigin`, and the iframe is sourced from that origin (not `srcdoc` against the SPA origin)
+- [ ] **Tool-input push** — the App shows the arguments the model called it with (host pushed `ui/notifications/tool-input` from the active stream)
+- [ ] **App-initiated `tools/call`** — drive the form (move a slider / pick a preset) so the App calls a server tool; the call shows up as its own tool card in the thread *and* the App updates from the `ui/notifications/tool-result` it gets back
+- [ ] **`ui/update-model-context` mutates the next turn** — after changing the allocation, send a new chat message that asks about it (e.g. "is my current split reasonable?"); the model's reply reflects the App's latest state — i.e. context written via `ui/update-model-context` was merged into the **next** turn (not the one that opened the App)
+- [ ] **`ui/open-link` consent prompt** — trigger a link-open from the App (e.g. an "industry benchmarks" link); an inline consent prompt appears in the message list (modeled on the OAuth-consent prompt) and the link only opens after you approve. (Consent is **frontend-only** — there is no `ui_consent_required` SSE event; don't look for one.)
+
+<details>
+<summary>The App card appears but the iframe is blank</summary>
+
+In order of likelihood:
+1. `sandboxOrigin` is empty on the `ui_resource` event → the MCP Sandbox stack isn't deployed, or `CDK_MCP_SANDBOX_ENABLED` wasn't `true` when the Inference API deployed (it consumes `/{prefix}/mcp-sandbox/origin` conditionally).
+2. The SPA origin isn't in the sandbox CSP `frame-ancestors` → the browser blocks the frame (console shows a `frame-ancestors` violation). Redeploy McpSandbox with the right origin (`CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` for localhost).
+3. The server didn't return `_meta.ui` on `tools/list`, or its `ui://` resource isn't `text/html;profile=mcp-app` → it isn't actually MCP-Apps-capable; re-check with the discover endpoint and the server's own logs.
+
+</details>
+
 ---
 
 ## You're Done!

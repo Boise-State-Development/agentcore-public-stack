@@ -169,7 +169,7 @@ To enable, set these GitHub environment variables before running:
 - `CDK_MCP_SANDBOX_CERTIFICATE_ARN` — ACM cert ARN that covers `mcp-sandbox.{domain}`. **Must be in `us-east-1`** (CloudFront requirement). The same wildcard-depth caveat as Artifacts applies: a `*.example.com` cert covers `mcp-sandbox.example.com` but **not** `mcp-sandbox.alpha.example.com`. If `CDK_DOMAIN_NAME` is a subdomain, issue a dedicated `us-east-1` cert for `*.{CDK_DOMAIN_NAME}`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates).
 - `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` *(optional, default none)* — comma-separated extra origins allowed to embed the proxy iframe via CSP `frame-ancestors`, on top of `https://{domain}`. Set to `http://localhost:4200` to point a local SPA at this environment. **Leave unset in production** — every listed origin can frame the proxy. Prefer a one-off targeted `cdk deploy '*McpSandboxStack*'` with this var exported over committing it as a CI variable, so localhost never lands in automated shared-env deploys.
 
-The sandbox origin is intentionally a sibling subdomain (not the SPA origin), matching the Artifacts pattern: it is the **outer** half of the spec's Sandbox Proxy pattern, giving a stable cross-origin boundary so the inner MCP App content frame's `allow-same-origin` never reaches the SPA's cookies/`localStorage`/app API. **This stack is inert on its own** — nothing consumes its `/mcp-sandbox/origin` SSM export until the frontend `<mcp-app-frame>` lands in a later PR, and the whole feature stays behind `MCP_APPS_HOST_ENABLED` until the initiative's final PR. Standing it up early is safe and changes nothing user-facing.
+The sandbox origin is intentionally a sibling subdomain (not the SPA origin), matching the Artifacts pattern: it is the **outer** half of the spec's Sandbox Proxy pattern, giving a stable cross-origin boundary so the inner MCP App content frame's `allow-same-origin` never reaches the SPA's cookies/`localStorage`/app API. When this stack is enabled, the Inference API conditionally consumes its `/mcp-sandbox/origin` SSM export into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` and surfaces it on the `ui_resource` SSE event so the SPA knows where to frame an App. The MCP Apps host surface is now on by default (`AGENTCORE_MCP_APPS_HOST_ENABLED=true` since PR #7), but **stays dormant until an MCP-Apps-capable server is registered** in the tool catalog — see [Register an MCP-Apps-capable MCP server](#register-an-mcp-apps-capable-mcp-server) below. If you skip this stack the surface stays dormant regardless, because the SPA has no proxy origin to frame an App in.
 
 </details>
 
@@ -222,6 +222,77 @@ You can re-run this workflow later to update seed data.
 > Authentication is handled by Cognito's first-boot flow — no auth provider seeding is needed. The first person to access the application will create the admin account directly.
 
 </details>
+
+---
+
+## Register an MCP-Apps-capable MCP server
+
+The MCP Apps host renderer (`docs/kaizen/scoping/mcp-apps-host-renderer.md`) is **on by default** (`AGENTCORE_MCP_APPS_HOST_ENABLED=true` since PR #7). But it stays completely dormant until you register an MCP-Apps-capable MCP server in the tool catalog — there is no built-in MCP App. Registration is a normal **tool-catalog** operation (DynamoDB, via the admin API); it is *not* a code constant or part of bootstrap seeding, so each environment opts in explicitly.
+
+### What "MCP-Apps-capable" means
+
+A server is MCP-Apps-capable when, on top of being a normal external MCP server, it:
+
+- advertises `_meta.ui` on its `tools/list` entries (a `resourceUri` of the form `ui://…` plus a `visibility` that includes `app`), and
+- serves that `ui://` resource via `resources/read` as `text/html;profile=mcp-app`.
+
+Our host advertises the `io.modelcontextprotocol/ui` extension on every outbound MCP `initialize` automatically (Gateway + external clients) — the server side needs no per-server opt-in here. Servers that don't speak the extension simply ignore it and behave as plain MCP tools.
+
+### Prerequisites
+
+1. **MCP Sandbox stack deployed** (`CDK_MCP_SANDBOX_ENABLED=true`, see *Deploy MCP Sandbox (Optional)* under [What Each Workflow Does](#what-each-workflow-does)). Without it the Inference API has no `/{prefix}/mcp-sandbox/origin` SSM value to consume, `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` stays empty, and the SPA has no cross-origin shell to frame the App in — every other piece can be wired and the App still won't render.
+2. **An MCP-Apps server reachable over Streamable HTTP.** External MCP tools connect via the Streamable-HTTP client (not stdio). Run the example server in HTTP mode (below).
+3. **Admin access** to the running App API (admin session cookie; the tool admin endpoints chain through `require_admin`).
+
+### Step 1 — Run the example server (dogfood)
+
+We dogfood with [`modelcontextprotocol/ext-apps` → `budget-allocator-server`](https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/budget-allocator-server) — a form-style App (sliders, presets, benchmarks) that exercises `ui/update-model-context` and app-initiated `tools/call` without any 3D/charting backend infra. `scenario-modeler-server` works the same way if you prefer it.
+
+```bash
+git clone https://github.com/modelcontextprotocol/ext-apps
+cd ext-apps/examples/budget-allocator-server
+npm install
+npm run start:http          # stateless Streamable HTTP on http://localhost:3001/mcp
+```
+
+(Override the port with `PORT=…`. The README's default config is stdio — use `start:http`, since external MCP tools here are Streamable-HTTP only.)
+
+### Step 2 — Register it in the tool catalog
+
+Either use the **Admin UI** (Settings → Tools → Add tool → protocol *MCP (external)*) or the admin API directly. A ready-to-POST body is committed at [`docs/kaizen/scoping/mcp-apps-budget-allocator.tool.json`](../../../docs/kaizen/scoping/mcp-apps-budget-allocator.tool.json).
+
+Optionally pre-flight discovery (lists the server's tool names so you can confirm reachability/auth before creating the catalog entry):
+
+```bash
+curl -X POST "$APP_API/admin/tools/discover" \
+  -H 'Content-Type: application/json' --cookie "$ADMIN_COOKIE" \
+  -d '{"serverUrl":"http://localhost:3001/mcp","transport":"streamable-http","authType":"none"}'
+```
+
+Then create the catalog entry:
+
+```bash
+curl -X POST "$APP_API/admin/tools/" \
+  -H 'Content-Type: application/json' --cookie "$ADMIN_COOKIE" \
+  -d @docs/kaizen/scoping/mcp-apps-budget-allocator.tool.json
+```
+
+`authType: none` is only appropriate for an unauthenticated local/dev server. A real deployed MCP-Apps server uses `aws-iam` (Lambda Function URL / API Gateway behind SigV4), `api-key` (+ `secretArn`), or `oauth2` — exactly like any other external MCP tool. After creating the tool, grant it to the relevant App roles (Settings → Tools → Roles, or the `/admin/tools/{id}/roles` endpoints); a freshly created tool is in the catalog but not yet visible to any role.
+
+### Step 3 — Local-dev environment
+
+When running the backend locally (App API + Inference API), set in `backend/src/.env` (template: `backend/src/.env.example`):
+
+| Var | Value | Why |
+|-----|-------|-----|
+| `AGENTCORE_MCP_APPS_HOST_ENABLED` | `true` | Default; set `false` to opt this env out entirely. |
+| `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` | the deployed `mcp-sandbox.{domain}` origin (SSM `/{prefix}/mcp-sandbox/origin`) | The agent puts this on the `ui_resource` SSE event as `sandboxOrigin`; the SPA frames the App in it. Empty ⇒ no render. There is no local sandbox shell — point at a deployed one. |
+
+For the local SPA (`http://localhost:4200`) to be allowed to embed that deployed sandbox origin, the sandbox stack must list it in CSP `frame-ancestors` — deploy McpSandbox once with `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS=http://localhost:4200` (one-off targeted deploy; never commit localhost as a shared CI variable — see *Deploy MCP Sandbox (Optional)* under [What Each Workflow Does](#what-each-workflow-does)).
+
+### Step 4 — Verify end-to-end
+
+In a chat, prompt the agent so it invokes the registered tool. You should see, in order: a `tool_use`/`tool_result` card, then the App's iframe rendering inside it (`ui_resource` SSE event carrying a non-empty `sandboxOrigin`). Driving the form should push `ui/notifications/tool-input`, app-initiated buttons should round-trip through `tools/call`, and an `ui/update-model-context` write should be visible to the model on the **next** turn. If the iframe stays blank, the `sandboxOrigin` is almost always empty (prerequisite 1) or the SPA origin isn't in the sandbox `frame-ancestors` (Step 3).
 
 ---
 

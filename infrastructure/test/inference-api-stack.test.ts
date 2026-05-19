@@ -160,6 +160,39 @@ describe('InferenceApiStack', () => {
         }),
       });
     });
+
+    // MCP Apps sandbox-proxy origin (PR #7 of
+    // docs/kaizen/scoping/mcp-apps-host-renderer.md). Conditional-SSM
+    // pattern: only wired when the mcp-sandbox stack is deployed, so a
+    // disabled environment never issues an SSM read against a parameter
+    // that doesn't exist.
+    test('omits AGENTCORE_MCP_APPS_SANDBOX_ORIGIN when mcp-sandbox disabled', () => {
+      // Default mock config has mcpSandbox.enabled = false.
+      template.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
+        EnvironmentVariables: Match.objectLike({
+          AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: Match.absent(),
+        }),
+      });
+    });
+
+    test('wires AGENTCORE_MCP_APPS_SANDBOX_ORIGIN when mcp-sandbox enabled', () => {
+      const enabledConfig = createMockConfig({
+        mcpSandbox: { enabled: true, extraFrameAncestors: [] },
+      });
+      const app = createMockApp(enabledConfig, ['InferenceApiStack']);
+      const stack = new InferenceApiStack(app, 'SandboxEnabledStack', {
+        config: enabledConfig,
+        env: mockEnv(enabledConfig),
+      });
+      Template.fromStack(stack).hasResourceProperties(
+        'AWS::BedrockAgentCore::Runtime',
+        {
+          EnvironmentVariables: Match.objectLike({
+            AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: Match.anyValue(),
+          }),
+        }
+      );
+    });
   });
 
   describe('AgentCore Memory', () => {

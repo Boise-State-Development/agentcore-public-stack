@@ -29,7 +29,7 @@ The write stays on the **app-api boundary** (called from
 `/mcp-apps/proxy-call` after a successful dispatch) so inference-api keeps
 its inference-only scope. Dev/local has no table — every method degrades
 to a no-op / empty list, consistent with the whole MCP Apps surface being
-inert behind `AGENTCORE_MCP_APPS_HOST_ENABLED` until PR #7.
+gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7).
 """
 
 from __future__ import annotations

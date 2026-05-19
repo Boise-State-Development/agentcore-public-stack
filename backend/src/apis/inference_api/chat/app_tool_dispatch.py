@@ -16,8 +16,9 @@ single tool call WITHOUT a model turn:
    per-session broker so the live conversation stream shows the card, and
    return the `CallToolResult` so app-api can hand it back to the iframe.
 
-Inert unless `AGENTCORE_MCP_APPS_HOST_ENABLED=true` (default false) — the
-catalog is empty otherwise, so every call is rejected as not app-visible.
+Inert unless `AGENTCORE_MCP_APPS_HOST_ENABLED=true` (default true since
+PR #7) — the catalog is empty when the flag is off, so every call is
+rejected as not app-visible.
 """
 
 from __future__ import annotations

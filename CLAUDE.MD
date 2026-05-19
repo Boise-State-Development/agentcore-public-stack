@@ -32,7 +32,7 @@ npx cdk deploy --all
 
 ## Key Conventions
 
-- **Deploy order:** Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts — parallel-safe) → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API; Inference API + App API + Frontend conditionally consume `/{prefix}/artifacts/*` SSM params when `CDK_ARTIFACTS_ENABLED=true`)
+- **Deploy order:** Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts, MCP Sandbox — parallel-safe) → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API; Inference API + App API + Frontend conditionally consume `/{prefix}/artifacts/*` SSM params when `CDK_ARTIFACTS_ENABLED=true`; Inference API conditionally consumes `/{prefix}/mcp-sandbox/origin` into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` when `CDK_MCP_SANDBOX_ENABLED=true`)
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
@@ -47,7 +47,7 @@ npx cdk deploy --all
 | `content_block_start/delta/stop` | Streaming content |
 | `message_stop` | End of message |
 | `tool_use` / `tool_result` | Tool invocation and result |
-| `ui_resource` | MCP App UI for a tool result (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}`, emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. HTML fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty until the mcp-sandbox stack is deployed). Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default false) |
+| `ui_resource` | MCP App UI for a tool result (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}`, emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. HTML fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty unless the mcp-sandbox stack is deployed — inference-api consumes its SSM origin only when `CDK_MCP_SANDBOX_ENABLED=true`; an empty origin means the SPA cannot frame the App). Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7; set `=false` to opt an environment out) |
 | `stream_error` | Conversational error |
 | `oauth_required` | External MCP tool needs user consent — payload `{providerId, authorizationUrl}`, one event per provider emitted after `message_stop` |
 | `compaction` | Backend rolled older turns into a summary on this turn — payload `{previousCheckpoint, newCheckpoint, summarizedTurns, inputTokens}`, emitted after the final `metadata` event so the badge updates first, before `done` |

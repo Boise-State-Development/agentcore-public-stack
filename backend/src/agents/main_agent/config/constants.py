@@ -113,12 +113,16 @@ class Defaults:
     GATEWAY_MCP_ENABLED = True
 
     # --- MCP Apps (host renderer initiative) ---
-    # Gates the entire MCP Apps host surface. Stays False until PR #7 of
-    # docs/kaizen/scoping/mcp-apps-host-renderer.md flips it on.
-    MCP_APPS_HOST_ENABLED = False
-    # Empty until the mcp-sandbox stack (PR #1) is deployed and the deploy
-    # pipeline wires its SSM origin into the env. Empty string is benign:
-    # the whole surface is inert behind MCP_APPS_HOST_ENABLED anyway.
+    # Gates the entire MCP Apps host surface. Flipped on in PR #7 of
+    # docs/kaizen/scoping/mcp-apps-host-renderer.md (the full #1–#6 chain
+    # landed first). Set AGENTCORE_MCP_APPS_HOST_ENABLED=false to opt a
+    # given environment back out.
+    MCP_APPS_HOST_ENABLED = True
+    # Empty unless the mcp-sandbox stack is deployed: the inference-api CDK
+    # stack wires `/{prefix}/mcp-sandbox/origin` into this env only when
+    # `config.mcpSandbox.enabled` (conditional-SSM, mirrors artifacts).
+    # An empty origin keeps the surface dormant — the SPA has no proxy
+    # origin to frame an App in even with the host flag on.
     MCP_APPS_SANDBOX_ORIGIN = ""
 
     # --- Voice Agent ---
