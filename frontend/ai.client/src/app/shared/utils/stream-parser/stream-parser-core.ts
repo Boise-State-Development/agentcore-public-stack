@@ -40,6 +40,7 @@ import type {
   ToolApprovalRequiredEvent,
   CompactionEvent,
   ArtifactEvent,
+  UiResourceEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -91,6 +92,11 @@ export interface StreamParserCallbacks {
   // Artifact created/updated this turn (existence signal; content is
   // fetched out-of-band via a render token + sandboxed iframe)
   onArtifact?: (data: ArtifactEvent) => void;
+
+  // MCP App UI resource for a tool result (SEP-1865). Inline event,
+  // correlated to its tool-use block by toolUseId; carries the HTML to
+  // render in the sandbox-proxy iframe.
+  onUiResource?: (data: UiResourceEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -424,6 +430,37 @@ export function validateArtifactEvent(data: unknown): data is ArtifactEvent {
 }
 
 /**
+ * Validate UiResourceEvent structure (SEP-1865 MCP App, PR #3 wire shape).
+ *
+ * `html` may legitimately be empty only in degenerate cases; we require it
+ * to be a string but not non-empty so a future server that streams an
+ * empty shell still round-trips. `csp`/`permissions` are objects;
+ * `sandboxOrigin` may be '' until the sandbox stack is deployed.
+ */
+export function validateUiResourceEvent(data: unknown): data is UiResourceEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<UiResourceEvent>;
+
+  return (
+    event.type === 'ui_resource' &&
+    typeof event.toolUseId === 'string' &&
+    event.toolUseId.length > 0 &&
+    typeof event.resourceUri === 'string' &&
+    event.resourceUri.length > 0 &&
+    typeof event.html === 'string' &&
+    typeof event.mimeType === 'string' &&
+    typeof event.sandboxOrigin === 'string' &&
+    typeof event.csp === 'object' &&
+    event.csp !== null &&
+    typeof event.permissions === 'object' &&
+    event.permissions !== null
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -617,6 +654,14 @@ export function processStreamEvent(
           callbacks.onArtifact?.(data);
         } else {
           callbacks.onParseError?.('artifact: invalid data structure');
+        }
+        break;
+
+      case 'ui_resource':
+        if (validateUiResourceEvent(data)) {
+          callbacks.onUiResource?.(data);
+        } else {
+          callbacks.onParseError?.('ui_resource: invalid data structure');
         }
         break;
 

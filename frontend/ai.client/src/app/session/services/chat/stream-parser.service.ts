@@ -19,11 +19,13 @@ import { OAuthConsentService } from '../../../services/oauth-consent/oauth-conse
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { CompactionSummaryService } from './compaction-summary.service';
 import { ArtifactStateService } from '../artifacts/artifact-state.service';
+import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
   CompactionEvent,
   ArtifactEvent,
+  UiResourceEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -70,6 +72,7 @@ export class StreamParserService {
   private toolApprovalService = inject(ToolApprovalService);
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
+  private mcpAppState = inject(McpAppStateService);
 
   // =========================================================================
   // State Signals
@@ -359,6 +362,14 @@ export class StreamParserService {
           }
         }
         this.artifactState.recordLive(data, lastAssistantId);
+      },
+
+      onUiResource: (data: UiResourceEvent) => {
+        // Inline event (arrives right after its tool_result, mid-stream),
+        // unlike the post-message_stop side channels above — just record
+        // it keyed by toolUseId. The tool-use renderer picks it up
+        // reactively and swaps in the MCP App frame.
+        this.mcpAppState.recordLive(data);
       },
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {

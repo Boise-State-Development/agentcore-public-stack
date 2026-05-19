@@ -10,6 +10,8 @@ import { NgComponentOutlet } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from './json-syntax-highlight.pipe';
 import { ContentBlock, ToolUseData } from '../../../../services/models/message.model';
 import { ToolRendererRegistryService } from './tool-renderer-registry.service';
+import { McpAppStateService } from '../../../../services/mcp-apps/mcp-app-state.service';
+import { McpAppFrameComponent } from './renderers/mcp-app-frame.component';
 
 @Component({
   selector: 'app-tool-use',
@@ -29,6 +31,7 @@ export class ToolUseComponent {
   isDetailsExpanded = signal(false);
 
   private readonly rendererRegistry = inject(ToolRendererRegistryService);
+  private readonly mcpAppState = inject(McpAppStateService);
 
   /** Extract tool use data from the content block */
   toolUseData = computed(() => {
@@ -44,6 +47,9 @@ export class ToolUseComponent {
   toolName = computed(() => {
     return this.toolUseData().name || 'Unknown Tool';
   });
+
+  /** Originating tool-use id (correlates the MCP App resource + tool data). */
+  toolUseId = computed(() => this.toolUseData().toolUseId);
 
   /** Tool input */
   toolInput = computed(() => {
@@ -66,17 +72,39 @@ export class ToolUseComponent {
   });
 
   /**
-   * Result-renderer component for this tool, resolved from the registry.
-   * Unregistered tools fall back to the default text/JSON/image renderer.
-   * Reads the registry signal, so it stays reactive to late registrations.
+   * Result-renderer component for this tool.
+   *
+   * An MCP App (SEP-1865) takes precedence: when this tool invocation
+   * produced a `ui_resource` event, render the sandbox-proxy frame. App
+   * tool names are server-defined and per-invocation, so this can't be a
+   * static name→component registry entry (PR #0) — it keys off the
+   * toolUseId-scoped resource instead, but stays a single
+   * `[ngComponentOutlet]` with no template branch. Otherwise fall back to
+   * the name-keyed registry (default = text/JSON/image). Both reads are
+   * signals, so this stays reactive to a `ui_resource` arriving after the
+   * tool-use block first renders.
    */
-  resultRenderer = computed(() => this.rendererRegistry.resolve(this.toolName()));
+  resultRenderer = computed(() =>
+    this.mcpAppState.has(this.toolUseId())
+      ? McpAppFrameComponent
+      : this.rendererRegistry.resolve(this.toolName()),
+  );
 
-  /** Inputs bound onto the resolved renderer via NgComponentOutlet. */
-  rendererInputs = computed(() => ({
-    result: this.toolResult(),
-    minimized: this.minimized(),
-  }));
+  /**
+   * Inputs bound onto the resolved renderer via NgComponentOutlet.
+   * `toolUseId` is passed ONLY to the MCP App frame: NgComponentOutlet
+   * throws (NG0303) if asked to set an input a component doesn't declare,
+   * and the default/other renderers intentionally don't expose it.
+   */
+  rendererInputs = computed(() => {
+    const base = {
+      result: this.toolResult(),
+      minimized: this.minimized(),
+    };
+    return this.resultRenderer() === McpAppFrameComponent
+      ? { ...base, toolUseId: this.toolUseId() }
+      : base;
+  });
 
   /** Preview of input keys for collapsed state */
   inputKeysPreview = computed(() => {

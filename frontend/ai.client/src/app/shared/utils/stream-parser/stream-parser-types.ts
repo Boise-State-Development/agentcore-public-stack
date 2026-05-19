@@ -176,6 +176,57 @@ export interface ArtifactEvent {
 }
 
 /**
+ * CSP domain allowlists declared by an MCP App resource (SEP-1865
+ * `McpUiResourceCsp`). The sandbox proxy composes the inner iframe's CSP
+ * from these plus the spec's deny-by-default fallbacks.
+ */
+export interface McpUiCsp {
+  connectDomains?: string[];
+  resourceDomains?: string[];
+  frameDomains?: string[];
+  baseUriDomains?: string[];
+}
+
+/**
+ * Sandbox permissions an MCP App resource requested (SEP-1865). Each key,
+ * when present (as an empty object), maps to a Permissions-Policy feature on
+ * the inner iframe's `allow` attribute. Absence = not requested.
+ */
+export interface McpUiPermissions {
+  camera?: Record<string, never>;
+  microphone?: Record<string, never>;
+  geolocation?: Record<string, never>;
+  clipboardWrite?: Record<string, never>;
+}
+
+/**
+ * UI resource event — emitted by the backend (PR #3) right after the
+ * correlated `tool_result` when the tool declared a `ui://` MCP App
+ * resource (SEP-1865). Unlike `artifact`/`oauth_required` this is an
+ * INLINE event during streaming, correlated to its tool-use block by
+ * `toolUseId`. The HTML is fetched server-side via `resources/read` and
+ * inlined here so the frontend needs no MCP client of its own.
+ *
+ * `sandboxOrigin` is the origin of the deployed sandbox-proxy (proxy.html)
+ * the SPA frames the App in; empty until that stack is deployed + wired
+ * (the whole surface is inert behind the backend host flag until then).
+ *
+ * The entire MCP Apps surface stays dark until PR #7 flips the backend
+ * `AGENTCORE_MCP_APPS_HOST_ENABLED` flag, so in practice this event does
+ * not arrive in production yet.
+ */
+export interface UiResourceEvent {
+  type: 'ui_resource';
+  toolUseId: string;
+  resourceUri: string;
+  html: string;
+  mimeType: string;
+  csp: McpUiCsp;
+  permissions: McpUiPermissions;
+  sandboxOrigin: string;
+}
+
+/**
  * Tool result event data structure
  */
 export interface ToolResultEventData {
@@ -215,7 +266,8 @@ export type StreamEventType =
   | 'citation'
   | 'oauth_required'
   | 'compaction'
-  | 'artifact';
+  | 'artifact'
+  | 'ui_resource';
 
 /**
  * Union type of all possible event data types
@@ -238,6 +290,7 @@ export type StreamEventData =
   | OAuthRequiredEvent
   | CompactionEvent
   | ArtifactEvent
+  | UiResourceEvent
   | null
   | undefined;
 

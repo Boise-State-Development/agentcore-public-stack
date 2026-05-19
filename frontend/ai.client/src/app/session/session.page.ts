@@ -17,6 +17,7 @@ import { StreamParserService } from './services/chat/stream-parser.service';
 import { CompactionSummaryService } from './services/chat/compaction-summary.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
+import { McpAppStateService } from './services/mcp-apps/mcp-app-state.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
@@ -47,6 +48,7 @@ export class ConversationPage implements OnDestroy {
   private streamParserService = inject(StreamParserService);
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
+  private mcpAppState = inject(McpAppStateService);
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
@@ -305,6 +307,11 @@ export class ConversationPage implements OnDestroy {
       // loads so a prior session's cards don't bleed in, then re-hydrate
       // from the app-api list endpoint below.
       this.artifactState.reset();
+
+      // MCP App frames persist for the conversation's lifetime per the
+      // scoping doc; teardown is on conversation change. No re-hydration:
+      // the inline `ui_resource` event only arrives live during a stream.
+      this.mcpAppState.reset();
 
       if (id) {
         // Update the messages signal reference (this triggers reactivity)

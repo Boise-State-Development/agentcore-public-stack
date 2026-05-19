@@ -21,6 +21,14 @@ export interface ToolResultData {
 export interface ToolResultRenderer {
   readonly result: InputSignal<ToolResultData>;
   readonly minimized: InputSignal<boolean>;
+  /**
+   * Originating tool-use id. Optional: existing renderers don't declare it
+   * and the host only binds it when the resolved renderer is one that
+   * declares it (the MCP App frame) — NgComponentOutlet throws if asked to
+   * set an input a component doesn't expose, so it must not be passed
+   * uniformly.
+   */
+  readonly toolUseId?: InputSignal<string | undefined>;
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   validateConversationalStreamError,
   validateCitation,
   validateArtifactEvent,
+  validateUiResourceEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -419,6 +420,52 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateUiResourceEvent', () => {
+    const valid = {
+      type: 'ui_resource',
+      toolUseId: 'tu-1',
+      resourceUri: 'ui://srv/widget',
+      html: '<h1>hi</h1>',
+      mimeType: 'text/html;profile=mcp-app',
+      csp: { connectDomains: ['https://api.test'] },
+      permissions: { clipboardWrite: {} },
+      sandboxOrigin: 'https://mcp-sandbox.example.com'
+    };
+
+    it('should return true for a valid ui_resource event', () => {
+      expect(validateUiResourceEvent(valid)).toBe(true);
+    });
+
+    it('should accept empty html and empty sandboxOrigin', () => {
+      expect(validateUiResourceEvent({ ...valid, html: '', sandboxOrigin: '' })).toBe(true);
+    });
+
+    it('should return false for null/undefined', () => {
+      expect(validateUiResourceEvent(null)).toBe(false);
+      expect(validateUiResourceEvent(undefined)).toBe(false);
+    });
+
+    it('should return false when type is wrong', () => {
+      expect(validateUiResourceEvent({ ...valid, type: 'artifact' })).toBe(false);
+    });
+
+    it('should return false for empty toolUseId or resourceUri', () => {
+      expect(validateUiResourceEvent({ ...valid, toolUseId: '' })).toBe(false);
+      expect(validateUiResourceEvent({ ...valid, resourceUri: '' })).toBe(false);
+    });
+
+    it('should return false when csp/permissions are not objects', () => {
+      expect(validateUiResourceEvent({ ...valid, csp: null })).toBe(false);
+      expect(validateUiResourceEvent({ ...valid, permissions: 'x' })).toBe(false);
+    });
+
+    it('should return false for missing fields', () => {
+      expect(
+        validateUiResourceEvent({ type: 'ui_resource', toolUseId: 'tu-1' }),
+      ).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -436,6 +483,7 @@ describe('stream-parser-core', () => {
         onStreamError: vi.fn(),
         onCitation: vi.fn(),
         onArtifact: vi.fn(),
+        onUiResource: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -507,6 +555,26 @@ describe('stream-parser-core', () => {
     it('should call onParseError for an invalid artifact event', () => {
       processStreamEvent('artifact', { type: 'artifact', artifactId: '' }, callbacks);
       expect(callbacks.onParseError).toHaveBeenCalledWith('artifact: invalid data structure');
+    });
+
+    it('should call onUiResource for a valid ui_resource event', () => {
+      const data = {
+        type: 'ui_resource',
+        toolUseId: 'tu-1',
+        resourceUri: 'ui://srv/widget',
+        html: '<main>app</main>',
+        mimeType: 'text/html;profile=mcp-app',
+        csp: {},
+        permissions: {},
+        sandboxOrigin: ''
+      };
+      processStreamEvent('ui_resource', data, callbacks);
+      expect(callbacks.onUiResource).toHaveBeenCalledWith(data);
+    });
+
+    it('should call onParseError for an invalid ui_resource event', () => {
+      processStreamEvent('ui_resource', { type: 'ui_resource', toolUseId: '' }, callbacks);
+      expect(callbacks.onParseError).toHaveBeenCalledWith('ui_resource: invalid data structure');
     });
   });
 
