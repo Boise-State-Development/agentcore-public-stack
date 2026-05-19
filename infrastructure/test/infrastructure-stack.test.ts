@@ -108,17 +108,58 @@ describe('InfrastructureStack', () => {
   });
 
   // ------------------------------------------------------------------
-  // 6. All DynamoDB tables are created (count)
+  // 6. All DynamoDB tables are created — enumerated, not counted
   // ------------------------------------------------------------------
-  test('creates all 18 DynamoDB tables', () => {
-    // The hard-coded count drifts as tables are added — bump it when you
-    // intentionally provision a new table; investigate if it changed
-    // unexpectedly. Today: oidc_state, bff_sessions, voice_ticket_replay,
-    // users, app_roles, api_keys, oauth_providers, oauth_user_tokens,
-    // user_quotas, quota_events, sessions_metadata, user_cost_summary,
-    // system_cost_rollup, managed_models, user_settings, auth_providers,
-    // user_files, shared_conversations.
-    template.resourceCountIs('AWS::DynamoDB::Table', 18);
+  test('provisions exactly the expected set of DynamoDB tables', () => {
+    // A bare resourceCountIs() number rots silently: a table gets added
+    // and the count just sits red (or worse, someone bumps the number
+    // without checking what changed). Instead, enumerate every table by
+    // the name-suffix passed to getResourceName() in
+    // infrastructure-stack.ts, with the reason it exists. When you add or
+    // remove a `new dynamodb.Table(...)`, update this map in the SAME
+    // change — the assertion below diffs the synthesized table names
+    // against this set, so an unjustified add/remove fails with the exact
+    // table name, not an opaque "expected 18 got 19".
+    const expectedTables: Record<string, string> = {
+      'oidc-state': 'OIDC login state/nonce (TTL)',
+      'bff-sessions': 'BFF httpOnly session store',
+      'voice-ticket-replay': 'voice-mode ticket replay guard (TTL)',
+      users: 'user directory + profile',
+      'app-roles': 'RBAC role definitions and mappings',
+      'api-keys': 'hashed API keys',
+      'oauth-providers': 'external OAuth provider registry',
+      'oauth-user-tokens': 'per-user external OAuth tokens (CMK)',
+      'user-quotas': 'usage quota assignments',
+      'quota-events': 'quota consumption ledger',
+      'sessions-metadata': 'conversation session metadata (TTL)',
+      'user-cost-summary': 'per-user cost rollup',
+      'system-cost-rollup': 'system-wide cost rollup',
+      'managed-models': 'admin-managed model catalog',
+      'user-settings': 'per-user UI/app settings',
+      'user-menu-links': 'admin-configured user menu links',
+      'auth-providers': 'OIDC auth provider config (stream)',
+      'user-file-uploads': 'uploaded file metadata (TTL, stream)',
+      'shared-conversations': 'publicly shared conversation snapshots',
+    };
+
+    const prefix = config.projectPrefix;
+    const expectedNames = Object.keys(expectedTables)
+      .map((suffix) => `${prefix}-${suffix}`)
+      .sort();
+
+    const tables = template.findResources('AWS::DynamoDB::Table');
+    const actualNames = Object.values(tables)
+      .map((r) => (r as any).Properties.TableName as string)
+      .sort();
+
+    // Exact set equality — the failure diff names the rogue table.
+    expect(actualNames).toEqual(expectedNames);
+    // Count is derived from the justified set, so it can no longer drift
+    // independently of the enumeration above.
+    template.resourceCountIs(
+      'AWS::DynamoDB::Table',
+      Object.keys(expectedTables).length,
+    );
   });
 
   // ------------------------------------------------------------------
