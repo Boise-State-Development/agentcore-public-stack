@@ -33,6 +33,7 @@ from agents.main_agent.integrations.mcp_apps import (
     UICapableMCPClient,
     _UIExtensionClientSession,
     ensure_ui_extension_session_patch,
+    fetch_ui_resource,
     get_ui_tool_catalog,
     record_and_filter_ui_tools,
 )
@@ -300,3 +301,181 @@ class TestFilteredGatewayClientUIFilter:
 
         assert [t.tool_name for t in result] == ["normal"]
         assert get_ui_tool_catalog().get("app_only").resource_uri == "ui://gw/app"
+
+
+# ── PR #3: resources/read fetch path + ui_resource payload ───────────────────
+
+
+class _FakeMCPClient:
+    """Stand-in for a Strands MCPClient at the `resources/read` boundary.
+
+    Mirrors the mock-the-boundary style in `test_external_mcp_client.py`:
+    the unit under test never starts a real session — it only calls
+    `read_resource_sync`, which we record and stub.
+    """
+
+    def __init__(self, result=None, raises: Exception | None = None) -> None:
+        self._result = result
+        self._raises = raises
+        self.read_calls: list = []
+
+    def read_resource_sync(self, uri):
+        self.read_calls.append(uri)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+def _html_resource(
+    *, text="<h1>widget</h1>", mime=MCP_APPS_UI_MIME_TYPE, ui_meta=None
+):
+    """A real `mcp.types.ReadResourceResult` — proves our extraction works
+    against the actual MCP SDK shape, not just a duck-typed fake."""
+    kwargs = {"uri": "ui://srv/widget", "mimeType": mime, "text": text}
+    if ui_meta is not None:
+        kwargs["_meta"] = {MCP_APPS_UI_EXTENSION_KEY: ui_meta}
+    return mcp_types.ReadResourceResult(
+        contents=[mcp_types.TextResourceContents(**kwargs)]
+    )
+
+
+def _seed_catalog(monkeypatch, *, ui, client):
+    """Record a UI tool + its hosting client exactly the way a live
+    `list_tools_sync` would (so the client-passing path is exercised too)."""
+    monkeypatch.setenv(_ENV_FLAG, "true")
+    record_and_filter_ui_tools([_fake_tool("widget", ui=ui)], client=client)
+
+
+class TestFetchUIResource:
+    def test_fetches_via_resources_read_and_inlines_html(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        client = _FakeMCPClient(
+            result=_html_resource(
+                ui_meta={
+                    "csp": {"connectDomains": ["https://api.test"]},
+                    "permissions": ["clipboard-write"],
+                }
+            )
+        )
+        _seed_catalog(
+            monkeypatch,
+            ui={"resourceUri": "ui://srv/widget"},
+            client=client,
+        )
+
+        payload = fetch_ui_resource("widget", "tu-1")
+
+        # Spec MUST: the resource is fetched via resources/read against the
+        # hosting client, addressed by the `ui://` URI — never inlined by us.
+        assert client.read_calls == ["ui://srv/widget"]
+        assert payload == {
+            "type": "ui_resource",
+            "toolUseId": "tu-1",
+            "resourceUri": "ui://srv/widget",
+            "html": "<h1>widget</h1>",
+            "mimeType": MCP_APPS_UI_MIME_TYPE,
+            "csp": {"connectDomains": ["https://api.test"]},
+            "permissions": ["clipboard-write"],
+        }
+
+    def test_inert_when_flag_disabled(self, mcp_apps_clean, monkeypatch):
+        client = _FakeMCPClient(result=_html_resource())
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+        # Flag flipped off *after* catalog seeding: the fetch path itself
+        # must stay inert regardless of catalog contents.
+        monkeypatch.setenv(_ENV_FLAG, "false")
+
+        assert fetch_ui_resource("widget", "tu-1") is None
+        assert client.read_calls == []
+
+    def test_none_for_unknown_or_non_ui_tool(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        assert fetch_ui_resource("never-seen", "tu-1") is None
+
+    def test_none_when_no_hosting_client_recorded(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        # Metadata recorded without a client (e.g. PR #2's catalog-only
+        # path) → we cannot issue resources/read, so no event.
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=None
+        )
+        assert fetch_ui_resource("widget", "tu-1") is None
+
+    def test_resources_read_failure_is_swallowed(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        client = _FakeMCPClient(raises=RuntimeError("session not running"))
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+        assert fetch_ui_resource("widget", "tu-1") is None
+        assert client.read_calls == ["ui://srv/widget"]
+
+    def test_none_when_resource_has_no_inline_html(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        blob = mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.BlobResourceContents(
+                    uri="ui://srv/widget",
+                    mimeType="application/octet-stream",
+                    blob="AAAA",
+                )
+            ]
+        )
+        client = _FakeMCPClient(result=blob)
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+        assert fetch_ui_resource("widget", "tu-1") is None
+
+    def test_csp_permissions_fall_back_to_tool_meta(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        # Resource carries no `_meta.ui`; the tool's `tools/list` `_meta.ui`
+        # (retained verbatim by PR #2 in ToolUIMetadata.raw) supplies them.
+        client = _FakeMCPClient(result=_html_resource(ui_meta=None))
+        _seed_catalog(
+            monkeypatch,
+            ui={
+                "resourceUri": "ui://srv/widget",
+                "csp": {"frameDomains": ["https://embed.test"]},
+                "permissions": ["geolocation"],
+            },
+            client=client,
+        )
+
+        payload = fetch_ui_resource("widget", "tu-9")
+        assert payload is not None
+        assert payload["csp"] == {"frameDomains": ["https://embed.test"]}
+        assert payload["permissions"] == ["geolocation"]
+
+    def test_prefers_mcp_app_mime_when_multiple_text_contents(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        result = mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(
+                    uri="ui://srv/widget",
+                    mimeType="text/plain",
+                    text="ignored",
+                ),
+                mcp_types.TextResourceContents(
+                    uri="ui://srv/widget",
+                    mimeType=MCP_APPS_UI_MIME_TYPE,
+                    text="<main>chosen</main>",
+                ),
+            ]
+        )
+        client = _FakeMCPClient(result=result)
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+
+        payload = fetch_ui_resource("widget", "tu-2")
+        assert payload["html"] == "<main>chosen</main>"
+        assert payload["mimeType"] == MCP_APPS_UI_MIME_TYPE

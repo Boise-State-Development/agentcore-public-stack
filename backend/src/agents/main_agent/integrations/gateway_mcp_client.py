@@ -90,7 +90,9 @@ class FilteredMCPClient(MCPClient):
 
         # Record `_meta.ui` into the catalog and drop app-only tools so the
         # model never sees them (no-op unless the host flag is enabled).
-        filtered_tools = record_and_filter_ui_tools(filtered_tools)
+        # `self` is the client hosting these tools — recorded so PR #3 can
+        # issue `resources/read` against it.
+        filtered_tools = record_and_filter_ui_tools(filtered_tools, client=self)
 
         return PaginatedList(filtered_tools, token=paginated_result.pagination_token)
 

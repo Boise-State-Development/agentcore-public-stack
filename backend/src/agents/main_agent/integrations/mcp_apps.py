@@ -33,7 +33,7 @@ ever changes how the session is constructed.
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import mcp.types as mcp_types
 from mcp.client.session import ClientSession
@@ -75,22 +75,47 @@ class UIToolCatalog:
     here to fetch the UI resource via `resources/read`. Kept in memory because
     `_meta.ui` is discovered live from the server on every `tools/list`, not
     admin-configured, and is re-derived each agent build.
+
+    PR #3 also records the MCP client that surfaced each UI tool, alongside
+    its metadata. `record_and_filter_ui_tools` is invoked from within a
+    client's own `list_tools_sync`, so "the server hosting the tool" is just
+    that client — `read_resource_sync` against it is the spec-mandated
+    `resources/read`. The client's session stays alive for the agent's
+    lifetime (Strands holds MCP clients as tool providers), so it is still
+    active when a tool result arrives mid-stream.
     """
 
     def __init__(self) -> None:
         self._by_tool_name: dict[str, ToolUIMetadata] = {}
+        self._client_by_tool_name: dict[str, Any] = {}
 
-    def record(self, tool_name: str, ui_metadata: ToolUIMetadata) -> None:
+    def record(
+        self,
+        tool_name: str,
+        ui_metadata: ToolUIMetadata,
+        client: Optional[Any] = None,
+    ) -> None:
         self._by_tool_name[tool_name] = ui_metadata
+        if client is not None:
+            self._client_by_tool_name[tool_name] = client
 
     def get(self, tool_name: str) -> Optional[ToolUIMetadata]:
         return self._by_tool_name.get(tool_name)
+
+    def get_client(self, tool_name: str) -> Optional[Any]:
+        """The MCP client that surfaced `tool_name`, or None.
+
+        Used by `fetch_ui_resource` to issue `resources/read` against the
+        same server the tool came from (spec MUST: never inline).
+        """
+        return self._client_by_tool_name.get(tool_name)
 
     def snapshot(self) -> dict[str, ToolUIMetadata]:
         return dict(self._by_tool_name)
 
     def clear(self) -> None:
         self._by_tool_name.clear()
+        self._client_by_tool_name.clear()
 
 
 _ui_tool_catalog: Optional[UIToolCatalog] = None
@@ -104,7 +129,9 @@ def get_ui_tool_catalog() -> UIToolCatalog:
     return _ui_tool_catalog
 
 
-def record_and_filter_ui_tools(tools: List[Any]) -> List[Any]:
+def record_and_filter_ui_tools(
+    tools: List[Any], client: Optional[Any] = None
+) -> List[Any]:
     """Record `_meta.ui` into the catalog and drop model-invisible tools.
 
     Given the `MCPAgentTool` list a Strands `MCPClient` produced from a
@@ -112,6 +139,11 @@ def record_and_filter_ui_tools(tools: List[Any]) -> List[Any]:
     by the agent-facing tool name), and return only the tools the model is
     allowed to see. Tools with no `_meta.ui` are ordinary tools and pass
     through untouched.
+
+    `client` is the MCP client whose `list_tools_sync` produced `tools`. It
+    is recorded alongside each UI tool's metadata so PR #3 can issue
+    `resources/read` against the same server the tool came from. It is
+    optional purely so PR #2's catalog tests can call this without a client.
 
     When the host flag is disabled this is a pure pass-through: nothing is
     recorded and nothing is filtered.
@@ -133,7 +165,7 @@ def record_and_filter_ui_tools(tools: List[Any]) -> List[Any]:
         tool_name = getattr(tool, "tool_name", None) or getattr(
             mcp_tool, "name", "<unknown>"
         )
-        catalog.record(tool_name, ui_metadata)
+        catalog.record(tool_name, ui_metadata, client=client)
 
         if ui_metadata.visible_to_model():
             visible.append(tool)
@@ -146,6 +178,171 @@ def record_and_filter_ui_tools(tools: List[Any]) -> List[Any]:
             )
 
     return visible
+
+
+# =============================================================================
+# resources/read fetch path (PR #3)
+# =============================================================================
+
+# Keys an MCP App resource may carry its `_meta.ui` block under. SEP-1865
+# namespaces it as `io.modelcontextprotocol/ui`; PR #2 also accepts the short
+# `ui` alias on tool `_meta`, so honor both on the resource side too.
+_UI_META_KEYS = (MCP_APPS_UI_EXTENSION_KEY, "ui")
+
+
+def _coerce_meta(meta: Any) -> Dict[str, Any]:
+    """Best-effort `_meta` -> dict. Accepts a dict or a pydantic model."""
+    if isinstance(meta, dict):
+        return meta
+    if meta is not None and hasattr(meta, "model_dump"):
+        try:
+            return meta.model_dump(by_alias=True, exclude_none=True)
+        except Exception:
+            return {}
+    return {}
+
+
+def _ui_block(meta: Any) -> Dict[str, Any]:
+    """Extract the MCP Apps `ui` block from a `_meta` dict, or {}."""
+    data = _coerce_meta(meta)
+    for key in _UI_META_KEYS:
+        block = data.get(key)
+        if isinstance(block, dict):
+            return block
+    return {}
+
+
+def _extract_html_content(result: Any) -> Tuple[Optional[str], str]:
+    """Pick the HTML body + MIME type out of a `resources/read` result.
+
+    Prefers the spec MIME type (`text/html;profile=mcp-app`), then any
+    `text/html*` text content, then untyped text (the tool already declared
+    a `ui://` resource, so an inline body with no MIME is treated as the
+    app). An explicit non-HTML MIME (`text/plain`, `application/json`, …) is
+    rejected — we never pass a non-app body off as the app. Returns
+    `(None, "")` when nothing usable is present (e.g. a blob-only resource);
+    the caller then emits nothing.
+    """
+    contents = getattr(result, "contents", None) or []
+    html_fallback: Optional[Tuple[str, str]] = None
+    untyped_fallback: Optional[Tuple[str, str]] = None
+
+    for item in contents:
+        text = getattr(item, "text", None)
+        if not isinstance(text, str):
+            continue
+        mime = getattr(item, "mimeType", None) or ""
+        if mime == MCP_APPS_UI_MIME_TYPE:
+            return text, mime
+        if html_fallback is None and mime.startswith("text/html"):
+            html_fallback = (text, mime)
+        elif untyped_fallback is None and not mime:
+            untyped_fallback = (text, MCP_APPS_UI_MIME_TYPE)
+
+    chosen = html_fallback or untyped_fallback
+    if chosen is None:
+        return None, ""
+    return chosen[0], chosen[1]
+
+
+def _extract_csp_permissions(
+    result: Any, ui_metadata: ToolUIMetadata
+) -> Tuple[Dict[str, Any], List[Any]]:
+    """Resolve `csp` / `permissions` for the `ui_resource` event.
+
+    The spec declares these on the resource's `_meta.ui` (per-content first,
+    then the result-level `_meta`). We fall back to the tool-level `_meta.ui`
+    PR #2 retained verbatim in `ToolUIMetadata.raw` so a server that declares
+    them only on `tools/list` still works. PR #3 passes them through opaquely;
+    building the actual CSP (deny-by-default) is the frontend's job (PR #4).
+    """
+    sources: List[Dict[str, Any]] = []
+    for item in getattr(result, "contents", None) or []:
+        block = _ui_block(getattr(item, "meta", None))
+        if block:
+            sources.append(block)
+    result_block = _ui_block(getattr(result, "meta", None))
+    if result_block:
+        sources.append(result_block)
+    sources.append(ui_metadata.raw or {})
+
+    csp: Dict[str, Any] = {}
+    permissions: List[Any] = []
+    for block in sources:
+        if not csp and isinstance(block.get("csp"), dict):
+            csp = block["csp"]
+        if not permissions and isinstance(block.get("permissions"), list):
+            permissions = block["permissions"]
+    return csp, permissions
+
+
+def fetch_ui_resource(
+    tool_name: str, tool_use_id: str
+) -> Optional[Dict[str, Any]]:
+    """Fetch a tool's MCP App UI resource and build the `ui_resource` payload.
+
+    Looks up `tool_name` in the catalog PR #2 populates; if it carries a
+    `ui://` `resourceUri`, issues `resources/read` against the same MCP
+    client that surfaced the tool (spec MUST: fetch via `resources/read`,
+    never inline from the server's perspective) and returns the SSE payload
+    `{type, toolUseId, resourceUri, html, mimeType, csp, permissions}` with
+    the HTML inlined so the frontend needs no MCP client of its own.
+
+    Best-effort and fully inert when `AGENTCORE_MCP_APPS_HOST_ENABLED` is
+    false: returns None on flag-off, non-UI tool, unknown hosting client,
+    inactive session, fetch error, or a body with no inline HTML. Never
+    raises into the stream.
+    """
+    if not is_mcp_apps_host_enabled():
+        return None
+
+    catalog = get_ui_tool_catalog()
+    ui_metadata = catalog.get(tool_name)
+    if ui_metadata is None or not ui_metadata.resource_uri:
+        return None
+
+    client = catalog.get_client(tool_name)
+    if client is None:
+        logger.warning(
+            "MCP Apps: tool %s has resourceUri %s but no hosting client "
+            "was recorded; cannot issue resources/read",
+            tool_name,
+            ui_metadata.resource_uri,
+        )
+        return None
+
+    try:
+        result = client.read_resource_sync(ui_metadata.resource_uri)
+    except Exception:
+        logger.warning(
+            "MCP Apps: resources/read failed for %s (%s); emitting no "
+            "ui_resource event",
+            tool_name,
+            ui_metadata.resource_uri,
+            exc_info=True,
+        )
+        return None
+
+    html, mime_type = _extract_html_content(result)
+    if html is None:
+        logger.warning(
+            "MCP Apps: resources/read for %s (%s) returned no inline HTML; "
+            "emitting no ui_resource event",
+            tool_name,
+            ui_metadata.resource_uri,
+        )
+        return None
+
+    csp, permissions = _extract_csp_permissions(result, ui_metadata)
+    return {
+        "type": "ui_resource",
+        "toolUseId": tool_use_id,
+        "resourceUri": ui_metadata.resource_uri,
+        "html": html,
+        "mimeType": mime_type or MCP_APPS_UI_MIME_TYPE,
+        "csp": csp,
+        "permissions": permissions,
+    }
 
 
 # =============================================================================
@@ -237,5 +434,5 @@ class UICapableMCPClient(MCPClient):
 
     def list_tools_sync(self, *args: Any, **kwargs: Any) -> PaginatedList:
         result = super().list_tools_sync(*args, **kwargs)
-        filtered = record_and_filter_ui_tools(list(result))
+        filtered = record_and_filter_ui_tools(list(result), client=self)
         return PaginatedList(filtered, token=result.pagination_token)

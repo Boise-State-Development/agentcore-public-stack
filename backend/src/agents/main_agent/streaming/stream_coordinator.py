@@ -77,6 +77,15 @@ class StreamCoordinator:
         # query + `artifact` SSE emit. Normal turns pay nothing.
         artifact_tool_invoked = False
 
+        # MCP Apps (PR #3): toolUseId -> tool name, learned from tool_use /
+        # content_block_start events so a later tool_result can be matched
+        # back to its catalog `_meta.ui`. `ui_resource_emitted` dedupes the
+        # `ui_resource` SSE per toolUseId (a tool result can surface twice —
+        # once via the lifecycle path, once via the tool path). Both stay
+        # empty and unused unless AGENTCORE_MCP_APPS_HOST_ENABLED=true.
+        ui_tool_use_names: Dict[str, str] = {}
+        ui_resource_emitted: set[str] = set()
+
         # Accumulate metadata from stream
         accumulated_metadata: Dict[str, Any] = {"usage": {}, "metrics": {}}
 
@@ -144,6 +153,27 @@ class StreamCoordinator:
                     )
                     if tool_name in ("create_artifact", "update_artifact"):
                         artifact_tool_invoked = True
+
+                # MCP Apps (PR #3): remember toolUseId -> tool name so a
+                # later tool_result can be matched to its catalog `_meta.ui`.
+                # Captured from both event flavors that carry the pairing:
+                # the `tool_use` event (data.tool_use) and the
+                # `content_block_start` of a tool-use block (data.toolUse).
+                etype = event.get("type")
+                if etype == "tool_use":
+                    td = event.get("data", {}).get("tool_use", {})
+                    tn = td.get("name")
+                    tuid = td.get("tool_use_id") or td.get("toolUseId")
+                    if tn and tuid:
+                        ui_tool_use_names[tuid] = tn
+                elif etype == "content_block_start":
+                    bd = event.get("data", {})
+                    if bd.get("type") == "tool_use":
+                        tu = bd.get("toolUse", {})
+                        tn = tu.get("name")
+                        tuid = tu.get("toolUseId") or tu.get("tool_use_id")
+                        if tn and tuid:
+                            ui_tool_use_names[tuid] = tn
 
                 # Track when assistant messages end
                 if event.get("type") == "message_stop":
@@ -533,6 +563,20 @@ class StreamCoordinator:
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
                 yield sse_event
+
+                # MCP Apps (PR #3): if this tool_result belongs to a
+                # UI-bearing tool, fetch its `ui://` resource via
+                # `resources/read` and emit a `ui_resource` SSE right after
+                # the tool_result it correlates to (toolUseId ties them).
+                # Inert + zero-cost unless the host flag is on; best-effort
+                # so a fetch failure never breaks the live stream.
+                if event.get("type") == "tool_result":
+                    for sse in await self._extract_ui_resource_events(
+                        event,
+                        ui_tool_use_names,
+                        ui_resource_emitted,
+                    ):
+                        yield sse
 
             # Calculate end-to-end latency (fallback if done event wasn't received)
             stream_end_time = time.time()
@@ -1038,6 +1082,65 @@ class StreamCoordinator:
                 f"event: artifact\ndata: {json.dumps(payload)}\n\n"
             )
         return events
+
+    async def _extract_ui_resource_events(
+        self,
+        event: Dict[str, Any],
+        tool_use_names: Dict[str, str],
+        emitted: set,
+    ) -> List[str]:
+        """Yield a `ui_resource` SSE for a tool_result that ships an MCP App.
+
+        PR #3 of the MCP Apps host-renderer initiative
+        (`docs/kaizen/scoping/mcp-apps-host-renderer.md`). When the host flag
+        is on and this tool_result's tool declared a `ui://` resource in its
+        `tools/list` `_meta.ui` (recorded in the catalog by PR #2), fetch that
+        resource via the spec-mandated `resources/read` against the same MCP
+        client that surfaced the tool, and emit a single
+
+            `{type, toolUseId, resourceUri, html, mimeType, csp, permissions}`
+
+        event with the HTML inlined (so the frontend needs no MCP client).
+        The blocking `resources/read` runs in a worker thread so the live
+        stream is not stalled.
+
+        Inert and zero-cost when `AGENTCORE_MCP_APPS_HOST_ENABLED` is false.
+        Best-effort: deduped per toolUseId, and any failure logs and returns
+        [] — it never breaks the stream.
+        """
+        from agents.main_agent.integrations.mcp_apps import (
+            fetch_ui_resource,
+            is_mcp_apps_host_enabled,
+        )
+
+        if not is_mcp_apps_host_enabled():
+            return []
+
+        try:
+            tool_result = event.get("data", {}).get("tool_result", {})
+            if not isinstance(tool_result, dict):
+                return []
+            tool_use_id = tool_result.get("toolUseId") or tool_result.get(
+                "tool_use_id"
+            )
+            if not tool_use_id or tool_use_id in emitted:
+                return []
+
+            tool_name = tool_use_names.get(tool_use_id)
+            if not tool_name:
+                return []
+
+            payload = await asyncio.to_thread(
+                fetch_ui_resource, tool_name, tool_use_id
+            )
+            if payload is None:
+                return []
+
+            emitted.add(tool_use_id)
+            return [f"event: ui_resource\ndata: {json.dumps(payload)}\n\n"]
+        except Exception as e:  # noqa: BLE001 - best-effort side channel
+            logger.warning("Failed to emit ui_resource event: %s", e)
+            return []
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
         """
