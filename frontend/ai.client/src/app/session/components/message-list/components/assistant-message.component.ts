@@ -11,6 +11,7 @@ import {
   OAuthConsentRequest,
   OAuthConsentService,
 } from '../../../../services/oauth-consent/oauth-consent.service';
+import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
 
 // ──────────────────────────────────────────────────────────────
 // 🔧 MOCK FLAG — set to true to render 10 fake tool calls
@@ -259,6 +260,7 @@ export class AssistantMessageComponent {
   isStreaming = input<boolean>(false);
 
   private consentService = inject(OAuthConsentService);
+  private mcpAppState = inject(McpAppStateService);
 
   /**
    * Transforms content blocks into display blocks.
@@ -321,9 +323,22 @@ export class AssistantMessageComponent {
       if ((block.type === 'toolUse' || block.type === 'tool_use') && block.toolUse) {
         const toolUse = block.toolUse as ToolUseData;
         const promotedVisual = this.extractPromotedVisual(toolUse);
+        // An MCP App tool (SEP-1865) renders its sandbox-proxy iframe inside
+        // <app-tool-use> via the resultRenderer computed there, so it must
+        // escape the collapsed tool_group exactly like a promoted visual.
+        // `extractPromotedVisual` only fires on the legacy in-result
+        // `ui_type`/`ui_display` marker; MCP Apps deliver UI via a separate
+        // `ui_resource` SSE event that arrives *after* `tool_result` and
+        // their tool result content carries no inline marker. Reading the
+        // signal here keeps `displayBlocks` reactive to a late-arriving
+        // `ui_resource` — the computed re-runs when McpAppStateService
+        // updates and the tool gets promoted retroactively (vs. staying
+        // folded into the group forever).
+        const hasMcpAppResource = this.mcpAppState.has(toolUse.toolUseId);
 
-        if (promotedVisual) {
-          // Promoted visuals break the tool group and render separately
+        if (promotedVisual || hasMcpAppResource) {
+          // Promoted visuals and MCP Apps both need their own <app-tool-use>
+          // row to host the visual or iframe; break the tool group here.
           flushToolGroup();
 
           result.push({
@@ -332,12 +347,14 @@ export class AssistantMessageComponent {
             toolUseId: toolUse.toolUseId
           });
 
-          result.push({
-            type: 'promoted_visual',
-            uiType: promotedVisual.uiType,
-            payload: promotedVisual.payload,
-            toolUseId: toolUse.toolUseId
-          });
+          if (promotedVisual) {
+            result.push({
+              type: 'promoted_visual',
+              uiType: promotedVisual.uiType,
+              payload: promotedVisual.payload,
+              toolUseId: toolUse.toolUseId
+            });
+          }
         } else {
           // Accumulate into the current tool group. A tool_use with no result
           // on a message that has a pending OAuth interrupt is the row that
