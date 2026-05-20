@@ -121,7 +121,10 @@ export interface McpUiInitializeResult {
 /** Params for `ui/notifications/sandbox-resource-ready` (host → proxy). */
 export interface SandboxResourceReadyParams {
   html: string;
-  /** Inner-iframe `sandbox` attribute. Defaults to `allow-scripts`. */
+  /**
+   * Inner-iframe `sandbox` attribute. Host default matches the ext-apps
+   * basic-host reference: `allow-scripts allow-same-origin allow-forms`.
+   */
   sandbox?: string;
   csp?: McpUiCsp;
   permissions?: McpUiPermissions;

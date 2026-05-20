@@ -11,9 +11,11 @@
  * host (ai.client) and the untrusted App View (an inner iframe this script
  * creates, mounted via document.write per the ext-apps basic-host
  * reference). The inner iframe defaults to allow-scripts +
- * allow-same-origin so document.write can populate it; the App may
- * override its `_meta.ui.sandbox` to opt back into null-origin (we'll
- * fall back to srcdoc when contentDocument isn't writable).
+ * allow-same-origin + allow-forms (matches the basic-host reference) so
+ * document.write can populate it and typical App bundles can use
+ * localStorage at the sandbox origin; the App may override its
+ * `_meta.ui.sandbox` to opt back into null-origin (we'll fall back to
+ * srcdoc when contentDocument isn't writable).
  *
  * Responsibilities (spec §"Sandbox proxy"):
  *   3. Announce readiness to the host (ui/notifications/sandbox-proxy-ready).
@@ -143,17 +145,19 @@
   // --- inner iframe (the View) -------------------------------------------
 
   function mountView(params) {
-    // Default to allow-scripts + allow-same-origin so document.write() can
-    // populate the inner iframe (contentDocument is only accessible when
-    // the inner is same-origin to this proxy, which is fine — the proxy
-    // origin is a static CDN with no shared state). The App can override
-    // via `_meta.ui.sandbox` to opt back into null-origin if it wants
-    // stricter isolation; we'll fall back to srcdoc when contentDocument
-    // isn't writable, matching the ext-apps basic-host reference.
+    // Default matches the ext-apps basic-host reference
+    // (`examples/basic-host/src/sandbox.ts`): allow-scripts +
+    // allow-same-origin + allow-forms. allow-same-origin lets document.write
+    // populate the inner doc (contentDocument is only accessible when the
+    // inner is same-origin to this proxy — fine, the proxy origin is a
+    // static CDN with no shared state) and lets typical bundled Apps reach
+    // localStorage at the sandbox origin. The App can override via
+    // `_meta.ui.sandbox` to opt back into null-origin for stricter isolation;
+    // we'll fall back to srcdoc when contentDocument isn't writable.
     var sandbox =
       typeof params.sandbox === 'string' && params.sandbox
         ? params.sandbox
-        : 'allow-scripts allow-same-origin';
+        : 'allow-scripts allow-same-origin allow-forms';
     var allow = allowAttr(params.permissions);
 
     inner = document.createElement('iframe');

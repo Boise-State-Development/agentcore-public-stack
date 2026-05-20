@@ -483,12 +483,21 @@ export class McpAppBridge {
 
   private sendSandboxResourceReady(): void {
     // Reserved host→proxy notification; consumed by the proxy, not forwarded.
+    // Inner-iframe sandbox matches the ext-apps basic-host reference
+    // (`examples/basic-host/src/sandbox.ts`): allow-scripts + allow-same-origin
+    // + allow-forms. allow-same-origin is required for proxy.js to populate
+    // the inner doc via document.write and for typical App bundles
+    // (Excalidraw, Cesium, etc.) to access localStorage at the sandbox origin.
+    // The mcp-sandbox origin is a static CDN with no shared state, so this
+    // does not weaken the cross-origin boundary against the SPA. Apps wanting
+    // stricter isolation can opt into null-origin via `_meta.ui.sandbox` once
+    // that pass-through lands.
     this.postToProxy({
       jsonrpc: '2.0',
       method: M_SANDBOX_RESOURCE_READY,
       params: {
         html: this.d.resource.html,
-        sandbox: 'allow-scripts',
+        sandbox: 'allow-scripts allow-same-origin allow-forms',
         csp: this.d.resource.csp,
         permissions: this.d.resource.permissions,
         nonce: this.d.nonce,

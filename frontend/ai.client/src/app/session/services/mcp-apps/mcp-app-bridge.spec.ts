@@ -140,7 +140,7 @@ describe('McpAppBridge', () => {
     expect(msg.params.nonce).toBe(NONCE);
     expect(msg.params.csp).toEqual({ connectDomains: ['https://api.test'] });
     expect(msg.params.permissions).toEqual({ clipboardWrite: {} });
-    expect(msg.params.sandbox).toBe('allow-scripts');
+    expect(msg.params.sandbox).toBe('allow-scripts allow-same-origin allow-forms');
     // Strict targetOrigin — never '*'.
     expect(h.proxy.sent[0].targetOrigin).toBe(SANDBOX_ORIGIN);
   });
