@@ -26,7 +26,6 @@ const {
   sanitizeCspDomains,
   buildCspHeader,
   parseCspParam,
-  summarizeCspParam,
   handler,
 } = require('../assets/mcp-sandbox/csp-function');
 
@@ -277,37 +276,6 @@ describe('parseCspParam', () => {
   });
 });
 
-describe('summarizeCspParam', () => {
-  test('reports no-querystring / no-csp-entry / empty-value', () => {
-    expect(summarizeCspParam(undefined)).toBe('no-querystring');
-    expect(summarizeCspParam({})).toBe('no-csp-entry');
-    expect(summarizeCspParam({ csp: { value: '' } })).toBe('empty-value');
-  });
-
-  test('reports parsed-raw on plain JSON', () => {
-    const v = '{"connectDomains":["https://esm.sh"]}';
-    expect(summarizeCspParam({ csp: { value: v } })).toBe(
-      'parsed-raw len=' + v.length,
-    );
-  });
-
-  test('reports parsed-decoded on URL-encoded JSON', () => {
-    const encoded = '%7B%22connectDomains%22%3A%5B%22https%3A%2F%2Fesm.sh%22%5D%7D';
-    expect(summarizeCspParam({ csp: { value: encoded } })).toBe(
-      'parsed-decoded rawlen=' + encoded.length,
-    );
-  });
-
-  test('reports parse-failed-* with a sanitized head fragment', () => {
-    expect(summarizeCspParam({ csp: { value: 'not-json' } })).toContain(
-      'parse-failed-noencoded',
-    );
-    expect(summarizeCspParam({ csp: { value: '%7Bbroken' } })).toContain(
-      'parse-failed-both',
-    );
-  });
-});
-
 describe('handler', () => {
   function makeEvent(querystring?: Record<string, { value: string }>) {
     return {
@@ -385,18 +353,5 @@ describe('handler', () => {
     const result = handler(event);
     expect(result.headers).toBeDefined();
     expect(result.headers['content-security-policy']).toBeDefined();
-  });
-
-  test('stamps x-csp-debug describing parse outcome', () => {
-    // TODO(diag): remove with the corresponding header in csp-function.js.
-    const encoded = '%7B%22resourceDomains%22%3A%5B%22https%3A%2F%2Fesm.sh%22%5D%7D';
-    const event = makeEvent({ csp: { value: encoded } });
-    const result = handler(event);
-    expect(result.headers['x-csp-debug']).toBeDefined();
-    expect(result.headers['x-csp-debug'].value).toContain('parsed-decoded');
-    // And the CSP itself includes the declared domain.
-    expect(result.headers['content-security-policy'].value).toContain(
-      'https://esm.sh',
-    );
   });
 });

@@ -135,32 +135,6 @@ function parseCspParam(querystring) {
   return tryParseObject(decoded);
 }
 
-/**
- * TODO(diag): remove after CSP propagation is verified for external Apps.
- * Returns a short diagnostic string describing what `parseCspParam` saw,
- * stamped onto an `x-csp-debug` response header so a curl can pinpoint
- * which branch the function took without redeploying with logs.
- */
-function summarizeCspParam(querystring) {
-  if (!querystring) return 'no-querystring';
-  var entry = querystring.csp;
-  if (!entry) return 'no-csp-entry';
-  if (typeof entry.value !== 'string') return 'value-not-string';
-  if (entry.value.length === 0) return 'empty-value';
-  var raw = entry.value;
-  var head = raw.slice(0, 60).replace(/[^\x20-\x7e]/g, '?');
-  if (tryParseObject(raw) !== null) return 'parsed-raw len=' + raw.length;
-  var decoded;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch (e) {
-    return 'decode-threw rawhead=' + head;
-  }
-  if (decoded === raw) return 'parse-failed-noencoded rawhead=' + head;
-  if (tryParseObject(decoded) !== null) return 'parsed-decoded rawlen=' + raw.length;
-  return 'parse-failed-both rawhead=' + head;
-}
-
 function handler(event) {
   var request = event.request || {};
   var response = event.response || {};
@@ -170,8 +144,6 @@ function handler(event) {
   var csp = buildCspHeader(cspConfig, FRAME_ANCESTORS);
 
   response.headers['content-security-policy'] = { value: csp };
-  // TODO(diag): remove after CSP propagation is verified for external Apps.
-  response.headers['x-csp-debug'] = { value: summarizeCspParam(request.querystring) };
   return response;
 }
 
@@ -180,7 +152,6 @@ if (typeof module !== 'undefined' && module.exports) {
     sanitizeCspDomains: sanitizeCspDomains,
     buildCspHeader: buildCspHeader,
     parseCspParam: parseCspParam,
-    summarizeCspParam: summarizeCspParam,
     handler: handler,
   };
 }
