@@ -93,20 +93,12 @@ function buildCspHeader(cspConfig, frameAncestors) {
 }
 
 /**
- * Extract and parse the `csp` query parameter. CloudFront delivers
- * `request.querystring` as an object keyed by param name where each
- * value is URL-decoded (we don't need a `decodeURIComponent` call).
- * Returns the parsed CSP object or null on absent / malformed / non-
- * object input — never throws.
+ * Try to parse a string as a JSON object (not array, not scalar). Returns
+ * the parsed object or null. Never throws.
  */
-function parseCspParam(querystring) {
-  if (!querystring) return null;
-  var entry = querystring.csp;
-  if (!entry || typeof entry.value !== 'string' || entry.value.length === 0) {
-    return null;
-  }
+function tryParseObject(s) {
   try {
-    var parsed = JSON.parse(entry.value);
+    var parsed = JSON.parse(s);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed;
     }
@@ -114,6 +106,59 @@ function parseCspParam(querystring) {
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * Extract and parse the `csp` query parameter. CloudFront Functions
+ * deliver `request.querystring[name].value` as the parameter value;
+ * whether that value is URL-decoded depends on runtime/event-type and
+ * doesn't always match the docs in practice. We try the value as-is
+ * first, then fall back to an explicit `decodeURIComponent` if that
+ * parse fails. Returns the parsed CSP object or null on absent /
+ * malformed / non-object input — never throws.
+ */
+function parseCspParam(querystring) {
+  if (!querystring) return null;
+  var entry = querystring.csp;
+  if (!entry || typeof entry.value !== 'string' || entry.value.length === 0) {
+    return null;
+  }
+  var asIs = tryParseObject(entry.value);
+  if (asIs !== null) return asIs;
+  var decoded;
+  try {
+    decoded = decodeURIComponent(entry.value);
+  } catch (e) {
+    return null;
+  }
+  if (decoded === entry.value) return null;
+  return tryParseObject(decoded);
+}
+
+/**
+ * TODO(diag): remove after CSP propagation is verified for external Apps.
+ * Returns a short diagnostic string describing what `parseCspParam` saw,
+ * stamped onto an `x-csp-debug` response header so a curl can pinpoint
+ * which branch the function took without redeploying with logs.
+ */
+function summarizeCspParam(querystring) {
+  if (!querystring) return 'no-querystring';
+  var entry = querystring.csp;
+  if (!entry) return 'no-csp-entry';
+  if (typeof entry.value !== 'string') return 'value-not-string';
+  if (entry.value.length === 0) return 'empty-value';
+  var raw = entry.value;
+  var head = raw.slice(0, 60).replace(/[^\x20-\x7e]/g, '?');
+  if (tryParseObject(raw) !== null) return 'parsed-raw len=' + raw.length;
+  var decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch (e) {
+    return 'decode-threw rawhead=' + head;
+  }
+  if (decoded === raw) return 'parse-failed-noencoded rawhead=' + head;
+  if (tryParseObject(decoded) !== null) return 'parsed-decoded rawlen=' + raw.length;
+  return 'parse-failed-both rawhead=' + head;
 }
 
 function handler(event) {
@@ -125,6 +170,8 @@ function handler(event) {
   var csp = buildCspHeader(cspConfig, FRAME_ANCESTORS);
 
   response.headers['content-security-policy'] = { value: csp };
+  // TODO(diag): remove after CSP propagation is verified for external Apps.
+  response.headers['x-csp-debug'] = { value: summarizeCspParam(request.querystring) };
   return response;
 }
 
@@ -133,6 +180,7 @@ if (typeof module !== 'undefined' && module.exports) {
     sanitizeCspDomains: sanitizeCspDomains,
     buildCspHeader: buildCspHeader,
     parseCspParam: parseCspParam,
+    summarizeCspParam: summarizeCspParam,
     handler: handler,
   };
 }
