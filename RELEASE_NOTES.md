@@ -7,308 +7,347 @@
 
 ## Highlights
 
-Beta.27 lands two new user-facing surfaces, both behind feature flags so adopting them is opt-in per environment:
+The largest release since the BFF cutover. Beta.27 lands two new user-visible surfaces, both built on top of brand-new CDK stacks, plus a major admin redesign and a handful of inference-API correctness fixes.
 
-- **Artifacts** — agents can now produce standalone HTML or Markdown documents (think Chart.js dashboards, write-ups, posters) that render in a sandboxed iframe panel docked beside the chat. Built on a new `artifacts.{domain}` CloudFront origin with a Python render Lambda gated by short-lived HS256 tokens; versions are immutable and the SPA panel re-mints a render token per open with no `allow-same-origin`. Gated end-to-end on `CDK_ARTIFACTS_ENABLED`.
-- **MCP Apps host-renderer** — MCP tools can return `ui://` resources that the agent surfaces in chat as embedded mini-applications. A new `mcp-sandbox.{domain}` proxy origin serves the outer iframe shell with a CSP locked to the SPA origin, and a `<mcp-app-frame>` web component runs a typed postMessage bridge supporting app-initiated `tools/call` proxying, `ui/update-model-context` mutations on the next turn, and persisted user consent. `AGENTCORE_MCP_APPS_HOST_ENABLED` is now `True` by default; opt out with `=false`.
+- **Artifacts** — the agent can now produce versioned, iframe-isolated HTML, Markdown, and code artifacts that render in a docked side panel beside the chat. Backed by a new `ArtifactsStack` (S3 + DynamoDB + render Lambda + CloudFront on `artifacts.{domain}`) and short-lived JWT render tokens minted by app-api.
+- **MCP Apps host renderer** — third-party MCP servers can ship UI alongside their tools. The agent advertises a UI extension on `initialize`, fetches `ui_resource` payloads via `resources/read`, and the SPA frames them in a sandboxed `<mcp-app-frame>` over a strict CSP, with an app-initiated `tools/call` proxy and explicit user consent. Backed by a new `McpSandboxStack` (CloudFront origin on `mcp-sandbox.{domain}` with dynamic per-resource CSP via a CloudFront Function). Default-on this release.
+- **Admin shell redesign** — the 15-card admin grid is replaced with a persistent grouped sidebar, and dense list redesigns for models and tools turn cards into compact expandable rows. Quotas and Fine-Tuning collapse from seven sibling routes into two tabbed pages.
+- **Recoverable `max_tokens` truncation** — what used to be a leaky, infinite-looping `MaxTokensReachedException` is now an inline "Response length limit reached" notice with a Continue button that resumes the truncated turn instead of resending the prompt. Survives a page refresh.
+- **Model-aware adaptive thinking** — Opus 4.7's 400 on `thinking.type=enabled` is fixed: Opus 4.6/4.7, Sonnet 4.6, and Mythos now emit `{type: adaptive, display: summarized}` and depth is governed by a new admin- and user-configurable `effort` knob. Older models keep the legacy `enabled` shape.
+- **`/ping` reaper fix** — fixes silent mid-stream microVM reaping by emitting the integer `time_of_last_update` field AgentCore's idle reaper requires. Workaround for `bedrock-agentcore-sdk-python#471` until async-task busy tracking lands.
+- **Pre-migration backup tool** — `scripts/backup-data/` produces a complete, restore-friendly snapshot of all DynamoDB tables, user-content S3 buckets, and Cognito (config + users + groups + IdPs + plaintext app-client secrets) for a given `CDK_PROJECT_PREFIX`. Workflow-dispatch wired.
+- **Dependency upgrades** — `bedrock-agentcore` 1.6.4 → 1.9.1 (with coupled `boto3` 1.42.96 → 1.43.9) and `strands-agents` 1.39.0 → 1.40.0.
 
-Alongside those, a persistent admin sidebar shell replaces the old card grid (with grouped nav and consolidated Quotas/Fine-Tuning tabs), the model and tool list pages are redesigned as compact expandable rows, admin-managed user-menu links land, the chat input autofocuses on session switch, code blocks gain a copy button, and the artifact creation experience iterates heavily (inline tool-rail streaming → docked resizable panel → per-version history → preview/code toggle).
-
-On the reliability side: **recoverable `max_tokens` truncation** with a Continue affordance that actually resumes the truncated message instead of restarting it, **model-aware adaptive thinking** so Opus 4.7 stops 400-ing the legacy `thinking.type="enabled"` shape, and a **`/ping` reaper fix** for the AgentCore Runtime that was silently reaping microVMs mid-stream. `bedrock-agentcore` jumps 1.6.4 → 1.9.1 (with the coupled `boto3` 1.42.96 → 1.43.9), `strands-agents` 1.39.0 → 1.40.0.
-
-**Deployment:** if you're enabling either feature, the new stacks (`ArtifactsStack`, `McpSandboxStack`) are tier-1 and parallel-safe with the other tier-1 stacks. See the Deployment Notes section.
+This release adds two new CDK stacks (`ArtifactsStack`, `McpSandboxStack`) and one new DynamoDB table (`user-menu-links`). Both new stacks are gated by config flags. Deploy order matters — see "Deployment notes" below.
 
 ---
 
 ## Artifacts
 
-Agents authoring a Chart.js dashboard, a Markdown brief, or any other self-contained HTML document can now publish it as an **artifact** that renders in a sandboxed iframe panel docked alongside the chat. The full chain is delivered behind `CDK_ARTIFACTS_ENABLED` so merging the change is a no-op until the flag is flipped per environment.
+The agent can now author versioned standalone documents — HTML pages, charts, Markdown reports — that render in a sandboxed iframe alongside the chat. Artifacts solve two problems the existing `create_visualization` and Code Interpreter outputs couldn't: persistence (the user can re-open and download), and isolation (HTML/JS runs in a cross-origin sandbox so it can't read cookies or the SPA DOM).
 
-### Infrastructure (#306)
+### Architecture
 
-- New `ArtifactsStack` (`infrastructure/lib/artifacts-stack.ts`):
-  - DynamoDB heads table + version log
-  - Private S3 content bucket
-  - CloudFront distribution at `artifacts.{domain}` (reuses the existing `*.{domain}` cert — no new ACM cert required for standard installs; documented in `step-02-aws-setup.md`)
-  - Python render Lambda (initially a placeholder; real impl lands in #309)
-  - Route53 alias
-  - 5 SSM exports
-- Tier-1 placement (parallel-safe with Gateway, RAG, Fine-Tuning, MCP Sandbox). Cross-stack contract goes through SSM in one direction: `InfrastructureStack` publishes `/{prefix}/artifacts/render-token-key-arn`; `ArtifactsStack` consumes it and publishes bucket/table/origin keys; `InferenceApiStack`/`AppApiStack`/`FrontendStack` consume those when the flag is on.
-- The `stack-dependencies` test (17/17 passing) enforces the tier ordering.
+A new leaf stack, `ArtifactsStack`, owns the rendering pipeline:
 
-### Render Lambda (#309)
+- **DynamoDB `user-artifacts` table** — version log + HEAD pointer per artifact. PK `USER#{user_id}`, SK `ARTIFACT#{aid}#V#{version:05d}` for versions and `ARTIFACT#{aid}#HEAD` for the latest pointer. GSI1 indexes by `SESSION#{session_id}` so the SPA can list artifacts produced in the current chat.
+- **S3 `artifacts-content` bucket** — private, no CORS. Layout `{user_id}/{aid}/v{n}/index.html`. Versions are immutable: there's no `s3:DeleteObject` grant on the inference-api role, so an `update_artifact` writes a new version and re-points HEAD instead of mutating.
+- **Render Lambda** — validates a render-token JWT scoped to one `(artifact_id, version)`, fetches the blob from S3, and returns it with a strict per-origin CSP that allows inline `<style>` / `<script>` plus scripts from `cdn.tailwindcss.com`, `esm.sh`, `cdn.jsdelivr.net`, and `unpkg.com`. `connect-src 'none'` — artifacts cannot make outbound network calls.
+- **CloudFront distribution on `artifacts.{domain}`** — terminates TLS, attaches the security-headers policy. The artifact origin is intentionally a different cookie-jar host from the SPA so a script in an artifact can't read `__Host-bff_session`.
+- **HMAC signing key** — the render-token signing secret lives in Secrets Manager in `InfrastructureStack` (not `ArtifactsStack`), so app-api and the render Lambda can both read it without `ArtifactsStack` becoming a stack-dependency root. App-api mints short-lived JWTs that the SPA embeds as the iframe `src`.
 
-The placeholder is replaced with a real authenticated gate written against the stdlib so the asset stays bundling-free:
+### Agent tools
 
-- **Token verification** — HS256 only (rejects `none` + HS/RS confusion), constant-time signature compare, iss/aud/exp validation with bounded lifetime (≤10 min), non-dict header/payload rejected
-- **DynamoDB version lookup** + **S3 content fetch** + pass-through response that stamps strict CSP / security headers
-- Token claim shape (`sub/aid/ver/sid/iss/aud/iat/exp`) and DDB version-record schema (`storage="s3"`, explicit `content_key`, `content_type`) are now frozen cross-PR contracts the minter and writer PRs must conform to
-- The token pins an exact immutable version so `#HEAD` is never read
-- The render token is a URL bearer credential, so the handler never logs the event or query string (docstring guard for future contributors)
-- 38-test suite: full token-verification matrix plus handler integration via moto
+Two new built-in tools, registered as default public tools so the feature is usable on first deploy without an admin opting them in per role:
 
-### App-API Render-Token Minter (#310)
+- `create_artifact(title, content, content_type="text/html; charset=utf-8")` — writes v1. HTML mode requires a complete standalone document (`<!doctype html>` + full `<html>`); Markdown mode (`content_type="text/markdown"`) takes raw GFM and the writer wraps it in a self-contained HTML render harness server-side.
+- `update_artifact(artifact_id, content, ...)` — writes a new version and re-points HEAD; the render-token mints against the latest version when the panel updates.
 
-`POST /artifacts/{artifact_id}/render-token` mints the short-lived HS256 JWT the render Lambda verifies. `sub` comes from the authenticated session so a caller can only mint for their own artifact; the version is validated against DynamoDB before minting so the SPA gets a clean 404 instead of a token that renders the Lambda's error page in the iframe. Claim shape, signing key, and DDB lookup keys exactly mirror #309's frozen contract (`iss=app-api`, `aud=artifact-render`, `iat` mandatory, `exp - iat = 120s`, SK zero-padded `V#{version:05d}`). Router registers conditionally on `ARTIFACTS_RENDER_TOKEN_SECRET_ARN` so this stays a backend-only change.
+The system prompt documents the dual authoring contract and the CSP allowlist (Chart.js auto-registering build, `import Chart from "https://esm.sh/chart.js@4/auto"` etc.) so the model produces output that actually renders.
 
-### Agent Tools (#311, #334)
+### SSE + SPA
 
-`create_artifact` / `update_artifact` factory-pattern Strands tools live in `backend/src/agents/builtin_tools/artifacts/`. They upload a standalone HTML/Markdown document to S3 and write the frozen DDB version + HEAD rows that #309 and #310 read back. Identity is captured by closure (mirrors `spreadsheet_analysis`). Versions are immutable (no `DeleteObject` grant): update writes a new version and re-points HEAD under an optimistic version-match condition. Bucket/table names resolve env-var-first then via SSM under the runtime's `PROJECT_PREFIX`. Both tools are seeded as default public tools (#334).
+A new `artifact` SSE event streams from the inference-api each time the agent creates or updates an artifact. The frontend has:
 
-### SSE + SPA (#312, #316–#325)
+- `ArtifactStateService` + `ArtifactHttpService` + `ArtifactDownloadService` — signal-backed state, render-token fetch, blob download.
+- A docked, resizable artifact panel beside the chat that auto-opens on first creation, shows a skeleton while loading, and on update jumps to the latest version. Per-version history cards in the panel let the user step backwards through revisions.
+- An inline artifact card anchored to the producing message, with a preview/code toggle (syntax-highlighted source view) and a download button on both the card and the panel.
+- Full-width inline cards, scoped `isolation: isolate` z-indexing so a focused artifact card doesn't escape its message row, and live tool-output streaming into the tool rail while the artifact is being authored.
 
-- New `artifact` SSE event — emitted post-`message_stop` next to `compaction`, gated on a create/update tool call that turn and filtered to artifacts touched this turn via the SessionIndex GSI (no fragile tool-text parsing)
-- `GET /artifacts?session_id=` on app-api for refresh-survival hydration, ownership-filtered
-- `ArtifactStateService` (signal store) + `ArtifactHttpService`, parser support, session-level inline card strip, and a slide-over panel
-- The panel re-mints a short-lived render token per open and frames the artifact sandboxed (`allow-scripts`, **no** `allow-same-origin`, `no-referrer`)
-- UX iterations across the release:
-  - Inline tool-rail streaming while the artifact is being authored (#316)
-  - Cards anchored inline to their producing message (#317)
-  - Markdown content type (#318)
-  - Docked-beside-chat resizable panel with a draggable keyboard-accessible resize handle (#319)
-  - Full-width inline card + download button (#321)
-  - Preview/code toggle with syntax-highlighted source view (#322)
-  - Per-version history cards + panel version picker (#324)
-  - Auto-open panel on create, skeleton loader, latest-version on update (#325)
+### Configuration
 
-### Drive-by fixes
-
-- Allowlisted `jsdelivr` and `unpkg` CDNs in the render Lambda CSP so Chart.js artifacts render (#326)
-- Scoped artifact card z-index with `isolation:isolate` (#323)
-- Configurable extra CSP `frame-ancestors` for external embedding (#314)
-- Plumbed artifact env vars through every consumer workflow (#307)
+Artifacts is opt-in at deploy time via `CDK_ARTIFACTS_ENABLED=true`. When enabled, `CDK_HOSTED_ZONE_DOMAIN` and `CDK_ARTIFACTS_CERTIFICATE_ARN` become required. Validation runs on every stack synth, so all five consumer GitHub workflows now thread these env vars through the OIDC composite action — a missing var on a non-`ArtifactsStack` workflow would otherwise fail synth.
 
 ---
 
 ## MCP Apps Host-Renderer
 
-Implements the MCP Apps host-renderer scoped in `docs/kaizen/scoping/mcp-apps-host-renderer.md` across seven chained PRs (#339, #343, #342, #344, #345, #346, #347, #348, #349). Tools can now declare `ui://` resources; the host fetches them server-side via `resources/read`, inlines them in a `ui_resource` SSE event, and the SPA frames the result in a sandbox-proxy origin with a typed postMessage protocol.
+A scoping document landed early in the cycle (`docs/kaizen/scoping/mcp-apps-host-renderer.md`) and the implementation followed a deliberate seven-PR sequence (#339 PR #0 → #349 PR #7). The result: third-party MCP servers can ship a small interactive UI alongside their tools, and that UI renders in a sandboxed iframe with the same isolation guarantees as artifacts.
 
-### Tool Renderer Registry (#339)
+### Architecture
 
-PR #0 of the sequence. Replaces the implicit text/JSON/image switch baked into `ToolUseComponent` with a signal-backed `ToolRendererRegistryService` keyed by tool name. The default renderer reproduces the prior markup verbatim (minimized-vs-full rounded-class and image-omission differences preserved), so all existing tool-result cards render identically. `calculator`, `fetch_url_content`, and `create_visualization` migrated as proof points to validate the registry shape.
+A new leaf stack, `McpSandboxStack`, mirrors the artifacts pattern:
 
-### Sandbox-Proxy Origin (#343)
+- **CloudFront distribution on `mcp-sandbox.{domain}`** — fronts an S3 origin that serves a tiny "basic-host" mount page. App URLs land at `mcp-sandbox.{domain}/<resource-encoded-path>`, the mount page reads the encoded resource URL from the path and frames the actual MCP App content in an inner blob iframe with `allow-same-origin` matching the basic-host reference.
+- **Dynamic per-resource CSP** — a CloudFront Function on the viewer-response decodes a `?csp=` query param (URL-encoded `frame-ancestors` source list scoped to that one resource) and emits a per-request `Content-Security-Policy` header. The function source is loaded from `assets/mcp-sandbox/csp-function.js` and the `frame-ancestors` allowlist is JSON-injected at synth — the substitution asserts the placeholder marker is present exactly once so a future refactor that loses it fails loudly at synth, not at edge runtime.
+- **Outer `frame-ancestors` allowlist** — configurable via `mcpSandbox.extraFrameAncestors` so a deploy can permit framing from custom origins (preview environments, alternate SPA hosts) without rebuilding the function asset.
 
-New `McpSandboxStack` stands up `mcp-sandbox.{domain}` (S3 + CloudFront + ACM + Route53) serving a static `proxy.html` shell — the outer half of the spec's Sandbox Proxy pattern. The CloudFront response-headers policy locks CSP `frame-ancestors` to the SPA origin only. The stack reads no cross-stack SSM (tier-1, parallel-safe). Inert until consumed.
+### MCP protocol surface
 
-### MCP Initialize + UI Extension (#342)
+The agent now advertises an `experimental.ui` extension during MCP `initialize` so a server knows whether the host can render UI. Tools whose only output is a `ui_resource` are filtered out for non-capable clients (the existing API-key path, scripted callers).
 
-The MCP client now advertises the UI extension on `initialize`. App-only tools are filtered from the agent's tool list so a tool that only makes sense inside the App UI isn't dangled in front of the model.
+When a tool result references a UI resource, the agent fetches it via the standard MCP `resources/read` flow and emits a `ui_resource` SSE event with `uri`, `permissions`, and a `sandboxOrigin` that points at the deployed `mcp-sandbox` host (sourced from SSM, so the value is correct per environment). Two app-initiated message types complete the protocol:
 
-### `ui_resource` SSE (#344, #345)
+- `ui/message` — the App pushes structured data into the chat input as a tool-input draft (acts like a smart form).
+- `ui/update-model-context` — the App contributes context the agent should consider on the next turn.
+- `tools/call` proxy — the App can invoke other tools on the same MCP server. The frontend brokers these through app-api over an event broker rather than letting an iframe call the Bedrock runtime directly.
 
-Emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. Payload:
+### Frontend
 
-```
-{
-  type, toolUseId, resourceUri, html, mimeType,
-  csp, permissions, sandboxOrigin
-}
-```
+- `<mcp-app-frame>` Angular custom element + a `postMessage` bridge that enforces the allowed message types and rejects unknown origins.
+- A consent prompt rendered as an inline message component — the user explicitly approves an App before it gets framed. Consent decisions persist across reloads via a card store.
+- Reload persistence: the consent service hydrates from a card store on session load so a refresh doesn't re-prompt for a previously-approved App.
+- A signal-backed `ToolRendererRegistryService` (the PR #0 refactor) keyed by tool name. The `mcp-app-frame` renderer is the first registry-aware tool result; the default renderer reproduces the prior text/JSON/image switch verbatim, so all existing tool-result cards render identically. `calculator`, `fetch_url_content`, and `create_visualization` were migrated as proof points to validate the registry shape.
 
-HTML is fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty unless the mcp-sandbox stack is deployed — inference-api consumes its SSM origin only when `CDK_MCP_SANDBOX_ENABLED=true`; empty origin means the SPA cannot frame the App).
+### Default-on
 
-### `<mcp-app-frame>` + postMessage Bridge (#346)
+`Defaults.MCP_APPS_HOST_ENABLED` flips `False → True` this release, and `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` is wired into the inference-api runtime env from the `mcp-sandbox` SSM origin (gated on `config.mcpSandbox.enabled`, mirrors the artifacts conditional-SSM pattern). Without that wiring a deployed environment would emit `ui_resource` events with an empty `sandboxOrigin` and the SPA couldn't frame the App. Two synth tests cover the present/absent paths.
 
-PR #4. New web component that blob-iframe-mounts the inlined HTML inside the sandbox proxy. Communicates with the embedded App over a typed postMessage protocol; treats the App as a first-class chat block.
+A budget-allocator-server example is committed as a reference MCP App, and `step-04-deploy.md` / `step-05-verify.md` runbooks gain "Register an MCP-Apps-capable MCP server" sections plus a manual e2e dogfood scenario.
 
-### App-Initiated `tools/call` Proxying (#347)
+### CSP / isolation hardening (PRs #352–#360)
 
-PR #5. Apps inside the iframe can request tool invocations on their behalf. The host runs an event broker that consent-gates the dispatch back into the agent's tool-call pipeline.
+Several follow-ups landed during dogfood to align the host with the upstream `ext-apps` basic-host reference:
 
-### `ui/message`, `ui/update-model-context`, Consent Persistence (#348)
-
-PR #6. Apps can post arbitrary messages to the host, mutate the model context fed into the next turn, and persist user consent decisions across reloads.
-
-### Dynamic Per-Resource CSP (#355)
-
-The sandbox proxy now decodes the `?csp=` query and applies a per-`ui://` resource policy layered over the outer CloudFront defaults. Earlier iterations URL-encoded the parameter; the decode fix and a temporary `x-csp-debug` header (#358, #359) — later removed — landed the right policy reliably.
-
-### Flag Flip + Dogfood (#349)
-
-PR #7 of the sequence:
-
-- `Defaults.MCP_APPS_HOST_ENABLED` flips `False → True`; docstrings refreshed across the MCP Apps backend surface and `.env.example`
-- `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` wired from the `mcp-sandbox` SSM origin into the inference-api runtime env, gated on `config.mcpSandbox.enabled` (conditional-SSM, mirrors the artifacts pattern). Closes a real gap: without it, a deployed env would emit `ui_resource` with an empty `sandboxOrigin` and the SPA cannot frame the App. Two synth tests cover present/absent
-- `step-04-deploy.md` — new "Register an MCP-Apps-capable MCP server" section (discover → create admin API, local-dev env, the `budget-allocator-server` example) + a committed example `ToolCreateRequest` payload. No auto-seed — registration stays an explicit per-env opt-in
-- `step-05-verify.md` — manual e2e dogfood scenario exercising all six Definition-of-Done interactions (resource fetch → iframe render → tool-input push → app-initiated `tools/call` → `ui/update-model-context` mutating the next turn → `ui/open-link` consent)
-
-### Iframe rendering fixes
-
-A cluster of fixes landed once the surface was live to align outer CSP and inner iframe mount with the ext-apps basic-host reference implementation, unblocking App rendering: blob iframe mount, first-class chat block, Angular 21 compatibility (#352), CSP alignment (#353), the `allow-same-origin` requirement on the inner App iframe (#360), and the `Comment`-field 128-char AWS cap on the CFN/RHP resources (#356, #357).
+- Outer CSP + inner mount alignment with the reference implementation (#353).
+- Blob-iframe rendering, first-class block element, Angular 21-specific fixes (#352).
+- Sandbox CFN `Comment` shortened to fit the 128-char AWS cap, twice (#356, #357).
+- URL-decoded `?csp=` parsing in the sandbox CFN (#358), with the `x-csp-debug` diagnostic header added during the investigation (#358) and removed once the fix landed (#359).
+- Inner App iframe got `allow-same-origin` to match the basic-host reference (#360).
 
 ---
 
 ## Admin Shell Redesign
 
-### Persistent Sidebar Shell (#300)
+The 15-card admin grid had outgrown its container — a sibling navigation surface that grew unboundedly with every new admin domain. Beta.27 replaces it with a persistent sidebar shell modeled on the user settings page, plus dense list redesigns for the two highest-traffic admin pages.
 
-The 15-card admin grid had outgrown its container. Replaced with a persistent sidebar-nav shell modeled on the user settings page. Nav items grouped into:
+### Persistent sidebar shell (#300)
 
-- **Usage & Spend**
-- **AI Configuration**
-- **Identity & Access**
-- **Customization**
+- Replaces the card grid with a left rail that stays visible across all admin routes. Nav items are grouped: **Usage & Spend**, **AI Configuration**, **Identity & Access**, **Customization**.
+- `/admin` redirects to `/admin/costs` as the default landing.
+- Strips the redundant "Back to Admin" link from 10 top-level admin sub-pages — the sidebar replaces them.
+- Cost summary cards restructured so the title gets its own row and the icon is a small top-right corner accent — fixes label wrapping on "Cache Savings" / "Avg Cost/User" in the narrower content area.
+- Drive-by fix: 24 loading spinners across admin, settings, fine-tuning, and auth pages were rendering as a uniform gray ring in dark mode (no visible motion); they now spin with the proper accent.
+- Admin shell widened and sidebar label wrapping fixed (#305).
 
-`/admin` redirects to `/admin/costs` as the default landing. Two clusters consolidated into tabbed pages:
+### Route consolidations
 
-- **Quotas** — five sibling routes collapsed into a single page with Tiers / Assignments / Overrides / Inspector / Events tabs (URLs unchanged for back-compat)
-- **Fine-Tuning** — Access + Costs consolidated at `/admin/fine-tuning`
+Two clusters of sibling routes collapse into tabbed pages:
 
-Drive-by fixes:
-- Stripped redundant "Back to Admin" links from 10 top-level admin sub-pages
-- Restructured cost summary cards so the title gets its own row and the icon is a top-right corner accent (fixes label wrapping on "Cache Savings" / "Avg Cost/User" in the narrower content area)
-- 24 loading spinners across admin/settings/fine-tuning/auth pages were rendering as a uniform gray ring in dark mode — Tailwind v4 dark-shorthand ordering fix
+- **Quotas** (`/admin/quotas`) — Tiers, Assignments, Overrides, Inspector, Events. Five sibling routes become tabs on a single page; deep-link URLs are preserved for back-compat.
+- **Fine-Tuning** (`/admin/fine-tuning`) — Access + Costs.
 
-### Compact Model + Tool Lists (#332, #335, #305)
+### Compact list redesigns
 
-Replaced information-dense card layouts on `manage-models`, the Bedrock/Gemini/OpenAI browse pages, and the tools catalog with a single scannable list: one-line rows with expand-on-demand detail and a slim inline filter toolbar. Added an inline enable/disable toggle on `manage-models` so status changes no longer require the edit form. Standardized border radius on `rounded-2xl` to match the chat input. The tools create/edit form is flattened to use the shared list-page token set. Admin shell widened; sidebar label wrapping fixed (#305).
+- **Manage Models + Bedrock/Gemini/OpenAI browse pages (#332)** — information-dense card layouts replaced with one-line scannable rows that expand on demand to show detail. Slim inline filter toolbar above the list. Inline enable/disable toggle on the manage-models row so status changes no longer require opening the edit form. Border-radius standardized on `rounded-2xl` to match the chat input.
+- **Tool catalog + form (#335)** — same redesign applied to the admin tools list and create/edit form. Compact expandable rows with an inline detail panel. Form flattened to use the shared list-page token set (`rounded-2xl`, `text-sm/6`, `text-2xl/8` header, `focus:ring-2`) instead of the older heavy section cards. No behavior changes — purely visual.
 
-### Admin-Managed User-Menu Links (#298)
+### Admin-managed user-menu links (#298, #303, #315)
 
-New admin domain so org admins can curate the links shown in the SPA user menu without code changes. Each link is either:
+A new admin domain so org admins can curate the links shown in the SPA user menu without code changes. Each link is either an external URL (opens in new tab) or an in-app modal that renders admin-authored Markdown — covers the common cases of policy pages, feedback forms, and embedded org-specific notices.
 
-- An **external URL** (opens in a new tab with `rel="noopener noreferrer"`)
-- An **in-app modal** rendering admin-authored Markdown via `ngx-markdown`
+- New `user-menu-links` DynamoDB table (single-tenant flat config; per-org PK scoping can be added later without changing the SK shape).
+- Admin CRUD at `/admin/user-menu-links` (gated by `require_admin`).
+- Public enabled-only read at `/user-menu-links` (cookie-aware `get_current_user_from_session` so it works under the BFF cutover).
+- Links and in-app modals are visually distinguished in both the modal preview and the runtime rendering (#303).
+- Resource gated to admin-only so non-admin user-menu loads no longer fire a duplicate request (#315).
 
-Covers the common cases of policy pages, feedback forms, and embedded org-specific notices.
+### Sidebar density (#301)
 
-- Dedicated `UserMenuLinksTable` (single-tenant flat config; per-org PK scoping can be added later without changing the SK shape)
-- Admin CRUD at `/admin/user-menu-links` (gated by `require_admin`) + public enabled-only read at `/user-menu-links` (cookie-aware `get_current_user_from_session` so it works under the BFF cutover)
-- Admin UI mirrors the manage-models pattern: list page + form page with live Markdown preview for the modal body
-- User dropdown renders custom links between Settings and Logout
-- Drive-by fix: modal and preview now visually distinguish internal vs. external link types (#303); resource gated to single load on page entry (#315)
+Drive-by improvement on the chat session list: rows tighten from ~40px to ~32px (`py-2 → py-1.5`, `text-sm/6 → text-sm/5`), nested flex wrappers around the title removed (the link is now `block truncate` directly on the text), group gaps reduced (`gap-y-4 → gap-y-3`, `pb-1 → pb-0.5`, row `gap-y-1 → gap-y-0.5`). A list of 10 sessions is ~25% shorter overall. Inactive items drop from `font-medium` to `font-normal`; the active row picks up `!font-medium` via `routerLinkActive` so the selected state still feels distinct. Skeleton loader and entry animation added.
 
 ---
 
 ## Recoverable `max_tokens` Truncation
 
-Previously, hitting `max_tokens` mid-response surfaced as a generic, leaky error ("...unrecoverable state... https://strandsagents.com/..."), and the only "recovery" re-sent the original prompt as a new user turn — so the model re-answered from scratch and re-truncated, an infinite loop. (#328)
+Previously a `MaxTokensReachedException` surfaced as a generic, leaky error in the chat (`...unrecoverable state... https://strandsagents.com/...`) and the only "recovery" was a re-send button that fired the original prompt as a new user turn — the model re-answered from scratch, hit the same ceiling, and infinite-looped (#328).
+
+Beta.27 turns the failure into a first-class inline affordance.
 
 ### Backend
 
-- Classify `MaxTokensReachedException` specifically in the stream processor; emit a `max_tokens`-coded, recoverable `stream_error` (no leaked SDK URL, no verbose chat bubble)
-- **Continue is a resume, not a new turn:** a `continue_truncated` invocation re-enters the agent loop with an empty-list prompt so the model continues the truncated assistant message in restored history (assistant-prefill) instead of answering a fresh instruction. Bypasses quota / RAG / file-resolution like the existing interrupt-resume path
-- Don't double-persist the error as a second assistant message (would break role alternation for the follow-up)
-- Refresh-survival: a `lastTurnContinuable` marker on session metadata (set on truncation, cleared at the start of any non-resume turn) flows through `SessionMetadataResponse` so Continue reappears after a reload
-- `stream_error` is now an always-allowed parser event so a terminal recovery signal can't be dropped by stream-state gating
+- `MaxTokensReachedException` is classified specifically in the stream processor; emits a `max_tokens`-coded, **recoverable** `stream_error` event. The leaked SDK URL and the verbose chat bubble are gone.
+- **Continue is a resume, not a new turn.** A `continue_truncated` invocation re-enters the agent loop with an empty-list prompt, so the model continues the truncated assistant message in restored history (assistant-prefill) instead of answering a fresh instruction. Bypasses quota / RAG / file-resolution like the existing interrupt-resume path.
+- The error is no longer double-persisted as a second assistant message (would otherwise break role alternation for the follow-up turn).
+- **Refresh-survival.** A `lastTurnContinuable` marker on session metadata is set on truncation and cleared at the start of any non-resume turn. The marker flows through `SessionMetadataResponse` so Continue reappears after a page reload.
+- `stream_error` is now an always-allowed parser event so a terminal recovery signal can't be dropped by stream-state gating.
 
 ### Frontend
 
-- Compact inline "Response length limit reached" notice + Continue button on the truncated message
+- Compact inline "Response length limit reached" notice with a Continue button on the truncated message — no verbose error bubble.
+- Continuation-aware message-map sync: pins the existing partial + notice and **appends** the continuation rather than truncating to the last user message.
+- Hydrates `lastTurnContinuable` from session metadata on session load.
+
+Backend + frontend regression tests cover classification, the continuation path, the always-allowed `stream_error`, and the refresh-survival marker round-trip.
 
 ---
 
-## Model-Aware Adaptive Thinking
+## Model-Aware Adaptive Thinking + `effort`
 
-Opus 4.7 rejects `thinking.type="enabled"` with a 400; it requires adaptive thinking with depth governed by `output_config.effort`. (#331)
+Opus 4.7 rejects `thinking.type="enabled"` with a 400 — it requires adaptive thinking with depth governed by Anthropic's top-level `output_config.effort` field. Sonnet 4.6, Opus 4.6, and Mythos accept the legacy shape but recommend adaptive. Beta.27 makes `_shape_thinking_value` model-aware (#329, #330, #331).
 
-- `_shape_thinking_value` is now model-aware:
-  - **Opus 4.6/4.7, Sonnet 4.6, Mythos** → `{type:"adaptive", display:"summarized"}`. The `display` keeps the reasoning trace from going blank, since Opus 4.7 defaults it to `"omitted"`
-  - **Older models** → keep the legacy `{type:"enabled", budget_tokens:N}` shape
-- New canonical `effort` inference parameter (→ `output_config.effort` via `additional_request_fields`) + generic `allowed` enum on `ModelParamSpec`, so the per-model effort-tier difference (Sonnet 4.6 vs Opus 4.7) is data, not branching in code
-- Wired through the admin model form and the user-facing chat settings panel (new select control), with server-side allowed-set gating in `_merge_inference_params`
-- Seeds `effort` on Sonnet 4.6
+- **Adaptive marker list.** `_BEDROCK_ADAPTIVE_THINKING_MARKERS = ("claude-opus-4-7", "claude-opus-4-6", ...)`. On a marker hit, `_shape_thinking_value` emits `{type: "adaptive", display: "summarized"}` (the explicit `display` keeps the reasoning trace visible — Opus 4.7 defaults `display` to `"omitted"`). Non-marker models keep the legacy `{type: "enabled", budget_tokens: N}` shape.
+- **`effort` as a canonical inference param.** Routed through `additional_request_fields.output_config.effort` (it's NOT on `additionalModelRequestFields` like `thinking` / `top_k`). Wired through the admin model form and the user-facing chat settings panel as a new select control, with server-side allowed-set gating in the param normalizer.
+- **Generic `allowed` enum on `ModelParamSpec`** — the per-model effort-tier difference between Sonnet 4.6 and Opus 4.7 (which gets the additional `xhigh` / `max` tiers) is now data, not a model-family branch in code.
+- **Hardened param coercion (#329, #330).** `Dict[str, Any]` from JSON let a float reach the Bedrock Converse SDK, which rejects a float `maxTokens` with a hard boto3 validation error. `max_tokens` and `top_k` are now coerced to `int` at the single provider-translation chokepoint (covers fresh + resumed turns, all providers). The thinking-vs-`max_tokens` consistency guard previously used `isinstance(..., int)` and silently no-opped on float input; it now coerces first so an inconsistent request (`thinking >= max_tokens`) is rejected before reaching Anthropic. A model-ceiling cap protects against admin-configured `max_tokens` that exceed the model's hard limit.
 
-Hardened `max_tokens` handling in the same path: string values are now coerced to `int` and capped at the model's ceiling, with the same int-coercion + thinking guard applied across the inference param merge (#329, #330).
+---
+
+## Inference-API Reliability
+
+### `/ping` reaper fix (#338)
+
+AgentCore's idle reaper requires an integer `time_of_last_update` field alongside `status`; when absent, the platform reaps the microVM at `idleRuntimeSessionTimeout` even mid-stream regardless of reported status (`bedrock-agentcore-sdk-python#471`). We have no async-task busy tracking yet (deferred async-mode work), so we cannot report `HealthyBusy` — returning a fresh timestamp on every ping is the documented mitigation against silent mid-generation reaps. Status casing also corrected to match `PingStatus`. This was a Kaizen-2026-05-15 review item.
+
+### Removed dead Bearer-only auth from app-api (#297)
+
+A sweep of `app_api/` for `Depends(get_current_user)`, `Depends(security)`, `Depends(verify_token)`, and manual `Authorization` header reads turned up exactly two routes still on Bearer auth, both in `chat/routes.py`. The dead Bearer-only paths are removed; `POST /chat/agent-stream` is documented as intentionally Bearer for non-SPA callers (API-key tooling, scripts). All other app-api routes are cookie-based BFF auth post-beta.24.
+
+### Frontend version baking (#336)
+
+`scripts/stack-frontend/build.sh` invoked `ng build` directly, which bypassed the npm `prebuild` lifecycle hook that runs `gen-version.js`. The deployed bundle therefore shipped the committed `'dev'` placeholder in `src/version.ts`, so the user menu rendered "local" on `develop` and `main`. Build script now runs `gen-version.js` explicitly before the build.
+
+### A2A streaming-capability guard (#338)
+
+Forward-looking guard: A2A is currently client-only. When the first A2A server construct lands (Strands `agent.to_a2a()`, `A2AServer`, or a hand-built `AgentCard`), its advertised capabilities **must** include `streaming=True` — otherwise the A2A SDK client silently falls back to non-streaming, never receives a `completed` event, and hangs ~40 minutes (ref-repo `sample-strands-agent-with-agentcore` commit `50c9112`). Documented in `CLAUDE.md` as a Kaizen-2026-05-15 review item.
+
+### Misc inference-API polish
+
+- Markdown content-type support in the artifact tool (#318).
+- Configurable extra CSP `frame-ancestors` for artifacts (#314).
+- `jsdelivr` and `unpkg` added to the artifact-origin script-src CSP so Chart.js artifacts loaded via the canonical jsDelivr snippet stop rendering blank (#326).
+
+---
+
+## Pre-Migration Backup Tool
+
+A new `scripts/backup-data/` tool produces a complete, restore-friendly snapshot for a given `CDK_PROJECT_PREFIX`, plus a `workflow_dispatch` GitHub Actions workflow that runs it via the existing OIDC composite action (#361).
+
+**Coverage:**
+
+- All ~20 application DynamoDB tables via `ExportTableToPointInTime` (portable DynamoDB-JSON).
+- User-content S3 buckets via `aws s3 sync`.
+- Full Cognito user pool config including identity providers and app clients **with their plaintext client secrets preserved** (so IdP re-registration with new infra can be fully automated).
+- Users, groups, and group memberships.
+- Best-effort AgentCore Memory events.
+
+Each run lands in a freshly-created, versioned, SSE-encrypted, TLS-only backup bucket named `{prefix}-backup-{utc_timestamp}`. `manifest.json` is the single source of truth a future restore script will consume.
+
+**Known limitation:** Cognito password hashes are not exportable by AWS — that constraint is documented prominently. Ephemeral session/state tables are excluded by default. Restore is intentionally a separate phase, to be written against the new infrastructure once it exists.
+
+---
+
+## Smaller Improvements
+
+- **Autofocus chat input on session load and switch (#333)** — focus the textarea on first mount and whenever the session changes (new or existing) so the user can type immediately. Assistant-preview empty state opts out via a new `autoFocus` input so it doesn't steal focus from the editor form.
+- **Copy-to-clipboard button on chat code blocks (#299)** — plus Prism syntax-highlighting bundles for JavaScript, TypeScript, Python, and SQL alongside the existing C#/CSS bundles.
+- **Tool renderer registry (#339)** — signal-backed `ToolRendererRegistryService` keyed by tool name replaces the implicit text/JSON/image switch baked into `ToolUseComponent`. Foundation for the MCP Apps `<mcp-app-frame>` renderer; `calculator`, `fetch_url_content`, and `create_visualization` migrated as proof points. Default renderer reproduces prior markup verbatim — zero visible change for existing tools.
+- **Kaizen-2026-05-15 hygiene (#338, #341, #302, #304)** — replaced dead source URLs in `kaizen-research` (the `bedrock/whats-new/` 404, the `docs.claude.com` claude-code release-notes 301→404, and the inactive `anthropics/courses`); fixed `aws/amazon-bedrock-agentcore-{sdk-python,starter-toolkit}` repo-slug typos to the correct `aws/bedrock-agentcore-*` slugs.
 
 ---
 
 ## 🐛 Bug fixes
 
-- **AgentCore Runtime `/ping` was missing the integer `time_of_last_update` field**, so AgentCore's idle reaper would silently reap the microVM at `idleRuntimeSessionTimeout` mid-stream regardless of reported status (bedrock-agentcore-sdk-python#471). `/ping` now returns a fresh timestamp on every call and corrects status casing to match `PingStatus`. We have no async-task busy tracking yet, so we cannot report `HealthyBusy` — returning a fresh timestamp on every ping is the documented mitigation against silent mid-generation reaps (#338)
-- **Frontend deploy builds were baking a placeholder version string** instead of the real `VERSION` file value (#336)
-- **Docker base image's pinned `curl`** was at an unavailable version blocking dev deploys; bumped to `8.14.1-2+deb13u3` (#327)
-- **`bedrock-agentcore` 1.43 botocore newly reads `Credentials.account_id` during endpoint construction**; on a `RefreshableCredentials` (SSO) object that forces a refresh → `GetRoleCredentials`, which moto does not implement. Combined with `AWS_PROFILE` leaking from `backend/src/.env` via `load_dotenv(override=True)`, this red the suite order-dependently. Added per-test autouse scrub fixtures for `AWS_PROFILE` and the `DYNAMODB_*` / `COGNITO_*` config families, mirroring the existing `_clear_skip_auth_env` fixture for the same `.env`-bleed class (#337)
-- Chat code blocks now have a copy-to-clipboard button (#299)
-- Chat message input autofocuses on session load and on session switch (#333)
-- Sidebar session list is denser, with a skeleton placeholder during load and entry animation on new sessions (#301)
+- `MaxTokensReachedException` no longer infinite-loops on retry; surfaces as a recoverable inline notice with Continue (#328).
+- Float-typed `max_tokens` / `top_k` in inference params no longer crash boto3's Bedrock Converse client (#329, #330).
+- Opus 4.7 no longer 400s on `thinking.type="enabled"` — model-aware adaptive shaping (#331).
+- Silent mid-stream microVM reaping on long generations fixed via `time_of_last_update` (#338).
+- Frontend deploy bundles bake the real version instead of the `'dev'` placeholder (#336).
+- Chart.js artifacts loaded via `cdn.jsdelivr.net` no longer render blank (#326).
+- Admin user-menu-links resource was firing a duplicate load request for non-admin users — gated to admin-only (#315).
+- Artifact card z-index escapes its message row on focus — scoped with `isolation: isolate` (#323).
+- `mcp-sandbox` CFN `Comment` overflow on the 128-char AWS cap (#356, #357).
+- `mcp-sandbox` CSP not URL-decoded in CloudFront Function (#358).
 
-## 🔒 Security
+---
 
-- Render-token verifier pins `alg=HS256` (rejects `none` + HS/RS confusion), constant-time signature compare, iss/aud/exp validation with bounded lifetime (≤10 min), non-dict header/payload rejection. The handler never logs the event or query string because the render token is a URL bearer credential (#309)
-- Artifact iframes mount with `allow-scripts` only — no `allow-same-origin`, no-referrer. The render token is re-minted per open with an `exp - iat = 120s` lifetime (well under the verifier's 600s cap) (#310, #312)
-- MCP Apps sandbox proxy enforces dynamic per-`ui://` resource CSP layered over the outer CloudFront `frame-ancestors`-locked policy. The outer CFN policy locks `frame-ancestors` to the SPA origin so a hostile proxy origin can't be embedded anywhere else (#343, #355)
-- All `Bearer`-only auth dependencies removed from `apis/app_api/` post-BFF migration. SPA-facing routes use `Depends(get_current_user_from_session)` (cookie-based) or `Depends(require_admin)`. Exceptions remain `auth/api_keys/` (`X-API-Key`) and `voice/` (voice-ticket cookie) — do not template off these for ordinary user routes (#297)
+## 🔒 Security / isolation
+
+- **Artifacts** render on `artifacts.{domain}` — a different cookie-jar host from the SPA, with `connect-src 'none'` so an artifact cannot make outbound requests. Render-token JWTs are scoped to one `(artifact_id, version)` and are HMAC-signed with a Secrets-Manager-managed key. S3 versions are immutable: there's no `s3:DeleteObject` grant on the inference-api role.
+- **MCP Apps** render on `mcp-sandbox.{domain}` with a per-resource `frame-ancestors` CSP emitted by a CloudFront Function. The outer host enforces a separate origin from the SPA, the inner App iframe carries `allow-same-origin` to match the basic-host reference, and an explicit user consent step (with reload persistence) gates first-time framing.
+- App-api Bearer-only auth removed from all routes except the documented API-key endpoint (#297).
+
+---
 
 ## ⚠️ Breaking changes
 
-- **`AGENTCORE_MCP_APPS_HOST_ENABLED` now defaults to `True`** (was `False` until PR #7). Environments that don't want the host-renderer surface should explicitly set `=false`. Without `CDK_MCP_SANDBOX_ENABLED=true`, the surface is functionally inert anyway (the SPA cannot frame any App without a sandbox origin), but the flag flip means `ui_resource` events will start appearing in SSE streams (#349)
-- **Bearer-only auth dependencies removed** from all standard `apis/app_api/` routes. The SPA was already on cookie auth post-BFF migration; any external integration still calling app-api with `Authorization: Bearer` will get 401. The API-key feature (`auth/api_keys/`, `X-API-Key`) is the supported path for non-SPA callers (#297)
+- **MCP Apps default-on.** `Defaults.MCP_APPS_HOST_ENABLED` flips `False → True`. To stay opt-in, set `AGENTCORE_MCP_APPS_HOST_ENABLED=false` in inference-api task env. If MCP Apps is enabled but `mcp-sandbox` isn't deployed, `ui_resource` events will emit with an empty `sandboxOrigin` and the SPA cannot frame the App.
+- **App-api Bearer-only auth removed (#297).** If any external integration was calling `apis/app_api/` routes with `Authorization: Bearer`, switch it to the API-key feature (`auth/api_keys/`, `X-API-Key`) before deploying beta.27. `POST /chat/agent-stream` remains Bearer for non-SPA callers and is unaffected.
+- **Opus 4.7 admin model entries.** Any admin model entry for an Opus 4.6/4.7 / Sonnet 4.6 / Mythos model that used `thinking.type="enabled"` should be updated to use the new `effort` knob; the runtime still emits the correct adaptive shape regardless, but the admin UI now exposes `effort` directly.
+
+---
 
 ## 🏗️ Infrastructure
 
-- **New `ArtifactsStack`** — gated on `CDK_ARTIFACTS_ENABLED`. Tier-1 (parallel-safe with Gateway, RAG, Fine-Tuning, MCP Sandbox). Cross-stack SSM contract:
-  - `InfrastructureStack` publishes `/{prefix}/artifacts/render-token-key-arn`
-  - `ArtifactsStack` consumes it and publishes the bucket/table/origin keys under `/{prefix}/artifacts/*`
-  - `InferenceApiStack`/`AppApiStack`/`FrontendStack` consume those when the flag is on
-  - Reuses the existing `*.{domain}` CloudFront cert — no new ACM cert for standard installs (documented in `step-02-aws-setup.md`)
-- **New `McpSandboxStack`** — `mcp-sandbox.{domain}` (S3 + CloudFront + ACM + Route53) serving `proxy.html`. CSP `frame-ancestors` locked to SPA origin. Tier-1. Publishes `/{prefix}/mcp-sandbox/origin` consumed by inference-api into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` when `CDK_MCP_SANDBOX_ENABLED=true`
-- `stack-dependencies` test (17/17) enforces tier ordering across the new stacks
-- Test infra: DynamoDB-table count test now enumerates tables instead of asserting a hard-coded count (#350)
+**New stacks (both gated by config flags, both safe to enable independently):**
+
+- **`ArtifactsStack`** (gated by `config.artifacts.enabled`) — DDB `user-artifacts` table, private S3 `artifacts-content` bucket, render Lambda, CloudFront on `artifacts.{domain}`, Route53 alias. Consumes `/artifacts/render-token-key-arn` SSM (published by `InfrastructureStack`); publishes `/artifacts/bucket-name`, `/artifacts/bucket-arn`, `/artifacts/table-name`, `/artifacts/table-arn`, `/artifacts/origin`. Requires `CDK_HOSTED_ZONE_DOMAIN` and `CDK_ARTIFACTS_CERTIFICATE_ARN`.
+- **`McpSandboxStack`** (gated by `config.mcpSandbox.enabled`) — S3 mount-page bucket, CloudFront distribution on `mcp-sandbox.{domain}` with a CloudFront Function for dynamic per-resource CSP, Route53 alias. Publishes `/mcp-sandbox/origin` SSM, consumed by inference-api at runtime as `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`.
+
+**`InfrastructureStack` additions:**
+
+- New `UserMenuLinksTable` (DDB) + `/admin/user-menu-links-table-name` and `/admin/user-menu-links-table-arn` SSM parameters.
+- New `ArtifactRenderTokenSecret` (Secrets Manager, AWS-managed encryption, `generateSecretString` 64-char) gated on `config.artifacts.enabled`. SSM `/artifacts/render-token-key-arn` publishes the ARN. Lives in `InfrastructureStack` (not `ArtifactsStack`) so app-api can read it without taking a stack-deploy-order dependency on `ArtifactsStack`.
+
+**Cross-stack:** `inference-api-stack` conditionally consumes `mcp-sandbox` SSM when `config.mcpSandbox.enabled` is true (mirrors the artifacts conditional-SSM pattern). Two synth tests cover present/absent.
+
+**Deploy order:** `InfrastructureStack` → `ArtifactsStack` (if enabled) and `McpSandboxStack` (if enabled) → app-api → inference-api → frontend.
+
+---
 
 ## 🔧 CI/CD improvements
 
-- **`artifacts.yml`** (381 lines) — deploys the ArtifactsStack with the standard env-var fanout, synth/deploy gates, and cert-reuse handling
-- **`mcp-sandbox.yml`** (383 lines) — deploys the McpSandboxStack
-- **`backup-data.yml`** (102 lines) — ad-hoc backup workflow for the platform DynamoDB tables (#361)
-- Artifact env vars (`CDK_ARTIFACTS_ENABLED` and friends) plumbed through every consumer workflow — `app-api.yml`, `inference-api.yml`, `frontend.yml`, `infrastructure.yml` (#307)
+- **Artifact env vars threaded through every consumer workflow (#307).** Validation on `config.artifacts.enabled` runs on every stack synth (the `bin/` instantiates all enabled stacks), so all five consumer workflows now pass `CDK_HOSTED_ZONE_DOMAIN`, `CDK_ARTIFACTS_ENABLED`, and `CDK_ARTIFACTS_CERTIFICATE_ARN` even when they're not synth'ing `ArtifactsStack` directly.
+- **Backup workflow** — new `workflow_dispatch` job wired to the OIDC composite action, runs `scripts/backup-data/` against any `CDK_PROJECT_PREFIX` (#361).
+- **Docker `curl` pin bumped (#327)** — Debian rotated `curl 8.14.1-2+deb13u2` out of the trixie apt index (superseded by `+deb13u3`), so the exact pin made every App API / Inference API Docker build hard-fail. Pin bumped, and the apt-pin policy documented as "follow Debian point-releases" rather than fully unpinning.
+- **`infrastructure-stack` DDB count test (#350)** — replaced the brittle `resourceCountIs(18)` magic number (which went stale when `user-menu-links` landed) with an enumerated, justified table list. Infra Jest is the only gate here and nothing blocks merges on it, so the count assertion had been sitting red on `develop`.
+
+---
 
 ## 📦 Dependency upgrades
 
-Backend:
+- **`bedrock-agentcore` 1.6.4 → 1.9.1** (#337). Coupled `boto3` 1.42.96 → 1.43.9 with `botocore` / `s3transfer` following — `bedrock-agentcore` 1.9.1 requires `boto3>=1.43.0`. CHANGELOG audited end-to-end: no breaking changes for our memory/identity usage (the double-base64 fix is unused here, the namespace redesign is backward-compatible, the `ConversationTurn` fix is internal telemetry). Validated with a read-only dev smoke test (memory `get_memory_strategies` / `retrieve_memories` + identity `list_workload_identities`) and the full backend suite (2913 passed).
 
-| Package | From | To |
-|---|---|---|
-| `bedrock-agentcore` | 1.6.4 | 1.9.1 |
-| `strands-agents` | 1.39.0 | 1.40.0 |
-| `strands-agents[bidi]` | 1.39.0 | 1.40.0 |
-| `boto3` | 1.42.96 | 1.43.9 |
+  Test-infra side effect: `botocore` 1.43 newly reads `Credentials.account_id` during endpoint construction; on a `RefreshableCredentials` (SSO) object that forces a refresh → `GetRoleCredentials`, which `moto` does not implement. Combined with `backend/src/.env`'s `AWS_PROFILE` leaking via `load_dotenv(override=True)`, this red-ed the suite order-dependently. Added per-test autouse scrub fixtures for `AWS_PROFILE` and the `DYNAMODB_*` / `COGNITO_*` config families, mirroring the existing `_clear_skip_auth_env` fixture for the same `.env`-bleed bug class.
 
-`strands-agents` 1.40.0 flips `use_native_token_count` default `True → False`. Audit (kaizen 2026-05-15 proposal #6): inert for our token accounting. The flag gates only `BedrockModel.count_tokens()`, which Strands calls solely from `_estimate_input_tokens()` to populate `projected_input_tokens` on `BeforeModelCallEvent`. Our cost-badge / context-% / compaction-trigger math reads `accumulated_metadata["usage"]`, sourced from the native Bedrock Converse streaming response usage (independent of the flag). Decision: accept the new default — do NOT pin `use_native_token_count=True`; pinning would add a redundant `CountTokens` API call per turn for a value nothing in our paths reads.
+- **`strands-agents` 1.39.0 → 1.40.0** (#340). Gated on a token-count audit and a compaction double-fire check. `use_native_token_count` default flipped `True → False` (Strands PR #2284) is inert for our token accounting — the flag gates only `BedrockModel.count_tokens()`, which Strands calls solely from `_estimate_input_tokens()` to populate `projected_input_tokens` on `BeforeModelCallEvent`. Our cost-badge / context-% / compaction-trigger plumbing reads from `inputTokens` + `cacheReadInputTokens` + `cacheWriteInputTokens` directly, so the default flip is transparent.
 
-`bedrock-agentcore` 1.9.1 CHANGELOG 1.6.4 → 1.9.1 audited: no breaking changes for our memory/identity usage (double-base64 fix unused here, namespace redesign is backward-compatible, `ConversationTurn` fix is internal telemetry). Validated with a read-only dev smoke test (memory `get_memory_strategies`/`retrieve_memories` + identity `list_workload_identities`) and the full backend suite (2913 passed). Requires `boto3>=1.43.0`, so `boto3` and the coupled `botocore`/`s3transfer` bump in lockstep.
-
-Frontend and infrastructure `package.json` had no dependency changes this release.
+---
 
 ## 🧪 Test Coverage
 
-- Render Lambda: **38 tests** covering the full token-verification matrix (alg confusion, expired, missing claims, malformed) plus handler integration via moto (Secrets Manager / DynamoDB / S3) (#309)
-- App-API minter: end-to-end contract test that feeds a freshly minted token through the render Lambda's actual `_verify_token` with a shared signing key (#310)
-- Artifact tools: create / update / immutability / foreign-artifact rejection / SSM fallback / route gating, plus a cross-PR contract test that feeds a written row through #310's `_assert_version_exists` and confirms it resolves to the S3 object #309 serves (#311)
-- MCP Sandbox: 183 lines of stack tests (frame-ancestors lock, proxy.html asset, response-headers policy) (#343)
-- Inference param merge: 42 new lines around `effort` allowed-set gating and integer coercion guard rails (#329, #331)
-- `test_model_config.py`: 82 new lines covering Opus 4.7 adaptive shape vs. legacy `enabled` shape per model family (#331)
-- Full backend suite: 2952 passed / 3 skipped at the PR #7 gate; frontend 1067 vitest passed (#349)
+- Backend + frontend regression tests for `MaxTokensReachedException` classification, the `continue_truncated` resume path, `stream_error` always-allowed gating, and the `lastTurnContinuable` refresh-survival marker round-trip (#328).
+- Backend regression tests for adaptive thinking shape per model marker, `effort` allowed-set gating, and the float→int coercion path on `max_tokens` / `top_k` (#329, #330, #331).
+- `infrastructure/test/mcp-sandbox-stack.test.ts` (264 lines) and `mcp-sandbox-csp-function.test.ts` (357 lines) — synth + CFN unit coverage for the new stack including the placeholder-substitution invariants and `frame-ancestors` quote-escaping.
+- `infrastructure/test/inference-api-stack.test.ts` — two synth cases gating `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` wiring on `config.mcpSandbox.enabled` (#349).
+- `infrastructure/test/cors.test.ts` (53 lines) — new CORS test surface.
+- Refactored `infrastructure/test/infrastructure-stack.test.ts` to enumerate the 19 DDB tables with one-line justifications instead of asserting a count (#350).
+- Frontend specs for `mcp-app-bridge`, `mcp-app-card-state.service`, `mcp-app-consent.service`, `mcp-app-message.service`, `mcp-app-proxy.service`, `mcp-app-state.service`, `proxy-url`, `artifact-http.service`, `artifact-state.service`, `artifact-source.component`.
+
+---
 
 ## 🚀 Deployment notes
 
-**Deploy order** (unchanged in shape, with two new optional tier-1 stacks):
+This is a multi-stack release. **Read this section before deploying.**
 
-1. Infrastructure
-2. (Gateway, RAG Ingestion, SageMaker Fine-Tuning, **Artifacts**, **MCP Sandbox**) — tier-1, parallel-safe
-3. Inference API
-4. App API
-5. Frontend
+### New stacks
 
-**If you're enabling Artifacts:**
-- Set `CDK_ARTIFACTS_ENABLED=true` in the deploying environment's workflow env
-- Deploy `ArtifactsStack` (workflow: `artifacts.yml`)
-- Inference API, App API, and Frontend will conditionally consume `/{prefix}/artifacts/*` SSM params on next deploy
-- The existing `*.{domain}` CloudFront cert is reused; no new ACM cert required for standard subdomain installs
+If you want either feature, set the gating flag and the supporting env vars before synth:
 
-**If you're enabling MCP Apps host-renderer:**
-- Set `CDK_MCP_SANDBOX_ENABLED=true` in the deploying environment's workflow env
-- Deploy `McpSandboxStack` (workflow: `mcp-sandbox.yml`)
-- Inference API consumes `/{prefix}/mcp-sandbox/origin` into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` on next deploy
-- `AGENTCORE_MCP_APPS_HOST_ENABLED` is now `True` by default — without the sandbox origin the SPA cannot frame an App, but the SSE `ui_resource` event will still be emitted. To opt out entirely, set `AGENTCORE_MCP_APPS_HOST_ENABLED=false`
-- Follow the new `step-04-deploy.md` "Register an MCP-Apps-capable MCP server" section to register your first MCP Apps tool; the `budget-allocator-server` example payload is committed for reference
-- Manual e2e dogfood scenario in `step-05-verify.md` exercises all six Definition-of-Done interactions
+- **Artifacts:** set `CDK_ARTIFACTS_ENABLED=true`. `CDK_HOSTED_ZONE_DOMAIN` and `CDK_ARTIFACTS_CERTIFICATE_ARN` become required across **every** consumer workflow that synthesizes any stack (validation runs on every synth — see #307). The artifacts ACM cert must be in `us-east-1` (CloudFront).
+- **MCP Apps:** set the corresponding `mcpSandbox.enabled` config and `AGENTCORE_MCP_APPS_HOST_ENABLED` (now defaults true). The `mcp-sandbox` ACM cert must be in `us-east-1`. Without `mcp-sandbox` deployed, `ui_resource` SSE events will emit with an empty `sandboxOrigin` and the SPA cannot frame the App.
 
-**If you're not enabling either feature:** no special steps. Both feature flags default the new stacks off; the runtime defaults for `AGENTCORE_MCP_APPS_HOST_ENABLED=True` produce no user-visible change in the absence of a sandbox origin and an MCP-Apps-capable tool registration.
+### Deploy order
 
-**Auth migration:** if any external integration was calling `apis/app_api/` routes with `Authorization: Bearer`, switch it to the API-key feature (`auth/api_keys/`, `X-API-Key`) before deploying beta.27 (#297).
+1. `InfrastructureStack` (provisions `UserMenuLinksTable` + `ArtifactRenderTokenSecret` + SSM publishes).
+2. `ArtifactsStack` (consumes `/artifacts/render-token-key-arn`).
+3. `McpSandboxStack` (independent of `ArtifactsStack`).
+4. `app-api` (consumes artifact + user-menu-links SSM).
+5. `inference-api` (consumes artifact + mcp-sandbox SSM, conditional on flags).
+6. Frontend.
+
+### Auth migration
+
+If any external integration was calling `apis/app_api/` routes with `Authorization: Bearer`, switch it to the API-key feature (`auth/api_keys/`, `X-API-Key`) before deploying beta.27 (#297). `POST /chat/agent-stream` remains Bearer-acceptable for non-SPA callers.
+
+### Pre-migration safety net
+
+Before any large infrastructure change (a stack-prefix migration, a region cutover, a CDK boundary refactor), run `scripts/backup-data/` first. The new workflow makes this a one-click affair against any `CDK_PROJECT_PREFIX`.
+
+### Optional follow-ups (not deploy-blocking)
+
+- Register an MCP Apps-capable MCP server via `step-04-deploy.md` to validate the host-renderer end-to-end against the committed `budget-allocator-server` example. Manual e2e dogfood scenario in `step-05-verify.md` exercises all six Definition-of-Done interactions.
+- If you carry custom CSP `frame-ancestors` source lists for embedded preview environments, set `mcpSandbox.extraFrameAncestors` rather than rebuilding the CloudFront Function asset.
 
 ---
 
