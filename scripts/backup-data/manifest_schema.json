@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Boise-State-Development/agentcore-public-stack/scripts/backup-data/manifest_schema.json",
+  "title": "AgentCore backup manifest",
+  "description": "Single-source-of-truth descriptor written at the root of every backup. The restore step reads this to know what is present, what failed, and how to address each artifact.",
+  "type": "object",
+  "required": ["version", "tool", "project_prefix", "region", "account_id", "timestamp", "bucket", "root_prefix", "summary", "components"],
+  "properties": {
+    "version": {"const": 1},
+    "tool": {"type": "string"},
+    "project_prefix": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,20}$"},
+    "region": {"type": "string"},
+    "account_id": {"type": "string", "pattern": "^[0-9]{12}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z$"},
+    "bucket": {"type": "string"},
+    "root_prefix": {"type": "string"},
+    "include_ephemeral": {"type": "boolean"},
+    "dry_run": {"type": "boolean"},
+    "fatal_error": {"type": "string", "description": "Present only if the run terminated with an unhandled exception."},
+    "summary": {
+      "type": "object",
+      "required": ["total", "ok", "skipped", "failed"],
+      "properties": {
+        "total":   {"type": "integer", "minimum": 0},
+        "ok":      {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "failed":  {"type": "integer", "minimum": 0}
+      }
+    },
+    "components": {
+      "type": "object",
+      "description": "Keys are component names (dynamodb, s3, cognito, agentcore-memory).",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["component", "logical_name", "status"],
+          "properties": {
+            "component":    {"type": "string"},
+            "logical_name": {"type": "string"},
+            "status":       {"enum": ["ok", "skipped", "failed"]},
+            "detail":       {"type": "object"},
+            "error":        {"type": ["string", "null"]}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,102 @@
+name: "Backup Data (Pre-Migration)"
+
+# Manual-dispatch only — this is a one-shot tool intended to be run before
+# a destructive infrastructure migration. See scripts/backup-data/README.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_prefix:
+        description: "CDK_PROJECT_PREFIX of the environment to back up (e.g. 'boisestate-prod')"
+        required: true
+        type: string
+      aws_region:
+        description: "AWS region"
+        required: true
+        default: "us-west-2"
+        type: string
+      aws_environment:
+        description: "GitHub Environment (selects AWS_ROLE_ARN secret + approvals)"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+          - development
+      include_ephemeral:
+        description: "Also back up TTL-driven session/state tables"
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: "Discover and list sources without performing any writes"
+        required: false
+        default: false
+        type: boolean
+      allow_partial:
+        description: "Succeed even if some components fail (manifest still reflects state)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write   # OIDC role assumption
+  contents: read
+
+concurrency:
+  # One backup at a time per environment to avoid bucket-name collisions
+  # and double-export of the same tables.
+  group: backup-data-${{ inputs.aws_environment }}
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Backup ${{ inputs.project_prefix }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.aws_environment }}
+    timeout-minutes: 360  # large S3 syncs can take a while
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: "backup-data-${{ inputs.project_prefix }}"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.x"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install backup tool
+        working-directory: scripts/backup-data
+        run: uv sync
+
+      - name: Run backup
+        working-directory: scripts/backup-data
+        env:
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --project-prefix "${{ inputs.project_prefix }}"
+            --region "${{ inputs.aws_region }}"
+          )
+          if [[ "${{ inputs.include_ephemeral }}" == "true" ]]; then
+            ARGS+=(--include-ephemeral)
+          fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            ARGS+=(--dry-run)
+          fi
+          if [[ "${{ inputs.allow_partial }}" == "true" ]]; then
+            ARGS+=(--allow-partial)
+          fi
+          uv run python backup.py "${ARGS[@]}"
