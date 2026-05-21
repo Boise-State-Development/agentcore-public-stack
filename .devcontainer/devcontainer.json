@@ -1,0 +1,62 @@
+{
+  "name": "agentcore-public-stack",
+  "build": {
+    "context": "..",
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "dev",
+  "containerUser": "dev",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+  "forwardPorts": [4200, 8000, 8001],
+  "portsAttributes": {
+    "4200": { "label": "Angular dev server", "onAutoForward": "silent" },
+    "8000": { "label": "App API", "onAutoForward": "silent" },
+    "8001": { "label": "Inference API", "onAutoForward": "silent" }
+  },
+  "containerEnv": {
+    "AWS_REGION": "us-west-2"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.defaultInterpreterPath": "/workspace/backend/.venv/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["backend/tests"],
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.formatOnSave": true
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[html]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        }
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "Angular.ng-template",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker",
+        "amazonwebservices.aws-toolkit-vscode",
+        "ms-playwright.playwright",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "bradlc.vscode-tailwindcss",
+        "GitHub.vscode-pull-request-github",
+        "eamodio.gitlens"
+      ]
+    }
+  },
+  "postCreateCommand": "echo 'Devcontainer ready. Run: cd backend && uv sync --frozen --extra agentcore --extra dev'"
+}
