@@ -73,4 +73,26 @@ describe('ConnectorsService', () => {
     });
     await promise;
   });
+
+  it('should fetch file-source adapters without key translation', async () => {
+    const mockResponse = {
+      adapters: [
+        {
+          key: 'google-drive',
+          displayName: 'Google Drive',
+          icon: 'google-drive',
+          compatibleProviderTypes: ['google'],
+          requiredScopes: ['https://www.googleapis.com/auth/drive.readonly'],
+        },
+      ],
+    };
+    const promise = service.fetchFileSourceAdapters();
+    await vi.waitFor(() => {
+      httpMock
+        .expectOne('http://localhost:8000/admin/file-source-adapters/')
+        .flush(mockResponse);
+    });
+    // The endpoint already serializes camelCase — response passes through as-is.
+    expect(await promise).toEqual(mockResponse);
+  });
 });

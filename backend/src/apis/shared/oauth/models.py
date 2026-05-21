@@ -121,6 +121,13 @@ class OAuthProvider:
     # `access_type=offline`) win on conflict — admins cannot accidentally
     # turn off a documented requirement.
     custom_parameters: Optional[Dict[str, str]] = None
+    # Maps this connector to a file-source adapter (e.g. "google-drive"),
+    # making it selectable as a file source in the assistant editor. The
+    # value is an adapter key from the backend adapter registry; admins set
+    # it via a dropdown. None means the connector is not a file source.
+    # Adapter existence / provider-type compatibility is validated in the
+    # admin route — `apis.shared` cannot import the app_api registry.
+    file_source_adapter_id: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
 
@@ -148,6 +155,7 @@ class OAuthProvider:
             "oauthDiscoveryUrl": self.oauth_discovery_url,
             "authorizationServerMetadata": self.authorization_server_metadata,
             "customParameters": self.custom_parameters,
+            "fileSourceAdapterId": self.file_source_adapter_id,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -168,6 +176,7 @@ class OAuthProvider:
             oauth_discovery_url=item.get("oauthDiscoveryUrl"),
             authorization_server_metadata=item.get("authorizationServerMetadata"),
             custom_parameters=item.get("customParameters"),
+            file_source_adapter_id=item.get("fileSourceAdapterId"),
             created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
             updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
         )
@@ -203,6 +212,9 @@ class OAuthProviderCreate(BaseModel):
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
+    # Adapter key that makes this connector a file source. Validated against
+    # the adapter registry in the admin route.
+    file_source_adapter_id: Optional[str] = None
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -257,6 +269,9 @@ class OAuthProviderUpdate(BaseModel):
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
+    # `""` clears the file-source mapping (the connector stops being a file
+    # source); a populated adapter key sets it; `None` leaves it unchanged.
+    file_source_adapter_id: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_credential_pair(self) -> "OAuthProviderUpdate":
@@ -289,6 +304,7 @@ class OAuthProviderResponse(BaseModel):
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
+    file_source_adapter_id: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -308,6 +324,7 @@ class OAuthProviderResponse(BaseModel):
             oauth_discovery_url=provider.oauth_discovery_url,
             authorization_server_metadata=provider.authorization_server_metadata,
             custom_parameters=provider.custom_parameters,
+            file_source_adapter_id=provider.file_source_adapter_id,
             created_at=provider.created_at,
             updated_at=provider.updated_at,
         )

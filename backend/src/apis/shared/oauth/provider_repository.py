@@ -154,6 +154,10 @@ class OAuthProviderRepository:
             # Empty dict (`{}`) explicitly clears the field; pass None on the
             # update model to leave the existing value alone.
             existing.custom_parameters = updates.custom_parameters or None
+        if updates.file_source_adapter_id is not None:
+            # Empty string (`""`) clears the file-source mapping; a populated
+            # adapter key sets it. `None` leaves the existing value alone.
+            existing.file_source_adapter_id = updates.file_source_adapter_id or None
 
         existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
         self._table.put_item(Item=existing.to_dynamo_item())

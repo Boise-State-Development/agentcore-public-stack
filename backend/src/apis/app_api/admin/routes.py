@@ -721,6 +721,11 @@ from .oauth.routes import router as oauth_admin_router
 
 router.include_router(oauth_admin_router)
 
+# ========== Include File-Source Adapters Admin Subrouter ==========
+from .file_sources.routes import router as file_sources_admin_router
+
+router.include_router(file_sources_admin_router)
+
 # ========== Include Auth Providers Admin Subrouter ==========
 from .auth_providers.routes import router as auth_providers_router
 

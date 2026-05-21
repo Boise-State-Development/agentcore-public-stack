@@ -7,6 +7,8 @@ import {
   ConnectorListResponse,
   ConnectorCreateRequest,
   ConnectorUpdateRequest,
+  FileSourceAdapter,
+  FileSourceAdapterListResponse,
 } from '../models/connector.model';
 
 function toSnakeCase(obj: Record<string, any>): Record<string, any> {
@@ -44,10 +46,26 @@ export class ConnectorsService {
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/admin/oauth-providers`);
 
+  private readonly fileSourceAdaptersUrl = computed(
+    () => `${this.config.appApiUrl()}/admin/file-source-adapters`
+  );
+
   readonly connectorsResource = resource({
     loader: async () => {
       await Promise.resolve();
       return this.fetchConnectors();
+    }
+  });
+
+  /**
+   * The file-source adapter registry. Read-only and rarely changes — adapters
+   * ship in releases — so a single eager load when the admin service is first
+   * injected is sufficient.
+   */
+  readonly fileSourceAdaptersResource = resource({
+    loader: async () => {
+      await Promise.resolve();
+      return this.fetchFileSourceAdapters();
     }
   });
 
@@ -71,6 +89,20 @@ export class ConnectorsService {
       providers: response.providers.map((p: any) => toCamelCase(p) as Connector),
       total: response.total,
     };
+  }
+
+  getFileSourceAdapters(): FileSourceAdapter[] {
+    return this.fileSourceAdaptersResource.value()?.adapters ?? [];
+  }
+
+  /**
+   * Fetch the file-source adapter registry. This endpoint serializes
+   * camelCase already, so no key translation is applied.
+   */
+  async fetchFileSourceAdapters(): Promise<FileSourceAdapterListResponse> {
+    return firstValueFrom(
+      this.http.get<FileSourceAdapterListResponse>(`${this.fileSourceAdaptersUrl()}/`)
+    );
   }
 
   async fetchConnector(providerId: string): Promise<Connector> {

@@ -52,6 +52,12 @@ export interface Connector {
    * always win on conflict.
    */
   customParameters?: Record<string, string> | null;
+  /**
+   * File-source adapter key (e.g. `google-drive`) mapping this connector to
+   * a file source. When set, the connector appears as a file source in the
+   * assistant editor. Null/absent means it is not a file source.
+   */
+  fileSourceAdapterId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +94,8 @@ export interface ConnectorCreateRequest {
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
   customParameters?: Record<string, string>;
+  /** File-source adapter key; omit when the connector is not a file source. */
+  fileSourceAdapterId?: string;
 }
 
 /**
@@ -110,6 +118,30 @@ export interface ConnectorUpdateRequest {
   oauthDiscoveryUrl?: string;
   authorizationServerMetadata?: Record<string, unknown>;
   customParameters?: Record<string, string>;
+  /**
+   * `""` clears the file-source mapping (the connector stops being a file
+   * source); a populated adapter key sets it; `undefined` leaves it alone.
+   */
+  fileSourceAdapterId?: string;
+}
+
+/**
+ * A file-source adapter shipped in the backend registry, as returned by
+ * `GET /admin/file-source-adapters`. Read-only — adapters are code, not
+ * config; an admin can only map a connector to an existing one.
+ */
+export interface FileSourceAdapter {
+  key: string;
+  displayName: string;
+  icon: string;
+  /** OAuth provider types this adapter may be mapped to. */
+  compatibleProviderTypes: ConnectorType[];
+  /** OAuth scopes the connector must grant for the adapter to work. */
+  requiredScopes: string[];
+}
+
+export interface FileSourceAdapterListResponse {
+  adapters: FileSourceAdapter[];
 }
 
 /**

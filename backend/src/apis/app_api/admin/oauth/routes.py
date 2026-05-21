@@ -11,10 +11,12 @@ import logging
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Optional
 
 import boto3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from apis.app_api.file_sources.registry import registry
 from apis.shared.auth import User, require_admin
 from apis.shared.oauth.agentcore_registrar import (
     AgentCoreRegistrar,
@@ -29,6 +31,7 @@ from apis.shared.oauth.models import (
     OAuthProviderCreate,
     OAuthProviderListResponse,
     OAuthProviderResponse,
+    OAuthProviderType,
     OAuthProviderUpdate,
 )
 from apis.shared.oauth.provider_repository import (
@@ -188,6 +191,11 @@ async def create_provider(
             detail=f"Provider '{provider_data.provider_id}' already exists",
         )
 
+    # Fail fast on a bad file-source mapping, before any AgentCore side-effect.
+    _validate_file_source_adapter(
+        provider_data.file_source_adapter_id, provider_data.provider_type
+    )
+
     try:
         credential_info = registrar.create_credential_provider(
             provider_id=provider_data.provider_id,
@@ -256,6 +264,12 @@ async def update_provider(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Provider '{provider_id}' not found",
         )
+
+    # A populated adapter key must be valid for this connector's type; an
+    # empty string (clear the mapping) and None (unchanged) skip validation.
+    _validate_file_source_adapter(
+        updates.file_source_adapter_id, existing.provider_type
+    )
 
     rotating_credentials = bool(updates.client_id and updates.client_secret)
     changing_discovery = (
@@ -352,6 +366,34 @@ async def delete_provider(
 # =============================================================================
 
 
+def _validate_file_source_adapter(
+    adapter_id: Optional[str], provider_type: OAuthProviderType
+) -> None:
+    """Reject a file-source adapter mapping the registry cannot honor.
+
+    An empty/None value is a no-op — the connector simply isn't a file
+    source. A populated value must name an adapter shipped in the registry
+    whose `compatible_provider_types` includes this connector's type.
+    Raises `HTTPException` 400 on a bad mapping.
+    """
+    if not adapter_id:
+        return
+    adapter = registry.get(adapter_id)
+    if adapter is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown file-source adapter '{adapter_id}'",
+        )
+    if provider_type not in adapter.metadata.compatible_provider_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"File-source adapter '{adapter_id}' is not compatible with "
+                f"provider type '{provider_type.value}'"
+            ),
+        )
+
+
 def _build_provider_from_create(
     data: OAuthProviderCreate, credential_info: CredentialProviderInfo
 ) -> OAuthProvider:
@@ -375,6 +417,8 @@ def _build_provider_from_create(
         # so absent/empty are indistinguishable in DynamoDB and `from_*`
         # lookups round-trip identically.
         custom_parameters=data.custom_parameters or None,
+        # `""` from the form means "not a file source" — store as None.
+        file_source_adapter_id=data.file_source_adapter_id or None,
         created_at=now,
         updated_at=now,
     )
