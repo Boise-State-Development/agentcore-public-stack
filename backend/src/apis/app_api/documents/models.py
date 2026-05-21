@@ -32,6 +32,17 @@ class Document(BaseModel):
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")
     ttl: Optional[int] = Field(None, alias="ttl", description="DynamoDB TTL epoch timestamp for auto-expiry")
+    # Source provenance — populated only when a document was imported from an
+    # external file source (Google Drive, etc.); null for device uploads.
+    # Required to support re-indexing a document from its origin later: they
+    # record which connector/adapter/file the bytes came from and whose
+    # credentials fetched them. Cheap to capture at import time, unrecoverable
+    # if skipped.
+    source_connector_id: Optional[str] = Field(None, alias="sourceConnectorId", description="OAuth connector the file was imported from")
+    source_adapter_key: Optional[str] = Field(None, alias="sourceAdapterKey", description="File-source adapter that fetched the file")
+    source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
+    source_etag: Optional[str] = Field(None, alias="sourceEtag", description="Provider-side version stamp at import time")
+    imported_by_user_id: Optional[str] = Field(None, alias="importedByUserId", description="User whose credentials imported the file")
 
 
 class CreateDocumentRequest(BaseModel):
