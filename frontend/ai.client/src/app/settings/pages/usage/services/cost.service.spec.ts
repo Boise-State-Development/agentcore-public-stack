@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { TestRequest } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { CostService } from './cost.service';
@@ -12,8 +13,9 @@ describe('CostService', () => {
   beforeEach(() => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         CostService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],

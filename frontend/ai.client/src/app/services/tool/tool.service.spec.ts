@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { ToolService, Tool, ToolsResponse } from './tool.service';
 import { ConfigService } from '../config.service';
 import { signal } from '@angular/core';
@@ -18,8 +19,9 @@ describe('ToolService', () => {
 
   async function setup() {
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         ToolService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
       ],

@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageMapService } from './message-map.service';
 import { SessionService } from './session.service';
@@ -28,8 +29,9 @@ describe('MessageMapService', () => {
       requestConsent: vi.fn()
     };
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         MessageMapService,
         { provide: SessionService, useValue: mockSessionService },
         { provide: FileUploadService, useValue: mockFileUploadService },

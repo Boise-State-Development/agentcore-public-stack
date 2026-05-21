@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { ApiKeyService, ApiKey, CreateApiKeyResponse } from './api-key.service';
 import { ConfigService } from '../../../services/config.service';
 
@@ -16,8 +17,9 @@ describe('ApiKeyService', () => {
     };
 
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         ApiKeyService,
         { provide: ConfigService, useValue: mockConfigService }
       ]

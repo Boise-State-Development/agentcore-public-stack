@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { ModelService } from './model.service';
 import { ConfigService } from '../../../services/config.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
@@ -34,8 +35,9 @@ describe('ModelService', () => {
     };
 
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         ModelService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
         { provide: UserSettingsService, useValue: mockUserSettings },

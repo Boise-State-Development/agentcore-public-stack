@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
-import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionService } from './session.service';
@@ -69,8 +70,9 @@ describe('SessionService', () => {
     };
 
     TestBed.configureTestingModule({
-      imports: [HttpClientTestingModule],
       providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
         SessionService,
         { provide: ConfigService, useValue: configService },
       ],
