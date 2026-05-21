@@ -1,16 +1,41 @@
 """Document management API routes"""
 
+import asyncio
 import logging
+import mimetypes
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from apis.shared.assistants.service import get_assistant
-from apis.app_api.documents.models import CreateDocumentRequest, DocumentResponse, DocumentsListResponse, DownloadUrlResponse, UploadUrlResponse, ReportUploadFailureRequest
+from apis.app_api.documents.models import (
+    CreateDocumentRequest,
+    DocumentProvenance,
+    DocumentResponse,
+    DocumentsListResponse,
+    DownloadUrlResponse,
+    ImportDocumentsRequest,
+    ImportDocumentsResponse,
+    ReportUploadFailureRequest,
+    UploadUrlResponse,
+)
 from apis.app_api.documents.services.document_service import _generate_document_id, create_document, list_assistant_documents, update_document_status
 from apis.app_api.documents.services.document_service import get_document as get_document_service
-from apis.app_api.documents.services.storage_service import generate_download_url, generate_upload_url
+from apis.app_api.documents.services.import_service import run_import
+from apis.app_api.documents.services.storage_service import (
+    _get_s3_key,
+    _sanitize_filename,
+    generate_download_url,
+    generate_upload_url,
+)
+from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
+from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.auth.dependencies import get_current_user_id
+from apis.shared.oauth.provider_repository import (
+    OAuthProviderRepository,
+    get_provider_repository,
+)
+from apis.shared.rbac.service import AppRoleService, get_app_role_service
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +101,93 @@ async def generate_upload_url_endpoint(
     except Exception as e:
         logger.error(f"Error generating upload URL: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate upload URL: {str(e)}")
+
+
+@router.post("/import", response_model=ImportDocumentsResponse, status_code=status.HTTP_202_ACCEPTED)
+async def import_documents(
+    assistant_id: str,
+    request: ImportDocumentsRequest,
+    current_user: User = Depends(get_current_user_from_session),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+) -> ImportDocumentsResponse:
+    """Import files from a connected file source into an assistant's index.
+
+    Creates one document record per file (status 'uploading', provenance
+    populated) and returns immediately. A fire-and-forget task then downloads
+    each file through the file-source adapter and stages it to S3, where the
+    existing S3-event ingestion Lambda drives chunking/embedding — exactly as
+    a device upload would.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        request: Connector id and the files selected for import
+        current_user: Authenticated user from the session cookie
+    """
+    try:
+        # 1. Verify the caller owns the assistant the files land in.
+        assistant = await get_assistant(assistant_id, current_user.user_id)
+        if not assistant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+
+        # 2. Resolve the connector to a usable adapter + access token. Raises
+        #    404/403 (not a visible file source), 409 (not connected), or 503
+        #    (workload context unavailable).
+        provider, adapter = await resolve_file_source(
+            request.connector_id, current_user, provider_repo, role_service
+        )
+        access_token = await require_file_source_token(provider, current_user.user_id)
+
+        # 3. Create a document record per file. Values are provisional — the
+        #    async task backfills the real filename/type/size/key after the
+        #    adapter download (Google-native docs change extension on export).
+        created: list = []
+        items: list = []
+        for file_ref in request.files:
+            document_id = _generate_document_id()
+            guessed_type, _ = mimetypes.guess_type(file_ref.name)
+            provisional_key = _get_s3_key(
+                assistant_id, document_id, _sanitize_filename(file_ref.name)
+            )
+            document = await create_document(
+                assistant_id=assistant_id,
+                filename=file_ref.name,
+                content_type=guessed_type or "application/octet-stream",
+                size_bytes=0,
+                s3_key=provisional_key,
+                document_id=document_id,
+                provenance=DocumentProvenance(
+                    source_connector_id=provider.provider_id,
+                    source_adapter_key=adapter.metadata.key,
+                    source_file_id=file_ref.file_id,
+                    imported_by_user_id=current_user.user_id,
+                ),
+            )
+            created.append(document)
+            items.append((document_id, file_ref.file_id))
+
+        # 4. Fire-and-forget the download + S3 stage (response already formed).
+        asyncio.ensure_future(
+            run_import(
+                assistant_id=assistant_id,
+                adapter=adapter,
+                access_token=access_token,
+                items=items,
+            )
+        )
+
+        return ImportDocumentsResponse(
+            documents=[
+                DocumentResponse.model_validate(doc.model_dump(by_alias=True))
+                for doc in created
+            ]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error importing documents: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to import documents: {str(e)}")
 
 
 @router.post("/{document_id}/upload-failed", response_model=DocumentResponse, status_code=status.HTTP_200_OK)
@@ -250,7 +362,6 @@ async def delete_document(assistant_id: str, document_id: str, user_id: str = De
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
 
         # Fire-and-forget cleanup (response already sent as 204)
-        import asyncio
         asyncio.ensure_future(
             cleanup_document_resources(
                 document_id=document.document_id,

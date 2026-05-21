@@ -15,7 +15,7 @@ import uuid
 from typing import Optional, Tuple, List
 from datetime import datetime, timezone
 
-from apis.app_api.documents.models import Document, DocumentStatus
+from apis.app_api.documents.models import Document, DocumentProvenance, DocumentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -91,21 +91,26 @@ async def create_document(
     content_type: str,
     size_bytes: int,
     s3_key: str,
-    document_id: Optional[str] = None
+    document_id: Optional[str] = None,
+    provenance: Optional[DocumentProvenance] = None
 ) -> Document:
     """
     Create a new document record in DynamoDB
-    
+
     Initial status is 'uploading'. Lambda will update to 'chunking' after
     S3 event is received.
-    
+
     Args:
         assistant_id: Parent assistant identifier
         filename: Original filename
         content_type: MIME type
         size_bytes: File size in bytes
         s3_key: S3 object key where file will be uploaded
-    
+        document_id: Optional pre-generated document identifier
+        provenance: Optional file-source origin metadata. Set only for
+            documents imported from an external connector; None for device
+            uploads.
+
     Returns:
         Document object with status='uploading'
     """
@@ -133,7 +138,12 @@ async def create_document(
         s3_key=s3_key,
         status='uploading',
         created_at=now,
-        updated_at=now
+        updated_at=now,
+        source_connector_id=provenance.source_connector_id if provenance else None,
+        source_adapter_key=provenance.source_adapter_key if provenance else None,
+        source_file_id=provenance.source_file_id if provenance else None,
+        source_etag=provenance.source_etag if provenance else None,
+        imported_by_user_id=provenance.imported_by_user_id if provenance else None,
     )
     
     dynamodb = boto3.resource('dynamodb')
@@ -356,6 +366,105 @@ async def update_document_status(
         return None
     except Exception as e:
         logger.error(f"Unexpected error updating document status: {e}", exc_info=True)
+        return None
+
+
+async def update_document_import_metadata(
+    assistant_id: str,
+    document_id: str,
+    *,
+    filename: str,
+    content_type: str,
+    size_bytes: int,
+    s3_key: str,
+    source_etag: Optional[str] = None,
+) -> Optional[Document]:
+    """
+    Backfill a document's file metadata after an async import download.
+
+    The import endpoint creates the record with provisional values (the
+    browser-supplied name, a placeholder content type, zero size) before the
+    bytes are fetched. Once the adapter download completes, the real
+    filename, content type, size, and S3 key are known — and for
+    Google-native docs the extension changes on export — so they are written
+    here just before the bytes are PUT to S3.
+
+    Status is intentionally left untouched: the S3-event ingestion Lambda
+    owns the 'uploading' -> 'chunking' transition once the object lands.
+
+    Args:
+        assistant_id: Parent assistant identifier
+        document_id: Document identifier
+        filename: Real filename after any provider-native export
+        content_type: Real MIME type of the downloaded bytes
+        size_bytes: Size of the downloaded bytes
+        s3_key: Final S3 object key the bytes are PUT to
+        source_etag: Provider-side version stamp at import time, if known
+
+    Returns:
+        Updated Document object, or None if the record no longer exists
+        (e.g. deleted between import request and download).
+    """
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+    except ImportError:
+        logger.error("boto3 is required for DynamoDB operations")
+        return None
+
+    table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
+    if not table_name:
+        logger.error("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable not set")
+        return None
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table(table_name)
+
+    set_parts = [
+        "filename = :filename",
+        "contentType = :content_type",
+        "sizeBytes = :size_bytes",
+        "s3Key = :s3_key",
+        "updatedAt = :updated_at",
+    ]
+    expression_attribute_values = {
+        ":filename": filename,
+        ":content_type": content_type,
+        ":size_bytes": size_bytes,
+        ":s3_key": s3_key,
+        ":updated_at": _get_current_timestamp(),
+    }
+    if source_etag is not None:
+        set_parts.append("sourceEtag = :source_etag")
+        expression_attribute_values[":source_etag"] = source_etag
+
+    try:
+        response = table.update_item(
+            Key={
+                'PK': f'AST#{assistant_id}',
+                'SK': f'DOC#{document_id}'
+            },
+            UpdateExpression="SET " + ", ".join(set_parts),
+            ExpressionAttributeValues=expression_attribute_values,
+            ConditionExpression='attribute_exists(PK)',
+            ReturnValues='ALL_NEW',
+        )
+        if 'Attributes' in response:
+            try:
+                return Document.model_validate(response['Attributes'])
+            except Exception as e:
+                logger.warning(f"Failed to parse document from DynamoDB response: {e}")
+                return None
+        return None
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        if error_code == 'ConditionalCheckFailedException':
+            logger.info(f"Document {document_id} no longer exists, skipping import metadata update")
+            return None
+        logger.error(f"Failed to update document import metadata in DynamoDB: {error_code} - {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error updating document import metadata: {e}", exc_info=True)
         return None
 
 
