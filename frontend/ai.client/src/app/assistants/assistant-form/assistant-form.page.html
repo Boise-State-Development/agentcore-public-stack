@@ -6,7 +6,7 @@
     <div class="flex items-center justify-between px-4 sm:px-6 lg:px-8 py-4">
       <!-- Left: Breadcrumbs and Status -->
       <div class="flex items-center gap-4">
-        <nav class="flex items-center gap-2 text-sm">
+        <nav class="flex items-center gap-2 text-sm/6">
           <a routerLink="/assistants"
              class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
             Assistants
@@ -26,12 +26,12 @@
       </div>
 
       <!-- Right: Action buttons -->
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
         @if (mode() === 'edit') {
           <button
             type="button"
             (click)="openShareDialog()"
-            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+            class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">
             <ng-icon name="heroUserGroup" class="size-4" />
             Share
           </button>
@@ -39,14 +39,14 @@
         <button
           type="button"
           (click)="onCancel()"
-          class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white">
           Cancel
         </button>
         <button
           type="button"
           (click)="onSubmit()"
           [disabled]="form.invalid"
-          class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          class="rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600">
           {{ mode() === 'create' ? 'Create' : 'Save Changes' }}
         </button>
       </div>
@@ -56,356 +56,382 @@
   <!-- Main content: Two-column layout -->
   <main class="flex-1 min-h-0 flex">
     <!-- Left Column: Form (independently scrollable) -->
-    <div class="flex-1 overflow-y-auto border-r border-gray-200 dark:border-gray-700">
+    <div class="flex-1 overflow-y-auto border-r border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900">
       <div class="p-6 lg:p-8">
-        <form [formGroup]="form" class="space-y-6 max-w-2xl">
-          <!-- Name and Emoji Fields -->
-          <div class="flex gap-4">
-            <!-- Emoji Field -->
-            <div class="shrink-0">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Emoji
-              </label>
-              <div class="relative">
-                <button
-                  type="button"
-                  cdkOverlayOrigin
-                  #emojiTrigger="cdkOverlayOrigin"
-                  (click)="toggleEmojiPicker()"
-                  class="flex size-10 items-center justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xl"
-                >
-                  @if (form.get('emoji')?.value) {
-                    <span>{{ form.get('emoji')?.value }}</span>
-                  } @else {
-                    <ng-icon name="heroFaceSmile" class="size-5 text-gray-400" />
-                  }
-                </button>
+        <form [formGroup]="form" class="max-w-2xl space-y-8">
+          <!-- Section: Basic information -->
+          <section class="space-y-4">
+            <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Basic information</h2>
 
-                <ng-template
-                  cdkConnectedOverlay
-                  [cdkConnectedOverlayOrigin]="emojiTrigger"
-                  [cdkConnectedOverlayOpen]="isEmojiPickerOpen()"
-                  [cdkConnectedOverlayPositions]="emojiPickerPositions"
-                  [cdkConnectedOverlayHasBackdrop]="true"
-                  cdkConnectedOverlayBackdropClass="cdk-overlay-transparent-backdrop"
-                  (backdropClick)="closeEmojiPicker()"
-                  (detach)="closeEmojiPicker()"
-                >
-                  <div class="rounded-lg shadow-lg ring-1 ring-black/5 dark:ring-white/10 overflow-hidden">
-                    <div class="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                      <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Select Emoji</span>
-                      <button
-                        type="button"
-                        (click)="closeEmojiPicker()"
-                        class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-sm hover:bg-gray-100 dark:hover:bg-gray-700"
-                      >
-                        <ng-icon name="heroXMark" class="size-4" />
-                      </button>
-                    </div>
-                    <emoji-mart
-                      [darkMode]="isDarkMode() === 'dark'"
-                      [perLine]="8"
-                      [emojiSize]="24"
-                      [showPreview]="false"
-                      (emojiSelect)="onEmojiSelect($event)"
-                    />
-                  </div>
-                </ng-template>
-              </div>
-              @if (form.get('emoji')?.value) {
-                <button
-                  type="button"
-                  (click)="clearEmoji()"
-                  class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                >
-                  Clear
-                </button>
-              }
-            </div>
-
-            <!-- Name Field -->
-            <div class="flex-1">
-              <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Name <span class="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="name"
-                formControlName="name"
-                class="block w-full px-3 py-2 bg-white dark:bg-gray-800 border rounded-md shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-                [class.border-red-500]="form.get('name')?.touched && form.get('name')?.invalid"
-                [class.border-gray-300]="!form.get('name')?.touched || form.get('name')?.valid"
-                [class.dark:border-red-500]="form.get('name')?.touched && form.get('name')?.invalid"
-                [class.dark:border-gray-600]="!form.get('name')?.touched || form.get('name')?.valid"
-                placeholder="Enter assistant name"
-              />
-              @if (getFieldError('name'); as error) {
-                <p class="mt-1 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-              }
-            </div>
-          </div>
-
-          <!-- Description Field -->
-          <div>
-            <label for="description" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Description <span class="text-red-500">*</span>
-            </label>
-            <textarea
-              id="description"
-              formControlName="description"
-              rows="3"
-              class="block w-full px-3 py-2 bg-white dark:bg-gray-800 border rounded-md shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-              [class.border-red-500]="form.get('description')?.touched && form.get('description')?.invalid"
-              [class.border-gray-300]="!form.get('description')?.touched || form.get('description')?.valid"
-              [class.dark:border-red-500]="form.get('description')?.touched && form.get('description')?.invalid"
-              [class.dark:border-gray-600]="!form.get('description')?.touched || form.get('description')?.valid"
-              placeholder="Enter assistant description"
-            ></textarea>
-            @if (getFieldError('description'); as error) {
-              <p class="mt-1 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-            }
-          </div>
-
-          <!-- Instructions Field -->
-          <div>
-            <label for="instructions" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Instructions (System Prompt) <span class="text-red-500">*</span>
-            </label>
-            <textarea
-              id="instructions"
-              formControlName="instructions"
-              rows="8"
-              class="block w-full px-3 py-2 bg-white dark:bg-gray-800 border rounded-md shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-              [class.border-red-500]="form.get('instructions')?.touched && form.get('instructions')?.invalid"
-              [class.border-gray-300]="!form.get('instructions')?.touched || form.get('instructions')?.valid"
-              [class.dark:border-red-500]="form.get('instructions')?.touched && form.get('instructions')?.invalid"
-              [class.dark:border-gray-600]="!form.get('instructions')?.touched || form.get('instructions')?.valid"
-              placeholder="Enter the system prompt for this assistant"
-            ></textarea>
-            @if (getFieldError('instructions'); as error) {
-              <p class="mt-1 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-            }
-          </div>
-
-          <!-- Conversation Starters -->
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Conversation Starters
-              </label>
-              <button
-                type="button"
-                (click)="addStarter()"
-                class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-              >
-                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-                Add Starter
-              </button>
-            </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-              Suggested prompts shown to users when they start a new conversation with this assistant.
-            </p>
-            @if (starters.length === 0) {
-              <div class="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 p-4 text-center">
-                <p class="text-sm text-gray-500 dark:text-gray-400">
-                  No conversation starters added yet. Click "Add Starter" to create one.
-                </p>
-              </div>
-            } @else {
-              <div class="space-y-3" formArrayName="starters">
-                @for (starter of starters.controls; track $index; let i = $index) {
-                  <div class="flex items-start gap-2">
-                    <div class="flex-1">
-                      <input
-                        type="text"
-                        [formControlName]="i"
-                        class="block w-full px-3 py-2 bg-white dark:bg-gray-800 border rounded-md shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-gray-100"
-                        [class.border-red-500]="starter.touched && starter.invalid"
-                        [class.border-gray-300]="!starter.touched || starter.valid"
-                        [class.dark:border-red-500]="starter.touched && starter.invalid"
-                        [class.dark:border-gray-600]="!starter.touched || starter.valid"
-                        placeholder="e.g., Help me write a professional email"
-                      />
-                      @if (starter.touched && starter.invalid) {
-                        <p class="mt-1 text-sm text-red-600 dark:text-red-400">Starter text is required</p>
-                      }
-                    </div>
-                    <button
-                      type="button"
-                      (click)="removeStarter(i)"
-                      class="flex-shrink-0 p-2 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-                      title="Remove starter"
-                    >
-                      <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                      </svg>
-                    </button>
-                  </div>
-                }
-              </div>
-            }
-          </div>
-
-          <!-- File Upload -->
-          <div>
-            <label for="file-upload" class="block text-sm/6 font-medium text-gray-900 dark:text-gray-100">Upload Assistant Documents</label>
-            <div class="mt-2 flex justify-center rounded-lg border border-dashed border-gray-900/25 dark:border-gray-600 px-6 py-10">
-              <div class="text-center">
-                <svg viewBox="0 0 24 24" fill="currentColor" data-slot="icon" aria-hidden="true" class="mx-auto size-12 text-gray-300 dark:text-gray-600">
-                  <path d="M1.5 6a2.25 2.25 0 0 1 2.25-2.25h16.5A2.25 2.25 0 0 1 22.5 6v12a2.25 2.25 0 0 1-2.25 2.25H3.75A2.25 2.25 0 0 1 1.5 18V6ZM3 16.06V18c0 .414.336.75.75.75h16.5A.75.75 0 0 0 21 18v-1.94l-2.69-2.689a1.5 1.5 0 0 0-2.12 0l-.88.879.97.97a.75.75 0 1 1-1.06 1.06l-5.16-5.159a1.5 1.5 0 0 0-2.12 0L3 16.061Zm10.125-7.81a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0Z" clip-rule="evenodd" fill-rule="evenodd" />
-                </svg>
-                <div class="mt-4 flex text-sm/6 text-gray-600 dark:text-gray-400">
-                  <label for="file-upload" class="relative cursor-pointer rounded-md bg-transparent font-semibold text-indigo-600 dark:text-indigo-400 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-600 dark:focus-within:outline-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300">
-                    <span>Upload a file</span>
-                    <input
-                      id="file-upload"
-                      type="file"
-                      name="file-upload"
-                      class="sr-only"
-                      (change)="onFileSelected($event)"
-                      accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
-                    />
-                  </label>
-                  <p class="pl-1">or drag and drop</p>
-                </div>
-                <p class="text-xs/5 text-gray-600 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10MB</p>
-                <div class="mt-4 border-t border-gray-900/10 dark:border-gray-700 pt-4">
+            <!-- Name and Emoji Fields -->
+            <div class="flex gap-4">
+              <!-- Emoji Field -->
+              <div class="shrink-0">
+                <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Emoji
+                </label>
+                <div class="relative mt-1">
                   <button
                     type="button"
-                    (click)="openFileSourceBrowser()"
-                    class="inline-flex items-center gap-1.5 rounded-md bg-white dark:bg-gray-800 px-3 py-1.5 text-sm/6 font-semibold text-gray-700 dark:text-gray-200 shadow-xs ring-1 ring-inset ring-gray-300 dark:ring-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600"
+                    cdkOverlayOrigin
+                    #emojiTrigger="cdkOverlayOrigin"
+                    (click)="toggleEmojiPicker()"
+                    class="flex size-10 items-center justify-center rounded-2xl border border-gray-300 bg-white text-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700"
                   >
-                    <ng-icon name="heroLink" class="size-4" aria-hidden="true" />
-                    Import from a connector
+                    @if (form.get('emoji')?.value) {
+                      <span>{{ form.get('emoji')?.value }}</span>
+                    } @else {
+                      <ng-icon name="heroFaceSmile" class="size-5 text-gray-400" />
+                    }
                   </button>
-                </div>
-              </div>
-            </div>
-          </div>
 
-          <!-- Upload Progress -->
-          @if (currentUpload(); as upload) {
-            <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-              <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-2 min-w-0 flex-1">
-                  <svg class="size-5 text-gray-400 dark:text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                  </svg>
-                  <span class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{{ upload.file.name }}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                  @if (upload.status === 'uploading') {
-                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ upload.progress }}%</span>
-                  }
-                  @if (upload.status === 'complete') {
-                    <span class="text-xs text-green-600 dark:text-green-400">Complete</span>
-                  }
-                  @if (upload.status === 'error') {
-                    <span class="text-xs text-red-600 dark:text-red-400">Error</span>
-                  }
-                </div>
-              </div>
-              @if (upload.status === 'uploading') {
-                <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                  <div
-                    class="bg-indigo-600 dark:bg-indigo-500 h-2 rounded-full transition-all duration-300"
-                    [style.width.%]="upload.progress"
-                  ></div>
-                </div>
-              }
-              @if (upload.status === 'error' && upload.error) {
-                <p class="mt-2 text-sm text-red-600 dark:text-red-400">{{ upload.error }}</p>
-              }
-            </div>
-          }
-
-          <!-- Uploaded Documents List -->
-          @if (isLoadingDocuments()) {
-            <div>
-              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Uploaded Documents</h3>
-              <div class="flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8">
-                <div class="flex flex-col items-center gap-3">
-                  <svg class="size-8 text-blue-600 dark:text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 0 1 4 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <p class="text-sm text-gray-500 dark:text-gray-400">Loading documents...</p>
-                </div>
-              </div>
-            </div>
-          } @else if (uploadedDocuments().length > 0) {
-            <div>
-              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Uploaded Documents</h3>
-              <div class="space-y-2">
-                @for (doc of uploadedDocuments(); track doc.documentId) {
-                  <div class="flex items-center justify-between rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-                    <div class="flex items-center gap-3 min-w-0 flex-1">
-                      @if (doc.status === 'complete') {
-                        <svg class="size-5 text-green-600 dark:text-green-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                        </svg>
-                      } @else if (doc.status === 'failed') {
-                        <svg class="size-5 text-red-600 dark:text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                        </svg>
-                      } @else if (pollingDocuments().has(doc.documentId)) {
-                        <svg class="size-5 text-blue-600 dark:text-blue-400 flex-shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 0 1 4 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                      } @else {
-                        <svg class="size-5 text-gray-400 dark:text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                        </svg>
-                      }
-                      <div class="min-w-0 flex-1">
-                        <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{{ doc.filename }}</p>
-                        <div class="flex items-center gap-2 mt-1">
-                          <span class="text-xs text-gray-500 dark:text-gray-400">{{ formatBytes(doc.sizeBytes) }}</span>
-                          <span class="text-xs text-gray-400 dark:text-gray-500">&#8226;</span>
-                          <span
-                            class="text-xs font-medium capitalize"
-                            [class.text-blue-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                            [class.text-blue-400]="(doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding') && true"
-                            [class.text-green-600]="doc.status === 'complete'"
-                            [class.text-green-400]="doc.status === 'complete' && true"
-                            [class.text-red-600]="doc.status === 'failed'"
-                            [class.text-red-400]="doc.status === 'failed' && true"
-                            [class.text-gray-500]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
-                            [class.dark:text-blue-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
-                            [class.dark:text-green-400]="doc.status === 'complete'"
-                            [class.dark:text-red-400]="doc.status === 'failed'"
-                          >
-                            {{ doc.status }}
-                          </span>
-                          @if (doc.chunkCount) {
-                            <span class="text-xs text-gray-400 dark:text-gray-500">&#8226;</span>
-                            <span class="text-xs text-gray-500 dark:text-gray-400">{{ doc.chunkCount }} chunks</span>
-                          }
-                        </div>
-                        @if (doc.status === 'failed' && doc.errorMessage) {
-                          <p class="text-xs text-red-600 dark:text-red-400 mt-1">{{ doc.errorMessage }}</p>
-                        }
+                  <ng-template
+                    cdkConnectedOverlay
+                    [cdkConnectedOverlayOrigin]="emojiTrigger"
+                    [cdkConnectedOverlayOpen]="isEmojiPickerOpen()"
+                    [cdkConnectedOverlayPositions]="emojiPickerPositions"
+                    [cdkConnectedOverlayHasBackdrop]="true"
+                    cdkConnectedOverlayBackdropClass="cdk-overlay-transparent-backdrop"
+                    (backdropClick)="closeEmojiPicker()"
+                    (detach)="closeEmojiPicker()"
+                  >
+                    <div class="overflow-hidden rounded-2xl shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+                      <div class="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
+                        <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Select Emoji</span>
+                        <button
+                          type="button"
+                          (click)="closeEmojiPicker()"
+                          class="rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                        >
+                          <ng-icon name="heroXMark" class="size-4" />
+                        </button>
                       </div>
+                      <emoji-mart
+                        [darkMode]="isDarkMode() === 'dark'"
+                        [perLine]="8"
+                        [emojiSize]="24"
+                        [showPreview]="false"
+                        (emojiSelect)="onEmojiSelect($event)"
+                      />
                     </div>
-                    <button
-                      type="button"
-                      (click)="deleteDocument(doc.documentId)"
-                      [disabled]="pollingDocuments().has(doc.documentId) && (doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding')"
-                      class="ml-3 flex-shrink-0 text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 rounded-sm p-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Delete document"
-                    >
-                      <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                      </svg>
-                    </button>
-                  </div>
+                  </ng-template>
+                </div>
+                @if (form.get('emoji')?.value) {
+                  <button
+                    type="button"
+                    (click)="clearEmoji()"
+                    class="mt-1 text-xs/5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  >
+                    Clear
+                  </button>
+                }
+              </div>
+
+              <!-- Name Field -->
+              <div class="flex-1">
+                <label for="name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Name <span class="text-red-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="name"
+                  formControlName="name"
+                  placeholder="Enter assistant name"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-red-500]="form.get('name')?.touched && form.get('name')?.invalid"
+                />
+                @if (getFieldError('name'); as error) {
+                  <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">{{ error }}</p>
                 }
               </div>
             </div>
-          }
+
+            <!-- Description Field -->
+            <div>
+              <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Description <span class="text-red-600">*</span>
+              </label>
+              <textarea
+                id="description"
+                formControlName="description"
+                rows="3"
+                placeholder="Enter assistant description"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-red-500]="form.get('description')?.touched && form.get('description')?.invalid"
+              ></textarea>
+              @if (getFieldError('description'); as error) {
+                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">{{ error }}</p>
+              }
+            </div>
+          </section>
+
+          <!-- Section: Behavior -->
+          <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+            <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Behavior</h2>
+
+            <!-- Instructions Field -->
+            <div>
+              <label for="instructions" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Instructions (System Prompt) <span class="text-red-600">*</span>
+              </label>
+              <textarea
+                id="instructions"
+                formControlName="instructions"
+                rows="8"
+                placeholder="Enter the system prompt for this assistant"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                [class.border-red-500]="form.get('instructions')?.touched && form.get('instructions')?.invalid"
+              ></textarea>
+              @if (getFieldError('instructions'); as error) {
+                <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">{{ error }}</p>
+              }
+            </div>
+
+            <!-- Conversation Starters -->
+            <div>
+              <div class="mb-1 flex items-center justify-between">
+                <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Conversation Starters
+                </label>
+                <button
+                  type="button"
+                  (click)="addStarter()"
+                  class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                >
+                  <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                  Add Starter
+                </button>
+              </div>
+              <p class="mb-3 text-xs/5 text-gray-500 dark:text-gray-400">
+                Suggested prompts shown to users when they start a new conversation with this assistant.
+              </p>
+              @if (starters.length === 0) {
+                <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-6 text-center dark:border-gray-700 dark:bg-gray-800">
+                  <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                    No conversation starters added yet. Click "Add Starter" to create one.
+                  </p>
+                </div>
+              } @else {
+                <div class="space-y-2" formArrayName="starters">
+                  @for (starter of starters.controls; track $index; let i = $index) {
+                    <div class="flex items-start gap-2">
+                      <div class="flex-1">
+                        <input
+                          type="text"
+                          [formControlName]="i"
+                          placeholder="e.g., Help me write a professional email"
+                          class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                          [class.border-red-500]="starter.touched && starter.invalid"
+                        />
+                        @if (starter.touched && starter.invalid) {
+                          <p class="mt-1 text-sm/6 text-red-600 dark:text-red-400">Starter text is required</p>
+                        }
+                      </div>
+                      <button
+                        type="button"
+                        (click)="removeStarter(i)"
+                        title="Remove starter"
+                        class="flex size-9 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                      >
+                        <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          </section>
+
+          <!-- Section: Knowledge -->
+          <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+            <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Knowledge</h2>
+
+            <!-- File Upload -->
+            <div>
+              <label for="file-upload" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Upload Assistant Documents
+              </label>
+
+              <!-- Import from a connector — one button per available file source -->
+              @if (fileSources().length > 0) {
+                <div class="mt-2">
+                  <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">Import from a connector</p>
+                  <div class="flex flex-wrap gap-2">
+                    @for (source of fileSources(); track source.providerId) {
+                      <button
+                        type="button"
+                        (click)="openFileSourceBrowser(source)"
+                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      >
+                        @if (source.iconData) {
+                          <img [src]="source.iconData" alt="" class="size-4 shrink-0 object-contain" />
+                        } @else {
+                          <ng-icon name="heroLink" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                        }
+                        {{ source.displayName }}
+                        @if (source.connected) {
+                          <span class="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Connected"></span>
+                        }
+                      </button>
+                    }
+                  </div>
+                </div>
+              }
+
+              @if (!hasDocuments()) {
+                <!-- Full drop zone — shown only while there is nothing uploaded yet -->
+                <div class="mt-3 flex justify-center rounded-2xl border border-dashed border-gray-300 px-6 py-10 dark:border-gray-600">
+                  <div class="text-center">
+                    <svg viewBox="0 0 24 24" fill="currentColor" data-slot="icon" aria-hidden="true" class="mx-auto size-12 text-gray-300 dark:text-gray-600">
+                      <path d="M1.5 6a2.25 2.25 0 0 1 2.25-2.25h16.5A2.25 2.25 0 0 1 22.5 6v12a2.25 2.25 0 0 1-2.25 2.25H3.75A2.25 2.25 0 0 1 1.5 18V6ZM3 16.06V18c0 .414.336.75.75.75h16.5A.75.75 0 0 0 21 18v-1.94l-2.69-2.689a1.5 1.5 0 0 0-2.12 0l-.88.879.97.97a.75.75 0 1 1-1.06 1.06l-5.16-5.159a1.5 1.5 0 0 0-2.12 0L3 16.061Zm10.125-7.81a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0Z" clip-rule="evenodd" fill-rule="evenodd" />
+                    </svg>
+                    <div class="mt-4 flex text-sm/6 text-gray-600 dark:text-gray-400">
+                      <label for="file-upload" class="relative cursor-pointer rounded-2xl bg-transparent font-semibold text-blue-600 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-600 hover:text-blue-500 dark:text-blue-400 dark:focus-within:outline-blue-400 dark:hover:text-blue-300">
+                        <span>Upload a file</span>
+                        <input
+                          id="file-upload"
+                          type="file"
+                          name="file-upload"
+                          class="sr-only"
+                          (change)="onFileSelected($event)"
+                          accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
+                        />
+                      </label>
+                      <p class="pl-1">or drag and drop</p>
+                    </div>
+                    <p class="text-xs/5 text-gray-500 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10MB</p>
+                  </div>
+                </div>
+              } @else {
+                <!-- Compact add-files control once documents exist or are uploading -->
+                <label for="file-upload" class="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+                  <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                  Add files
+                  <input
+                    id="file-upload"
+                    type="file"
+                    name="file-upload"
+                    class="sr-only"
+                    (change)="onFileSelected($event)"
+                    accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
+                  />
+                </label>
+              }
+            </div>
+
+            <!-- Upload Progress -->
+            @if (currentUpload(); as upload) {
+              <div class="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                <div class="mb-2 flex items-center justify-between">
+                  <div class="flex min-w-0 flex-1 items-center gap-2">
+                    <svg class="size-5 shrink-0 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-gray-100">{{ upload.file.name }}</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    @if (upload.status === 'uploading') {
+                      <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ upload.progress }}%</span>
+                    }
+                    @if (upload.status === 'complete') {
+                      <span class="text-xs/5 text-green-600 dark:text-green-400">Complete</span>
+                    }
+                    @if (upload.status === 'error') {
+                      <span class="text-xs/5 text-red-600 dark:text-red-400">Error</span>
+                    }
+                  </div>
+                </div>
+                @if (upload.status === 'uploading') {
+                  <div class="h-2 w-full rounded-full bg-gray-200 dark:bg-gray-700">
+                    <div
+                      class="h-2 rounded-full bg-blue-600 transition-all duration-300 dark:bg-blue-500"
+                      [style.width.%]="upload.progress"
+                    ></div>
+                  </div>
+                }
+                @if (upload.status === 'error' && upload.error) {
+                  <p class="mt-2 text-sm/6 text-red-600 dark:text-red-400">{{ upload.error }}</p>
+                }
+              </div>
+            }
+
+            <!-- Uploaded Documents List -->
+            @if (isLoadingDocuments()) {
+              <div>
+                <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+                <div class="flex items-center justify-center rounded-2xl border border-gray-200 bg-white p-8 dark:border-gray-700 dark:bg-gray-800">
+                  <div class="flex flex-col items-center gap-3">
+                    <div class="size-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+                    <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading documents…</p>
+                  </div>
+                </div>
+              </div>
+            } @else if (uploadedDocuments().length > 0) {
+              <div>
+                <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Uploaded Documents</h3>
+                <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+                  @for (doc of uploadedDocuments(); track doc.documentId) {
+                    <li class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+                      <div class="flex min-w-0 flex-1 items-center gap-3">
+                        @if (doc.status === 'complete') {
+                          <svg class="size-5 shrink-0 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                          </svg>
+                        } @else if (doc.status === 'failed') {
+                          <svg class="size-5 shrink-0 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                          </svg>
+                        } @else if (pollingDocuments().has(doc.documentId)) {
+                          <div class="size-5 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+                        } @else {
+                          <svg class="size-5 shrink-0 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                          </svg>
+                        }
+                        <div class="min-w-0 flex-1">
+                          <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ doc.filename }}</p>
+                          <div class="mt-0.5 flex items-center gap-2">
+                            <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ formatBytes(doc.sizeBytes) }}</span>
+                            <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                            <span
+                              class="text-xs/5 font-medium capitalize"
+                              [class.text-blue-600]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                              [class.dark:text-blue-400]="doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding'"
+                              [class.text-green-600]="doc.status === 'complete'"
+                              [class.dark:text-green-400]="doc.status === 'complete'"
+                              [class.text-red-600]="doc.status === 'failed'"
+                              [class.dark:text-red-400]="doc.status === 'failed'"
+                              [class.text-gray-500]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
+                              [class.dark:text-gray-400]="doc.status !== 'complete' && doc.status !== 'failed' && doc.status !== 'uploading' && doc.status !== 'chunking' && doc.status !== 'embedding'"
+                            >
+                              {{ doc.status }}
+                            </span>
+                            @if (doc.chunkCount) {
+                              <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                              <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ doc.chunkCount }} chunks</span>
+                            }
+                          </div>
+                          @if (doc.status === 'failed' && doc.errorMessage) {
+                            <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ doc.errorMessage }}</p>
+                          }
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        (click)="deleteDocument(doc.documentId)"
+                        [disabled]="pollingDocuments().has(doc.documentId) && (doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding')"
+                        title="Delete document"
+                        [attr.aria-label]="'Delete ' + doc.filename"
+                        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                      >
+                        <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                      </button>
+                    </li>
+                  }
+                </ul>
+              </div>
+            }
+          </section>
         </form>
       </div>
     </div>

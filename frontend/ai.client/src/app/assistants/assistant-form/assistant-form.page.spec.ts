@@ -7,6 +7,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { AssistantFormPage } from './assistant-form.page';
 import { AssistantService } from '../services/assistant.service';
 import { DocumentService } from '../services/document.service';
+import { FileSourceService } from '../services/file-source.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 
@@ -28,6 +29,10 @@ describe('AssistantFormPage', () => {
     uploadToS3: vi.fn(),
     deleteDocument: vi.fn(),
     pollDocumentStatus: vi.fn(),
+  };
+
+  const mockFileSourceService = {
+    listFileSources: vi.fn().mockResolvedValue([]),
   };
 
   const mockSidenavService = {
@@ -53,6 +58,7 @@ describe('AssistantFormPage', () => {
         provideRouter([]),
         { provide: AssistantService, useValue: mockAssistantService },
         { provide: DocumentService, useValue: mockDocumentService },
+        { provide: FileSourceService, useValue: mockFileSourceService },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: ThemeService, useValue: mockThemeService },
         { provide: Dialog, useValue: mockDialog },

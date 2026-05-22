@@ -29,6 +29,8 @@ import {
   heroLink,
   heroXMark,
   heroUserGroup,
+  heroPlus,
+  heroTrash,
 } from '@ng-icons/heroicons/outline';
 import { Dialog } from '@angular/cdk/dialog';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
@@ -43,6 +45,8 @@ import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
 } from '../components/file-source-browser-dialog.component';
+import { FileSourceService } from '../services/file-source.service';
+import { FileSourceConnector } from '../models/file-source.model';
 import { ToastService } from '../../services/toast/toast.service';
 
 @Component({
@@ -67,6 +71,8 @@ import { ToastService } from '../../services/toast/toast.service';
       heroLink,
       heroXMark,
       heroUserGroup,
+      heroPlus,
+      heroTrash,
     }),
   ],
 })
@@ -76,6 +82,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   private fb = inject(FormBuilder);
   private assistantService = inject(AssistantService);
   private documentService = inject(DocumentService);
+  private fileSourceService = inject(FileSourceService);
   readonly sidenavService = inject(SidenavService);
   private readonly themeService = inject(ThemeService);
   private readonly dialog = inject(Dialog);
@@ -109,6 +116,21 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     error?: string;
   } | null>(null);
   readonly pollingDocuments = signal<Set<string>>(new Set());
+
+  /** Connectors the user can import documents from, surfaced as buttons. */
+  readonly fileSources = signal<FileSourceConnector[]>([]);
+
+  /**
+   * True once at least one document exists, is uploading, or is still
+   * loading. Drives swapping the full drop zone for a compact "Add files"
+   * control — the drop zone only shows while there is nothing to display.
+   */
+  readonly hasDocuments = computed(
+    () =>
+      this.uploadedDocuments().length > 0 ||
+      this.currentUpload() !== null ||
+      this.isLoadingDocuments(),
+  );
 
   form!: FormGroup;
 
@@ -160,6 +182,9 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       this.loadAssistant(id);
       this.loadDocuments();
     }
+
+    // Load the connectors the user can import documents from (create or edit)
+    void this.loadFileSources();
 
     // Sync form changes into signals so the preview (OnPush) updates live
     this.syncFormToSignals();
@@ -383,12 +408,27 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   }
 
   /**
-   * Open the file-source browser so the user can import documents from a
-   * connected connector (Google Drive, etc.). Ensures a draft assistant
-   * exists first — imported documents need a parent. On close, any imported
-   * documents are merged into the list and polled like a device upload.
+   * Load the connectors the user can import documents from. The feature is
+   * optional — on any error (not configured, no access) just surface no
+   * connector buttons rather than blocking the editor.
    */
-  async openFileSourceBrowser(): Promise<void> {
+  private async loadFileSources(): Promise<void> {
+    try {
+      this.fileSources.set(await this.fileSourceService.listFileSources());
+    } catch {
+      this.fileSources.set([]);
+    }
+  }
+
+  /**
+   * Open the file-source browser so the user can import documents from a
+   * connector (Google Drive, etc.). When `connector` is given the browser
+   * opens straight into it, skipping the in-modal source picker. Ensures a
+   * draft assistant exists first — imported documents need a parent. On
+   * close, any imported documents are merged into the list and polled like a
+   * device upload.
+   */
+  async openFileSourceBrowser(connector?: FileSourceConnector): Promise<void> {
     let assistantId = this.assistantId();
     if (!assistantId) {
       try {
@@ -403,7 +443,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     const dialogRef = this.dialog.open<Document[] | undefined, FileSourceBrowserDialogData>(
       FileSourceBrowserDialogComponent,
       {
-        data: { assistantId },
+        data: { assistantId, connector },
         hasBackdrop: false,
       },
     );
@@ -598,7 +638,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
 
   getStatusBadgeClasses(): string {
     const status = this.form?.get('status')?.value || 'DRAFT';
-    const baseClasses = 'inline-flex items-center rounded-xs px-2.5 py-1 text-xs/5 font-medium';
+    const baseClasses = 'inline-flex items-center rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
 
     switch (status) {
       case 'COMPLETE':

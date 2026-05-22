@@ -38,6 +38,13 @@ import { ToastService } from '../../services/toast/toast.service';
 /** Data passed in when the assistant editor opens the browser. */
 export interface FileSourceBrowserDialogData {
   assistantId: string;
+  /**
+   * When set, the dialog opens straight into this connector — its folder
+   * browser if already connected, or an inline Connect prompt if not — and
+   * hides the source picker. The assistant editor surfaces each connector as
+   * its own button, so the in-modal source list is redundant when targeted.
+   */
+  connector?: FileSourceConnector;
 }
 
 type DialogView = 'sources' | 'browser';
@@ -119,6 +126,9 @@ export class FileSourceBrowserDialogComponent {
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
 
+  /** True when the dialog was opened targeting a single connector. */
+  protected readonly lockedToConnector = !!this.data.connector;
+
   // --- View state -----------------------------------------------------------
   protected readonly view = signal<DialogView>('sources');
 
@@ -179,7 +189,25 @@ export class FileSourceBrowserDialogComponent {
   protected readonly selectedCount = computed(() => this.selected().size);
 
   constructor() {
-    void this.loadSources();
+    const preselected = this.data.connector;
+    if (preselected) {
+      // Opened from a connector button in the editor — skip the source
+      // picker and go straight to this connector.
+      this.connector.set(preselected);
+      this.view.set('browser');
+      if (preselected.connected) {
+        void this.enterBrowser(preselected);
+      } else {
+        // Surface the inline Connect prompt the browser view already renders
+        // for an expired/revoked token.
+        this.browserError.set(
+          'This file source needs to be connected before you can browse it.',
+        );
+        this.browserErrorConnectable.set(true);
+      }
+    } else {
+      void this.loadSources();
+    }
 
     // Drive the connect flow off the shared consent service: the
     // `/oauth-complete` popup broadcasts a completion the service surfaces
