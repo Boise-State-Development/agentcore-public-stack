@@ -107,8 +107,15 @@ async def resolve_file_source_token(
 
     Returns a `TokenResult`: `access_token` is populated when the vault has a
     usable token, `authorization_url` when the user still needs to consent.
-    Wires `custom_parameters` the same way the connector status route does,
-    so file-source token fetches behave identically to the settings page.
+
+    `custom_parameters` is built with `force_authentication=True` so it matches
+    the consent flow. AgentCore factors `customParameters` into whether
+    `get_resource_oauth2_token` short-circuits to a vaulted token: connector
+    consent always runs through `initiate_consent`, which sends Google's
+    `prompt=consent` extra — so a retrieval call that omits it is treated as a
+    different request and reports consent-required even though a usable token
+    is vaulted. This is a pure read; `force_authentication` stays False on
+    `get_token_for_user` itself.
     """
     identity = get_agentcore_identity_client()
     return await identity.get_token_for_user(
@@ -116,7 +123,9 @@ async def resolve_file_source_token(
         scopes=provider.scopes,
         user_id=user_id,
         custom_parameters=custom_parameters_for(
-            provider.provider_type.value, provider.custom_parameters
+            provider.provider_type.value,
+            provider.custom_parameters,
+            force_authentication=True,
         ),
     )
 

@@ -403,9 +403,13 @@ class TestForceReauthLifecycle:
         identity.get_token_for_user.assert_called_once()
         assert identity.get_token_for_user.call_args.kwargs["force_authentication"] is False
 
-    def test_status_forwards_google_access_type_offline(self, app_with_deps):
-        # Per AgentCore docs, Google needs `access_type=offline` in
-        # customParameters so the vault gets a refresh token.
+    def test_status_matches_initiate_consent_custom_parameters(self, app_with_deps):
+        # AgentCore factors customParameters into whether get_resource_oauth2_token
+        # short-circuits to a vaulted token. Connector consent always runs through
+        # initiate_consent, which sends Google `prompt=consent`; a status read that
+        # omits it is treated as a fresh request and reports consent-required even
+        # when a usable token is vaulted. So /status MUST send the same
+        # customParameters initiate_consent uses.
         app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(),  # default is OAuthProviderType.GOOGLE
@@ -416,6 +420,7 @@ class TestForceReauthLifecycle:
         identity.get_token_for_user.assert_called_once()
         assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
             "access_type": "offline",
+            "prompt": "consent",
         }
 
     def test_initiate_consent_forwards_google_access_type_offline_and_prompt_consent(
@@ -458,6 +463,7 @@ class TestForceReauthLifecycle:
         kwargs = identity.get_token_for_user.call_args.kwargs
         assert kwargs["custom_parameters"] == {
             "access_type": "offline",  # baseline wins
+            "prompt": "consent",  # matches the consent flow's customParameters
             "hd": "mycompany.com",
         }
 

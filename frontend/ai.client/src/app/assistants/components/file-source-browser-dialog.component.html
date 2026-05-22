@@ -200,7 +200,29 @@
         } @else if (browserError()) {
           <div class="flex items-start gap-3 rounded-sm border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
             <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-red-600 dark:text-red-400" />
-            <p class="text-sm/6 text-red-700 dark:text-red-300">{{ browserError() }}</p>
+            <div>
+              <p class="text-sm/6 text-red-700 dark:text-red-300">{{ browserError() }}</p>
+              @if (browserErrorConnectable() && connector(); as conn) {
+                @let connecting = connectingId() === conn.providerId;
+                <button
+                  type="button"
+                  (click)="reconnect()"
+                  [disabled]="connecting"
+                  class="mt-3 inline-flex items-center gap-1.5 rounded-sm bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-xs hover:bg-blue-700 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+                >
+                  @if (connecting && connectPhase() === 'initiating') {
+                    <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                    Starting…
+                  } @else if (connecting && connectPhase() === 'awaiting') {
+                    <ng-icon name="heroArrowPath" class="size-4" />
+                    Awaiting consent
+                  } @else {
+                    <ng-icon name="heroLink" class="size-4" />
+                    Connect
+                  }
+                </button>
+              }
+            </div>
           </div>
         } @else if (displayedEntries().length === 0) {
           <p class="py-6 text-center text-sm/6 text-gray-500 dark:text-gray-400">

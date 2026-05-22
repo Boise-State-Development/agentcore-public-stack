@@ -1,8 +1,20 @@
-import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
+import {
+  HttpContextToken,
+  HttpInterceptorFn,
+  HttpErrorResponse,
+} from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 import { ErrorService } from '../services/error/error.service';
 import { SessionService } from './session.service';
+
+/**
+ * Set on a request's `HttpContext` to opt out of the global error toast.
+ * The caller takes responsibility for surfacing the failure itself — used
+ * where a feature renders its own inline, actionable error UI (e.g. the
+ * file-source browser handling a 409 with a Connect button).
+ */
+export const SUPPRESS_ERROR_TOAST = new HttpContextToken<boolean>(() => false);
 
 /**
  * HTTP interceptor that handles errors from non-streaming HTTP requests
@@ -50,7 +62,7 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
         // toast — it just flashes before the redirect lands.
         if (error.status === 401) {
           sessionService.handleUnauthorized();
-        } else if (!isSilentEndpoint) {
+        } else if (!isSilentEndpoint && !req.context.get(SUPPRESS_ERROR_TOAST)) {
           // Use ErrorService to display the error
           errorService.handleHttpError(error);
         }

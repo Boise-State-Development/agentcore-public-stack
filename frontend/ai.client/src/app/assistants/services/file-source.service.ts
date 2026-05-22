@@ -1,7 +1,13 @@
 import { Injectable, inject, computed } from '@angular/core';
-import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import {
+  HttpClient,
+  HttpContext,
+  HttpErrorResponse,
+  HttpParams,
+} from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import {
   BrowseResult,
   FileSourceConnector,
@@ -58,13 +64,30 @@ export class FileSourceService {
     return { OAuth2CallbackUrl: callback.toString() };
   }
 
+  /**
+   * Per-request options shared by every file-source call. `SUPPRESS_ERROR_TOAST`
+   * opts these requests out of the global error toast — the file-source browser
+   * dialog renders its own inline, actionable errors (e.g. a Connect button on
+   * a 409), so the generic toast would only be a confusing duplicate.
+   */
+  private requestOptions(): {
+    headers: Record<string, string>;
+    context: HttpContext;
+  } {
+    return {
+      headers: this.callbackHeaders(),
+      context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true),
+    };
+  }
+
   /** List the connectors the current user can use as a file source. */
   async listFileSources(): Promise<FileSourceConnector[]> {
     try {
       const response = await firstValueFrom(
-        this.http.get<FileSourceListResponse>(`${this.baseUrl()}/file-sources`, {
-          headers: this.callbackHeaders(),
-        }),
+        this.http.get<FileSourceListResponse>(
+          `${this.baseUrl()}/file-sources`,
+          this.requestOptions(),
+        ),
       );
       return response.fileSources;
     } catch (err) {
@@ -78,7 +101,7 @@ export class FileSourceService {
       const response = await firstValueFrom(
         this.http.get<SourceRootsResponse>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/roots`,
-          { headers: this.callbackHeaders() },
+          this.requestOptions(),
         ),
       );
       return response.roots;
@@ -101,7 +124,7 @@ export class FileSourceService {
       return await firstValueFrom(
         this.http.get<BrowseResult>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/browse`,
-          { params, headers: this.callbackHeaders() },
+          { ...this.requestOptions(), params },
         ),
       );
     } catch (err) {
@@ -123,7 +146,7 @@ export class FileSourceService {
       return await firstValueFrom(
         this.http.get<BrowseResult>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/search`,
-          { params, headers: this.callbackHeaders() },
+          { ...this.requestOptions(), params },
         ),
       );
     } catch (err) {
@@ -145,7 +168,7 @@ export class FileSourceService {
         this.http.post<ImportDocumentsResponse>(
           `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/documents/import`,
           { connectorId, files },
-          { headers: this.callbackHeaders() },
+          this.requestOptions(),
         ),
       );
     } catch (err) {

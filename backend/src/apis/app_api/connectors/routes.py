@@ -316,8 +316,17 @@ async def connector_status(
             provider_name=provider.provider_id,
             scopes=provider.scopes,
             user_id=current_user.user_id,
+            # Match the customParameters `initiate_consent` used to grant the
+            # token. AgentCore factors `customParameters` into whether
+            # `get_resource_oauth2_token` short-circuits to a vaulted token, so
+            # a status read that omits Google's `prompt=consent` is treated as
+            # a fresh request and reports consent-required even when a usable
+            # token is vaulted. Pure read — `get_token_for_user` itself stays
+            # at `force_authentication=False`.
             custom_parameters=custom_parameters_for(
-                provider.provider_type.value, provider.custom_parameters
+                provider.provider_type.value,
+                provider.custom_parameters,
+                force_authentication=True,
             ),
         )
     except WorkloadTokenUnavailableError as err:

@@ -142,6 +142,12 @@ export class FileSourceBrowserDialogComponent {
   protected readonly browserLoading = signal<boolean>(false);
   protected readonly loadingMore = signal<boolean>(false);
   protected readonly browserError = signal<string | null>(null);
+  /**
+   * True when {@link browserError} is a 409 the user can fix in place — the
+   * catalog reported the connector as connected, but its token expired or was
+   * revoked before they drilled in. Drives an inline Connect button.
+   */
+  protected readonly browserErrorConnectable = signal<boolean>(false);
 
   // --- Search ---------------------------------------------------------------
   protected readonly searchTerm = signal<string>('');
@@ -284,7 +290,18 @@ export class FileSourceBrowserDialogComponent {
       }
     } catch (err) {
       this.browserError.set(this.errorMessage(err));
+      this.browserErrorConnectable.set(
+        err instanceof FileSourceError && err.status === 409,
+      );
       this.browserLoading.set(false);
+    }
+  }
+
+  /** Re-run the consent flow for the connector currently failing in the browser. */
+  protected reconnect(): void {
+    const connector = this.connector();
+    if (connector) {
+      void this.connect(connector);
     }
   }
 
@@ -301,6 +318,7 @@ export class FileSourceBrowserDialogComponent {
     this.nextCursor.set(null);
     this.browserLoading.set(true);
     this.browserError.set(null);
+    this.browserErrorConnectable.set(false);
     try {
       const result = await this.fileSourceService.browse(connector.providerId, folderId);
       this.entries.set(result.entries);
@@ -322,6 +340,7 @@ export class FileSourceBrowserDialogComponent {
     this.breadcrumbs.set([]);
     this.nextCursor.set(null);
     this.browserError.set(null);
+    this.browserErrorConnectable.set(false);
   }
 
   protected onEntryActivate(entry: FileEntry): void {
@@ -370,6 +389,7 @@ export class FileSourceBrowserDialogComponent {
     this.nextCursor.set(null);
     this.browserLoading.set(true);
     this.browserError.set(null);
+    this.browserErrorConnectable.set(false);
     try {
       const result = await this.fileSourceService.search(connector.providerId, term);
       this.entries.set(result.entries);
@@ -457,6 +477,7 @@ export class FileSourceBrowserDialogComponent {
     this.entries.set([]);
     this.nextCursor.set(null);
     this.browserError.set(null);
+    this.browserErrorConnectable.set(false);
     this.searchTerm.set('');
     this.activeSearch.set(null);
     this.selected.set(new Map());
