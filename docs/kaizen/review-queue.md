@@ -56,6 +56,27 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — additive but pattern-validated across Linear/ChatGPT/Cursor
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
+### [2026-05-22] Pin `backup-data.yml` runner + actions to restore the CI gate
+- **Source**: reviews/2026-05-22.md ▸ Proposal #1 (direct observation — CI failure analysis). `kaizen-research` did not run 2026-05-22; this item surfaced from review-prep's repo-activity scan.
+- **Surface**: infrastructure / CI — `.github/workflows/backup-data.yml`
+- **Effort × Impact**: L × H
+- **Subtracts**: no — corrective; restores the supply-chain pinning control currently bypassed by a red gate
+- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #1 (Ship — recommended ship-first); no decision logged yet. CI red *now*: ~8+ Deploy App API / Deploy Inference API / Nightly failures since PR #361 (May 20).
+
+### [2026-05-22] Re-bump `bedrock-agentcore` 1.9.1 → 1.11.0 + adopt `async_mode`
+- **Source**: reviews/2026-05-22.md ▸ Proposal #2 — re-evaluation of the `async_mode`/#452 risk the 2026-05-15 review explicitly deferred "to the 2026-05-22 review".
+- **Surface**: backend (`backend/pyproject.toml`, `backend/uv.lock`, `AgentCoreMemoryConfig` construction)
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: no — dep bump; adopting `async_mode` retires the latent #452 event-loop-blocking failure mode
+- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #2 (Ship); no decision logged yet. Lag re-opened to 2 releases the week after #337 closed it.
+
+### [2026-05-22] Fast PR-gate for the deterministic `supply_chain` + `architecture` test subset
+- **Source**: reviews/2026-05-22.md ▸ Proposal #6 — root-cause of the Proposal #1 friction (policy violation merged clean because PR-merge CI runs no pytest).
+- **Surface**: CI — new lightweight job in the PR workflow
+- **Effort × Impact**: L × M
+- **Subtracts**: no — addition; converts a recurring post-merge friction class into a pre-merge block. Scoped to two deterministic dirs to avoid reopening the "no full pytest in PR CI" decision.
+- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #6 (Ship scoped, or Defer 2 weeks); no decision logged yet.
+
 ## Resolved
 
 ### [2026-05-10] MCP Apps host renderer — multi-PR build (PRs #1–#7) → RESOLVED — shipped, host enabled
