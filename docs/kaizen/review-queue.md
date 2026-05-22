@@ -3,6 +3,43 @@
 Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 
 ## Open
+<!-- Newest at top. -->
+
+### [2026-05-22] Strands 1.40 → 1.41 bump + enable Bedrock prompt caching (closes issue #269)
+- **Source**: research/2026-05-22.md ▸ Top 5 #1 — Strands v1.41.0 (PR #2232 `cache_tools_ttl`) + open issue #269
+- **Surface**: backend (`pyproject.toml`, `uv.lock`, `BedrockModel` construction, `CacheConfig` wiring)
+- **Effort × Impact**: M × H
+- **Subtracts**: partial — adopts library-native `cache_tools_ttl` instead of a hand-rolled TTL workaround
+- **Unlocks**: end-to-end 1h prompt caching → lower input-token cost on multi-turn sessions, surfaced in the admin "Cache Savings" card
+- **Status**: open — gated on a `starlette` 1.x transitive-conflict audit (Strands 1.41 bumps starlette to the 1.x major line)
+
+### [2026-05-22] Defensive guard against SDK #482 SSE-disconnect runtime deadlock
+- **Source**: research/2026-05-22.md ▸ Top 5 #2 — AgentCore SDK issue #482
+- **Surface**: backend (`inference-api` streaming worker — the `/invocations` SSE handler)
+- **Effort × Impact**: M × H
+- **Subtracts**: no — defensive; silent 78s+ microVM stall on mid-stream client disconnect
+- **Status**: open
+
+### [2026-05-22] Bump `bedrock-agentcore` 1.9.1 → 1.11.0
+- **Source**: research/2026-05-22.md ▸ Top 5 #3 — SDK v1.10.0/v1.11.0 releases
+- **Surface**: backend (`pyproject.toml`, `uv.lock`)
+- **Effort × Impact**: L × M
+- **Subtracts**: possibly — v1.10.0 header-forwarding may retire a custom `X-Amzn-Custom-` header workaround (audit during bump)
+- **Status**: open
+
+### [2026-05-22] Opus 4.7 `temperature`-omission guard
+- **Source**: research/2026-05-22.md ▸ Top 5 #4 — ref-repo commit `9385454`
+- **Surface**: backend (provider-translation chokepoint — same site as `_shape_thinking_value` / #329 / #331)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — defensive; Opus 4.7 rejects `temperature` on extended-thinking turns
+- **Status**: open
+
+### [2026-05-22] Runaway-session cost guardrail — `max_turns` + CloudWatch Bedrock-spend alarm
+- **Source**: research/2026-05-22.md ▸ Top 5 #5 — starter-toolkit issue #498 + in-window HN $30K-bill story
+- **Surface**: cross-cutting — agent loop (`backend/src/agents/main_agent/`) + infrastructure (CloudWatch alarm)
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: no — defensive/operational; `stop_runtime_session` does not stop the microVM
+- **Status**: open
 
 ### [2026-05-15] Wire per-tool `duration_ms` into `tool_result` SSE
 - **Source**: research/2026-05-15.md ▸ Top 5 #5 — Claude Code 2.1.141 hook pattern
