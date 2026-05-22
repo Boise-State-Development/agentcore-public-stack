@@ -54,6 +54,7 @@ Load these based on the task:
 - **[references/accessibility.md](references/accessibility.md)** — WCAG 2.1 AA patterns: contrast, focus, screen readers
 - **[references/theming.md](references/theming.md)** — @theme setup, CSS variables, light/dark mode
 - **[references/components.md](references/components.md)** — Accessible component patterns (buttons, forms, cards, nav)
+- **[references/app-conventions.md](references/app-conventions.md)** — Project-specific list & form page design tokens (border radius, list style, form sections). Load this for any list or form page in `frontend/ai.client`.
 
 ## Theme Asset
 
