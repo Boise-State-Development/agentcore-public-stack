@@ -271,6 +271,16 @@
                   <p class="pl-1">or drag and drop</p>
                 </div>
                 <p class="text-xs/5 text-gray-600 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10MB</p>
+                <div class="mt-4 border-t border-gray-900/10 dark:border-gray-700 pt-4">
+                  <button
+                    type="button"
+                    (click)="openFileSourceBrowser()"
+                    class="inline-flex items-center gap-1.5 rounded-md bg-white dark:bg-gray-800 px-3 py-1.5 text-sm/6 font-semibold text-gray-700 dark:text-gray-200 shadow-xs ring-1 ring-inset ring-gray-300 dark:ring-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600"
+                  >
+                    <ng-icon name="heroLink" class="size-4" aria-hidden="true" />
+                    Import from a connector
+                  </button>
+                </div>
               </div>
             </div>
           </div>

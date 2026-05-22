@@ -16,7 +16,7 @@ import {
   FormControl,
   Validators,
 } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
 import { AssistantService } from '../services/assistant.service';
 import { DocumentService, DocumentUploadError } from '../services/document.service';
 import { Document, PROCESSING_STATUSES, STALE_DOCUMENT_THRESHOLD_MS } from '../models/document.model';
@@ -26,6 +26,7 @@ import {
   heroArrowLeft,
   heroChevronRight,
   heroFaceSmile,
+  heroLink,
   heroXMark,
   heroUserGroup,
 } from '@ng-icons/heroicons/outline';
@@ -38,6 +39,11 @@ import {
   ShareAssistantDialogComponent,
   ShareAssistantDialogData,
 } from '../components/share-assistant-dialog.component';
+import {
+  FileSourceBrowserDialogComponent,
+  FileSourceBrowserDialogData,
+} from '../components/file-source-browser-dialog.component';
+import { ToastService } from '../../services/toast/toast.service';
 
 @Component({
   selector: 'app-assistant-form-page',
@@ -58,6 +64,7 @@ import {
       heroArrowLeft,
       heroChevronRight,
       heroFaceSmile,
+      heroLink,
       heroXMark,
       heroUserGroup,
     }),
@@ -72,6 +79,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   readonly sidenavService = inject(SidenavService);
   private readonly themeService = inject(ThemeService);
   private readonly dialog = inject(Dialog);
+  private readonly toast = inject(ToastService);
 
   // Emoji picker popover state
   readonly isEmojiPickerOpen = signal(false);
@@ -330,23 +338,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     let assistantId = this.assistantId();
     if (!assistantId) {
       try {
-        // Create a draft assistant first
-        const draft = await this.assistantService.createDraft({
-          name: this.form.get('name')?.value || 'Untitled Assistant',
-        });
-        assistantId = draft.assistantId;
-        this.assistantId.set(assistantId);
-
-        // Update form with draft data
-        this.form.patchValue({
-          name: draft.name,
-          description: draft.description || '',
-          instructions: draft.instructions || '',
-          vectorIndexId: draft.vectorIndexId,
-          visibility: draft.visibility,
-          tags: draft.tags,
-          status: draft.status,
-        });
+        assistantId = await this.createDraftAssistant();
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Failed to create assistant';
         this.currentUpload.set({
@@ -365,6 +357,66 @@ export class AssistantFormPage implements OnInit, OnDestroy {
 
     // Clear the input to allow re-selecting the same file
     input.value = '';
+  }
+
+  /**
+   * Ensure an assistant record exists so documents have a parent to attach
+   * to. In create mode the form has no assistant yet, so a draft is created
+   * and the form is patched with its server-assigned fields. Returns the
+   * assistant id; throws if draft creation fails.
+   */
+  private async createDraftAssistant(): Promise<string> {
+    const draft = await this.assistantService.createDraft({
+      name: this.form.get('name')?.value || 'Untitled Assistant',
+    });
+    this.assistantId.set(draft.assistantId);
+    this.form.patchValue({
+      name: draft.name,
+      description: draft.description || '',
+      instructions: draft.instructions || '',
+      vectorIndexId: draft.vectorIndexId,
+      visibility: draft.visibility,
+      tags: draft.tags,
+      status: draft.status,
+    });
+    return draft.assistantId;
+  }
+
+  /**
+   * Open the file-source browser so the user can import documents from a
+   * connected connector (Google Drive, etc.). Ensures a draft assistant
+   * exists first — imported documents need a parent. On close, any imported
+   * documents are merged into the list and polled like a device upload.
+   */
+  async openFileSourceBrowser(): Promise<void> {
+    let assistantId = this.assistantId();
+    if (!assistantId) {
+      try {
+        assistantId = await this.createDraftAssistant();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create assistant';
+        this.toast.error(message);
+        return;
+      }
+    }
+
+    const dialogRef = this.dialog.open<Document[] | undefined, FileSourceBrowserDialogData>(
+      FileSourceBrowserDialogComponent,
+      {
+        data: { assistantId },
+        hasBackdrop: false,
+      },
+    );
+
+    const imported = await firstValueFrom(dialogRef.closed);
+    if (imported && imported.length > 0) {
+      this.toast.success(
+        `Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`,
+      );
+      // loadDocuments() picks up the new 'uploading' records and starts
+      // polling them through to 'complete', exactly like a device upload.
+      await this.loadDocuments();
+    }
   }
 
   async uploadDocument(file: File, assistantId: string): Promise<void> {
