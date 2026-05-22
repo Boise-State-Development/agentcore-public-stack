@@ -34,7 +34,11 @@ describe('FileSourceService', () => {
   it('lists file sources from the catalog response', async () => {
     const promise = service.listFileSources();
     await vi.waitFor(() => {
-      httpMock.expectOne(`${API}/file-sources`).flush({
+      const req = httpMock.expectOne(`${API}/file-sources`);
+      // app-api needs the callback URL to resolve OAuth tokens — without it
+      // the backend raises CallbackUrlUnavailableError (503).
+      expect(req.request.headers.get('OAuth2CallbackUrl')).toMatch(/\/oauth-complete$/);
+      req.flush({
         fileSources: [
           { providerId: 'google', displayName: 'Google Drive', iconName: 'heroCloud', connected: true },
         ],
@@ -44,6 +48,31 @@ describe('FileSourceService', () => {
     expect(result).toHaveLength(1);
     expect(result[0].providerId).toBe('google');
     expect(result[0].connected).toBe(true);
+  });
+
+  it('sends the OAuth2CallbackUrl header on every token-resolving call', async () => {
+    const calls = [
+      { trigger: () => service.listRoots('google'), url: `${API}/connectors/google/roots` },
+      { trigger: () => service.browse('google', 'f1'), url: `${API}/connectors/google/browse` },
+      { trigger: () => service.search('google', 'q'), url: `${API}/connectors/google/search` },
+    ];
+    for (const call of calls) {
+      const promise = call.trigger();
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne((r) => r.url === call.url);
+        expect(req.request.headers.get('OAuth2CallbackUrl')).toMatch(/\/oauth-complete$/);
+        req.flush({ entries: [], breadcrumbs: [], roots: [] });
+      });
+      await promise;
+    }
+
+    const importPromise = service.importDocuments('AST-1', 'google', [{ fileId: 'f', name: 'n' }]);
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(`${API}/assistants/AST-1/documents/import`);
+      expect(req.request.headers.get('OAuth2CallbackUrl')).toMatch(/\/oauth-complete$/);
+      req.flush({ documents: [] });
+    });
+    await importPromise;
   });
 
   it('lists roots for a connector', async () => {

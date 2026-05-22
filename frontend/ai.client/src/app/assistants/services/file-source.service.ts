@@ -42,11 +42,29 @@ export class FileSourceService {
   private readonly config = inject(ConfigService);
   private readonly baseUrl = computed(() => this.config.appApiUrl());
 
+  /**
+   * Header app-api's `AgentCoreContextMiddleware` bridges into
+   * `BedrockAgentCoreContext` so the identity client has a callback URL for
+   * AgentCore Identity. Every file-source endpoint resolves an OAuth token
+   * server-side, so this must accompany every call — without it the backend
+   * raises `CallbackUrlUnavailableError` (503). Mirrors `UserConnectorsService`.
+   *
+   * The backend re-appends `provider_id` itself, and the middleware rejects
+   * URLs carrying a query string as a redirect-pivot guard — so we send a
+   * bare `/oauth-complete`.
+   */
+  private callbackHeaders(): Record<string, string> {
+    const callback = new URL('/oauth-complete', window.location.origin);
+    return { OAuth2CallbackUrl: callback.toString() };
+  }
+
   /** List the connectors the current user can use as a file source. */
   async listFileSources(): Promise<FileSourceConnector[]> {
     try {
       const response = await firstValueFrom(
-        this.http.get<FileSourceListResponse>(`${this.baseUrl()}/file-sources`),
+        this.http.get<FileSourceListResponse>(`${this.baseUrl()}/file-sources`, {
+          headers: this.callbackHeaders(),
+        }),
       );
       return response.fileSources;
     } catch (err) {
@@ -60,6 +78,7 @@ export class FileSourceService {
       const response = await firstValueFrom(
         this.http.get<SourceRootsResponse>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/roots`,
+          { headers: this.callbackHeaders() },
         ),
       );
       return response.roots;
@@ -82,7 +101,7 @@ export class FileSourceService {
       return await firstValueFrom(
         this.http.get<BrowseResult>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/browse`,
-          { params },
+          { params, headers: this.callbackHeaders() },
         ),
       );
     } catch (err) {
@@ -104,7 +123,7 @@ export class FileSourceService {
       return await firstValueFrom(
         this.http.get<BrowseResult>(
           `${this.baseUrl()}/connectors/${encodeURIComponent(connectorId)}/search`,
-          { params },
+          { params, headers: this.callbackHeaders() },
         ),
       );
     } catch (err) {
@@ -126,6 +145,7 @@ export class FileSourceService {
         this.http.post<ImportDocumentsResponse>(
           `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/documents/import`,
           { connectorId, files },
+          { headers: this.callbackHeaders() },
         ),
       );
     } catch (err) {
