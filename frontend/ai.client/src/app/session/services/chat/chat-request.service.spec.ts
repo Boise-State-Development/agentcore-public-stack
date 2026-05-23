@@ -96,6 +96,17 @@ describe('ChatRequestService', () => {
     );
   });
 
+  it('overrides enabled_tools to [] when an assistant ID is set (KB-only consumer chat)', async () => {
+    await service.submitChatRequest('Hello', 'session1', undefined, 'assistant1');
+
+    expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rag_assistant_id: 'assistant1',
+        enabled_tools: [],
+      })
+    );
+  });
+
   it('should throw error when no model selected', async () => {
     mockModelService.getSelectedModel.mockReturnValue(null);
 

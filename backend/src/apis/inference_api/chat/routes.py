@@ -960,6 +960,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         logger.info("Assistant RAG requested")
         logger.info("Processing for authenticated user")
 
+        # Assistants are KB-grounded with no external tools available to the consumer.
+        # Override any tools the client sent — server is the source of truth here.
+        if input_data.enabled_tools:
+            logger.warning(
+                "Ignoring enabled_tools on assistant chat (assistants are KB-only)"
+            )
+        input_data.enabled_tools = []
+
         # 1. Check if session already has an assistant attached
         # If it does, verify it's the same assistant (can't change assistants mid-session)
         # If it doesn't, verify session has no messages (can only attach to new sessions)
@@ -1068,6 +1076,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         preview_instructions_override = input_data.system_prompt if is_preview_session(input_data.session_id) and input_data.system_prompt else None
         effective_instructions = preview_instructions_override or assistant.instructions
 
+        kb_grounding_directive = (
+            "## Knowledge Base Grounding\n\n"
+            "Answer using only the knowledge base context provided with the user's message. "
+            "If the context does not cover the question, say so plainly rather than guessing. "
+            "You have no external tools available."
+        )
+
         if effective_instructions:
             # Import here to avoid circular dependency
             from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
@@ -1077,7 +1092,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             base_prompt = base_prompt_builder.build(include_date=True)
 
             # Append assistant instructions to the base prompt
-            system_prompt = f"{base_prompt}\n\n## Assistant-Specific Instructions\n\n{effective_instructions}"
+            system_prompt = f"{base_prompt}\n\n{kb_grounding_directive}\n\n## Assistant-Specific Instructions\n\n{effective_instructions}"
             if preview_instructions_override:
                 logger.info(
                     "Using live preview instructions override"
@@ -1090,13 +1105,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         else:
             # No assistant instructions - use base prompt if no system_prompt provided
             logger.warning("No instructions found on assistant!")
-            if not system_prompt:
-                from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+            from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
 
-                base_prompt_builder = SystemPromptBuilder()
-                system_prompt = base_prompt_builder.build(include_date=True)
+            base_prompt_builder = SystemPromptBuilder()
+            base_prompt = base_prompt_builder.build(include_date=True)
+            system_prompt = f"{base_prompt}\n\n{kb_grounding_directive}"
             logger.info(
-                "Assistant has no instructions - using fallback system prompt"
+                "Assistant has no instructions - using fallback system prompt with KB grounding"
             )
 
         # 6. Save assistant_id to session preferences (persist for future loads)

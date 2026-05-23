@@ -230,6 +230,8 @@ export class ChatRequestService implements OnDestroy {
     // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
     if (assistantId) {
       requestObject['rag_assistant_id'] = assistantId;
+      // Assistants are KB-grounded with no external tools. Backend enforces this too.
+      requestObject['enabled_tools'] = [];
     }
 
     return requestObject;
