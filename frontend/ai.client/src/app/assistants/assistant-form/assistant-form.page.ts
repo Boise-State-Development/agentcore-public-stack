@@ -134,6 +134,14 @@ export class AssistantFormPage implements OnInit, OnDestroy {
 
   /** Connectors the user can import documents from, surfaced as buttons. */
   readonly fileSources = signal<FileSourceConnector[]>([]);
+  /**
+   * True while the editor is fetching the connector catalog for the first
+   * time. Drives the inline skeleton chips so the connector buttons fade
+   * in rather than popping into existence after a network round-trip.
+   * Initial value `true` because `loadFileSources()` is called from
+   * `ngOnInit` — the row should render the skeleton on first paint.
+   */
+  readonly fileSourcesLoading = signal<boolean>(true);
 
   /** Provider whose consent popup is in flight from an editor connector button. */
   readonly connectingProviderId = signal<string | null>(null);
@@ -476,10 +484,13 @@ export class AssistantFormPage implements OnInit, OnDestroy {
    * connector buttons rather than blocking the editor.
    */
   private async loadFileSources(): Promise<void> {
+    this.fileSourcesLoading.set(true);
     try {
       this.fileSources.set(await this.fileSourceService.listFileSources());
     } catch {
       this.fileSources.set([]);
+    } finally {
+      this.fileSourcesLoading.set(false);
     }
   }
 

@@ -244,25 +244,52 @@
 
           <!-- Section: Knowledge -->
           <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
-            <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Knowledge</h2>
+            <div class="flex items-center gap-3">
+              <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
+              @if (webCrawlActive()) {
+                <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                  <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+                  Crawling…
+                </span>
+              }
+            </div>
+
+            <!-- Single hidden file input shared by both the inline "Add files"
+                 button and the empty-state drop zone label. Two labels can
+                 point at one input; duplicating the input would emit two
+                 elements with the same id (invalid HTML + a11y violation). -->
+            <input
+              id="file-upload"
+              type="file"
+              name="file-upload"
+              class="sr-only"
+              (change)="onFileSelected($event)"
+              accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
+            />
 
             <!-- File Upload -->
             <div>
-              <label for="file-upload" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Upload Assistant Documents
-              </label>
+              <p id="add-content-label" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Add content
+              </p>
 
-              <!-- Add web content — single page or bounded crawl -->
-              <div class="mt-2">
-                <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">
-                  Fetch from the web
-                  @if (webCrawlActive()) {
-                    <span class="ml-2 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                      <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
-                      Crawling…
-                    </span>
-                  }
-                </p>
+              <!-- Inline action row: web crawl + connector buttons + device upload.
+                   The same flex-wrap container holds every "add knowledge" affordance
+                   so the user sees one row instead of three labeled groups. -->
+              <div
+                class="mt-2 flex flex-wrap items-center gap-2"
+                role="group"
+                aria-labelledby="add-content-label"
+              >
+                <!-- Device upload sits first — the most-common action. -->
+                <label
+                  for="file-upload"
+                  class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <ng-icon name="heroPlus" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                  Add files
+                </label>
+
                 <button
                   type="button"
                   (click)="openWebSourceDialog()"
@@ -271,84 +298,73 @@
                   <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
                   Add web content
                 </button>
+
+                @if (fileSourcesLoading()) {
+                  <!-- Skeleton chips while the connector catalog loads.
+                       Width-matched to a typical "Connect to <Provider>" label
+                       so the row's final layout is roughly what's previewed. -->
+                  <div
+                    class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800/60"
+                    aria-hidden="true"
+                  >
+                    <div class="size-4 shrink-0 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+                    <div class="h-3 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+                  </div>
+                  <div
+                    class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-1.5 dark:border-gray-700 dark:bg-gray-800/60"
+                    aria-hidden="true"
+                  >
+                    <div class="size-4 shrink-0 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+                    <div class="h-3 w-20 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+                  </div>
+                  <span class="sr-only">Loading connectors…</span>
+                } @else {
+                  @for (source of fileSources(); track source.providerId) {
+                    @let busy = connectingProviderId() === source.providerId;
+                    <button
+                      type="button"
+                      (click)="openOrConnect(source)"
+                      [disabled]="busy"
+                      class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      @if (busy && connectPhase() === 'initiating') {
+                        <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
+                        Starting…
+                      } @else if (busy && connectPhase() === 'awaiting') {
+                        <ng-icon name="heroArrowPath" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                        Awaiting consent
+                      } @else {
+                        @if (source.iconData) {
+                          <img [src]="source.iconData" alt="" class="size-4 shrink-0 object-contain" />
+                        } @else {
+                          <ng-icon name="heroLink" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                        }
+                        @if (source.connected) {
+                          {{ source.displayName }}
+                          <span class="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Connected"></span>
+                        } @else {
+                          Connect to {{ source.displayName }}
+                        }
+                      }
+                    </button>
+                  }
+                }
               </div>
 
-              <!-- Import from a connector — one button per available file source -->
-              @if (fileSources().length > 0) {
-                <div class="mt-2">
-                  <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">Import from a connector</p>
-                  <div class="flex flex-wrap gap-2">
-                    @for (source of fileSources(); track source.providerId) {
-                      @let busy = connectingProviderId() === source.providerId;
-                      <button
-                        type="button"
-                        (click)="openOrConnect(source)"
-                        [disabled]="busy"
-                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                      >
-                        @if (busy && connectPhase() === 'initiating') {
-                          <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"></div>
-                          Starting…
-                        } @else if (busy && connectPhase() === 'awaiting') {
-                          <ng-icon name="heroArrowPath" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
-                          Awaiting consent
-                        } @else {
-                          @if (source.iconData) {
-                            <img [src]="source.iconData" alt="" class="size-4 shrink-0 object-contain" />
-                          } @else {
-                            <ng-icon name="heroLink" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
-                          }
-                          @if (source.connected) {
-                            {{ source.displayName }}
-                            <span class="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Connected"></span>
-                          } @else {
-                            Connect to {{ source.displayName }}
-                          }
-                        }
-                      </button>
-                    }
-                  </div>
-                </div>
-              }
-
               @if (!hasDocuments()) {
-                <!-- Full drop zone — shown only while there is nothing uploaded yet -->
+                <!-- Drag-drop area for the empty state. Click-to-pick is
+                     covered by the inline "Add files" button above, so the
+                     drop zone is intentionally read-only here — it exists
+                     purely to surface the drop affordance + format hint. -->
                 <div class="mt-3 flex justify-center rounded-2xl border border-dashed border-gray-300 px-6 py-10 dark:border-gray-600">
                   <div class="text-center">
                     <svg viewBox="0 0 24 24" fill="currentColor" data-slot="icon" aria-hidden="true" class="mx-auto size-12 text-gray-300 dark:text-gray-600">
                       <path d="M1.5 6a2.25 2.25 0 0 1 2.25-2.25h16.5A2.25 2.25 0 0 1 22.5 6v12a2.25 2.25 0 0 1-2.25 2.25H3.75A2.25 2.25 0 0 1 1.5 18V6ZM3 16.06V18c0 .414.336.75.75.75h16.5A.75.75 0 0 0 21 18v-1.94l-2.69-2.689a1.5 1.5 0 0 0-2.12 0l-.88.879.97.97a.75.75 0 1 1-1.06 1.06l-5.16-5.159a1.5 1.5 0 0 0-2.12 0L3 16.061Zm10.125-7.81a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0Z" clip-rule="evenodd" fill-rule="evenodd" />
                     </svg>
-                    <div class="mt-4 flex text-sm/6 text-gray-600 dark:text-gray-400">
-                      <label for="file-upload" class="relative cursor-pointer rounded-2xl bg-transparent font-semibold text-blue-600 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-600 hover:text-blue-500 dark:text-blue-400 dark:focus-within:outline-blue-400 dark:hover:text-blue-300">
-                        <span>Upload a file</span>
-                        <input
-                          id="file-upload"
-                          type="file"
-                          name="file-upload"
-                          class="sr-only"
-                          (change)="onFileSelected($event)"
-                          accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
-                        />
-                      </label>
-                      <p class="pl-1">or drag and drop</p>
-                    </div>
-                    <p class="text-xs/5 text-gray-500 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10MB</p>
+                    <p class="mt-4 text-sm/6 text-gray-600 dark:text-gray-400">Drag and drop a file here</p>
+                    <p class="text-xs/5 text-gray-500 dark:text-gray-400">PDF, DOCX, TXT, MD, and other document types up to 10&nbsp;MB</p>
                   </div>
                 </div>
-              } @else {
-                <!-- Compact add-files control once documents exist or are uploading -->
-                <label for="file-upload" class="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
-                  <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
-                  Add files
-                  <input
-                    id="file-upload"
-                    type="file"
-                    name="file-upload"
-                    class="sr-only"
-                    (change)="onFileSelected($event)"
-                    accept=".pdf,.docx,.txt,.md,.html,.csv,.xls,.xlsx,.pptx,.csv,.md,.pptx"
-                  />
-                </label>
               }
             </div>
 
