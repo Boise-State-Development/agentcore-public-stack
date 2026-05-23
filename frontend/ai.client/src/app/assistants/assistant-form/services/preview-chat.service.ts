@@ -147,7 +147,12 @@ export class PreviewChatService {
    * Passes current form instructions as system_prompt so the backend uses
    * the live (unsaved) version instead of the persisted one.
    */
-  async sendMessage(userMessage: string, assistantId: string, liveInstructions?: string): Promise<void> {
+  async sendMessage(
+    userMessage: string,
+    assistantId: string,
+    liveInstructions?: string,
+    fileUploadIds?: string[],
+  ): Promise<void> {
     if (!userMessage.trim() || this.loadingSignal()) {
       return;
     }
@@ -199,7 +204,7 @@ export class PreviewChatService {
 
       // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
       // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
-      const requestBody = {
+      const requestBody: Record<string, unknown> = {
         message: userMessage,
         session_id: this.sessionIdSignal(),
         rag_assistant_id: assistantId,
@@ -207,6 +212,9 @@ export class PreviewChatService {
         model_id: null, // Use default model
         enabled_tools: [], // No tools in preview
       };
+      if (fileUploadIds && fileUploadIds.length > 0) {
+        requestBody['file_upload_ids'] = fileUploadIds;
+      }
 
       // `fetchEventSource` bypasses the HttpClient pipeline, so the
       // csrfInterceptor doesn't run here. Attach X-CSRF-Token by hand.

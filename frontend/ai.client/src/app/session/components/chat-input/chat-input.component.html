@@ -79,16 +79,18 @@
                 type="file"
                 class="sr-only"
                 (change)="onFileSelect($event)"
-                id="file-upload"
+                id="chat-input-file-upload"
                 [accept]="acceptedFileTypes"
                 multiple
                 aria-label="Attach a file"
               />
-              <label for="file-upload" class="flex size-full cursor-pointer items-center justify-center">
+              <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
                 <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
               </label>
             </div>
+          }
 
+          @if (showSettingsControl()) {
             <!-- Settings Button -->
             <button
               type="button"
@@ -102,6 +104,7 @@
             </button>
           }
 
+          @if (showVoiceControl()) {
           <!-- Voice Toggle Button -->
           <button
             type="button"
@@ -135,6 +138,7 @@
               <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
             }
           </button>
+          }
         </div>
 
         <!-- Right Controls -->

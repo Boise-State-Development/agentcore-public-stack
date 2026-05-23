@@ -74,6 +74,14 @@ export class ChatInputComponent {
   // Input: show file attachment controls (defaults to true)
   readonly showFileControls = input<boolean>(true);
 
+  // Input: show voice mode toggle (defaults to true). Disabled where voice
+  // is not meaningful, e.g. the assistant editor preview.
+  readonly showVoiceControl = input<boolean>(true);
+
+  // Input: show the settings/tools button (defaults to true). Disabled where
+  // the chat input isn't wired to a settings panel, e.g. the assistant editor preview.
+  readonly showSettingsControl = input<boolean>(true);
+
   // Input: auto-focus the textarea on load and session change (defaults to true).
   // Disabled where the input sits beside an editable form (e.g. assistant preview).
   readonly autoFocus = input<boolean>(true);

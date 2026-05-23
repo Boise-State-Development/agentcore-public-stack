@@ -37,6 +37,10 @@ export interface ChatContainerConfig {
   allowCloseAssistant: boolean;
   /** Show file attachment controls in chat input */
   showFileControls: boolean;
+  /** Show voice mode toggle in chat input */
+  showVoiceControl: boolean;
+  /** Show settings/tools button in chat input */
+  showSettingsControl: boolean;
   /** Custom greeting message (overrides default) */
   customGreeting?: string;
   /** Enable embedded mode (flex layout, no fixed positioning) */
@@ -101,6 +105,8 @@ export class ChatContainerComponent {
     showEmptyState: true,
     allowCloseAssistant: true,
     showFileControls: true,
+    showVoiceControl: true,
+    showSettingsControl: true,
     embeddedMode: false,
     fullPageMode: false,
     ...this.config(),

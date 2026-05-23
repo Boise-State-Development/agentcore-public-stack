@@ -70,6 +70,7 @@ describe('AssistantPreviewComponent', () => {
         'Hello',
         'ast-123',
         'You are a pirate. Speak like a pirate.',
+        undefined,
       );
     });
 
@@ -84,6 +85,7 @@ describe('AssistantPreviewComponent', () => {
         'Hi',
         'ast-123',
         'Version 1 instructions',
+        undefined,
       );
 
       // Simulate parent updating the input (user edited the form)
@@ -95,6 +97,7 @@ describe('AssistantPreviewComponent', () => {
         'Hi again',
         'ast-123',
         'Version 2 instructions',
+        undefined,
       );
     });
 

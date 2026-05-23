@@ -68,7 +68,9 @@ import { AssistantCardComponent } from '../../components/assistant-card.componen
               <app-chat-input
                 [sessionId]="previewChatService.sessionId()"
                 [isChatLoading]="previewChatService.isLoading()"
-                [showFileControls]="false"
+                [showFileControls]="true"
+                [showVoiceControl]="false"
+                [showSettingsControl]="false"
                 [autoFocus]="false"
                 (messageSubmitted)="onMessageSubmitted($event)"
                 (messageCancelled)="onMessageCancelled()"
@@ -132,7 +134,9 @@ export class AssistantPreviewComponent {
     showTopnav: false,
     showEmptyState: true,
     allowCloseAssistant: false, // Don't allow closing in preview
-    showFileControls: false, // No file uploads in preview
+    showFileControls: true,
+    showVoiceControl: false, // Voice mode is not meaningful in the editor preview
+    showSettingsControl: false, // Settings panel isn't wired into the preview
   };
 
   // Chat container configuration for messages-only mode (no input, used when we render input separately)
@@ -142,7 +146,9 @@ export class AssistantPreviewComponent {
     showTopnav: false,
     showEmptyState: false,
     allowCloseAssistant: false,
-    showFileControls: false,
+    showFileControls: true,
+    showVoiceControl: false,
+    showSettingsControl: false,
   };
 
   // Computed: build an Assistant-like object from form inputs
@@ -202,7 +208,12 @@ export class AssistantPreviewComponent {
       return;
     }
 
-    this.previewChatService.sendMessage(event.content, assistantId, this.instructions());
+    this.previewChatService.sendMessage(
+      event.content,
+      assistantId,
+      this.instructions(),
+      event.fileUploadIds,
+    );
   }
 
   /**
