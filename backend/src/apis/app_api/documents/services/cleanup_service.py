@@ -33,6 +33,8 @@ async def cleanup_document_resources(
     chunk_count: Optional[int],
     max_retries: int = 3,
     base_delay: float = 0.5,
+    source_connector_id: Optional[str] = None,
+    source_file_id: Optional[str] = None,
 ) -> bool:
     """
     Delete vectors and S3 source file with exponential backoff retries.
@@ -44,6 +46,12 @@ async def cleanup_document_resources(
     Returns True only if both phases succeed. On True, hard-deletes the
     DynamoDB record. On failure, logs and leaves the record for TTL auto-expiry.
 
+    For web-source documents (`source_connector_id == 'web'`) the success
+    path also cascades into `_cascade_delete_orphaned_crawl_jobs`, which
+    purges any terminal-status CrawlJob row no longer referenced by a
+    surviving doc. A running crawl is left alone — the crawler is still
+    creating rows that would re-orphan it on every tick.
+
     Never raises exceptions.
 
     Args:
@@ -53,6 +61,11 @@ async def cleanup_document_resources(
         chunk_count: Number of vector chunks (None triggers probe-and-scan fallback)
         max_retries: Maximum retry attempts per phase
         base_delay: Base delay in seconds for exponential backoff
+        source_connector_id: Provenance connector id of the doc being deleted.
+            Only `'web'` triggers the CrawlJob cascade; everything else is a no-op.
+        source_file_id: Provenance file id of the doc being deleted (the page
+            URL for web docs). Unused today — kept symmetric with the rest of
+            the provenance fields and reserved for tighter prefix matching.
 
     Returns:
         True if all resources were cleaned up successfully, False otherwise
@@ -82,6 +95,15 @@ async def cleanup_document_resources(
             await hard_delete_document(assistant_id, document_id)
         except Exception as e:
             logger.error(f"Failed to hard-delete document {document_id}: {e}", exc_info=True)
+
+        if source_connector_id == "web":
+            try:
+                await _cascade_delete_orphaned_crawl_jobs(assistant_id)
+            except Exception as e:
+                logger.error(
+                    f"CrawlJob cascade after deleting {document_id} failed: {e}",
+                    exc_info=True,
+                )
     else:
         logger.warning(
             f"Cleanup incomplete for {document_id}: vectors={vectors_deleted}, "
@@ -89,6 +111,96 @@ async def cleanup_document_resources(
         )
 
     return all_succeeded
+
+
+async def _cascade_delete_orphaned_crawl_jobs(assistant_id: str) -> None:
+    """Hard-delete terminal CrawlJob rows whose root_url no surviving web doc references.
+
+    Called right after a web-source document is hard-deleted. The cascade is
+    intentionally scoped to terminal-status crawls (`complete` / `failed`) —
+    a running crawl is still spawning child docs, and deleting its row would
+    break the SPA's watcher loop and cause the in-flight `finalize_crawl`
+    update to fail its `attribute_exists` precondition.
+
+    "Orphaned" is decided by URL prefix match: a CrawlJob is kept iff some
+    surviving doc has `source_connector_id == 'web'` and `source_file_id`
+    starts with the crawl's `root_url`. Prefix is good enough — the crawler
+    only enqueues URLs that already satisfy the same-domain / same-root
+    filter, so false positives are rare in practice and the worst case is
+    that a row sticks around until its TTL fires.
+
+    Never raises. Failures of the underlying list/delete calls are logged.
+    """
+    from apis.app_api.web_sources.crawl_repository import (
+        hard_delete_crawl_job,
+        list_all_crawls,
+    )
+
+    crawls = await list_all_crawls(assistant_id)
+    terminal_crawls = [c for c in crawls if c.status in ("complete", "failed")]
+    if not terminal_crawls:
+        return
+
+    surviving_web_urls = await _list_surviving_web_source_file_ids(assistant_id)
+
+    for crawl in terminal_crawls:
+        if any(url.startswith(crawl.root_url) for url in surviving_web_urls):
+            continue
+        await hard_delete_crawl_job(assistant_id, crawl.crawl_id)
+
+
+async def _list_surviving_web_source_file_ids(assistant_id: str) -> list[str]:
+    """Return source_file_id values for every surviving `web` document of an assistant.
+
+    Reads the assistants table directly (not via `list_assistant_documents`)
+    so the cascade does not require an ownership check — by the time we get
+    here the deleting user has already been verified by the soft-delete
+    upstream. Paginates internally; the typical assistant has a few hundred
+    docs at most.
+    """
+    import os
+
+    import boto3
+    from boto3.dynamodb.conditions import Attr, Key
+
+    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table_name:
+        logger.error("DYNAMODB_ASSISTANTS_TABLE_NAME not set; skipping crawl cascade")
+        return []
+
+    table = boto3.resource("dynamodb").Table(table_name)
+    urls: list[str] = []
+    exclusive_start_key: Optional[dict] = None
+    while True:
+        kwargs: dict = {
+            "KeyConditionExpression": Key("PK").eq(f"AST#{assistant_id}")
+            & Key("SK").begins_with("DOC#"),
+            "FilterExpression": Attr("sourceConnectorId").eq("web"),
+            "ProjectionExpression": "sourceFileId, #st",
+            "ExpressionAttributeNames": {"#st": "status"},
+        }
+        if exclusive_start_key:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        try:
+            response = table.query(**kwargs)
+        except Exception as e:
+            logger.error(f"Failed to list web docs for cascade ({assistant_id}): {e}")
+            return urls
+
+        for item in response.get("Items", []):
+            # Soft-deleted rows still exist in the table until cleanup hard-deletes
+            # them; treat them as gone for cascade purposes.
+            if item.get("status") == "deleting":
+                continue
+            file_id = item.get("sourceFileId")
+            if isinstance(file_id, str):
+                urls.append(file_id)
+
+        exclusive_start_key = response.get("LastEvaluatedKey")
+        if not exclusive_start_key:
+            break
+
+    return urls
 
 
 async def _delete_vectors_with_retries(

@@ -28,6 +28,7 @@ import {
   heroArrowPath,
   heroChevronRight,
   heroFaceSmile,
+  heroGlobeAlt,
   heroLink,
   heroXMark,
   heroUserGroup,
@@ -47,7 +48,12 @@ import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
 } from '../components/file-source-browser-dialog.component';
+import {
+  WebSourceDialogComponent,
+  WebSourceDialogData,
+} from '../components/web-source-dialog.component';
 import { FileSourceService } from '../services/file-source.service';
+import { WebSourceService } from '../services/web-source.service';
 import { FileSourceConnector } from '../models/file-source.model';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
@@ -73,6 +79,7 @@ import { ToastService } from '../../services/toast/toast.service';
       heroArrowPath,
       heroChevronRight,
       heroFaceSmile,
+      heroGlobeAlt,
       heroLink,
       heroXMark,
       heroUserGroup,
@@ -88,6 +95,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   private assistantService = inject(AssistantService);
   private documentService = inject(DocumentService);
   private fileSourceService = inject(FileSourceService);
+  private webSourceService = inject(WebSourceService);
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   readonly sidenavService = inject(SidenavService);
@@ -130,6 +138,14 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   /** Provider whose consent popup is in flight from an editor connector button. */
   readonly connectingProviderId = signal<string | null>(null);
   readonly connectPhase = signal<'initiating' | 'awaiting' | null>(null);
+
+  /**
+   * True while a web crawl is running for this assistant. Drives a small
+   * "crawling…" badge in the Knowledge section so the user knows pages will
+   * keep appearing for a while after the dialog closes.
+   */
+  readonly webCrawlActive = signal<boolean>(false);
+  private crawlWatcherHandle: ReturnType<typeof setInterval> | null = null;
 
   /**
    * True once at least one document exists, is uploading, or is still
@@ -250,6 +266,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     // Show sidenav when leaving the form page
     this.sidenavService.show();
     this.formSub?.unsubscribe();
+    this.stopCrawlWatcher();
   }
 
   async loadAssistant(id: string): Promise<void> {
@@ -566,6 +583,126 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Open the web-source dialog so the user can attach a URL (single page or
+   * a bounded crawl). Mirrors {@link openFileSourceBrowser} — ensures a
+   * draft assistant exists, opens the dialog, then on close merges the
+   * pre-created root document into the list and starts the crawl watcher
+   * so additional pages surface as the crawler discovers them.
+   */
+  async openWebSourceDialog(): Promise<void> {
+    let assistantId = this.assistantId();
+    if (!assistantId) {
+      try {
+        assistantId = await this.createDraftAssistant();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to create assistant';
+        this.toast.error(message);
+        return;
+      }
+    }
+
+    const dialogRef = this.dialog.open<Document[] | undefined, WebSourceDialogData>(
+      WebSourceDialogComponent,
+      {
+        data: { assistantId },
+        hasBackdrop: false,
+      },
+    );
+
+    const imported = await firstValueFrom(dialogRef.closed);
+    if (imported && imported.length > 0) {
+      this.toast.success('Crawling web content…');
+      await this.loadDocuments();
+      this.startCrawlWatcher();
+    }
+  }
+
+  /**
+   * Poll active crawls for this assistant every few seconds. While any are
+   * `running` we surface newly-discovered pages via {@link discoverNewDocuments}
+   * — an *incremental* merge that appends only the new rows. The full list
+   * is not replaced, so unchanged rows keep their references and per-doc
+   * polling drives status updates without a list-wide flicker. Stops itself
+   * once the server reports no active crawls.
+   */
+  private startCrawlWatcher(): void {
+    this.webCrawlActive.set(true);
+    this.stopCrawlWatcher();
+    const tick = async (): Promise<void> => {
+      const assistantId = this.assistantId();
+      if (!assistantId) {
+        this.stopCrawlWatcher();
+        return;
+      }
+      try {
+        const active = await this.webSourceService.listActiveCrawls(assistantId);
+        if (active.length === 0) {
+          this.webCrawlActive.set(false);
+          this.stopCrawlWatcher();
+          // Catch any pages that completed in the gap between the previous
+          // tick and the server reporting "no crawls running" — still
+          // incremental, so no list-wide refresh.
+          await this.discoverNewDocuments();
+          return;
+        }
+        await this.discoverNewDocuments();
+      } catch {
+        // Network blip — keep polling; the watcher is non-critical.
+      }
+    };
+    this.crawlWatcherHandle = setInterval(() => void tick(), 5000);
+  }
+
+  private stopCrawlWatcher(): void {
+    if (this.crawlWatcherHandle !== null) {
+      clearInterval(this.crawlWatcherHandle);
+      this.crawlWatcherHandle = null;
+    }
+  }
+
+  /**
+   * Fetch the assistant's documents and append only the IDs we don't already
+   * have to the local list — does NOT replace existing rows. Each new
+   * processing doc gets its own per-doc polling started so its status
+   * updates flow into the list one row at a time, no list-wide refresh.
+   *
+   * Used by the crawl watcher: a crawl discovers pages over its lifetime,
+   * and we want each new page to slide into the list when it appears
+   * without re-rendering rows that already exist.
+   */
+  private async discoverNewDocuments(): Promise<void> {
+    const assistantId = this.assistantId();
+    if (!assistantId) {
+      return;
+    }
+    try {
+      const response = await this.documentService.listDocuments(assistantId);
+      const existing = new Set(
+        this.uploadedDocuments().map((doc) => doc.documentId),
+      );
+      const newDocs = response.documents.filter(
+        (doc) => !existing.has(doc.documentId),
+      );
+      if (newDocs.length === 0) {
+        return;
+      }
+      this.uploadedDocuments.update((docs) => [...docs, ...newDocs]);
+      for (const doc of newDocs) {
+        if (
+          PROCESSING_STATUSES.includes(doc.status) &&
+          !this.isDocumentStale(doc) &&
+          !this.pollingDocuments().has(doc.documentId)
+        ) {
+          this.startPollingDocument(doc.documentId, assistantId);
+        }
+      }
+    } catch (error) {
+      console.error('Error discovering new documents:', error);
+    }
+  }
+
   async uploadDocument(file: File, assistantId: string): Promise<void> {
     // Set initial upload state
     this.currentUpload.set({
@@ -688,13 +825,33 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       return;
     }
 
+    // Optimistic UI: drop the row immediately so the click feels instant
+    // instead of waiting on the DELETE + full document-list reload (a couple
+    // seconds round-trip). Soft-delete is idempotent and almost always
+    // succeeds for a doc the user owns and is currently looking at; on the
+    // rare failure we restore the row and toast.
+    const previousDocs = this.uploadedDocuments();
+    if (!previousDocs.some((doc) => doc.documentId === documentId)) {
+      return;
+    }
+    this.uploadedDocuments.update((docs) =>
+      docs.filter((doc) => doc.documentId !== documentId),
+    );
+    // Drop from the polling set too so the row's spinner indicator doesn't
+    // briefly reappear on the next poll tick before the GET 404s.
+    this.pollingDocuments.update((set) => {
+      const newSet = new Set(set);
+      newSet.delete(documentId);
+      return newSet;
+    });
+
     try {
       await this.documentService.deleteDocument(assistantId, documentId);
-      // Reload documents list
-      await this.loadDocuments();
     } catch (error) {
-      console.error('Error deleting document:', error);
-      // TODO: Show error message to user
+      this.uploadedDocuments.set(previousDocs);
+      const message =
+        error instanceof Error ? error.message : 'Failed to delete document.';
+      this.toast.error(message);
     }
   }
 

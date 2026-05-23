@@ -43,6 +43,10 @@ dependencies = [
     # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
     # Bundles PDFium (no system poppler/ghostscript needed).
     "pypdfium2==4.30.0",
+
+    # Web-source crawler: link extraction + main-content -> markdown.
+    "beautifulsoup4==4.13.5",
+    "trafilatura==2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,229 @@
+<!-- Backdrop -->
+<div
+  class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
+  aria-hidden="true"
+  (click)="cancel()"
+></div>
+
+<!-- Centering wrapper -->
+<div class="fixed inset-0 z-10 flex min-h-full items-center justify-center p-4">
+  <div
+    class="dialog-panel relative flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="web-src-title"
+    (click)="$event.stopPropagation()"
+  >
+    <div class="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
+      <div class="flex items-center gap-2">
+        <ng-icon name="heroGlobeAlt" class="size-5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+        <h2 id="web-src-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
+          Add web content
+        </h2>
+      </div>
+      <button
+        type="button"
+        (click)="cancel()"
+        aria-label="Close"
+        class="-mr-1 rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+      >
+        <ng-icon name="heroXMark" class="size-5" />
+      </button>
+    </div>
+
+    <div class="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+      <!-- URL -->
+      <div>
+        <label for="web-src-url" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+          Page URL
+        </label>
+        <input
+          id="web-src-url"
+          type="url"
+          autocomplete="off"
+          spellcheck="false"
+          inputmode="url"
+          placeholder="https://example.com/article"
+          [value]="url()"
+          (input)="onUrlInput($any($event.target).value)"
+          (keydown.enter)="submit()"
+          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+        />
+        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+          Public http or https URLs only. JavaScript-only sites may render as empty pages — only the HTML is fetched.
+        </p>
+      </div>
+
+      <!-- Crawl toggle -->
+      <div class="flex items-start gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900/40">
+        <div class="flex h-6 shrink-0 items-center">
+          <input
+            id="web-src-crawl-toggle"
+            type="checkbox"
+            [checked]="crawlLinkedPages()"
+            (change)="setCrawlLinkedPages($any($event.target).checked)"
+            class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+          />
+        </div>
+        <div class="min-w-0">
+          <label for="web-src-crawl-toggle" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+            Crawl linked pages from this URL
+          </label>
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            Off by default — only the page above is fetched. Turn on to follow links within the same site.
+          </p>
+        </div>
+      </div>
+
+      <!-- Crawl knobs -->
+      @if (crawlLinkedPages()) {
+        <div class="space-y-4 rounded-2xl border border-gray-200 px-4 py-4 dark:border-gray-700">
+          <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            Crawl limits
+          </p>
+
+          <!-- Max depth -->
+          <div>
+            <div class="flex items-center justify-between gap-3">
+              <label for="web-src-depth" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Max depth</label>
+              <span class="text-sm/6 tabular-nums text-gray-900 dark:text-white">{{ maxDepth() }}</span>
+            </div>
+            <input
+              id="web-src-depth"
+              type="range"
+              min="0"
+              max="3"
+              step="1"
+              [value]="maxDepth()"
+              (input)="setMaxDepth($any($event.target).value)"
+              class="mt-1 w-full accent-blue-600"
+            />
+            <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+              How many link hops from the start URL. 0 = single page, 3 = links of links of links.
+            </p>
+          </div>
+
+          <!-- Max pages -->
+          <div>
+            <div class="flex items-center justify-between gap-3">
+              <label for="web-src-pages" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Max pages</label>
+              <span class="text-sm/6 tabular-nums text-gray-900 dark:text-white">{{ maxPages() }}</span>
+            </div>
+            <input
+              id="web-src-pages"
+              type="range"
+              min="1"
+              max="100"
+              step="1"
+              [value]="maxPages()"
+              (input)="setMaxPages($any($event.target).value)"
+              class="mt-1 w-full accent-blue-600"
+            />
+            <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+              Hard cap. Crawl stops once this many pages have been queued.
+            </p>
+          </div>
+
+          <!-- Concurrency -->
+          <div>
+            <div class="flex items-center justify-between gap-3">
+              <label for="web-src-concurrency" class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Concurrent fetches</label>
+              <span class="text-sm/6 tabular-nums text-gray-900 dark:text-white">{{ concurrency() }}</span>
+            </div>
+            <input
+              id="web-src-concurrency"
+              type="range"
+              min="1"
+              max="5"
+              step="1"
+              [value]="concurrency()"
+              (input)="setConcurrency($any($event.target).value)"
+              class="mt-1 w-full accent-blue-600"
+            />
+          </div>
+
+          <!-- Delay range -->
+          <div>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Per-host delay</span>
+              <span class="text-sm/6 tabular-nums text-gray-900 dark:text-white">
+                {{ minDelay() }}s – {{ maxDelay() }}s
+              </span>
+            </div>
+            <div class="mt-1 grid grid-cols-2 gap-3">
+              <div>
+                <label for="web-src-min-delay" class="block text-xs/5 text-gray-500 dark:text-gray-400">Min</label>
+                <input
+                  id="web-src-min-delay"
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="0.5"
+                  [value]="minDelay()"
+                  (input)="setMinDelay($any($event.target).value)"
+                  class="mt-1 w-full accent-blue-600"
+                />
+              </div>
+              <div>
+                <label for="web-src-max-delay" class="block text-xs/5 text-gray-500 dark:text-gray-400">Max</label>
+                <input
+                  id="web-src-max-delay"
+                  type="range"
+                  min="0"
+                  max="10"
+                  step="0.5"
+                  [value]="maxDelay()"
+                  (input)="setMaxDelay($any($event.target).value)"
+                  class="mt-1 w-full accent-blue-600"
+                />
+              </div>
+            </div>
+            @if (delayRangeInvalid()) {
+              <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">Max delay must be at least min delay.</p>
+            }
+            <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              Random pause between requests to the same host. Politer is slower.
+            </p>
+          </div>
+
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            Crawl stays on the same domain and honors the site's robots.txt.
+          </p>
+        </div>
+      }
+
+      @if (error(); as msg) {
+        <div class="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
+          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-red-600 dark:text-red-400" aria-hidden="true" />
+          <p class="text-sm/6 text-red-700 dark:text-red-300">{{ msg }}</p>
+        </div>
+      }
+    </div>
+
+    <!-- Footer -->
+    <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
+      <button
+        type="button"
+        (click)="cancel()"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        (click)="submit()"
+        [disabled]="!canSubmit() || delayRangeInvalid()"
+        class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-3 py-1.5 text-sm/6 font-semibold text-white hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        @if (submitting()) {
+          <div class="size-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"></div>
+          Starting…
+        } @else if (crawlLinkedPages()) {
+          Start crawling
+        } @else {
+          Add page
+        }
+      </button>
+    </div>
+  </div>
+</div>

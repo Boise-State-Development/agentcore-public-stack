@@ -252,6 +252,27 @@
                 Upload Assistant Documents
               </label>
 
+              <!-- Add web content — single page or bounded crawl -->
+              <div class="mt-2">
+                <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Fetch from the web
+                  @if (webCrawlActive()) {
+                    <span class="ml-2 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-xs/4 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                      <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+                      Crawling…
+                    </span>
+                  }
+                </p>
+                <button
+                  type="button"
+                  (click)="openWebSourceDialog()"
+                  class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                  Add web content
+                </button>
+              </div>
+
               <!-- Import from a connector — one button per available file source -->
               @if (fileSources().length > 0) {
                 <div class="mt-2">
@@ -431,7 +452,6 @@
                       <button
                         type="button"
                         (click)="deleteDocument(doc.documentId)"
-                        [disabled]="pollingDocuments().has(doc.documentId) && (doc.status === 'uploading' || doc.status === 'chunking' || doc.status === 'embedding')"
                         title="Delete document"
                         [attr.aria-label]="'Delete ' + doc.filename"
                         class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"

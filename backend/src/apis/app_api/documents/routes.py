@@ -368,6 +368,8 @@ async def delete_document(assistant_id: str, document_id: str, user_id: str = De
                 assistant_id=assistant_id,
                 s3_key=document.s3_key,
                 chunk_count=document.chunk_count,
+                source_connector_id=document.source_connector_id,
+                source_file_id=document.source_file_id,
             )
         )
 
