@@ -24,6 +24,7 @@ import { Document, PROCESSING_STATUSES, STALE_DOCUMENT_THRESHOLD_MS } from '../m
 import { AssistantPreviewComponent } from './components/assistant-preview.component';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroArrowDownTray,
   heroArrowLeft,
   heroArrowPath,
   heroChevronRight,
@@ -75,6 +76,7 @@ import { ToastService } from '../../services/toast/toast.service';
   ],
   providers: [
     provideIcons({
+      heroArrowDownTray,
       heroArrowLeft,
       heroArrowPath,
       heroChevronRight,
@@ -827,6 +829,22 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       // Don't show error to user, just log it
     } finally {
       this.isLoadingDocuments.set(false);
+    }
+  }
+
+  async downloadDocument(documentId: string): Promise<void> {
+    const assistantId = this.assistantId();
+    if (!assistantId) {
+      return;
+    }
+
+    try {
+      const response = await this.documentService.getDownloadUrl(assistantId, documentId);
+      window.open(response.downloadUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to get download URL.';
+      this.toast.error(message);
     }
   }
 
