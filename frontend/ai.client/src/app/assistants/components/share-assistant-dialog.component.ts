@@ -200,7 +200,10 @@ export type ShareAssistantDialogResult = {
                   </div>
                 </div>
 
-                <!-- Mode Toggle (segmented tabs) -->
+                <!-- Mode Toggle (segmented tabs).
+                     The negative bottom margin on each button pulls its border-b down 1px
+                     so the active underline overlaps the parent border cleanly — no thin
+                     gray line peeking through under the selected tab. -->
                 <div
                   class="flex gap-1 border-b border-gray-200 dark:border-gray-700"
                   role="tablist"
@@ -213,9 +216,10 @@ export type ShareAssistantDialogResult = {
                     (click)="searchMode.set(true)"
                     [class.border-blue-600]="searchMode()"
                     [class.text-blue-600]="searchMode()"
+                    [class.font-semibold]="searchMode()"
                     [class.dark:border-blue-400]="searchMode()"
                     [class.dark:text-blue-400]="searchMode()"
-                    class="inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
                   >
                     <ng-icon name="heroMagnifyingGlass" class="size-4" aria-hidden="true" />
                     Search users
@@ -227,9 +231,10 @@ export type ShareAssistantDialogResult = {
                     (click)="searchMode.set(false)"
                     [class.border-blue-600]="!searchMode()"
                     [class.text-blue-600]="!searchMode()"
+                    [class.font-semibold]="!searchMode()"
                     [class.dark:border-blue-400]="!searchMode()"
                     [class.dark:text-blue-400]="!searchMode()"
-                    class="inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
                   >
                     <ng-icon name="heroUserPlus" class="size-4" aria-hidden="true" />
                     Add by email
@@ -352,19 +357,17 @@ export type ShareAssistantDialogResult = {
                 </div>
 
                 @if (loadingShares()) {
-                  <!-- Skeleton: matches the real row layout (email + select + delete) so
-                       the container doesn't reflow when shares land. -->
+                  <!-- Skeleton: single row matching the real layout (email + select + delete)
+                       so the container doesn't reflow when shares land. -->
                   <ul
-                    class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+                    class="overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
                     aria-hidden="true"
                   >
-                    @for (placeholder of skeletonRows; track placeholder) {
-                      <li class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
-                        <div class="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-                        <div class="h-7 w-20 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
-                        <div class="size-8 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
-                      </li>
-                    }
+                    <li class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+                      <div class="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+                      <div class="h-7 w-20 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                      <div class="size-8 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                    </li>
                   </ul>
                   <span class="sr-only" role="status">Loading existing shares…</span>
                 } @else if (shares().length === 0) {
