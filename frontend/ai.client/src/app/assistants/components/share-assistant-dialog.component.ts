@@ -201,11 +201,11 @@ export type ShareAssistantDialogResult = {
                 </div>
 
                 <!-- Mode Toggle (segmented tabs).
-                     Bottom-only border-b-* variant avoids a CSS collision between
-                     border-transparent (base) and border-blue-600 (active) — those
-                     are both border-color utilities at the same specificity, so
-                     using border-b-color targets a different property and lets the
-                     active state win cleanly. -->
+                     Active styling rides aria-selected="true" rather than [class.x] bindings —
+                     both border-b-blue-600 and border-b-transparent share class-selector
+                     specificity, and Tailwind's emit order made the transparent base win.
+                     aria-selected:* generates [aria-selected="true"] which has higher
+                     specificity and reliably beats the base utility. -->
                 <div
                   class="flex gap-1 border-b border-gray-200 dark:border-gray-700"
                   role="tablist"
@@ -216,12 +216,7 @@ export type ShareAssistantDialogResult = {
                     role="tab"
                     [attr.aria-selected]="searchMode()"
                     (click)="searchMode.set(true)"
-                    [class.border-b-blue-600]="searchMode()"
-                    [class.text-blue-600]="searchMode()"
-                    [class.font-semibold]="searchMode()"
-                    [class.dark:border-b-blue-400]="searchMode()"
-                    [class.dark:text-blue-400]="searchMode()"
-                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 aria-selected:border-b-blue-600 aria-selected:font-semibold aria-selected:text-blue-600 dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-blue-400 dark:aria-selected:text-blue-400"
                   >
                     <ng-icon name="heroMagnifyingGlass" class="size-4" aria-hidden="true" />
                     Search users
@@ -231,12 +226,7 @@ export type ShareAssistantDialogResult = {
                     role="tab"
                     [attr.aria-selected]="!searchMode()"
                     (click)="searchMode.set(false)"
-                    [class.border-b-blue-600]="!searchMode()"
-                    [class.text-blue-600]="!searchMode()"
-                    [class.font-semibold]="!searchMode()"
-                    [class.dark:border-b-blue-400]="!searchMode()"
-                    [class.dark:text-blue-400]="!searchMode()"
-                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 aria-selected:border-b-blue-600 aria-selected:font-semibold aria-selected:text-blue-600 dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-blue-400 dark:aria-selected:text-blue-400"
                   >
                     <ng-icon name="heroUserPlus" class="size-4" aria-hidden="true" />
                     Add by email
