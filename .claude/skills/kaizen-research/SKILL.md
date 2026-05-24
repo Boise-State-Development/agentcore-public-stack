@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns, and agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns, agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -89,6 +89,13 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
 10. **Anthropic cookbook**
     - https://github.com/anthropics/anthropic-cookbook
     - Worked examples often outpace docs — especially for caching, tool use, and agent loops.
+
+12. **LibreChat** — open-source ChatGPT-like agentic platform; useful as a parallel-implementation reference cutting across UI/UX, MCP integration, agent/RAG architecture, and provider-routing decisions. Light-touch scan (releases-first); deeper dives only when a release headline maps onto something we're building.
+    - https://github.com/danny-avila/LibreChat/releases (primary — read the latest release notes)
+    - https://github.com/danny-avila/LibreChat/blob/main/CHANGELOG.md (supplementary if releases are sparse)
+    - Web budget: 1–2 requests per week. If a release headlines something material (new MCP capability, attachment UX, agent harness pattern, OAuth/identity flow, multi-model routing), flag it for the Agentic UI/UX or MCP ecosystem sections rather than expanding the LibreChat scan inline.
+    - Identify across four lenses: (a) **UI/UX patterns** — chat UX, attachments, tool-call rendering, agent UI; (b) **comparable-platform choices** — agent harness, RAG, multi-provider routing, feature parity vs this stack; (c) **MCP integration** — how they wire MCP servers, tool routing, OAuth/consent; (d) **release-only signal** — feature ships worth knowing about even if we don't act.
+    - React/Node app, so UI items are pattern-only references (extract idea, implement in Angular signals).
 
 11. **Seasonal sources** (only when in window)
     - AWS re:Invent (typically late Nov / early Dec) — Bedrock/AgentCore announcements.
@@ -301,7 +308,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–11 above (13 categories total including 4a FastMCP and 4b Agentic UI/UX). Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (14 categories total including 4a FastMCP, 4b Agentic UI/UX, and 12 LibreChat). LibreChat gets a *light* subagent — releases-first, 1–2 web requests; do not fan it out further unless a headline maps onto something we're shipping. Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
