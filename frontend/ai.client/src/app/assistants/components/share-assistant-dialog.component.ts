@@ -192,7 +192,7 @@ export type ShareAssistantDialogResult = {
                       id="new-permission-input"
                       [ngModel]="newPermission()"
                       (ngModelChange)="onNewPermissionChange($event)"
-                      class="rounded-2xl border border-gray-300 bg-white px-2.5 py-1 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      class="rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-7 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                     >
                       <option value="viewer">Can view & chat</option>
                       <option value="editor">Can edit</option>
@@ -392,7 +392,7 @@ export type ShareAssistantDialogResult = {
                           [id]="'perm-' + entry.email"
                           [ngModel]="entry.permission"
                           (ngModelChange)="setPermission(entry.email, $event)"
-                          class="shrink-0 rounded-2xl border border-gray-300 bg-white px-2.5 py-1 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                          class="shrink-0 rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-7 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                         >
                           <option value="viewer">Can view</option>
                           <option value="editor">Can edit</option>
