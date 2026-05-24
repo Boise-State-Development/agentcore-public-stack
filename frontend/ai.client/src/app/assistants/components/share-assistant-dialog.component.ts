@@ -344,12 +344,30 @@ export type ShareAssistantDialogResult = {
                   <h4 class="text-base/7 font-semibold text-gray-900 dark:text-white">
                     Currently shared with
                   </h4>
-                  <span class="text-xs/5 tabular-nums text-gray-500 dark:text-gray-400">
-                    {{ shares().length }}
-                  </span>
+                  @if (!loadingShares()) {
+                    <span class="text-xs/5 tabular-nums text-gray-500 dark:text-gray-400">
+                      {{ shares().length }}
+                    </span>
+                  }
                 </div>
 
-                @if (shares().length === 0) {
+                @if (loadingShares()) {
+                  <!-- Skeleton: matches the real row layout (email + select + delete) so
+                       the container doesn't reflow when shares land. -->
+                  <ul
+                    class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+                    aria-hidden="true"
+                  >
+                    @for (placeholder of skeletonRows; track placeholder) {
+                      <li class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
+                        <div class="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+                        <div class="h-7 w-20 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                        <div class="size-8 shrink-0 animate-pulse rounded-2xl bg-gray-200 dark:bg-gray-700"></div>
+                      </li>
+                    }
+                  </ul>
+                  <span class="sr-only" role="status">Loading existing shares…</span>
+                } @else if (shares().length === 0) {
                   <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-6 text-center dark:border-gray-700 dark:bg-gray-800">
                     <p class="text-sm/6 text-gray-500 dark:text-gray-400">
                       Not shared with anyone yet.
@@ -480,6 +498,9 @@ export class ShareAssistantDialogComponent {
   protected readonly searchResults = signal<UserSearchResult[] | null>(null);
   protected readonly searching = signal<boolean>(false);
   protected readonly saving = signal<boolean>(false);
+  /** True while loadShares() is in flight on dialog open — drives the shares-list skeleton.
+   *  Seeded `true` so the skeleton paints before the constructor's async fetch resolves. */
+  protected readonly loadingShares = signal<boolean>(true);
   protected readonly error = signal<string | null>(null);
 
   protected readonly isPublic = computed<boolean>(() => this.data.assistant.visibility === 'PUBLIC');
@@ -577,6 +598,7 @@ export class ShareAssistantDialogComponent {
   }
 
   protected async loadShares(): Promise<void> {
+    this.loadingShares.set(true);
     try {
       // Only try to load shares if assistant is SHARED
       // PRIVATE assistants won't have shares yet
@@ -593,6 +615,8 @@ export class ShareAssistantDialogComponent {
       // Don't show error for initial load failure - just start with empty list
       this.initialShares = [];
       this.shares.set([]);
+    } finally {
+      this.loadingShares.set(false);
     }
   }
 
