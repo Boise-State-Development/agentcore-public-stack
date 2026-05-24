@@ -200,25 +200,26 @@ async def get_assistant(assistant_id: str, owner_id: str) -> Optional[Assistant]
     return await _get_assistant_cloud(assistant_id, owner_id, assistants_table)
 
 
-async def get_assistant_with_access_check(assistant_id: str, user_id: str, user_email: str = None) -> Optional[Assistant]:
+async def get_assistant_with_access_check(
+    assistant_id: str, user_id: str, user_email: str = None
+) -> Tuple[Optional[Assistant], Optional[str]]:
     """
-    Retrieve assistant by ID with visibility-based access control
+    Retrieve assistant by ID with visibility-based access control.
 
     Checks visibility:
     - PRIVATE: Only owner can access
-    - PUBLIC: Anyone can access
+    - PUBLIC: Anyone can access (returns "viewer" for non-owners)
     - SHARED: Only owner or users with share records can access
 
-    Args:
-        assistant_id: Assistant identifier
-        user_id: User identifier requesting access
-        user_email: User's email address (required for SHARED visibility check)
-
     Returns:
-        Assistant object if found and access granted, None otherwise
-        None can mean either:
-        - Assistant not found (404)
-        - Access denied (403 for PRIVATE assistant not owned by user, or SHARED without share record)
+        Tuple of (assistant, permission). Permission is one of:
+        - "owner" — caller owns the assistant
+        - "editor" — caller has an editor share record
+        - "viewer" — caller has a viewer share record OR assistant is PUBLIC
+        - None — assistant not found or access denied
+
+        (None, None) means either not found (404) or access denied (403).
+        Caller must distinguish via assistant_exists() if it needs the distinction.
     """
     assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
     if not assistants_table:
@@ -228,32 +229,68 @@ async def get_assistant_with_access_check(assistant_id: str, user_id: str, user_
     assistant = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
 
     if not assistant:
-        # Assistant not found
-        return None
+        return None, None
 
-    # Check visibility-based access
+    # Owner always has full access regardless of visibility
+    if assistant.owner_id == user_id:
+        return assistant, "owner"
+
+    # Non-owner access depends on visibility
     if assistant.visibility == "PRIVATE":
-        # Only owner can access PRIVATE assistants
-        if assistant.owner_id != user_id:
-            logger.warning(f"Access denied: user {user_id} attempted to access PRIVATE assistant {assistant_id} owned by {assistant.owner_id}")
-            return None
-    elif assistant.visibility == "SHARED":
-        # SHARED: owner or users with share records can access
-        if assistant.owner_id != user_id:
-            # Not the owner, check if user has share access
-            if not user_email:
-                logger.warning(f"Access denied: user_email required for SHARED assistant {assistant_id}")
-                return None
+        logger.warning(
+            f"Access denied: user {user_id} attempted to access PRIVATE assistant {assistant_id} owned by {assistant.owner_id}"
+        )
+        return None, None
 
-            has_share = await check_share_access(assistant_id, user_email)
-            if not has_share:
-                logger.warning(
-                    f"Access denied: user {user_id} ({user_email}) attempted to access SHARED assistant {assistant_id} without share record"
-                )
-                return None
-    # PUBLIC is accessible by anyone
+    if assistant.visibility == "SHARED":
+        if not user_email:
+            logger.warning(f"Access denied: user_email required for SHARED assistant {assistant_id}")
+            return None, None
 
-    return assistant
+        share_permission = await check_share_access(assistant_id, user_email)
+        if not share_permission:
+            logger.warning(
+                f"Access denied: user {user_id} ({user_email}) attempted to access SHARED assistant {assistant_id} without share record"
+            )
+            return None, None
+        return assistant, share_permission
+
+    # PUBLIC: non-owners are viewers
+    return assistant, "viewer"
+
+
+async def resolve_assistant_permission(
+    assistant_id: str, user_id: str, user_email: Optional[str] = None
+) -> Tuple[Optional[Assistant], Optional[str]]:
+    """
+    Resolve the requesting user's permission on an assistant.
+
+    Unlike get_assistant_with_access_check (which gates on visibility), this
+    helper resolves *any* permission the user has regardless of visibility —
+    so an editor share on a PRIVATE assistant still resolves to "editor".
+    Returns (assistant, permission) or (assistant, None) if the user has no
+    permission, or (None, None) if the assistant doesn't exist.
+
+    Used by write routes that need to gate on permission level (owner/editor)
+    rather than visibility.
+    """
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    assistant = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
+    if not assistant:
+        return None, None
+
+    if assistant.owner_id == user_id:
+        return assistant, "owner"
+
+    if user_email:
+        share_permission = await check_share_access(assistant_id, user_email)
+        if share_permission:
+            return assistant, share_permission
+
+    return assistant, None
 
 
 async def assistant_exists(assistant_id: str) -> bool:
@@ -811,7 +848,9 @@ async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:
 # ========== Share Management Functions ==========
 
 
-async def share_assistant(assistant_id: str, owner_id: str, emails: List[str]) -> bool:
+async def share_assistant(
+    assistant_id: str, owner_id: str, emails: List[str], permission: str = "viewer"
+) -> bool:
     """
     Share an assistant with specified email addresses.
 
@@ -822,10 +861,16 @@ async def share_assistant(assistant_id: str, owner_id: str, emails: List[str]) -
         assistant_id: Assistant identifier
         owner_id: User identifier (must be the owner)
         emails: List of email addresses to share with
+        permission: Permission level granted to each new share ("viewer" or "editor").
+            Existing share records for the same email are overwritten with this value.
 
     Returns:
         True if shares were created successfully, False otherwise
     """
+    if permission not in ("viewer", "editor"):
+        logger.warning(f"Invalid permission '{permission}' for share_assistant; rejecting")
+        return False
+
     # Verify ownership first
     assistant = await get_assistant(assistant_id, owner_id)
     if not assistant:
@@ -863,9 +908,10 @@ async def share_assistant(assistant_id: str, owner_id: str, emails: List[str]) -
                         "email": email,
                         "createdAt": _get_current_timestamp(),
                         "firstInteracted": False,
+                        "permission": permission,
                     }
                 )
-                logger.info(f"Created share record for assistant {assistant_id} with {email}")
+                logger.info(f"Created share record ({permission}) for assistant {assistant_id} with {email}")
             except ClientError as e:
                 logger.error(f"Failed to create share record for {email}: {e}")
                 # Continue with other emails even if one fails
@@ -874,6 +920,77 @@ async def share_assistant(assistant_id: str, owner_id: str, emails: List[str]) -
 
     except Exception as e:
         logger.error(f"Error sharing assistant {assistant_id}: {e}", exc_info=True)
+        return False
+
+
+async def update_share_permission(
+    assistant_id: str, owner_id: str, email: str, permission: str
+) -> bool:
+    """
+    Update the permission level of an existing share record.
+
+    Only the owner can change share permissions. Returns False if the assistant
+    is not owned by `owner_id`, the share record does not exist, or `permission`
+    is invalid.
+
+    Args:
+        assistant_id: Assistant identifier
+        owner_id: User identifier (must be the owner)
+        email: Email of the existing share to update (normalized lowercase)
+        permission: New permission level ("viewer" or "editor")
+
+    Returns:
+        True on success, False otherwise
+    """
+    if permission not in ("viewer", "editor"):
+        logger.warning(f"Invalid permission '{permission}' for update_share_permission")
+        return False
+
+    assistant = await get_assistant(assistant_id, owner_id)
+    if not assistant:
+        logger.warning(
+            f"Cannot update share permission on {assistant_id}: not found or not owned by {owner_id}"
+        )
+        return False
+
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    normalized_email = email.lower().strip()
+    if not normalized_email:
+        return False
+
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(assistants_table)
+
+        table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"SHARE#{normalized_email}"},
+            UpdateExpression="SET #perm = :perm",
+            ExpressionAttributeNames={"#perm": "permission"},
+            ExpressionAttributeValues={":perm": permission},
+            ConditionExpression="attribute_exists(PK)",
+        )
+        logger.info(
+            f"Updated share permission for assistant {assistant_id}, email {normalized_email} -> {permission}"
+        )
+        return True
+
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        if error_code == "ConditionalCheckFailedException":
+            logger.warning(
+                f"Share record not found: assistant={assistant_id}, email={normalized_email}"
+            )
+        else:
+            logger.error(f"Failed to update share permission: {error_code} - {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Error updating share permission: {e}", exc_info=True)
         return False
 
 
@@ -931,23 +1048,26 @@ async def unshare_assistant(assistant_id: str, owner_id: str, emails: List[str])
         return False
 
 
-async def list_assistant_shares(assistant_id: str, owner_id: str) -> List[str]:
+async def list_assistant_shares(assistant_id: str, owner_id: str) -> List[dict]:
     """
-    List all email addresses an assistant is shared with.
+    List all share records (email + permission) for an assistant.
 
-    Only the owner can view the share list.
+    Caller has already verified they're permitted to read the share list
+    (owners and editors); we still verify the assistant exists.
 
     Args:
         assistant_id: Assistant identifier
-        owner_id: User identifier (must be the owner)
+        owner_id: True owner of the assistant — used to fetch the assistant.
+            Pass the assistant's real ownerId (not the requesting user).
 
     Returns:
-        List of email addresses (lowercase, normalized)
+        List of dicts shaped like {"email": str, "permission": "viewer"|"editor"}.
+        Missing `permission` on legacy records defaults to "viewer".
     """
-    # Verify ownership first
+    # Verify the assistant exists (and the supplied owner_id matches it)
     assistant = await get_assistant(assistant_id, owner_id)
     if not assistant:
-        logger.warning(f"Cannot list shares for assistant {assistant_id}: not found or not owned by {owner_id}")
+        logger.warning(f"Cannot list shares for assistant {assistant_id}: not found or owner mismatch")
         return []
 
     assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
@@ -963,16 +1083,19 @@ async def list_assistant_shares(assistant_id: str, owner_id: str) -> List[str]:
         table = dynamodb.Table(assistants_table)
 
         # Query all share records for this assistant
-        response = table.query(KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("SHARE#"))
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("SHARE#")
+        )
 
-        emails = []
+        shares: List[dict] = []
         for item in response.get("Items", []):
             email = item.get("email")
-            if email:
-                emails.append(email)
+            if not email:
+                continue
+            shares.append({"email": email, "permission": item.get("permission", "viewer")})
 
-        logger.info(f"Found {len(emails)} shares for assistant {assistant_id}")
-        return emails
+        logger.info(f"Found {len(shares)} shares for assistant {assistant_id}")
+        return shares
 
     except ClientError as e:
         logger.error(f"Error listing shares for assistant {assistant_id}: {e}")
@@ -982,16 +1105,17 @@ async def list_assistant_shares(assistant_id: str, owner_id: str) -> List[str]:
         return []
 
 
-async def check_share_access(assistant_id: str, user_email: str) -> bool:
+async def check_share_access(assistant_id: str, user_email: str) -> Optional[str]:
     """
-    Check if a user has share access to an assistant.
+    Look up a user's share permission on an assistant.
 
     Args:
         assistant_id: Assistant identifier
         user_email: User's email address (will be normalized to lowercase)
 
     Returns:
-        True if share record exists, False if not found
+        "viewer" or "editor" if the user has a share record, None otherwise.
+        Legacy share records without a `permission` attribute resolve to "viewer".
 
     Raises:
         Exception: On DynamoDB errors (not ResourceNotFoundException)
@@ -1013,7 +1137,15 @@ async def check_share_access(assistant_id: str, user_email: str) -> bool:
         # Check if share record exists
         response = table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"SHARE#{normalized_email}"})
 
-        return "Item" in response
+        item = response.get("Item")
+        if not item:
+            return None
+
+        permission = item.get("permission", "viewer")
+        if permission not in ("viewer", "editor"):
+            # Defensive: unknown stored value -> treat as viewer
+            return "viewer"
+        return permission
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
@@ -1021,7 +1153,7 @@ async def check_share_access(assistant_id: str, user_email: str) -> bool:
 
         if error_code == "ResourceNotFoundException":
             logger.debug(f"Table {assistants_table} not found")
-            return False
+            return None
         else:
             # Don't suppress real errors like AccessDeniedException
             logger.error(f"DynamoDB error checking share access for {assistant_id}: {error_code} - {error_message}")
@@ -1115,6 +1247,7 @@ async def list_shared_with_user(user_email: str) -> List[Assistant]:
         for item in response.get("Items", []):
             assistant_id = item.get("assistantId")
             first_interacted = item.get("firstInteracted", False)  # Default to False if not present
+            share_permission = item.get("permission", "viewer")  # Legacy records default to viewer
 
             if assistant_id:
                 # Get the full assistant metadata
@@ -1122,6 +1255,7 @@ async def list_shared_with_user(user_email: str) -> List[Assistant]:
                 if assistant:
                     # Attach share metadata as dynamic attributes
                     assistant.first_interacted = first_interacted
+                    assistant.user_permission = share_permission
                     assistants.append(assistant)
 
         logger.info(f"Found {len(assistants)} assistants shared with {normalized_email}")

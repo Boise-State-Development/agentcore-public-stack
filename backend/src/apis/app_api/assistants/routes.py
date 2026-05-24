@@ -26,8 +26,10 @@ from apis.shared.assistants.models import (
     CreateAssistantDraftRequest,
     CreateAssistantRequest,
     ShareAssistantRequest,
+    ShareEntry,
     UnshareAssistantRequest,
     UpdateAssistantRequest,
+    UpdateSharePermissionRequest,
 )
 from apis.shared.assistants.service import (
     assistant_exists,
@@ -39,9 +41,11 @@ from apis.shared.assistants.service import (
     list_assistant_shares,
     list_shared_with_user,
     list_user_assistants,
+    resolve_assistant_permission,
     share_assistant,
     unshare_assistant,
     update_assistant,
+    update_share_permission,
 )
 from apis.shared.assistants.rag_service import augment_prompt_with_context, search_assistant_knowledgebase_with_formatting
 
@@ -194,6 +198,7 @@ async def list_assistants_endpoint(
         for assistant in assistants:
             assistant.is_shared_with_me = False
             assistant.first_interacted = None  # Not applicable for owned assistants
+            assistant.user_permission = "owner"
 
         # Also get assistants shared with this user
         shared_assistants = await list_shared_with_user(current_user.email)
@@ -205,7 +210,7 @@ async def list_assistants_endpoint(
         # Mark shared assistants with share metadata
         for assistant in unique_shared:
             assistant.is_shared_with_me = True
-            # first_interacted is already set by list_shared_with_user
+            # first_interacted and user_permission are already set by list_shared_with_user
 
         # Combine lists (user's own assistants first, then shared)
         all_assistants = assistants + unique_shared
@@ -267,11 +272,16 @@ async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
 
         # Assistant exists, now check access
-        assistant = await get_assistant_with_access_check(assistant_id=assistant_id, user_id=user_id, user_email=current_user.email)
+        assistant, permission = await get_assistant_with_access_check(
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+        )
 
         if not assistant:
             # Assistant exists but access is denied
             raise HTTPException(status_code=403, detail=f"Access denied: You do not have permission to access this assistant")
+
+        # Surface permission so the SPA can decide what to render (e.g. show edit form for editors)
+        assistant.user_permission = permission
 
         # Convert to response model (excludes owner_id for privacy)
         assistant_dict = assistant.model_dump(by_alias=True, exclude={"ownerId"})
@@ -289,18 +299,17 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
     """
     Update an assistant (deep merge).
 
-    Requires JWT authentication. Users can only update their own assistants.
-    Only provided fields are updated; existing fields are preserved.
+    Requires JWT authentication. Owners and users with `editor` share permission
+    can update the assistant. Only provided fields are updated; existing fields
+    are preserved.
 
-    This can be used to:
-    - Complete a draft assistant (set status=COMPLETE with full fields)
-    - Update any assistant fields
-    - Transition status from DRAFT to COMPLETE
+    Editors cannot change `visibility` — sharing is an ownership action and
+    must be performed by the owner.
 
     Args:
         assistant_id: Assistant identifier from URL path
         request: UpdateAssistantRequest with fields to update (all optional)
-        current_user: Authenticated user from JWT token (injected by dependency)
+        current_user: Authenticated user from session cookie (injected by dependency)
 
     Returns:
         AssistantResponse with updated assistant information
@@ -308,7 +317,9 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
     Raises:
         HTTPException:
             - 401 if not authenticated
-            - 404 if assistant not found or not owned by user
+            - 403 if user has no edit permission (viewer or no share)
+            - 404 if assistant not found
+            - 400 if an editor attempts to change visibility
             - 500 if server error
     """
     user_id = current_user.user_id
@@ -316,11 +327,28 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
     logger.info("PUT /assistants/{assistant_id}")
 
     try:
-        # Update assistant
-        # Note: vector_index_id is not user-configurable - it's set automatically from environment
+        # Resolve permission and gate
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+        )
+        if not assistant:
+            raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
+        if permission not in ("owner", "editor"):
+            raise HTTPException(
+                status_code=403, detail="You do not have permission to edit this assistant"
+            )
+
+        # Editors cannot change visibility (sharing is an ownership action)
+        if permission == "editor" and request.visibility is not None and request.visibility != assistant.visibility:
+            raise HTTPException(
+                status_code=400,
+                detail="Only the owner can change assistant visibility",
+            )
+
+        # Mutation functions are keyed on the assistant's real owner_id, not the requester
         updated_assistant = await update_assistant(
             assistant_id=assistant_id,
-            owner_id=user_id,
+            owner_id=assistant.owner_id,
             name=request.name,
             description=request.description,
             instructions=request.instructions,
@@ -334,6 +362,9 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
         if not updated_assistant:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
+
+        # Surface the requester's permission on the response so the SPA stays consistent
+        updated_assistant.user_permission = permission
 
         # Convert to response model
         return AssistantResponse.model_validate(updated_assistant.model_dump(by_alias=True))
@@ -419,16 +450,22 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
     logger.info("POST /assistants/{assistant_id}/test-chat")
 
     try:
-        # 1. Get assistant and verify ownership
-        assistant = await get_assistant(assistant_id=assistant_id, owner_id=user_id)
+        # 1. Resolve permission — owner or editor may test-chat (editors need to preview their edits)
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+        )
 
         if not assistant:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
+        if permission not in ("owner", "editor"):
+            raise HTTPException(
+                status_code=403, detail="You do not have permission to test-chat this assistant"
+            )
 
-        # 2. Check if assistant has processed documents
+        # 2. Check if assistant has processed documents (use the real owner_id)
         documents, _ = await list_assistant_documents(
             assistant_id=assistant_id,
-            owner_id=user_id,
+            owner_id=assistant.owner_id,
             limit=100,  # Check up to 100 documents
         )
 
@@ -525,18 +562,18 @@ async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatReques
 @router.post("/{assistant_id}/shares", response_model=AssistantSharesResponse)
 async def share_assistant_endpoint(assistant_id: str, request: ShareAssistantRequest, current_user: User = Depends(get_current_user_from_session)):
     """
-    Share an assistant with specified email addresses.
+    Share an assistant with specified email addresses at a given permission level.
 
     Requires JWT authentication. Only the owner can share their assistant.
     Creates share records for each email address. Emails are normalized to lowercase.
 
     Args:
         assistant_id: Assistant identifier
-        request: ShareAssistantRequest with list of email addresses
-        current_user: Authenticated user from JWT token (injected by dependency)
+        request: ShareAssistantRequest with emails and permission level
+        current_user: Authenticated user from session cookie (injected by dependency)
 
     Returns:
-        AssistantSharesResponse with updated list of shared emails
+        AssistantSharesResponse with updated list of shares (email + permission)
 
     Raises:
         HTTPException:
@@ -549,16 +586,22 @@ async def share_assistant_endpoint(assistant_id: str, request: ShareAssistantReq
     logger.info("POST /assistants/{assistant_id}/shares")
 
     try:
-        # Share assistant with emails
-        success = await share_assistant(assistant_id=assistant_id, owner_id=user_id, emails=request.emails)
+        # Share assistant with emails at the requested permission level
+        success = await share_assistant(
+            assistant_id=assistant_id,
+            owner_id=user_id,
+            emails=request.emails,
+            permission=request.permission,
+        )
 
         if not success:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
 
         # Get updated share list
-        shared_emails = await list_assistant_shares(assistant_id, user_id)
+        shares = await list_assistant_shares(assistant_id, user_id)
+        share_entries = [ShareEntry.model_validate(s) for s in shares]
 
-        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=shared_emails)
+        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=share_entries)
 
     except HTTPException:
         raise
@@ -577,10 +620,10 @@ async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistan
     Args:
         assistant_id: Assistant identifier
         request: UnshareAssistantRequest with list of email addresses to remove
-        current_user: Authenticated user from JWT token (injected by dependency)
+        current_user: Authenticated user from session cookie (injected by dependency)
 
     Returns:
-        AssistantSharesResponse with updated list of shared emails
+        AssistantSharesResponse with updated list of shares (email + permission)
 
     Raises:
         HTTPException:
@@ -593,16 +636,15 @@ async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistan
     logger.info("DELETE /assistants/{assistant_id}/shares")
 
     try:
-        # Unshare assistant from emails
         success = await unshare_assistant(assistant_id=assistant_id, owner_id=user_id, emails=request.emails)
 
         if not success:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
 
-        # Get updated share list
-        shared_emails = await list_assistant_shares(assistant_id, user_id)
+        shares = await list_assistant_shares(assistant_id, user_id)
+        share_entries = [ShareEntry.model_validate(s) for s in shares]
 
-        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=shared_emails)
+        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=share_entries)
 
     except HTTPException:
         raise
@@ -611,24 +653,74 @@ async def unshare_assistant_endpoint(assistant_id: str, request: UnshareAssistan
         raise HTTPException(status_code=500, detail=f"Failed to unshare assistant: {str(e)}")
 
 
-@router.get("/{assistant_id}/shares", response_model=AssistantSharesResponse)
-async def get_assistant_shares_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_from_session)):
+@router.patch("/{assistant_id}/shares", response_model=AssistantSharesResponse)
+async def update_share_permission_endpoint(
+    assistant_id: str,
+    request: UpdateSharePermissionRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
     """
-    Get list of email addresses an assistant is shared with.
+    Update the permission level of an existing share on an assistant.
 
-    Requires JWT authentication. Only the owner can view the share list.
-
-    Args:
-        assistant_id: Assistant identifier
-        current_user: Authenticated user from JWT token (injected by dependency)
-
-    Returns:
-        AssistantSharesResponse with list of shared emails
+    Owner-only. Use this to upgrade a viewer to an editor (or downgrade) without
+    removing and re-adding the share — preserving createdAt / firstInteracted.
 
     Raises:
         HTTPException:
             - 401 if not authenticated
-            - 404 if assistant not found or not owned by user
+            - 404 if assistant not owned by user or share record does not exist
+            - 500 if server error
+    """
+    user_id = current_user.user_id
+
+    logger.info("PATCH /assistants/{assistant_id}/shares")
+
+    try:
+        success = await update_share_permission(
+            assistant_id=assistant_id,
+            owner_id=user_id,
+            email=request.email,
+            permission=request.permission,
+        )
+
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Assistant or share record not found",
+            )
+
+        shares = await list_assistant_shares(assistant_id, user_id)
+        share_entries = [ShareEntry.model_validate(s) for s in shares]
+
+        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=share_entries)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating share permission: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update share permission: {str(e)}")
+
+
+@router.get("/{assistant_id}/shares", response_model=AssistantSharesResponse)
+async def get_assistant_shares_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_from_session)):
+    """
+    Get list of share records for an assistant.
+
+    Requires JWT authentication. Owners and editors can read the share list;
+    editors see it read-only (PATCH/POST/DELETE remain owner-only).
+
+    Args:
+        assistant_id: Assistant identifier
+        current_user: Authenticated user from session cookie (injected by dependency)
+
+    Returns:
+        AssistantSharesResponse with list of shares (email + permission)
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user has no edit/view-share permission
+            - 404 if assistant not found
             - 500 if server error
     """
     user_id = current_user.user_id
@@ -636,15 +728,22 @@ async def get_assistant_shares_endpoint(assistant_id: str, current_user: User = 
     logger.info("GET /assistants/{assistant_id}/shares")
 
     try:
-        # Get share list
-        shared_emails = await list_assistant_shares(assistant_id, user_id)
-
-        # Verify ownership (list_assistant_shares checks this, but we want to return 404 if not found)
-        assistant = await get_assistant(assistant_id, user_id)
+        # Resolve the caller's permission — owners and editors may read the share list
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+        )
         if not assistant:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
+        if permission not in ("owner", "editor"):
+            raise HTTPException(
+                status_code=403, detail="You do not have permission to view shares for this assistant"
+            )
 
-        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=shared_emails)
+        # list_assistant_shares accepts the assistant's real owner_id as a guard
+        shares = await list_assistant_shares(assistant_id, assistant.owner_id)
+        share_entries = [ShareEntry.model_validate(s) for s in shares]
+
+        return AssistantSharesResponse(assistant_id=assistant_id, shared_with=share_entries)
 
     except HTTPException:
         raise

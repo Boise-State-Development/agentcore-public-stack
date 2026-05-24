@@ -12,7 +12,9 @@ from .models import (
     CreateAssistantDraftRequest,
     CreateAssistantRequest,
     ShareAssistantRequest,
+    ShareEntry,
     UnshareAssistantRequest,
+    UpdateSharePermissionRequest,
     AssistantSharesResponse,
     UpdateAssistantRequest,
 )
@@ -28,9 +30,11 @@ from .service import (
     list_shared_with_user,
     list_user_assistants,
     mark_share_as_interacted,
+    resolve_assistant_permission,
     share_assistant,
     unshare_assistant,
     update_assistant,
+    update_share_permission,
 )
 from .rag_service import (
     augment_prompt_with_context,
@@ -46,7 +50,9 @@ __all__ = [
     "CreateAssistantDraftRequest",
     "CreateAssistantRequest",
     "ShareAssistantRequest",
+    "ShareEntry",
     "UnshareAssistantRequest",
+    "UpdateSharePermissionRequest",
     "AssistantSharesResponse",
     "UpdateAssistantRequest",
     # Service functions
@@ -61,9 +67,11 @@ __all__ = [
     "list_shared_with_user",
     "list_user_assistants",
     "mark_share_as_interacted",
+    "resolve_assistant_permission",
     "share_assistant",
     "unshare_assistant",
     "update_assistant",
+    "update_share_permission",
     # RAG service functions
     "augment_prompt_with_context",
     "search_assistant_knowledgebase_with_formatting",

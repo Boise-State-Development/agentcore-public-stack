@@ -7,6 +7,7 @@ Endpoints under test:
 Requirements: 14.1, 14.2
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,7 +16,8 @@ from fastapi.testclient import TestClient
 
 from apis.app_api.documents.routes import router
 from apis.app_api.documents.models import Document
-from apis.shared.auth.dependencies import get_current_user_id
+from apis.shared.auth import get_current_user_from_session
+from apis.shared.auth.models import User
 from tests.routes.conftest import mock_no_auth
 
 
@@ -60,8 +62,15 @@ def app():
 
 
 def _override_user_id(app: FastAPI, user_id: str = USER_ID) -> None:
-    """Override get_current_user_id to return a fixed user_id string."""
-    app.dependency_overrides[get_current_user_id] = lambda: user_id
+    """Override the session-cookie dependency with a fixed User."""
+    app.dependency_overrides[get_current_user_from_session] = lambda: User(
+        user_id=user_id, email=f"{user_id}@example.com", name="Test User", roles=["User"]
+    )
+
+
+def _owner_resolve(user_id: str = USER_ID):
+    """Build a resolve_assistant_permission return value for an owner."""
+    return (SimpleNamespace(owner_id=user_id), "owner")
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +86,11 @@ class TestListDocumentsAuthenticated:
         _override_user_id(app)
 
         sample = _make_document()
-        mock_assistant = AsyncMock(return_value={"assistantId": ASSISTANT_ID})
 
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value=mock_assistant.return_value,
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.list_assistant_documents",
             new_callable=AsyncMock,
@@ -102,9 +110,9 @@ class TestListDocumentsAuthenticated:
         _override_user_id(app)
 
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.list_assistant_documents",
             new_callable=AsyncMock,

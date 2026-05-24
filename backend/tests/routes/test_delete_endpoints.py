@@ -7,6 +7,7 @@ Endpoints under test:
 Requirements: 2.1, 2.2, 8.1, 8.2
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -18,6 +19,11 @@ from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.models import Document
 from apis.shared.auth.dependencies import get_current_user_id, get_current_user_from_session
 from apis.shared.auth.models import User
+
+
+def _owner_resolve(user_id: str):
+    """Build a resolve_assistant_permission return value for an owner."""
+    return (SimpleNamespace(owner_id=user_id), "owner")
 
 
 # ---------------------------------------------------------------------------
@@ -75,14 +81,19 @@ class TestDocumentDeleteEndpoint:
     def app(self):
         _app = FastAPI()
         _app.include_router(documents_router)
-        _app.dependency_overrides[get_current_user_id] = lambda: USER_ID
+        _app.dependency_overrides[get_current_user_from_session] = _make_user
         return _app
 
     def test_delete_returns_204_after_soft_delete(self, app):
         """Req 2.1: Endpoint returns 204 after successful soft-delete."""
         doc = _make_document()
+        routes_module = "apis.app_api.documents.routes"
 
         with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
             f"{DOC_SERVICE}.soft_delete_document",
             new_callable=AsyncMock,
             return_value=doc,
@@ -99,7 +110,12 @@ class TestDocumentDeleteEndpoint:
 
     def test_delete_returns_404_when_not_found(self, app):
         """Req 1.5: Returns 404 when soft_delete_document returns None."""
+        routes_module = "apis.app_api.documents.routes"
         with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
             f"{DOC_SERVICE}.soft_delete_document",
             new_callable=AsyncMock,
             return_value=None,
@@ -112,8 +128,13 @@ class TestDocumentDeleteEndpoint:
     def test_delete_fires_cleanup_in_background(self, app):
         """Req 2.2: Cleanup is scheduled as a background task via asyncio.ensure_future."""
         doc = _make_document()
+        routes_module = "apis.app_api.documents.routes"
 
         with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
             f"{DOC_SERVICE}.soft_delete_document",
             new_callable=AsyncMock,
             return_value=doc,

@@ -93,6 +93,9 @@ class AssistantResponse(BaseModel):
     is_shared_with_me: Optional[bool] = Field(
         None, alias="isSharedWithMe", description="Whether this assistant is shared with the requesting user (not owned)"
     )
+    user_permission: Optional[Literal["owner", "editor", "viewer"]] = Field(
+        None, alias="userPermission", description="Requesting user's permission level on this assistant"
+    )
 
 
 class AssistantsListResponse(BaseModel):
@@ -119,6 +122,9 @@ class ShareAssistantRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     emails: List[str] = Field(..., min_length=1, description="Email addresses to share with")
+    permission: Literal["viewer", "editor"] = Field(
+        "viewer", description="Permission level granted to each shared user"
+    )
 
 
 class UnshareAssistantRequest(BaseModel):
@@ -129,10 +135,32 @@ class UnshareAssistantRequest(BaseModel):
     emails: List[str] = Field(..., min_length=1, description="Email addresses to remove from shares")
 
 
+class UpdateSharePermissionRequest(BaseModel):
+    """Request body for changing an existing share's permission level"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str = Field(..., description="Email address of the existing share to update")
+    permission: Literal["viewer", "editor"] = Field(..., description="New permission level")
+
+
+class ShareEntry(BaseModel):
+    """A single share record (email + permission level)"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str = Field(..., description="Email address (normalized lowercase)")
+    permission: Literal["viewer", "editor"] = Field(
+        "viewer", description="Permission level granted to this user"
+    )
+
+
 class AssistantSharesResponse(BaseModel):
-    """Response containing list of emails an assistant is shared with"""
+    """Response containing share records for an assistant"""
 
     model_config = ConfigDict(populate_by_name=True)
 
     assistant_id: str = Field(..., alias="assistantId", description="Assistant identifier")
-    shared_with: List[str] = Field(..., alias="sharedWith", description="List of email addresses this assistant is shared with")
+    shared_with: List[ShareEntry] = Field(
+        ..., alias="sharedWith", description="List of share records (email + permission)"
+    )

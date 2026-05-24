@@ -1012,7 +1012,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         # 2. Load assistant with access check
         logger.info("Loading assistant with access check...")
-        assistant = await get_assistant_with_access_check(assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email)
+        assistant, _ = await get_assistant_with_access_check(
+            assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email
+        )
 
         if not assistant:
             logger.warning("get_assistant_with_access_check returned None")

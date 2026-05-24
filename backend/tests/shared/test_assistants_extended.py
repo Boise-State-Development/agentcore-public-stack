@@ -16,8 +16,9 @@ class TestAssistantsServiceExtended:
             owner_id="u1", owner_name="Alice", name="Bot",
             description="d", instructions="hi",
         )
-        result = await get_assistant_with_access_check(created.assistant_id, "u1", "alice@test.com")
-        assert result is not None
+        assistant, permission = await get_assistant_with_access_check(created.assistant_id, "u1", "alice@test.com")
+        assert assistant is not None
+        assert permission == "owner"
 
     @pytest.mark.asyncio
     async def test_get_assistant_with_access_check_not_owner(self):
@@ -26,8 +27,9 @@ class TestAssistantsServiceExtended:
             owner_id="u1", owner_name="Alice", name="Bot",
             description="d", instructions="hi",
         )
-        result = await get_assistant_with_access_check(created.assistant_id, "u2", "bob@test.com")
-        assert result is None  # private, not shared
+        assistant, permission = await get_assistant_with_access_check(created.assistant_id, "u2", "bob@test.com")
+        assert assistant is None  # private, not shared
+        assert permission is None
 
     @pytest.mark.asyncio
     async def test_list_user_assistants_pagination(self):
@@ -50,6 +52,10 @@ class TestAssistantsServiceExtended:
         await share_assistant(created.assistant_id, "u1", ["a@test.com", "b@test.com"])
         shares = await list_assistant_shares(created.assistant_id, "u1")
         assert len(shares) == 2
+        # Each share is now a dict with email + permission (default viewer)
+        emails = {s["email"] for s in shares}
+        assert emails == {"a@test.com", "b@test.com"}
+        assert all(s["permission"] == "viewer" for s in shares)
 
     @pytest.mark.asyncio
     async def test_create_with_tags_and_starters(self):

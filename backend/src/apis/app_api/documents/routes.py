@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from apis.shared.assistants.service import get_assistant
+from apis.shared.assistants.service import resolve_assistant_permission
 from apis.app_api.documents.models import (
     CreateDocumentRequest,
     DocumentProvenance,
@@ -30,7 +30,6 @@ from apis.app_api.documents.services.storage_service import (
 )
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
 from apis.shared.auth import User, get_current_user_from_session
-from apis.shared.auth.dependencies import get_current_user_id
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
@@ -42,33 +41,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/assistants/{assistant_id}/documents", tags=["documents"])
 
 
+async def _require_edit_permission(assistant_id: str, current_user: User) -> str:
+    """Resolve the requesting user's permission and require owner|editor.
+
+    Returns the assistant's real owner_id so existing document-service calls
+    (which are owner-keyed) pass cleanly. Raises HTTPException on 404/403.
+    """
+    assistant, permission = await resolve_assistant_permission(
+        assistant_id=assistant_id, user_id=current_user.user_id, user_email=current_user.email
+    )
+    if not assistant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+    if permission not in ("owner", "editor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage documents for this assistant",
+        )
+    return assistant.owner_id
+
+
 @router.post("/upload-url", response_model=UploadUrlResponse, status_code=status.HTTP_200_OK)
 async def generate_upload_url_endpoint(
-    assistant_id: str, request: CreateDocumentRequest, user_id: str = Depends(get_current_user_id)
+    assistant_id: str,
+    request: CreateDocumentRequest,
+    current_user: User = Depends(get_current_user_from_session),
 ) -> UploadUrlResponse:
     """
     Generate presigned S3 URL for document upload
 
     Flow:
-    1. Verify user owns the assistant
+    1. Verify user is owner or editor of the assistant
     2. Generate document_id
     3. Create document record in DynamoDB (status='uploading')
     4. Generate presigned S3 URL
     5. Return URL to client
-
-    Args:
-        assistant_id: Parent assistant identifier
-        request: Document metadata (filename, content_type, size)
-        user_id: Authenticated user ID from JWT
-
-    Returns:
-        UploadUrlResponse with presigned URL and document_id
     """
     try:
-        # 1. Verify user owns the assistant
-        assistant = await get_assistant(assistant_id, user_id)
-        if not assistant:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+        # 1. Resolve permission — owner or editor may upload documents
+        await _require_edit_permission(assistant_id, current_user)
 
         # 2. Generate document_id and S3 key
         from apis.app_api.documents.services.storage_service import _get_s3_key, _sanitize_filename
@@ -125,10 +135,8 @@ async def import_documents(
         current_user: Authenticated user from the session cookie
     """
     try:
-        # 1. Verify the caller owns the assistant the files land in.
-        assistant = await get_assistant(assistant_id, current_user.user_id)
-        if not assistant:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+        # 1. Verify the caller is the owner or an editor of this assistant.
+        await _require_edit_permission(assistant_id, current_user)
 
         # 2. Resolve the connector to a usable adapter + access token. Raises
         #    404/403 (not a visible file source), 409 (not connected), or 503
@@ -192,7 +200,10 @@ async def import_documents(
 
 @router.post("/{document_id}/upload-failed", response_model=DocumentResponse, status_code=status.HTTP_200_OK)
 async def report_upload_failure(
-    assistant_id: str, document_id: str, request: ReportUploadFailureRequest, user_id: str = Depends(get_current_user_id)
+    assistant_id: str,
+    document_id: str,
+    request: ReportUploadFailureRequest,
+    current_user: User = Depends(get_current_user_from_session),
 ) -> DocumentResponse:
     """
     Report that a client-side S3 upload failed.
@@ -200,16 +211,13 @@ async def report_upload_failure(
     Marks the document as 'failed' in DynamoDB so the frontend stops polling
     and displays the error. Called by the client when the presigned URL upload
     to S3 fails (network error, permission error, etc.).
-
-    Args:
-        assistant_id: Parent assistant identifier
-        document_id: Document identifier
-        request: Error details from the client
-        user_id: Authenticated user ID from JWT
     """
     try:
-        # Verify document exists and user owns the assistant
-        document = await get_document_service(assistant_id, document_id, user_id)
+        # Verify caller has edit permission on the assistant
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+
+        # Verify document exists (using the assistant's real owner_id)
+        document = await get_document_service(assistant_id, document_id, assistant_owner_id)
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
 
@@ -243,32 +251,26 @@ async def report_upload_failure(
 
 @router.get("", response_model=DocumentsListResponse, status_code=status.HTTP_200_OK)
 async def list_documents(
-    assistant_id: str, limit: Optional[int] = None, next_token: Optional[str] = None, user_id: str = Depends(get_current_user_id)
+    assistant_id: str,
+    limit: Optional[int] = None,
+    next_token: Optional[str] = None,
+    current_user: User = Depends(get_current_user_from_session),
 ) -> DocumentsListResponse:
     """
-    List all documents for an assistant with pagination
+    List all documents for an assistant with pagination.
 
-    Query pattern:
+    Owners and editors can list documents. Query pattern:
     - PK = AST#{assistant_id}
     - SK begins_with DOC#
-
-    Args:
-        assistant_id: Parent assistant identifier
-        limit: Maximum number of documents to return
-        next_token: Pagination token
-        user_id: Authenticated user ID from JWT
-
-    Returns:
-        DocumentsListResponse with documents and pagination token
     """
     try:
-        # Verify assistant ownership
-        assistant = await get_assistant(assistant_id, user_id)
-        if not assistant:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+        # Verify owner/editor permission and get the assistant's real owner_id
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
 
         # List documents
-        documents, next_page_token = await list_assistant_documents(assistant_id=assistant_id, owner_id=user_id, limit=limit, next_token=next_token)
+        documents, next_page_token = await list_assistant_documents(
+            assistant_id=assistant_id, owner_id=assistant_owner_id, limit=limit, next_token=next_token
+        )
 
         # Convert to response models
         document_responses = [DocumentResponse.model_validate(doc.model_dump(by_alias=True)) for doc in documents]
@@ -283,21 +285,14 @@ async def list_documents(
 
 
 @router.get("/{document_id}", response_model=DocumentResponse, status_code=status.HTTP_200_OK)
-async def get_document(assistant_id: str, document_id: str, user_id: str = Depends(get_current_user_id)) -> DocumentResponse:
-    """
-    Get document details and processing status
-
-    Args:
-        assistant_id: Parent assistant identifier
-        document_id: Document identifier
-        user_id: Authenticated user ID from JWT
-
-    Returns:
-        DocumentResponse with current status and metadata
-    """
+async def get_document(
+    assistant_id: str, document_id: str, current_user: User = Depends(get_current_user_from_session)
+) -> DocumentResponse:
+    """Get document details and processing status. Owners and editors may read."""
     try:
-        # Verify assistant ownership and get document
-        document = await get_document_service(assistant_id, document_id, user_id)
+        # Verify owner/editor permission and use the assistant's real owner_id
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+        document = await get_document_service(assistant_id, document_id, assistant_owner_id)
 
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
@@ -312,24 +307,19 @@ async def get_document(assistant_id: str, document_id: str, user_id: str = Depen
 
 
 @router.get("/{document_id}/download", response_model=DownloadUrlResponse, status_code=status.HTTP_200_OK)
-async def get_download_url(assistant_id: str, document_id: str, user_id: str = Depends(get_current_user_id)) -> DownloadUrlResponse:
+async def get_download_url(
+    assistant_id: str, document_id: str, current_user: User = Depends(get_current_user_from_session)
+) -> DownloadUrlResponse:
     """
-    Generate presigned S3 URL for document download
+    Generate presigned S3 URL for document download.
 
-    This endpoint is called on-demand when a user clicks to view/download a source document
-    from a citation. The presigned URL is generated fresh each time to ensure it's valid.
-
-    Args:
-        assistant_id: Parent assistant identifier
-        document_id: Document identifier
-        user_id: Authenticated user ID from JWT
-
-    Returns:
-        DownloadUrlResponse with presigned URL and filename
+    Owners and editors may download. This endpoint is called on-demand when a
+    user clicks to view/download a source document from a citation. The presigned
+    URL is generated fresh each time to ensure it's valid.
     """
     try:
-        # Verify assistant ownership and get document
-        document = await get_document_service(assistant_id, document_id, user_id)
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+        document = await get_document_service(assistant_id, document_id, assistant_owner_id)
 
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
@@ -351,13 +341,16 @@ async def get_download_url(assistant_id: str, document_id: str, user_id: str = D
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(assistant_id: str, document_id: str, user_id: str = Depends(get_current_user_id)) -> None:
-    """Delete document using soft-delete + background cleanup pattern."""
+async def delete_document(
+    assistant_id: str, document_id: str, current_user: User = Depends(get_current_user_from_session)
+) -> None:
+    """Delete document using soft-delete + background cleanup pattern. Owners and editors may delete."""
     try:
         from apis.app_api.documents.services.document_service import soft_delete_document
         from apis.app_api.documents.services.cleanup_service import cleanup_document_resources
 
-        document = await soft_delete_document(assistant_id, document_id, user_id)
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+        document = await soft_delete_document(assistant_id, document_id, assistant_owner_id)
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
 

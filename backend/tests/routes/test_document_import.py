@@ -7,6 +7,7 @@ write, and the async import task — are patched; we test the gating, the
 provenance wiring, and the response shape.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,6 +24,11 @@ from apis.shared.rbac.service import get_app_role_service
 ROUTES_MODULE = "apis.app_api.documents.routes"
 ASSISTANT_ID = "ast-001"
 USER_ID = "user-001"
+
+
+def _owner_resolve(user_id: str = USER_ID):
+    """Build a resolve_assistant_permission return value for an owner."""
+    return (SimpleNamespace(owner_id=user_id), "owner")
 
 
 def _make_user(user_id: str = USER_ID) -> User:
@@ -87,9 +93,9 @@ class TestImportDocuments:
             f"{ROUTES_MODULE}._generate_document_id",
             side_effect=["DOC-1", "DOC-2"],
         ), patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.resolve_file_source",
             new_callable=AsyncMock,
@@ -126,9 +132,9 @@ class TestImportDocuments:
         adapter.metadata.key = "google-drive"
 
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.resolve_file_source",
             new_callable=AsyncMock,
@@ -159,10 +165,28 @@ class TestImportDocuments:
         assert first.imported_by_user_id == USER_ID
 
     def test_404_when_assistant_not_owned(self, app):
+        # Caller is neither owner nor editor — resolve returns (assistant, None)
+        # which our _require_edit_permission helper maps to 403.
+        not_permitted = (SimpleNamespace(owner_id="someone-else"), None)
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value=None,
+            return_value=not_permitted,
+        ), patch(
+            f"{ROUTES_MODULE}.create_document", new_callable=AsyncMock
+        ) as mock_create:
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/documents/import", json=_import_body()
+            )
+
+        assert resp.status_code == 403
+        mock_create.assert_not_called()
+
+    def test_404_when_assistant_not_found(self, app):
+        with patch(
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=(None, None),
         ), patch(
             f"{ROUTES_MODULE}.create_document", new_callable=AsyncMock
         ) as mock_create:
@@ -178,9 +202,9 @@ class TestImportDocuments:
         provider.provider_id = "google"
 
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.resolve_file_source",
             new_callable=AsyncMock,
@@ -203,9 +227,9 @@ class TestImportDocuments:
 
     def test_404_propagates_when_not_a_file_source(self, app):
         with patch(
-            f"{ROUTES_MODULE}.get_assistant",
+            f"{ROUTES_MODULE}.resolve_assistant_permission",
             new_callable=AsyncMock,
-            return_value={"assistantId": ASSISTANT_ID},
+            return_value=_owner_resolve(),
         ), patch(
             f"{ROUTES_MODULE}.resolve_file_source",
             new_callable=AsyncMock,
