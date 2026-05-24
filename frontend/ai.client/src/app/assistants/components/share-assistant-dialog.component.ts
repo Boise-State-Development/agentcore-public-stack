@@ -12,6 +12,7 @@ import {
   heroTrash,
   heroPencilSquare,
   heroEye,
+  heroChevronDown,
 } from '@ng-icons/heroicons/outline';
 import { Assistant, ShareEntry, SharePermission, UserSearchResult } from '../models/assistant.model';
 import { AssistantService } from '../services/assistant.service';
@@ -52,6 +53,7 @@ export type ShareAssistantDialogResult = {
       heroTrash,
       heroPencilSquare,
       heroEye,
+      heroChevronDown,
     }),
   ],
   host: {
@@ -188,15 +190,26 @@ export type ShareAssistantDialogResult = {
                     <label for="new-permission-input" class="text-xs/5 font-medium text-gray-600 dark:text-gray-400">
                       Default for new people
                     </label>
-                    <select
-                      id="new-permission-input"
-                      [ngModel]="newPermission()"
-                      (ngModelChange)="onNewPermissionChange($event)"
-                      class="rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-7 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                    >
-                      <option value="viewer">Can view & chat</option>
-                      <option value="editor">Can edit</option>
-                    </select>
+                    <!-- appearance-none + overlaid chevron: the native chevron sits at a
+                         fixed offset from the right edge regardless of padding, which
+                         crowds the rounded-2xl corner. Owning the chevron lets us place
+                         it where we want. -->
+                    <div class="relative inline-flex">
+                      <select
+                        id="new-permission-input"
+                        [ngModel]="newPermission()"
+                        (ngModelChange)="onNewPermissionChange($event)"
+                        class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      >
+                        <option value="viewer">Can view & chat</option>
+                        <option value="editor">Can edit</option>
+                      </select>
+                      <ng-icon
+                        name="heroChevronDown"
+                        class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                        aria-hidden="true"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -380,15 +393,22 @@ export type ShareAssistantDialogResult = {
                         <label class="sr-only" [attr.for]="'perm-' + entry.email">
                           Permission for {{ entry.email }}
                         </label>
-                        <select
-                          [id]="'perm-' + entry.email"
-                          [ngModel]="entry.permission"
-                          (ngModelChange)="setPermission(entry.email, $event)"
-                          class="shrink-0 rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-7 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                        >
-                          <option value="viewer">Can view</option>
-                          <option value="editor">Can edit</option>
-                        </select>
+                        <div class="relative inline-flex shrink-0">
+                          <select
+                            [id]="'perm-' + entry.email"
+                            [ngModel]="entry.permission"
+                            (ngModelChange)="setPermission(entry.email, $event)"
+                            class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                          >
+                            <option value="viewer">Can view</option>
+                            <option value="editor">Can edit</option>
+                          </select>
+                          <ng-icon
+                            name="heroChevronDown"
+                            class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                            aria-hidden="true"
+                          />
+                        </div>
                         <button
                           type="button"
                           (click)="removeEmail(entry.email)"
