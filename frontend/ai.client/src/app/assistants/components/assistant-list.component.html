@@ -150,6 +150,12 @@
               <ng-icon name="heroUser" class="mr-1 size-3" />
               {{ assistant.ownerName }}
             </span>
+            @if (isEditorShare(assistant)) {
+              <span [class]="getEditorBadgeClasses()" appTooltip="You can edit this assistant">
+                <ng-icon name="heroPencilSquare" class="mr-1 size-3" />
+                Editor
+              </span>
+            }
           } @else {
             <span [class]="getVisibilityBadgeClasses(assistant.visibility)">
               <ng-icon [name]="getVisibilityIcon(assistant.visibility)" class="mr-1 size-3" />
@@ -187,11 +193,11 @@
         <span>Chat</span>
       </button>
 
-      @if (isOwned) {
+      @if (isOwned || isEditorShare(assistant)) {
         <!-- Divider -->
         <div class="w-px h-5 bg-gray-100 dark:bg-gray-700/60"></div>
 
-        <!-- Edit button -->
+        <!-- Edit button (owners always; editors on shared assistants) -->
         <button
           type="button"
           (click)="onEditClick(assistant, $event)"
@@ -202,7 +208,9 @@
           <ng-icon name="heroPencilSquare" class="size-4" />
           <span>Edit</span>
         </button>
+      }
 
+      @if (isOwned) {
         <!-- Divider -->
         <div class="w-px h-5 bg-gray-100 dark:bg-gray-700/60"></div>
 

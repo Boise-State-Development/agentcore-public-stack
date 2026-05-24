@@ -234,6 +234,14 @@ export class AssistantListComponent {
     return 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400';
   }
 
+  getEditorBadgeClasses(): string {
+    return 'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+  }
+
+  isEditorShare(assistant: Assistant): boolean {
+    return !!assistant.isSharedWithMe && assistant.userPermission === 'editor';
+  }
+
   private simpleHash(str: string): number {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {

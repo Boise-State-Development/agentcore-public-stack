@@ -32,6 +32,7 @@ import {
   heroGlobeAlt,
   heroLink,
   heroXMark,
+  heroUser,
   heroUserGroup,
   heroPlus,
   heroTrash,
@@ -84,6 +85,7 @@ import { ToastService } from '../../services/toast/toast.service';
       heroGlobeAlt,
       heroLink,
       heroXMark,
+      heroUser,
       heroUserGroup,
       heroPlus,
       heroTrash,
@@ -113,6 +115,13 @@ export class AssistantFormPage implements OnInit, OnDestroy {
 
   readonly assistantId = signal<string | null>(null);
   readonly mode = computed<'create' | 'edit'>(() => (this.assistantId() ? 'edit' : 'create'));
+  /** The requesting user's permission on the loaded assistant — populated by loadAssistant.
+   *  In create mode the user is implicitly the owner, so we seed it that way. */
+  readonly userPermission = signal<'owner' | 'editor' | 'viewer'>('owner');
+  /** Owner display name surfaced on the editor banner when the requester is an editor. */
+  readonly ownerName = signal<string>('');
+  readonly canManageShares = computed(() => this.userPermission() === 'owner');
+  readonly isEditorView = computed(() => this.userPermission() === 'editor');
 
   // Live form value signals — kept in sync via form.valueChanges so the
   // preview component (OnPush) receives updates as the user types.
@@ -301,6 +310,12 @@ export class AssistantFormPage implements OnInit, OnDestroy {
           emoji: assistant.emoji || '',
           status: assistant.status,
         });
+
+        // Cached assistants from the list view do not carry userPermission
+        // (the list synthesises it locally) — fall back to 'owner' for cache hits
+        // so the owner's editor experience stays identical.
+        this.userPermission.set(assistant.userPermission ?? 'owner');
+        this.ownerName.set(assistant.ownerName ?? '');
 
         // Populate starters FormArray
         this.starters.clear();

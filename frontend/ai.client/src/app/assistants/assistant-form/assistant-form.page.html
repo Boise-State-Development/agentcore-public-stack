@@ -23,11 +23,22 @@
             {{ form.get('status')?.value || 'DRAFT' }}
           </span>
         }
+
+        <!-- Editor banner: shown when the requester is an editor on someone else's assistant -->
+        @if (isEditorView()) {
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs/5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+            title="You are editing as a collaborator. Only the owner can delete this assistant or change who has access."
+          >
+            <ng-icon name="heroUser" class="size-3" />
+            Shared by {{ ownerName() || 'owner' }}
+          </span>
+        }
       </div>
 
       <!-- Right: Action buttons -->
       <div class="flex items-center gap-2">
-        @if (mode() === 'edit') {
+        @if (mode() === 'edit' && canManageShares()) {
           <button
             type="button"
             (click)="openShareDialog()"

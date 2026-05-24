@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroShare, heroLink, heroMagnifyingGlass, heroUserPlus, heroTrash } from '@ng-icons/heroicons/outline';
-import { Assistant, UserSearchResult } from '../models/assistant.model';
+import { Assistant, ShareEntry, SharePermission, UserSearchResult } from '../models/assistant.model';
 import { AssistantService } from '../services/assistant.service';
 import { UserApiService } from '../../users/services/user-api.service';
 import { Subject, debounceTime, distinctUntilChanged, switchMap, catchError, of } from 'rxjs';
@@ -267,22 +267,50 @@ export type ShareAssistantDialogResult = {
                 </div>
               }
 
+              <!-- Permission selector for new additions -->
+              <div class="flex items-center gap-3 rounded-sm bg-gray-50 px-3 py-2 dark:bg-gray-700/40">
+                <label for="new-permission-input" class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Permission for new people:
+                </label>
+                <select
+                  id="new-permission-input"
+                  [ngModel]="newPermission()"
+                  (ngModelChange)="onNewPermissionChange($event)"
+                  class="rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="viewer">Can view & chat</option>
+                  <option value="editor">Can edit</option>
+                </select>
+              </div>
+
               <!-- Currently Shared List -->
-              @if (sharedEmails().length > 0) {
+              @if (shares().length > 0) {
                 <div class="space-y-2">
                   <h4 class="text-sm font-medium text-gray-900 dark:text-white">Currently shared with:</h4>
-                  <div class="space-y-1 max-h-32 overflow-y-auto">
-                    @for (email of sharedEmails(); track email) {
-                      <div class="flex items-center justify-between rounded-sm border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-700">
-                        <span class="text-sm text-gray-900 dark:text-white">{{ email }}</span>
-                        <button
-                          type="button"
-                          (click)="removeEmail(email)"
-                          class="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                          aria-label="Remove {{ email }}"
-                        >
-                          <ng-icon name="heroTrash" class="size-4" />
-                        </button>
+                  <div class="space-y-1 max-h-40 overflow-y-auto">
+                    @for (entry of shares(); track entry.email) {
+                      <div class="flex items-center justify-between gap-2 rounded-sm border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-700">
+                        <span class="text-sm text-gray-900 dark:text-white truncate">{{ entry.email }}</span>
+                        <div class="flex items-center gap-2 shrink-0">
+                          <label class="sr-only" [attr.for]="'perm-' + entry.email">Permission for {{ entry.email }}</label>
+                          <select
+                            [id]="'perm-' + entry.email"
+                            [ngModel]="entry.permission"
+                            (ngModelChange)="setPermission(entry.email, $event)"
+                            class="rounded-sm border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                          >
+                            <option value="viewer">Can view</option>
+                            <option value="editor">Can edit</option>
+                          </select>
+                          <button
+                            type="button"
+                            (click)="removeEmail(entry.email)"
+                            class="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                            [attr.aria-label]="'Remove ' + entry.email"
+                          >
+                            <ng-icon name="heroTrash" class="size-4" />
+                          </button>
+                        </div>
                       </div>
                     }
                   </div>
@@ -367,7 +395,12 @@ export class ShareAssistantDialogComponent {
   protected readonly searchMode = signal<boolean>(true); // true = search, false = manual email
   protected readonly searchQuery = signal<string>('');
   protected readonly emailInput = signal<string>('');
-  protected readonly sharedEmails = signal<string[]>([]);
+  /** Working set of shares for this dialog. Compared against `initialShares` on Save to compute deltas. */
+  protected readonly shares = signal<ShareEntry[]>([]);
+  /** Snapshot of shares loaded from the API — used to detect adds/removes/permission changes. */
+  private initialShares: ShareEntry[] = [];
+  /** Permission applied to newly added emails (toggle at top of the add-people section). */
+  protected readonly newPermission = signal<SharePermission>('viewer');
   protected readonly searchResults = signal<UserSearchResult[] | null>(null);
   protected readonly searching = signal<boolean>(false);
   protected readonly saving = signal<boolean>(false);
@@ -416,9 +449,14 @@ export class ShareAssistantDialogComponent {
     this.searchQuerySubject.next(value);
   }
 
+  protected onNewPermissionChange(value: SharePermission): void {
+    this.newPermission.set(value);
+  }
+
   protected addUserFromSearch(user: UserSearchResult): void {
-    if (!this.isEmailShared(user.email)) {
-      this.sharedEmails.update(emails => [...emails, user.email.toLowerCase()]);
+    const email = user.email.toLowerCase();
+    if (!this.isEmailShared(email)) {
+      this.shares.update(current => [...current, { email, permission: this.newPermission() }]);
       this.searchQuery.set('');
       this.searchResults.set(null);
     }
@@ -428,20 +466,18 @@ export class ShareAssistantDialogComponent {
     const input = this.emailInput();
     if (!input.trim()) return;
 
-    const emails = input
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const candidates = input
       .split(',')
       .map(e => e.trim().toLowerCase())
-      .filter(e => {
-        // Basic email validation
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return emailRegex.test(e) && !this.isEmailShared(e);
-      });
+      .filter(e => emailRegex.test(e) && !this.isEmailShared(e));
 
-    if (emails.length > 0) {
-      this.sharedEmails.update(current => {
-        const newEmails = emails.filter(e => !current.includes(e));
-        return [...current, ...newEmails];
-      });
+    if (candidates.length > 0) {
+      const perm = this.newPermission();
+      this.shares.update(current => [
+        ...current,
+        ...candidates.map(email => ({ email, permission: perm })),
+      ]);
       this.emailInput.set('');
     } else {
       this.error.set('Please enter valid email addresses');
@@ -449,12 +485,19 @@ export class ShareAssistantDialogComponent {
     }
   }
 
+  protected setPermission(email: string, permission: SharePermission): void {
+    this.shares.update(current =>
+      current.map(entry => (entry.email === email ? { ...entry, permission } : entry)),
+    );
+  }
+
   protected removeEmail(email: string): void {
-    this.sharedEmails.update(emails => emails.filter(e => e !== email));
+    this.shares.update(current => current.filter(entry => entry.email !== email));
   }
 
   protected isEmailShared(email: string): boolean {
-    return this.sharedEmails().includes(email.toLowerCase());
+    const normalized = email.toLowerCase();
+    return this.shares().some(entry => entry.email === normalized);
   }
 
   protected async loadShares(): Promise<void> {
@@ -462,16 +505,18 @@ export class ShareAssistantDialogComponent {
       // Only try to load shares if assistant is SHARED
       // PRIVATE assistants won't have shares yet
       if (this.isShared()) {
-        const emails = await this.assistantService.getAssistantShares(this.data.assistant.assistantId);
-        this.sharedEmails.set(emails);
+        const entries = await this.assistantService.getAssistantShares(this.data.assistant.assistantId);
+        this.initialShares = entries.map(e => ({ ...e }));
+        this.shares.set(entries.map(e => ({ ...e })));
       } else {
-        // PRIVATE assistant - start with empty shares list
-        this.sharedEmails.set([]);
+        this.initialShares = [];
+        this.shares.set([]);
       }
     } catch (err) {
       console.error('Failed to load shares:', err);
       // Don't show error for initial load failure - just start with empty list
-      this.sharedEmails.set([]);
+      this.initialShares = [];
+      this.shares.set([]);
     }
   }
 
@@ -480,9 +525,9 @@ export class ShareAssistantDialogComponent {
     this.error.set(null);
 
     try {
-      const newShares = this.sharedEmails();
+      const next = this.shares();
       const isCurrentlyPrivate = !this.isShared();
-      const willHaveShares = newShares.length > 0;
+      const willHaveShares = next.length > 0;
 
       // If assistant is PRIVATE and we're adding shares, update visibility to SHARED
       if (isCurrentlyPrivate && willHaveShares) {
@@ -497,25 +542,29 @@ export class ShareAssistantDialogComponent {
         });
       }
 
-      // Get current shares from API (may be empty for PRIVATE assistants)
-      let currentShares: string[] = [];
-      try {
-        currentShares = await this.assistantService.getAssistantShares(this.data.assistant.assistantId);
-      } catch (err) {
-        // If assistant is PRIVATE, getAssistantShares might fail - that's okay, currentShares stays empty
-        console.debug('No existing shares (assistant may be PRIVATE)');
-      }
-      
-      // Find emails to add and remove
-      const toAdd = newShares.filter(e => !currentShares.includes(e));
-      const toRemove = currentShares.filter(e => !newShares.includes(e));
+      const deltas = this.computeDeltas(this.initialShares, next);
 
-      // Apply changes
-      if (toAdd.length > 0) {
-        await this.assistantService.shareAssistant(this.data.assistant.assistantId, toAdd);
+      // Apply each delta against the backend. The backend handles each grouped batch.
+      const id = this.data.assistant.assistantId;
+
+      // Permission changes use PATCH per-email (one record at a time keyed on email)
+      for (const change of deltas.permissionChanges) {
+        await this.assistantService.updateSharePermission(id, change.email, change.permission);
       }
-      if (toRemove.length > 0) {
-        await this.assistantService.unshareAssistant(this.data.assistant.assistantId, toRemove);
+
+      // Group adds by permission so we can POST in batches
+      const addsByPermission = new Map<SharePermission, string[]>();
+      for (const entry of deltas.adds) {
+        const bucket = addsByPermission.get(entry.permission) ?? [];
+        bucket.push(entry.email);
+        addsByPermission.set(entry.permission, bucket);
+      }
+      for (const [permission, emails] of addsByPermission) {
+        await this.assistantService.shareAssistant(id, emails, permission);
+      }
+
+      if (deltas.removes.length > 0) {
+        await this.assistantService.unshareAssistant(id, deltas.removes);
       }
 
       this.dialogRef.close({ action: 'shared' });
@@ -525,6 +574,39 @@ export class ShareAssistantDialogComponent {
     } finally {
       this.saving.set(false);
     }
+  }
+
+  /**
+   * Compare initial vs current shares to determine what API calls are needed.
+   * Adds, removes, and permission changes on already-shared emails are all distinct.
+   */
+  protected computeDeltas(
+    initial: ShareEntry[],
+    next: ShareEntry[],
+  ): { adds: ShareEntry[]; removes: string[]; permissionChanges: ShareEntry[] } {
+    const initialByEmail = new Map(initial.map(e => [e.email, e.permission]));
+    const nextByEmail = new Map(next.map(e => [e.email, e.permission]));
+
+    const adds: ShareEntry[] = [];
+    const removes: string[] = [];
+    const permissionChanges: ShareEntry[] = [];
+
+    for (const entry of next) {
+      const previous = initialByEmail.get(entry.email);
+      if (previous === undefined) {
+        adds.push(entry);
+      } else if (previous !== entry.permission) {
+        permissionChanges.push(entry);
+      }
+    }
+
+    for (const [email] of initialByEmail) {
+      if (!nextByEmail.has(email)) {
+        removes.push(email);
+      }
+    }
+
+    return { adds, removes, permissionChanges };
   }
 
   protected copyUrl(): void {

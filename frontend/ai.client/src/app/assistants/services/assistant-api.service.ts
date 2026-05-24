@@ -1,15 +1,16 @@
 import { Injectable, inject, computed } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { 
-  Assistant, 
+import {
+  Assistant,
   CreateAssistantDraftRequest,
-  CreateAssistantRequest, 
+  CreateAssistantRequest,
   UpdateAssistantRequest,
   AssistantsListResponse,
   ShareAssistantRequest,
   UnshareAssistantRequest,
-  AssistantSharesResponse
+  UpdateSharePermissionRequest,
+  AssistantSharesResponse,
 } from '../models/assistant.model';
 import {
   CreateDocumentRequest,
@@ -91,6 +92,13 @@ export class AssistantApiService {
 
   unshareAssistant(id: string, request: UnshareAssistantRequest): Observable<AssistantSharesResponse> {
     return this.http.delete<AssistantSharesResponse>(`${this.baseUrl()}/${id}/shares`, { body: request });
+  }
+
+  updateSharePermission(
+    id: string,
+    request: UpdateSharePermissionRequest,
+  ): Observable<AssistantSharesResponse> {
+    return this.http.patch<AssistantSharesResponse>(`${this.baseUrl()}/${id}/shares`, request);
   }
 
   getAssistantShares(id: string): Observable<AssistantSharesResponse> {

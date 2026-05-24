@@ -1,3 +1,6 @@
+export type SharePermission = 'viewer' | 'editor';
+export type UserPermission = 'owner' | SharePermission;
+
 export interface Assistant {
   assistantId: string;
   ownerId: string;
@@ -19,6 +22,7 @@ export interface Assistant {
   // Share metadata (only present for shared assistants)
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
+  userPermission?: UserPermission;
 }
 
 export interface CreateAssistantDraftRequest {
@@ -55,15 +59,26 @@ export interface AssistantsListResponse {
 
 export interface ShareAssistantRequest {
   emails: string[];
+  permission?: SharePermission;
 }
 
 export interface UnshareAssistantRequest {
   emails: string[];
 }
 
+export interface UpdateSharePermissionRequest {
+  email: string;
+  permission: SharePermission;
+}
+
+export interface ShareEntry {
+  email: string;
+  permission: SharePermission;
+}
+
 export interface AssistantSharesResponse {
   assistantId: string;
-  sharedWith: string[];
+  sharedWith: ShareEntry[];
 }
 
 export interface UserSearchResult {

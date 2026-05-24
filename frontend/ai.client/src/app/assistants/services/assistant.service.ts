@@ -1,11 +1,13 @@
 import { Injectable, signal, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import { 
-  Assistant, 
+import {
+  Assistant,
   CreateAssistantDraftRequest,
-  CreateAssistantRequest, 
+  CreateAssistantRequest,
   UpdateAssistantRequest,
-  AssistantSharesResponse
+  AssistantSharesResponse,
+  ShareEntry,
+  SharePermission,
 } from '../models/assistant.model';
 import { AssistantApiService } from './assistant-api.service';
 
@@ -165,13 +167,17 @@ export class AssistantService {
     return this.assistants().find(assistant => assistant.assistantId === id);
   }
 
-  async shareAssistant(id: string, emails: string[]): Promise<AssistantSharesResponse> {
+  async shareAssistant(
+    id: string,
+    emails: string[],
+    permission: SharePermission = 'viewer',
+  ): Promise<AssistantSharesResponse> {
     this.loading.set(true);
     this.error.set(null);
 
     try {
       const response = await firstValueFrom(
-        this.apiService.shareAssistant(id, { emails })
+        this.apiService.shareAssistant(id, { emails, permission })
       );
       return response;
     } catch (err) {
@@ -201,7 +207,29 @@ export class AssistantService {
     }
   }
 
-  async getAssistantShares(id: string): Promise<string[]> {
+  async updateSharePermission(
+    id: string,
+    email: string,
+    permission: SharePermission,
+  ): Promise<AssistantSharesResponse> {
+    this.loading.set(true);
+    this.error.set(null);
+
+    try {
+      const response = await firstValueFrom(
+        this.apiService.updateSharePermission(id, { email, permission })
+      );
+      return response;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update share permission';
+      this.error.set(errorMessage);
+      throw err;
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  async getAssistantShares(id: string): Promise<ShareEntry[]> {
     this.loading.set(true);
     this.error.set(null);
 
