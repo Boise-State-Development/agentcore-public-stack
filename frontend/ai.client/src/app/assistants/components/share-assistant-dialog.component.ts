@@ -201,9 +201,11 @@ export type ShareAssistantDialogResult = {
                 </div>
 
                 <!-- Mode Toggle (segmented tabs).
-                     The negative bottom margin on each button pulls its border-b down 1px
-                     so the active underline overlaps the parent border cleanly — no thin
-                     gray line peeking through under the selected tab. -->
+                     Bottom-only border-b-* variant avoids a CSS collision between
+                     border-transparent (base) and border-blue-600 (active) — those
+                     are both border-color utilities at the same specificity, so
+                     using border-b-color targets a different property and lets the
+                     active state win cleanly. -->
                 <div
                   class="flex gap-1 border-b border-gray-200 dark:border-gray-700"
                   role="tablist"
@@ -214,12 +216,12 @@ export type ShareAssistantDialogResult = {
                     role="tab"
                     [attr.aria-selected]="searchMode()"
                     (click)="searchMode.set(true)"
-                    [class.border-blue-600]="searchMode()"
+                    [class.border-b-blue-600]="searchMode()"
                     [class.text-blue-600]="searchMode()"
                     [class.font-semibold]="searchMode()"
-                    [class.dark:border-blue-400]="searchMode()"
+                    [class.dark:border-b-blue-400]="searchMode()"
                     [class.dark:text-blue-400]="searchMode()"
-                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
                   >
                     <ng-icon name="heroMagnifyingGlass" class="size-4" aria-hidden="true" />
                     Search users
@@ -229,12 +231,12 @@ export type ShareAssistantDialogResult = {
                     role="tab"
                     [attr.aria-selected]="!searchMode()"
                     (click)="searchMode.set(false)"
-                    [class.border-blue-600]="!searchMode()"
+                    [class.border-b-blue-600]="!searchMode()"
                     [class.text-blue-600]="!searchMode()"
                     [class.font-semibold]="!searchMode()"
-                    [class.dark:border-blue-400]="!searchMode()"
+                    [class.dark:border-b-blue-400]="!searchMode()"
                     [class.dark:text-blue-400]="!searchMode()"
-                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+                    class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
                   >
                     <ng-icon name="heroUserPlus" class="size-4" aria-hidden="true" />
                     Add by email
