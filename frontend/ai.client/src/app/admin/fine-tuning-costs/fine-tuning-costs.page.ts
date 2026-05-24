@@ -6,7 +6,6 @@ import {
   OnInit,
   signal,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -26,7 +25,7 @@ type SortField = 'email' | 'total_cost_usd' | 'total_gpu_hours' | 'training_job_
 
 @Component({
   selector: 'app-fine-tuning-costs-page',
-  imports: [RouterLink, FormsModule, NgIcon],
+  imports: [FormsModule, NgIcon],
   providers: [
     provideIcons({
       heroArrowLeft,

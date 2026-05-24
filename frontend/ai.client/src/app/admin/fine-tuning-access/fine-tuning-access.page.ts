@@ -1,6 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -16,7 +15,7 @@ import { FineTuningAdminStateService } from './services/fine-tuning-admin-state.
 
 @Component({
   selector: 'app-fine-tuning-access-page',
-  imports: [FormsModule, RouterLink, NgIcon, TooltipDirective],
+  imports: [FormsModule, NgIcon, TooltipDirective],
   providers: [
     provideIcons({
       heroArrowLeft,

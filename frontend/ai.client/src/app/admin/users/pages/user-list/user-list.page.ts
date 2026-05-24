@@ -4,7 +4,7 @@ import {
   inject,
   OnInit,
 } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -20,7 +20,7 @@ import { UserListItem, UserStatus } from '../../models';
 @Component({
   selector: 'app-user-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, RouterLink],
+  imports: [FormsModule, NgIcon],
   providers: [
     provideIcons({ heroMagnifyingGlass, heroUser, heroChevronRight, heroXMark, heroArrowLeft }),
   ],

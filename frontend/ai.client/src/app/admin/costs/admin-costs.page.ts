@@ -6,7 +6,7 @@ import {
   OnInit,
   signal,
 } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -28,7 +28,6 @@ import { ModelBreakdownComponent } from './components/model-breakdown.component'
 @Component({
   selector: 'app-admin-costs',
   imports: [
-    RouterLink,
     NgIcon,
     PeriodSelectorComponent,
     SystemSummaryCardComponent,
