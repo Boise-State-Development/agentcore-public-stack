@@ -23,15 +23,15 @@
     <!-- Header -->
     <div class="border-b border-gray-200 px-4 py-4 dark:border-white/10">
       <div class="flex items-center justify-between">
-        <h2 id="model-settings-title" class="text-base/6 font-semibold text-gray-900 dark:text-white">
+        <h2 id="model-settings-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
           Settings
         </h2>
         <button
           type="button"
           (click)="close()"
-          class="rounded-sm p-1 text-gray-400 hover:text-gray-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:hover:text-gray-300 dark:focus-visible:outline-primary-400"
+          class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
           aria-label="Close settings panel">
-          <ng-icon name="heroXMark" class="size-6" aria-hidden="true" />
+          <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -63,8 +63,8 @@
               [attr.aria-activedescendant]="isModelDropdownOpen() ? 'model-option-' + focusedOptionIndex() : null"
               (click)="toggleModelDropdown()"
               (keydown)="onDropdownKeydown($event)"
-              class="flex w-full items-center justify-between gap-2 rounded-sm bg-white px-2.5 py-1.5 text-left outline-1 -outline-offset-1 outline-gray-300 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:bg-white/5 dark:outline-white/10 dark:focus-visible:outline-primary-400">
-              <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">
+              class="flex w-full items-center justify-between gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-left focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800">
+              <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
                 {{ modelService.selectedModel().modelName }}
               </span>
               <ng-icon
@@ -79,7 +79,7 @@
               <ul
                 role="listbox"
                 aria-labelledby="model-select-label"
-                class="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-sm bg-white py-1 shadow-lg outline-1 outline-black/5 dark:bg-gray-800 dark:shadow-none dark:-outline-offset-1 dark:outline-white/10">
+                class="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-2xl border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:shadow-none">
                 @for (model of modelService.availableModels(); track model.modelId; let i = $index) {
                   <li
                     [id]="'model-option-' + i"
@@ -87,7 +87,7 @@
                     [attr.aria-selected]="isModelSelected(model)"
                     (click)="selectModel(model)"
                     (mouseenter)="focusedOptionIndex.set(i)"
-                    class="flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm/5 select-none"
+                    class="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm/6 select-none"
                     [class.bg-primary-600]="focusedOptionIndex() === i"
                     [class.text-white]="focusedOptionIndex() === i"
                     [class.dark:bg-primary-500]="focusedOptionIndex() === i"
@@ -100,7 +100,7 @@
                         {{ model.modelName }}
                       </span>
                       <span
-                        class="block truncate text-xs/4"
+                        class="block truncate text-xs/5"
                         [class.text-primary-200]="focusedOptionIndex() === i"
                         [class.text-gray-500]="focusedOptionIndex() !== i"
                         [class.dark:text-gray-400]="focusedOptionIndex() !== i">
@@ -132,7 +132,7 @@
             (click)="toggleAdvanced()"
             [attr.aria-expanded]="isAdvancedOpen()"
             aria-controls="advanced-params-body"
-            class="flex w-full items-center justify-between gap-3 px-4 py-4 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 dark:hover:bg-white/5 dark:focus-visible:outline-primary-400">
+            class="flex w-full items-center justify-between gap-3 px-4 py-4 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5">
             <div class="flex items-center gap-2">
               <ng-icon
                 [name]="isAdvancedOpen() ? 'heroChevronDown' : 'heroChevronRight'"
@@ -170,7 +170,7 @@
                       <button
                         type="button"
                         (click)="resetParam(row)"
-                        class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:text-primary-400 dark:focus-visible:outline-primary-400">
+                        class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-400">
                         Reset
                       </button>
                     }
@@ -207,7 +207,7 @@
                         [attr.aria-describedby]="'param-desc-' + row.key"
                         [disabled]="row.locked || row.disabledByConflict"
                         (click)="onParamToggle(row)"
-                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-400"
+                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                         [class]="row.value ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                         <span
                           aria-hidden="true"
@@ -225,7 +225,7 @@
                           [attr.aria-describedby]="'param-desc-' + row.key"
                           [disabled]="row.locked || row.disabledByConflict || (!isThinkingEnabled(row.value) && !!row.unsatisfiable)"
                           (click)="onThinkingToggle(row)"
-                          class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-400"
+                          class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                           [class]="isThinkingEnabled(row.value) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                           <span
                             aria-hidden="true"
@@ -244,21 +244,27 @@
                           placeholder="Budget tokens"
                           [disabled]="row.locked || row.disabledByConflict || !isThinkingEnabled(row.value)"
                           (change)="onThinkingBudgetChange(row, $event)"
-                          class="w-32 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0" />
+                          class="w-32 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900" />
                       </div>
                     }
                     @case ('select') {
-                      <select
-                        [id]="'param-input-' + row.key"
-                        [attr.aria-describedby]="'param-desc-' + row.key"
-                        [disabled]="row.locked || row.disabledByConflict"
-                        (change)="onParamSelectChange(row, $event)"
-                        class="w-40 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0">
-                        <option value="" [selected]="row.value === null || row.value === undefined">Use admin default</option>
-                        @for (lvl of row.spec.allowed ?? []; track lvl) {
-                          <option [value]="lvl" [selected]="row.value === lvl">{{ lvl }}</option>
-                        }
-                      </select>
+                      <div class="relative inline-flex">
+                        <select
+                          [id]="'param-input-' + row.key"
+                          [attr.aria-describedby]="'param-desc-' + row.key"
+                          [disabled]="row.locked || row.disabledByConflict"
+                          (change)="onParamSelectChange(row, $event)"
+                          class="w-40 appearance-none rounded-2xl border border-gray-300 bg-white py-1.5 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900">
+                          <option value="" [selected]="row.value === null || row.value === undefined">Use admin default</option>
+                          @for (lvl of row.spec.allowed ?? []; track lvl) {
+                            <option [value]="lvl" [selected]="row.value === lvl">{{ lvl }}</option>
+                          }
+                        </select>
+                        <ng-icon
+                          name="heroChevronDown"
+                          class="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                          aria-hidden="true" />
+                      </div>
                     }
                     @default {
                       <input
@@ -271,7 +277,7 @@
                         [step]="row.meta.kind === 'integer' ? 1 : 0.1"
                         [disabled]="row.locked || row.disabledByConflict"
                         (change)="onParamNumberChange(row, $event)"
-                        class="w-32 rounded-sm border border-gray-300 bg-white px-2 py-1 text-sm/5 text-gray-900 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-600 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:disabled:bg-white/0" />
+                        class="w-32 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900" />
                     }
                   }
                 </div>
@@ -281,7 +287,7 @@
                 <button
                   type="button"
                   (click)="resetAllParams()"
-                  class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:text-primary-400 dark:focus-visible:outline-primary-400">
+                  class="text-xs/5 text-primary-600 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-400">
                   Reset all to defaults
                 </button>
               }
@@ -335,7 +341,7 @@
                   (click)="toggleTool(tool.toolId)"
                   (keydown.space)="$event.preventDefault(); toggleTool(tool.toolId)"
                   (keydown.enter)="toggleTool(tool.toolId)"
-                  class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 dark:focus-visible:outline-primary-400"
+                  class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                   [class]="tool.isEnabled ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                   <span
                     aria-hidden="true"
