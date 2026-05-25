@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from agents.main_agent.config.constants import EnvVars
-from apis.shared.errors import ErrorCode, StreamErrorEvent, build_conversational_error_event
+from apis.shared.errors import (
+    ConversationalErrorEvent,
+    ErrorCode,
+    StreamErrorEvent,
+    build_conversational_error_event,
+)
 
 from .stream_processor import process_agent_stream
 
@@ -492,13 +497,45 @@ class StreamCoordinator:
                     except ValueError:
                         error_code = ErrorCode.STREAM_ERROR
 
-                    # Create a synthetic exception for build_conversational_error_event
-                    synthetic_error = Exception(f"{error_message}: {error_detail}" if error_detail else error_message)
+                    # When stream_processor's force_stop classifier (in
+                    # _format_force_stop_message) already produced friendly
+                    # user-facing markdown — recognizable by the leading "⚠️"
+                    # — pass it through unwrapped. The generic
+                    # build_conversational_error_event template would
+                    # otherwise wrap it in a second "⚠️ Something went
+                    # wrong" + blockquote, double-marking the message and
+                    # appending a ceremonial "Please try again." The
+                    # unclassified "Agent force-stopped: {raw}" fallthrough
+                    # has no warning prefix and still goes through the
+                    # generic wrapper below.
+                    recoverable = error_data.get("recoverable", False)
+                    if (
+                        error_code == ErrorCode.AGENT_ERROR
+                        and error_message
+                        and error_message.lstrip().startswith("⚠️")
+                    ):
+                        metadata: Optional[Dict[str, Any]] = (
+                            {"session_id": session_id} if session_id else None
+                        )
+                        conv_error_event = ConversationalErrorEvent(
+                            code=error_code,
+                            message=error_message,
+                            recoverable=recoverable,
+                            metadata=metadata,
+                        )
+                    else:
+                        # Create a synthetic exception for build_conversational_error_event
+                        synthetic_error = Exception(
+                            f"{error_message}: {error_detail}" if error_detail else error_message
+                        )
 
-                    # Build conversational error event
-                    conv_error_event = build_conversational_error_event(
-                        code=error_code, error=synthetic_error, session_id=session_id, recoverable=error_data.get("recoverable", False)
-                    )
+                        # Build conversational error event
+                        conv_error_event = build_conversational_error_event(
+                            code=error_code,
+                            error=synthetic_error,
+                            session_id=session_id,
+                            recoverable=recoverable,
+                        )
 
                     if error_code == ErrorCode.MAX_TOKENS:
                         # No verbose assistant bubble for truncation. The model
