@@ -605,29 +605,22 @@ async def stream_conversational_message(
         logger.info("Preview session - skipping message persistence")
         return
 
-    # Save messages to session for persistence
+    # Persist user + assistant turns. Unlike the streaming error paths in
+    # stream_coordinator (which persist assistant-only because the agent
+    # loop's MessageAddedEvent hook already wrote the user turn), this
+    # path fires BEFORE any agent run — quota-exceeded short-circuits,
+    # etc. — so no hook has persisted the user turn yet.
     try:
-        from strands.types.content import Message
-        from strands.types.session import SessionMessage
+        from agents.main_agent.session.persistence import persist_synthetic_messages
 
         session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+        persist_synthetic_messages(
+            session_manager,
+            session_id,
+            [("user", user_input), ("assistant", message)],
+        )
 
-        # Save user message
-        user_message: Message = {"role": "user", "content": [{"text": user_input}]}
-
-        # Save assistant message
-        assistant_message: Message = {"role": "assistant", "content": [{"text": message}]}
-
-        # Use base_manager's create_message for persistence (AgentCore Memory)
-        if hasattr(session_manager, "base_manager") and hasattr(session_manager.base_manager, "create_message"):
-            user_session_msg = SessionMessage.from_message(user_message, index=0)
-            assistant_session_msg = SessionMessage.from_message(assistant_message, index=1)
-
-            session_manager.base_manager.create_message(session_id, "default", user_session_msg)
-            session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-            logger.info("Saved messages to session")
-
-    except Exception as e:
+    except Exception:
         logger.error("Failed to save messages to session", exc_info=True)
 
 

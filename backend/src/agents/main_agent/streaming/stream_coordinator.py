@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from agents.main_agent.config.constants import EnvVars
-from apis.shared.errors import ErrorCode, StreamErrorEvent, build_conversational_error_event
+from apis.shared.errors import ConversationalErrorEvent, ErrorCode, StreamErrorEvent, build_conversational_error_event
 
-from .stream_processor import process_agent_stream
+from .stream_processor import _format_force_stop_message, process_agent_stream
 
 logger = logging.getLogger(__name__)
 
@@ -554,32 +554,38 @@ class StreamCoordinator:
                             f"(Strands already committed the recovered partial turn)"
                         )
                     else:
-                        try:
-                            from strands.types.content import Message
-                            from strands.types.session import SessionMessage
+                        # Persist ONLY the assistant turn. The user turn was
+                        # already persisted at turn start by Strands'
+                        # MessageAddedEvent hook (any error event reaching
+                        # this in-loop handler was emitted from inside
+                        # ``process_agent_stream``, after the agent stream
+                        # began iterating). Re-persisting the user turn
+                        # would either duplicate it or cause AgentCore
+                        # Memory to reject the conflicting write and drop
+                        # the assistant message along with it.
+                        #
+                        # For AGENT_ERROR (Strands force_stop, classified
+                        # by stream_processor), the friendly markdown is
+                        # already in ``error_message``. For other codes,
+                        # ``conv_error_event.message`` is the conversational
+                        # template assembled above.
+                        if error_code == ErrorCode.AGENT_ERROR:
+                            assistant_text = error_message or conv_error_event.message
+                        else:
+                            assistant_text = conv_error_event.message
 
+                        try:
+                            from agents.main_agent.session.persistence import persist_synthetic_messages
                             from agents.main_agent.session.session_factory import SessionFactory
 
                             persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
-
-                            # Extract user text from prompt (can be string or ContentBlock list)
-                            if isinstance(prompt, str):
-                                user_text = prompt
-                            else:
-                                # Extract text from ContentBlock list
-                                user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
-
-                            user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
-                            assistant_msg: Message = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
-
-                            if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
-                                user_session_msg = SessionMessage.from_message(user_msg, 0)
-                                assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
-                                persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
-                                persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-                                logger.info(f"💾 Saved intercepted error messages to session {session_id}")
+                            persist_synthetic_messages(
+                                persist_session_manager,
+                                session_id,
+                                [("assistant", assistant_text)],
+                            )
                         except Exception as persist_error:
-                            logger.error(f"Failed to persist intercepted error to session: {persist_error}")
+                            logger.error(f"Failed to persist intercepted error to session: {persist_error}", exc_info=True)
 
                     # Skip the original error event and exit the loop - we've handled the error
                     return
@@ -779,43 +785,57 @@ class StreamCoordinator:
             # Emergency flush: save buffered messages before losing them
             self._emergency_flush(session_manager)
 
-            # Stream error as conversational assistant message for better UX
-            error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
+            # Some Bedrock errors (notably ValidationException for unsupported
+            # documents / images) propagate as raw exceptions instead of
+            # through Strands' force_stop event — Strands' `yield
+            # ForceStopEvent(reason=e)` hits a GeneratorExit when the
+            # consumer closes during the throw, so stream_processor's
+            # force_stop branch never fires. Run str(e) through the same
+            # classifier we use there so the user sees the same actionable
+            # message in both code paths instead of the generic
+            # "Something went wrong" STREAM_ERROR template.
+            classified_message, classified_recoverable = _format_force_stop_message(str(e))
+            is_classified = not classified_message.startswith("Agent force-stopped:")
+
+            if is_classified:
+                message_text = classified_message
+                recoverable = classified_recoverable
+                resolved_code = ErrorCode.AGENT_ERROR
+                error_event = ConversationalErrorEvent(
+                    code=resolved_code,
+                    message=message_text,
+                    recoverable=recoverable,
+                    metadata={"session_id": session_id} if session_id else None,
+                )
+            else:
+                # Fall back to the existing STREAM_ERROR template for errors
+                # the classifier doesn't recognize.
+                error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
+                message_text = error_event.message
+                resolved_code = ErrorCode.STREAM_ERROR
 
             # Emit message events so error appears in chat
             yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
             yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
-            yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': error_event.message})}\n\n"
+            yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': message_text})}\n\n"
             yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
             yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
             yield error_event.to_sse_format()
             yield "event: done\ndata: {}\n\n"
 
-            # Persist error messages to session
+            # Persist ONLY the assistant turn. Same reasoning as the
+            # AGENT_ERROR path above — the user turn was already persisted
+            # at turn start by Strands' MessageAddedEvent hook.
             try:
-                from strands.types.content import Message
-                from strands.types.session import SessionMessage
-
+                from agents.main_agent.session.persistence import persist_synthetic_messages
                 from agents.main_agent.session.session_factory import SessionFactory
 
                 persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
-
-                # Extract user text from prompt (can be string or ContentBlock list)
-                if isinstance(prompt, str):
-                    user_text = prompt
-                else:
-                    # Extract text from ContentBlock list
-                    user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
-
-                user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
-                assistant_msg: Message = {"role": "assistant", "content": [{"text": error_event.message}]}
-
-                if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
-                    user_session_msg = SessionMessage.from_message(user_msg, 0)
-                    assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
-                    persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
-                    persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-                    logger.info(f"💾 Saved stream error messages to session {session_id}")
+                persist_synthetic_messages(
+                    persist_session_manager,
+                    session_id,
+                    [("assistant", message_text)],
+                )
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
         finally:

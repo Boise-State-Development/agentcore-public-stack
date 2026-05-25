@@ -12,6 +12,7 @@ import pytest
 
 from agents.main_agent.streaming.stream_processor import (
     _create_event,
+    _format_force_stop_message,
     _handle_citation_events,
     _handle_content_block_events,
     _handle_lifecycle_events,
@@ -837,3 +838,104 @@ class TestProcessAgentStreamMaxTokens:
         data = error_events[0]["data"]
         assert data["code"] == "stream_error"
         assert data["recoverable"] is False
+
+
+class TestFormatForceStopMessage:
+    """Classifier for raw Bedrock force-stop reasons → user-facing markdown.
+
+    Regression coverage for the gpt-oss-120b case where the model rejects
+    documents outright and the message was being misclassified as a size
+    overflow because the substring `"document"` matched both branches.
+    """
+
+    def test_model_does_not_support_documents_is_not_size_error(self):
+        reason = (
+            "An error occurred (ValidationException) when calling the "
+            "ConverseStream operation: This model doesn't support documents."
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "can't read attached files" in message
+        assert "switch to a model that supports documents" in message
+        # Must NOT surface the 4.5 MB size message — that's a different problem
+        assert "4.5 MB" not in message
+        assert "too large" not in message
+        # No brand names (model lineups change) and no deployment-specific
+        # tool references (Spreadsheet Analysis may not be enabled).
+        assert "Claude" not in message
+        assert "Nova" not in message
+        assert "Spreadsheet Analysis" not in message
+        # No suggestions for actions the user can't actually take.
+        assert "remove the attachment" not in message
+        assert recoverable is True
+
+    def test_model_does_not_support_documents_alternate_phrasing(self):
+        """AWS sometimes phrases this as 'does not support' (no contraction)."""
+        reason = (
+            "ValidationException: This model does not support documents in "
+            "the request."
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "can't read attached files" in message
+        assert "4.5 MB" not in message
+        assert recoverable is True
+
+    def test_model_does_not_support_images(self):
+        reason = (
+            "An error occurred (ValidationException) when calling the "
+            "ConverseStream operation: This model doesn't support images."
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "can't read attached images" in message
+        assert "switch to a model that supports images" in message
+        assert "Claude" not in message
+        assert "Nova" not in message
+        assert "remove the image" not in message
+        assert recoverable is True
+
+    def test_document_size_limit_classic_message(self):
+        reason = (
+            "ValidationException: The provided document exceeds the maximum "
+            "document size."
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "too large" in message
+        assert "4.5 MB" in message
+        # Guidance is deployment-agnostic — no references to optional tools
+        # or UI affordances that might not exist in every deployment.
+        assert "Spreadsheet Analysis" not in message
+        assert "gear icon" not in message
+        assert recoverable is True
+
+    def test_document_size_limit_too_large_phrasing(self):
+        reason = "ValidationException: document content is too large to process"
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "too large" in message
+        assert "4.5 MB" in message
+        assert recoverable is True
+
+    def test_throttling(self):
+        reason = "ThrottlingException: Too many requests, please slow down."
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "too many requests" in message.lower()
+        assert recoverable is True
+
+    def test_access_denied(self):
+        reason = "AccessDeniedException: User is not authorized to invoke this model."
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "don't have access" in message
+        assert recoverable is False
+
+    def test_unknown_reason_falls_through(self):
+        reason = "Some unexpected transient error from upstream"
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "force-stopped" in message
+        assert reason in message
+        assert recoverable is False

@@ -329,28 +329,53 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
     reason_str = str(reason or "")
     reason_lower = reason_str.lower()
 
+    # Some Bedrock-hosted models (e.g. gpt-oss-120b) reject any document or
+    # image content block outright with "This model doesn't support
+    # documents." Check this BEFORE the size-limit branch — the AWS message
+    # contains "ValidationException" + "documents" and would otherwise be
+    # misclassified as a 4.5 MB overflow.
+    #
+    # Copy notes: keep the actionable advice deployment-agnostic — no brand
+    # names (model lineups change), no UI affordance names (might drift),
+    # no references to optional tools like Spreadsheet Analysis (not
+    # guaranteed enabled across forks/deployments).
+    if "doesn't support document" in reason_lower or "does not support document" in reason_lower:
+        return (
+            "⚠️ The selected model can't read attached files.\n\n"
+            "To work with this file, switch to a model that supports "
+            "documents.",
+            True,
+        )
+
+    if "doesn't support image" in reason_lower or "does not support image" in reason_lower:
+        return (
+            "⚠️ The selected model can't read attached images.\n\n"
+            "To work with this image, switch to a model that supports "
+            "images.",
+            True,
+        )
+
     # Bedrock ConverseStream rejects document content blocks over ~4.5 MB
     # internal size. Triggered most often by XLSX files that inflate
-    # significantly during parsing. The fix-forward is to route tabular
-    # files through the spreadsheet analysis tools, but a turn with a
-    # non-tabular file this large (or history that accumulated past the
-    # limit) still needs a friendlier message than the raw AWS error. See
-    # issue #206.
-    if "maximum document size" in reason_lower or (
-        "validationexception" in reason_lower and "document" in reason_lower
+    # significantly during parsing. See issue #206. Narrowed from
+    # `"document" in reason` to size-specific markers so
+    # unsupported-modality errors don't false-positive here.
+    #
+    # Copy notes: keep guidance deployment-agnostic — no references to
+    # optional tools (Spreadsheet Analysis isn't guaranteed enabled across
+    # forks/deployments) and no UI affordance names that might drift.
+    if (
+        "maximum document size" in reason_lower
+        or "document size" in reason_lower
+        or ("document" in reason_lower and ("too large" in reason_lower or "exceeds" in reason_lower or "exceed the" in reason_lower))
     ):
         return (
             "⚠️ One of the attached files is too large for the model to read "
             "directly.\n\n"
-            "Bedrock limits inline documents to 4.5 MB of internal content, "
-            "and spreadsheets (especially XLSX) often expand past that when "
-            "parsed. To work with large data files, enable **Spreadsheet "
-            "Analysis** in the Tools section of the settings panel (gear "
-            "icon next to the message input) and re-attach the file — the "
-            "tool runs pandas on the real file and isn't limited by the "
-            "document size cap.\n\n"
-            "For large PDFs or docs, split them into smaller sections or "
-            "convert to plain text.",
+            "Bedrock limits inline documents to 4.5 MB after parsing, and "
+            "spreadsheets (especially XLSX) often expand past that. Try "
+            "splitting the file into smaller sections, converting to plain "
+            "text or CSV, or sharing only the relevant portion.",
             True,
         )
 
