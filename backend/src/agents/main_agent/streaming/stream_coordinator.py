@@ -601,16 +601,14 @@ class StreamCoordinator:
                         # Memory to reject the conflicting write and drop
                         # the assistant message along with it.
                         #
-                        # For AGENT_ERROR (Strands force_stop, classified
-                        # by stream_processor), the friendly markdown is
-                        # already in ``error_message``. For other codes,
-                        # ``conv_error_event.message`` is the conversational
-                        # template assembled above.
-                        if error_code == ErrorCode.AGENT_ERROR:
-                            assistant_text = error_message or conv_error_event.message
-                        else:
-                            assistant_text = conv_error_event.message
-
+                        # Persist what the user saw live: PR #388's
+                        # double-wrap fix above means ``conv_error_event.message``
+                        # is the un-wrapped friendly text for classified
+                        # AGENT_ERROR cases (leading "⚠️") and the wrapped
+                        # template for everything else — same string the
+                        # content_block_delta below yields to the SSE
+                        # stream. Persisting it keeps live and
+                        # refresh-hydrated views in sync.
                         try:
                             from agents.main_agent.session.persistence import persist_synthetic_messages
                             from agents.main_agent.session.session_factory import SessionFactory
@@ -619,7 +617,7 @@ class StreamCoordinator:
                             persist_synthetic_messages(
                                 persist_session_manager,
                                 session_id,
-                                [("assistant", assistant_text)],
+                                [("assistant", conv_error_event.message)],
                             )
                         except Exception as persist_error:
                             logger.error(f"Failed to persist intercepted error to session: {persist_error}", exc_info=True)
