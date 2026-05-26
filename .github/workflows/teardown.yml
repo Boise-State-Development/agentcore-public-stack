@@ -1,0 +1,100 @@
+name: "Teardown All Infrastructure"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to tear down'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      confirm:
+        description: 'Type DESTROY to confirm teardown'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CDK_REQUIRE_APPROVAL: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LOAD_ENV_QUIET: true
+
+concurrency:
+  group: teardown-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Confirmation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check confirmation input
+        if: github.event.inputs.confirm != 'DESTROY'
+        run: |
+          echo "::error::You must type DESTROY to confirm teardown. Got: '${{ github.event.inputs.confirm }}'"
+          exit 1
+
+  teardown:
+    name: Destroy All Stacks
+    runs-on: ubuntu-24.04
+    needs: validate
+    environment: ${{ github.event.inputs.environment }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
+      CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
+      CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
+      CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
+      CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
+      CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
+      CDK_ARTIFACTS_ENABLED: ${{ vars.CDK_ARTIFACTS_ENABLED }}
+      CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
+      CDK_FINE_TUNING_ENABLED: ${{ vars.CDK_FINE_TUNING_ENABLED }}
+      CDK_RAG_ENABLED: ${{ vars.CDK_RAG_ENABLED }}
+      CDK_GATEWAY_ENABLED: ${{ vars.CDK_GATEWAY_ENABLED }}
+      CDK_FRONTEND_ENABLED: ${{ vars.CDK_FRONTEND_ENABLED }}
+      CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ env.CDK_AWS_REGION }}
+          role-session-name: GitHubActions-Teardown
+          aws-role-arn: ${{ env.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Install system dependencies
+        run: |
+          bash scripts/common/install-deps.sh
+
+      - name: Install CDK dependencies
+        run: |
+          cd infrastructure && npm ci
+
+      - name: Build CDK
+        run: |
+          cd infrastructure && npm run build
+
+      - name: Destroy all stacks
+        run: |
+          bash scripts/teardown/destroy.sh
