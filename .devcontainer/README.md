@@ -3,19 +3,22 @@
 A reproducible, security-hardened Docker image with every toolchain needed to
 build, test, lint, deploy, and end-to-end-test every stack in this monorepo.
 
+For agent execution rules and the workspace-path map, see
+[`.kiro/steering/dev-environment.md`](../.kiro/steering/dev-environment.md).
+
 ## What's inside
 
-| Tool                         | Version    | Pin type                              |
-|------------------------------|------------|---------------------------------------|
-| Ubuntu (base)                | 24.04 LTS  | Multi-arch sha256 image-index digest  |
-| Python                       | 3.13       | Managed by uv (lockfile-driven)       |
-| uv (Python pkg manager)      | 0.7.12     | sha256-pinned ghcr.io image           |
-| Node.js                      | 22.22.3    | sha256-verified upstream tarball      |
+| Tool                         | Version    | Pin type                                  |
+|------------------------------|------------|-------------------------------------------|
+| Ubuntu (base)                | 24.04 LTS  | Multi-arch sha256 image-index digest      |
+| Python                       | 3.13       | Managed by uv (lockfile-driven)           |
+| uv (Python pkg manager)      | 0.7.12     | sha256-pinned ghcr.io image               |
+| Node.js                      | 22.22.3    | sha256-verified upstream tarball          |
 | npm                          | 11.2.0     | Matches `frontend/ai.client/package.json` |
-| AWS CLI                      | 2.34.40    | sha256 + PGP signature verified       |
-| AWS CDK CLI                  | 2.1120.0   | Matches `infrastructure/package.json` |
-| Docker CLI (client only)     | 29.4.3     | sha256-verified static binary         |
-| Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x        |
+| AWS CLI                      | 2.34.40    | sha256 + PGP signature verified           |
+| AWS CDK CLI                  | 2.1120.0   | Matches `infrastructure/package.json`     |
+| Docker CLI (client only)     | 29.4.3     | sha256-verified static binary             |
+| Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
 
 > All artifacts downloaded over the network during the build are verified
 > against either a pinned sha256 or a PGP signature. Apt packages installed
@@ -29,16 +32,22 @@ From the repo root:
 
 ```bash
 docker build \
+    --build-arg DOCKER_GID="$(getent group docker | cut -d: -f3)" \
     -f .devcontainer/Dockerfile \
     -t agentcore-devcontainer:latest \
     .
 ```
+
+The `DOCKER_GID` build-arg ensures the in-container `docker` group matches
+your host's, so `docker build` and friends work from inside the container.
+See **The Docker GID Gotcha** below for why this matters.
 
 Cross-platform (BuildKit + buildx):
 
 ```bash
 docker buildx build \
     --platform linux/amd64,linux/arm64 \
+    --build-arg DOCKER_GID="$(getent group docker | cut -d: -f3)" \
     -f .devcontainer/Dockerfile \
     -t agentcore-devcontainer:latest \
     .
@@ -60,65 +69,65 @@ docker build \
 
 Always update both architecture SHAs together.
 
-### Matching your host's docker GID
-
-If `getent group docker` on your host reports a GID other than `999`, pass it
-in so the in-container `dev` user can read `/var/run/docker.sock`:
-
-```bash
-docker build \
-    --build-arg DOCKER_GID="$(getent group docker | cut -d: -f3)" \
-    -f .devcontainer/Dockerfile \
-    -t agentcore-devcontainer:latest \
-    .
-```
-
 ## Running
 
-### Quick start — interactive shell
+### Long-lived shell — recommended
+
+Start once, `docker exec` into it many times. Project deps installed by
+`uv sync` and `npm ci` cache between runs:
+
+```bash
+docker rm -f agentcore-dev 2>/dev/null || true
+docker run -d \
+    --name agentcore-dev \
+    --group-add "$(getent group docker | cut -d: -f3)" \
+    -v "$(pwd)":/workspace \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -p 4200:4200 -p 8000:8000 -p 8001:8001 \
+    -w /workspace \
+    agentcore-devcontainer:latest \
+    sleep infinity
+
+docker exec -it agentcore-dev bash
+```
+
+### One-shot
 
 ```bash
 docker run --rm -it \
+    --group-add "$(getent group docker | cut -d: -f3)" \
     -v "$(pwd)":/workspace \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -p 4200:4200 -p 8000:8000 -p 8001:8001 \
     agentcore-devcontainer:latest
 ```
 
-The repository is bind-mounted at `/workspace`. Files written from inside the
-container are owned by UID 1000, which matches the default first user on most
-Linux desktops.
+## The Docker GID Gotcha
 
-### Docker Compose
+The Dockerfile bakes its internal `docker` group at GID **999** by default —
+the standard Debian/Ubuntu value. Whether the in-container `dev` user can
+read the bind-mounted `/var/run/docker.sock` depends on what GID the **host**
+uses for its docker group:
 
-A minimal `docker-compose.yml` to put alongside this Dockerfile:
+| Host                                 | Host docker GID  | What to do                                                |
+|--------------------------------------|------------------|-----------------------------------------------------------|
+| Native Linux (most distros)          | 999              | Nothing                                                   |
+| WSL2 with Docker Desktop             | 1001             | `--group-add 1001` at run time, **or** rebuild with `--build-arg DOCKER_GID=1001` |
+| Other                                | varies           | `getent group docker \| cut -d: -f3` to find yours        |
 
-```yaml
-services:
-  dev:
-    build:
-      context: ..
-      dockerfile: .devcontainer/Dockerfile
-    image: agentcore-devcontainer:latest
-    volumes:
-      - ..:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-    ports:
-      - "4200:4200"   # Angular dev server
-      - "8000:8000"   # App API
-      - "8001:8001"   # Inference API
-    working_dir: /workspace
-    command: sleep infinity
-```
+The `$(getent group docker | cut -d: -f3)` shell expression in the build and
+run commands above auto-resolves the right value on any Linux host, so you
+don't have to hard-code anything.
 
-Start it with `docker compose -f .devcontainer/docker-compose.yml up -d`,
-then `docker compose exec dev bash`.
+Symptom when the GID is wrong: any command that opens the docker daemon
+socket — `docker build`, `docker push`, `docker ps`, `docker run` — fails
+with `permission denied while trying to connect to the docker API at
+unix:///var/run/docker.sock`. Pure-CLI ops like `docker --version` still
+work because they don't touch the socket.
 
-### VS Code Dev Containers
-
-The included `devcontainer.json` is recognized by the
-[Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
-Open the repo and run **Reopen in Container** from the command palette.
+This **only** affects workflows that drive the Docker daemon from inside the
+container — building/pushing the project's own service images. Python,
+Node, AWS, and CDK workflows don't care.
 
 ## Verifying everything works
 
@@ -127,7 +136,7 @@ Inside the container:
 ```bash
 # All toolchains resolve and report versions
 node --version && npm --version
-uv --version && uv python list
+uv --version && uv python list --only-installed
 aws --version && cdk --version && docker --version
 
 # Backend — Python tests
@@ -161,24 +170,17 @@ Wrapper scripts under `scripts/stack-*/` work unchanged inside the container.
 ## Docker-in-Docker notes
 
 The Docker daemon is **not** included in this image. The Docker CLI binary
-talks to whatever daemon is exposed via `/var/run/docker.sock`. When you run
-a script like `bash scripts/stack-app-api/build.sh`, it shells out to
-`docker build` against the host daemon.
+talks to whatever daemon is exposed via the bind-mounted
+`/var/run/docker.sock`. When you run a script like
+`bash scripts/stack-app-api/build.sh`, it shells out to `docker build` against
+the host daemon.
 
 The host daemon resolves build contexts using **host filesystem paths**, not
-container paths. If you bind-mount your repo at `/workspace` inside the
-container but it lives at `/home/you/code/agentcore-public-stack` on the
-host, `docker build` will look for `/workspace/...` on the host and fail.
-
-Two ways to fix this:
-
-1. **Mount the repo at the same path inside and outside the container.**
-   For example, mount `~/code` to `/home/you/code` rather than `/workspace`.
-2. **Use `docker buildx` with a remote builder** that doesn't depend on
-   shared host paths.
-
-This Dockerfile only provides the CLI; the path-alignment decision is the
-caller's.
+container paths. Builds initiated from inside the dev container still work
+because the Docker CLI streams the build context as a tarball over the
+socket — the daemon doesn't need to read the host filesystem at the
+in-container path. Keep this in mind if you ever use `RUN --mount=type=bind`
+in a Dockerfile, which DOES require host-side paths.
 
 ## Files in this directory
 
@@ -186,8 +188,6 @@ caller's.
 |-----------------------------|----------------------------------------------------------|
 | `Dockerfile`                | The dev container image definition.                      |
 | `aws-cli-public-key.gpg`    | AWS CLI Team PGP public key (for installer signature).   |
-| `devcontainer.json`         | VS Code Dev Containers configuration.                    |
-| `.dockerignore`             | Build-context filter to keep image builds fast.          |
 | `README.md`                 | This file.                                               |
 
 ## Upgrading
