@@ -13,6 +13,14 @@ every synthetic write was silently skipped. That was the root cause of
 the "assistant error visible live, gone after refresh" bug. Centralizing
 the contract here surfaces the failure mode loudly and prevents the same
 shape of bug from drifting back into individual call sites.
+
+CANONICAL REFERENCE for the "user turn already persisted" invariant:
+The ``messages`` argument's docstring below is the single source of truth
+for *which roles to pass* in each scenario (assistant-only for paths
+inside the agent stream; user+assistant for paths that short-circuit
+before the agent runs). Call sites in ``stream_coordinator`` and
+``chat/routes.py`` repeat the high-level reasoning inline; if you need to
+revisit the invariant, start here.
 """
 
 import logging

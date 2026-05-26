@@ -1490,14 +1490,19 @@ async def process_agent_stream(
         yield _create_event("done", {})
 
     except RuntimeError as e:
-        # RuntimeError may occur during generator cleanup or cancellation
-        # Check if it's related to generator state
+        # The "generator"/"async" matched branch is the load-bearing part of
+        # this clause — it swallows async-generator state errors that aren't
+        # real user-facing failures: e.g. "asynchronous generator is already
+        # running" (re-entry) or "generator ignored GeneratorExit" (cleanup
+        # races). Normal shutdown goes through the GeneratorExit handler
+        # above; this catches the residual edge cases that should not
+        # surface as visible error events to the consumer.
         if "generator" in str(e).lower() or "async" in str(e).lower():
             logger.debug(f"Generator runtime error (likely cleanup): {e}")
         else:
-            # Unexpected RuntimeError - treat as error
+            # Any other RuntimeError: emit a STREAM_ERROR event, same shape
+            # as the generic Exception handler below.
             logger.error(f"Runtime error processing agent stream: {e}", exc_info=True)
-            # Create structured error event
             error_event = StreamErrorEvent(
                 error="Runtime error during streaming",
                 code=ErrorCode.STREAM_ERROR,

@@ -18,7 +18,7 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 
-from .stream_processor import _format_force_stop_message, process_agent_stream
+from .stream_processor import process_agent_stream
 
 logger = logging.getLogger(__name__)
 
@@ -820,39 +820,22 @@ class StreamCoordinator:
             # Emergency flush: save buffered messages before losing them
             self._emergency_flush(session_manager)
 
-            # Some Bedrock errors (notably ValidationException for unsupported
-            # documents / images) propagate as raw exceptions instead of
-            # through Strands' force_stop event — Strands' `yield
-            # ForceStopEvent(reason=e)` hits a GeneratorExit when the
-            # consumer closes during the throw, so stream_processor's
-            # force_stop branch never fires. Run str(e) through the same
-            # classifier we use there so the user sees the same actionable
-            # message in both code paths instead of the generic
-            # "Something went wrong" STREAM_ERROR template.
-            classified_message, classified_recoverable = _format_force_stop_message(str(e))
-            is_classified = not classified_message.startswith("Agent force-stopped:")
-
-            if is_classified:
-                message_text = classified_message
-                recoverable = classified_recoverable
-                resolved_code = ErrorCode.AGENT_ERROR
-                error_event = ConversationalErrorEvent(
-                    code=resolved_code,
-                    message=message_text,
-                    recoverable=recoverable,
-                    metadata={"session_id": session_id} if session_id else None,
-                )
-            else:
-                # Fall back to the existing STREAM_ERROR template for errors
-                # the classifier doesn't recognize.
-                error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
-                message_text = error_event.message
-                resolved_code = ErrorCode.STREAM_ERROR
+            # This handler catches exceptions from stream_coordinator's own
+            # loop body (e.g. interrupt extraction, artifact lookup,
+            # metadata calculation). Exceptions from inside the agent
+            # stream are caught one level down by process_agent_stream's
+            # own `except Exception` and yielded as STREAM_ERROR events
+            # — the in-loop branch above handles those. See
+            # test_force_stop_persistence.py:217-235 for the trace path.
+            # Coordinator-internal failures don't carry Bedrock-y patterns
+            # the force_stop classifier could match, so use the generic
+            # STREAM_ERROR template directly.
+            error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
 
             # Emit message events so error appears in chat
             yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
             yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
-            yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': message_text})}\n\n"
+            yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': error_event.message})}\n\n"
             yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
             yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
             yield error_event.to_sse_format()
@@ -869,7 +852,7 @@ class StreamCoordinator:
                 persist_synthetic_messages(
                     persist_session_manager,
                     session_id,
-                    [("assistant", message_text)],
+                    [("assistant", error_event.message)],
                 )
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
