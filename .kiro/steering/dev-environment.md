@@ -1,5 +1,5 @@
 ---
-inclusion: always
+inclusion: manual
 ---
 # Dev Environment — Container Execution Rules
 
