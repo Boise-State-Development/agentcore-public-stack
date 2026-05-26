@@ -70,6 +70,12 @@ ARG DOCKER_VERSION=29.4.3
 ARG DOCKER_SHA256_AMD64=bc9734a89d3edd15eeca8620961f6499ba69948814c85d7ac3488e34b3e16d01
 ARG DOCKER_SHA256_ARM64=fdde3dbedbd8dc9e9e54a3172e682b4e69e740296e580542ea9ceacebbbf4f4c
 
+# docker-buildx CLI plugin — required for Buildkit features such as
+# `RUN --mount=type=cache` used by backend/Dockerfile.app-api and friends.
+ARG BUILDX_VERSION=0.30.1
+ARG BUILDX_SHA256_AMD64=c37114fcd034025ec68e224657c8a5a850df472ded3ddcbca75ad3a7ebb9710d
+ARG BUILDX_SHA256_ARM64=31d012d52d6df68aef4b55db62330967b562811f0de30cdfaa4505f314797c76
+
 # uv — Python package and toolchain manager. Pinned to match
 # backend/Dockerfile.app-api and backend/Dockerfile.inference-api.
 ARG UV_VERSION=0.7.12
@@ -201,15 +207,22 @@ RUN set -eux; \
     aws --version
 
 # -----------------------------------------------------------------------------
-# Docker CLI (static binary)
+# Docker CLI (static binary) + buildx plugin
 #
 # Only the client. The daemon must be provided at runtime via a bind-mount
 # of /var/run/docker.sock — see .devcontainer/README.md.
+#
+# buildx is required to use BuildKit features (e.g. RUN --mount=type=cache)
+# that backend/Dockerfile.app-api and backend/Dockerfile.inference-api rely
+# on. It's installed as a CLI plugin under /usr/libexec/docker/cli-plugins/
+# so `docker build` automatically routes through it on Docker 23+.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     case "${TARGETARCH}" in \
-        amd64) docker_arch=x86_64;  docker_sha="${DOCKER_SHA256_AMD64}" ;; \
-        arm64) docker_arch=aarch64; docker_sha="${DOCKER_SHA256_ARM64}" ;; \
+        amd64) docker_arch=x86_64;  docker_sha="${DOCKER_SHA256_AMD64}"; \
+               buildx_arch=amd64;   buildx_sha="${BUILDX_SHA256_AMD64}" ;; \
+        arm64) docker_arch=aarch64; docker_sha="${DOCKER_SHA256_ARM64}"; \
+               buildx_arch=arm64;   buildx_sha="${BUILDX_SHA256_ARM64}" ;; \
         *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     cd /tmp; \
@@ -218,7 +231,13 @@ RUN set -eux; \
     tar -xzf docker.tgz; \
     install -m 0755 docker/docker /usr/local/bin/docker; \
     rm -rf docker docker.tgz; \
-    docker --version
+    install -d -m 0755 /usr/libexec/docker/cli-plugins; \
+    curl -fsSLo /usr/libexec/docker/cli-plugins/docker-buildx \
+        "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-${buildx_arch}"; \
+    echo "${buildx_sha}  /usr/libexec/docker/cli-plugins/docker-buildx" | sha256sum -c -; \
+    chmod 0755 /usr/libexec/docker/cli-plugins/docker-buildx; \
+    docker --version; \
+    docker buildx version
 
 # -----------------------------------------------------------------------------
 # uv — Python package and toolchain manager

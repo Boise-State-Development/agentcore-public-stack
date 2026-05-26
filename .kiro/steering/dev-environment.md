@@ -15,9 +15,9 @@ orchestrating the dev container, nothing else.
 - **Workspace path inside**: `/workspace`
 - **User inside**: `dev` (UID 1000, GID 1000, passwordless sudo)
 - **Toolchains**: Python 3.13 (via uv 0.7.12), Node.js 22 LTS, npm 11.2.0,
-  AWS CLI 2.34.40, AWS CDK 2.1120.0, Docker CLI 29.4.3, plus the Playwright
-  chromium runtime libs and fonts. See `.devcontainer/README.md` for the
-  full pinned-version table.
+  AWS CLI 2.34.40, AWS CDK 2.1120.0, Docker CLI 29.4.3 with buildx 0.30.1
+  plugin, plus the Playwright chromium runtime libs and fonts. See
+  `.devcontainer/README.md` for the full pinned-version table.
 
 If the image is missing, build it:
 

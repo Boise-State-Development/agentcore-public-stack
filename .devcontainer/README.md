@@ -18,6 +18,7 @@ For agent execution rules and the workspace-path map, see
 | AWS CLI                      | 2.34.40    | sha256 + PGP signature verified           |
 | AWS CDK CLI                  | 2.1120.0   | Matches `infrastructure/package.json`     |
 | Docker CLI (client only)     | 29.4.3     | sha256-verified static binary             |
+| Docker buildx (CLI plugin)   | 0.30.1     | sha256-verified GitHub release            |
 | Playwright chromium runtime  | n/a        | Apt deps for Playwright 1.59.x            |
 
 > All artifacts downloaded over the network during the build are verified
