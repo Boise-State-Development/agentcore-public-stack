@@ -38,7 +38,7 @@ const PROVIDER_LOGO_DIR: Record<string, string> = {
   Anthropic: 'anthropic',
   Amazon: 'amazon',
   Meta: 'meta',
-  OpenAI: 'open-aI',
+  OpenAI: 'openai',
 };
 
 @Component({
