@@ -261,6 +261,7 @@ export class ModelFormPage implements OnInit {
   readonly isEditMode = signal<boolean>(false);
   readonly modelId = signal<string | null>(null);
   readonly isSubmitting = signal<boolean>(false);
+  readonly isLoading = signal<boolean>(false);
 
   // Inference-param row metadata, parallel to the ``inferenceParams`` FormArray.
   // Provider switch rebuilds both together so each row is paired with its
@@ -758,6 +759,7 @@ export class ModelFormPage implements OnInit {
    * Load model data for editing
    */
   private async loadModelData(id: string): Promise<void> {
+    this.isLoading.set(true);
     try {
       const model = await this.managedModelsService.getModel(id);
 
@@ -789,6 +791,8 @@ export class ModelFormPage implements OnInit {
       console.error('Error loading model data:', error);
       alert('Failed to load model data. Please try again.');
       this.router.navigate(['/admin/manage-models']);
+    } finally {
+      this.isLoading.set(false);
     }
   }
 
