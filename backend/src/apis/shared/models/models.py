@@ -94,13 +94,26 @@ class SupportedParams(BaseModel):
             return self
         # bool is a subclass of int — reject it explicitly so a stale `true`
         # default from the old toggle schema fails loudly instead of being
-        # interpreted as a 1-token budget.
-        if isinstance(budget, bool) or not isinstance(budget, int):
+        # interpreted as a 1-token budget. Whole-number floats are accepted
+        # and coerced because DynamoDB roundtrips numeric fields through
+        # Decimal → float, so an int stored from the admin form comes back
+        # as `4096.0` and would otherwise fail this check on every list call.
+        if isinstance(budget, bool):
+            raise ValueError("thinking default must be an int budget (>= 1024) or null/0")
+        if isinstance(budget, float):
+            if not budget.is_integer():
+                raise ValueError("thinking default must be an int budget (>= 1024) or null/0")
+            budget = int(budget)
+            thinking.default = budget
+        elif not isinstance(budget, int):
             raise ValueError("thinking default must be an int budget (>= 1024) or null/0")
         if budget < 1024:
             raise ValueError("thinking budget must be >= 1024")
         max_tokens = self.params.get("max_tokens")
-        if max_tokens and isinstance(max_tokens.default, int) and budget >= max_tokens.default:
+        mt_default = max_tokens.default if max_tokens else None
+        if isinstance(mt_default, float) and mt_default.is_integer():
+            mt_default = int(mt_default)
+        if isinstance(mt_default, int) and not isinstance(mt_default, bool) and budget >= mt_default:
             raise ValueError("thinking budget must be < max_tokens default")
         return self
 
