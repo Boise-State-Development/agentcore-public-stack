@@ -100,29 +100,21 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
   },
   {
     key: 'claude-opus-4-7',
-    // TODO(curated-catalog): swap to the real Opus 4.7 inference-profile ID
-    // before merging. The placeholder below will fail validation against the
-    // live Bedrock catalog. Family aliases live in
-    // backend/src/agents/main_agent/core/model_config.py — `claude-opus-4-7`.
     tagline: 'Anthropic\'s most capable model — for the hardest reasoning.',
     capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
     template: {
       ...claude4xDefaults(),
-      modelId: 'us.anthropic.claude-opus-4-7-TODO-v1:0',
+      modelId: 'global.anthropic.claude-opus-4-7',
       modelName: 'Claude Opus 4.7',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 15.0,
-      outputPricePerMillionTokens: 75.0,
-      cacheWritePricePerMillionTokens: 18.75,
-      cacheReadPricePerMillionTokens: 1.5,
+      inputPricePerMillionTokens: 5.0,
+      outputPricePerMillionTokens: 25.0,
+      cacheWritePricePerMillionTokens: 6.25,
+      cacheReadPricePerMillionTokens: 0.5,
       knowledgeCutoffDate: '2025-10-01',
       supportedParams: {
         params: {
-          temperature: { supported: true, min: 0, max: 1, default: 1.0 },
-          top_p: { supported: true, min: 0, max: 1, default: null },
-          top_k: { supported: true, min: 1, default: null },
-          max_tokens: { supported: true, min: 1, max: 64_000, default: 16_000 },
-          thinking: { supported: true, min: 1024, max: 48_000, default: 16_000 },
+          max_tokens: { supported: true, min: 1, max: 64_000, default: 32_000 },
           effort: {
             supported: true,
             allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
