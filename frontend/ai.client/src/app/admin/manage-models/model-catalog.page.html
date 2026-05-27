@@ -1,0 +1,251 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Back link -->
+    <a
+      routerLink="/admin/manage-models"
+      class="mb-4 inline-flex items-center gap-1 text-sm/6 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+      Back to models
+    </a>
+
+    <!-- Page Header -->
+    <div class="mb-6">
+      <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Add a model</h1>
+      <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        Pick a curated model below to add it with sensible defaults — pricing, modalities, and inference
+        parameters already configured. You can fine-tune anything later from the model's edit page.
+      </p>
+    </div>
+
+    <!-- Provider tabs -->
+    <div
+      role="tablist"
+      aria-label="Model providers"
+      class="mb-4 flex flex-wrap items-center gap-1 rounded-2xl border border-gray-200 bg-white p-1 dark:border-gray-700 dark:bg-gray-800"
+    >
+      @for (tab of tabs; track tab.id) {
+        <button
+          type="button"
+          role="tab"
+          [id]="'catalog-tab-' + tab.id"
+          [attr.aria-selected]="activeTab() === tab.id"
+          [attr.aria-controls]="'catalog-panel-' + tab.id"
+          [tabindex]="activeTab() === tab.id ? 0 : -1"
+          (click)="selectTab(tab.id)"
+          class="rounded-2xl px-4 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+          [class]="activeTab() === tab.id
+            ? 'bg-blue-600 text-white dark:bg-blue-500'
+            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white'"
+        >
+          {{ tab.label }}
+        </button>
+      }
+    </div>
+
+    <!-- Tab panels -->
+    @for (tab of tabs; track tab.id) {
+      @if (activeTab() === tab.id) {
+        <section
+          role="tabpanel"
+          [id]="'catalog-panel-' + tab.id"
+          [attr.aria-labelledby]="'catalog-tab-' + tab.id"
+        >
+          @if (visibleModels().length === 0) {
+            <!-- Empty state: Coming soon (OpenAI / Gemini) -->
+            <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+              <ng-icon
+                name="heroSparkles"
+                class="mx-auto size-8 text-gray-400 dark:text-gray-500"
+                aria-hidden="true"
+              />
+              <h2 class="mt-2 text-sm/6 font-semibold text-gray-900 dark:text-white">
+                {{ tab.label }} catalog coming soon
+              </h2>
+              <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+                We're still curating defaults for {{ tab.label }}. In the meantime, you can configure a
+                model manually.
+              </p>
+              <a
+                routerLink="/admin/manage-models/new"
+                class="mt-4 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+              >
+                <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+                Add a custom model
+              </a>
+            </div>
+          } @else {
+            <!-- Curated cards grid -->
+            <ul class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              @for (model of visibleModels(); track model.key) {
+                <li
+                  class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800"
+                >
+                  <!-- Header: logo + name + provider + (added badge) -->
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="flex min-w-0 items-start gap-3">
+                      @if (logoDirFor(model.template.providerName); as logoDir) {
+                        <div
+                          class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-50 dark:bg-gray-900"
+                          aria-hidden="true"
+                        >
+                          <img
+                            [src]="'/img/provider-logos/' + logoDir + '/light.svg'"
+                            alt=""
+                            class="block size-7 object-contain dark:hidden"
+                          />
+                          <img
+                            [src]="'/img/provider-logos/' + logoDir + '/dark.svg'"
+                            alt=""
+                            class="hidden size-7 object-contain dark:block"
+                          />
+                        </div>
+                      }
+                      <div class="min-w-0">
+                        <h3 class="truncate text-base/6 font-semibold text-gray-900 dark:text-white">
+                          {{ model.template.modelName }}
+                        </h3>
+                        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                          {{ model.template.providerName }}
+                        </p>
+                      </div>
+                    </div>
+                    @if (isAlreadyAdded(model.template.modelId)) {
+                      <span class="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-green-100 px-2 py-0.5 text-xs/5 font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                        <ng-icon name="heroCheckCircleSolid" class="size-4" aria-hidden="true" />
+                        Added
+                      </span>
+                    }
+                  </div>
+
+                  <!-- Tagline -->
+                  <p class="mt-2 text-sm/6 text-gray-700 dark:text-gray-300">
+                    {{ model.tagline }}
+                  </p>
+
+                  <!-- Capability badges -->
+                  <ul class="mt-3 flex flex-wrap gap-1.5">
+                    @for (cap of model.capabilities; track cap) {
+                      <li
+                        class="inline-flex items-center rounded-2xl bg-purple-100 px-2 py-0.5 text-xs/5 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+                      >
+                        {{ cap }}
+                      </li>
+                    }
+                  </ul>
+
+                  <!-- Key facts -->
+                  <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs/5">
+                    <div>
+                      <dt class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        Context
+                      </dt>
+                      <dd class="mt-0.5 text-gray-700 dark:text-gray-300">
+                        {{ model.template.maxInputTokens / 1000 }}K in /
+                        {{ model.template.maxOutputTokens / 1000 }}K out
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        Pricing / 1M tokens
+                      </dt>
+                      <dd class="mt-0.5 text-gray-700 dark:text-gray-300">
+                        <span class="font-semibold text-gray-900 dark:text-white">
+                          ${{ model.template.inputPricePerMillionTokens.toFixed(2) }}
+                        </span> in ·
+                        <span class="font-semibold text-gray-900 dark:text-white">
+                          ${{ model.template.outputPricePerMillionTokens.toFixed(2) }}
+                        </span> out
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        Modalities
+                      </dt>
+                      <dd class="mt-0.5 text-gray-700 dark:text-gray-300">
+                        {{ model.template.inputModalities.join(', ') }}
+                        <span class="text-gray-400 dark:text-gray-500">→</span>
+                        {{ model.template.outputModalities.join(', ') }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        Model ID
+                      </dt>
+                      <dd
+                        class="mt-0.5 truncate font-mono text-gray-500 dark:text-gray-400"
+                        [title]="model.template.modelId"
+                      >
+                        {{ model.template.modelId }}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <!-- Error message (if last add attempt failed) -->
+                  @if (errorFor(model.key); as msg) {
+                    <p
+                      role="alert"
+                      class="mt-3 text-xs/5 text-red-600 dark:text-red-400"
+                    >
+                      {{ msg }}
+                    </p>
+                  }
+
+                  <!-- Action -->
+                  <div class="mt-4 flex items-center justify-end gap-2">
+                    @if (isAlreadyAdded(model.template.modelId)) {
+                      <a
+                        routerLink="/admin/manage-models"
+                        class="inline-flex items-center gap-1 text-sm/6 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        View in list
+                      </a>
+                    } @else {
+                      <button
+                        type="button"
+                        (click)="previewCuratedModel(model)"
+                        [disabled]="addingKey() !== null"
+                        class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                      >
+                        Preview &amp; customize
+                      </button>
+                      <button
+                        type="button"
+                        (click)="addCuratedModel(model)"
+                        [disabled]="addingKey() !== null"
+                        class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-600"
+                      >
+                        <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+                        {{ isAdding(model.key) ? 'Adding…' : 'Add to models' }}
+                      </button>
+                    }
+                  </div>
+                </li>
+              }
+            </ul>
+          }
+        </section>
+      }
+    }
+
+    <!-- Footer escape hatches -->
+    <div class="mt-8 flex flex-col gap-2 text-sm/6 sm:flex-row sm:items-center sm:justify-between">
+      <a
+        routerLink="/admin/manage-models/new"
+        class="inline-flex items-center gap-1 font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+      >
+        Need something else? Add a custom model
+      </a>
+      @if (activeTab() === 'bedrock') {
+        <a
+          routerLink="/admin/bedrock/models"
+          class="inline-flex items-center gap-1 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:text-white"
+        >
+          Browse all Bedrock foundation models
+          <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
+        </a>
+      }
+    </div>
+  </div>
+
+</div>

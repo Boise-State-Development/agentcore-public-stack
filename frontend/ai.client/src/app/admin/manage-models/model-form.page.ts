@@ -22,6 +22,7 @@ import {
   SupportedParams,
 } from './models/managed-model.model';
 import { ManagedModelsService } from './services/managed-models.service';
+import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
 
 interface ParamRowGroup {
@@ -245,6 +246,7 @@ export class ModelFormPage implements OnInit {
   private router = inject(Router);
   private route = inject(ActivatedRoute);
   private managedModelsService = inject(ManagedModelsService);
+  private prefillService = inject(CuratedModelPrefillService);
   private appRolesService = inject(AppRolesService);
 
   // Available options for multi-select fields
@@ -353,12 +355,21 @@ export class ModelFormPage implements OnInit {
       this.isEditMode.set(true);
       this.modelId.set(id);
       this.loadModelData(id);
-    }
-
-    // Check for query params (from Bedrock models page)
-    const queryParams = this.route.snapshot.queryParams;
-    if (queryParams['modelId']) {
-      this.prefillFromQueryParams(queryParams);
+    } else {
+      // Curated catalog handoff: a one-shot template seeded by the catalog
+      // page lives in CuratedModelPrefillService. Consume it before falling
+      // through to the older query-param prefill so the richer template
+      // (pricing + supportedParams) wins when both are present.
+      const pending = this.prefillService.consume();
+      if (pending) {
+        this.prefillFromCuratedTemplate(pending);
+      } else {
+        // Check for query params (from Bedrock models page)
+        const queryParams = this.route.snapshot.queryParams;
+        if (queryParams['modelId']) {
+          this.prefillFromQueryParams(queryParams);
+        }
+      }
     }
 
     // Clear cache pricing when supportsCaching is toggled off
@@ -779,6 +790,39 @@ export class ModelFormPage implements OnInit {
       alert('Failed to load model data. Please try again.');
       this.router.navigate(['/admin/manage-models']);
     }
+  }
+
+  /**
+   * Apply a curated template to the form. Mirrors `loadModelData`'s patching
+   * shape, so the admin sees a fully-populated form they can review and tweak
+   * before clicking Create. Patches main fields first so the provider
+   * valueChanges fires and rebuilds the inference-params rows; then re-runs
+   * `rebuildInferenceParamRows` with the template's `supportedParams` so the
+   * per-param bounds/defaults land in those rows.
+   */
+  private prefillFromCuratedTemplate(template: ManagedModelFormData): void {
+    this.modelForm.patchValue({
+      modelId: template.modelId,
+      modelName: template.modelName,
+      provider: template.provider,
+      providerName: template.providerName,
+      inputModalities: template.inputModalities.map(m => m.toUpperCase()),
+      outputModalities: template.outputModalities.map(m => m.toUpperCase()),
+      maxInputTokens: template.maxInputTokens,
+      maxOutputTokens: template.maxOutputTokens,
+      allowedAppRoles: template.allowedAppRoles ?? [],
+      availableToRoles: template.availableToRoles ?? [],
+      enabled: template.enabled,
+      isDefault: template.isDefault,
+      inputPricePerMillionTokens: template.inputPricePerMillionTokens,
+      outputPricePerMillionTokens: template.outputPricePerMillionTokens,
+      cacheWritePricePerMillionTokens: template.cacheWritePricePerMillionTokens ?? null,
+      cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
+      knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
+      supportsCaching: template.supportsCaching ?? true,
+    });
+
+    this.rebuildInferenceParamRows(template.provider, template.supportedParams ?? null);
   }
 
   /**
