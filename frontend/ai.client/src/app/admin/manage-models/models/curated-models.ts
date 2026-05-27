@@ -74,13 +74,13 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     },
   },
   {
-    key: 'claude-sonnet-4-5',
+    key: 'claude-sonnet-4-6',
     tagline: 'Balanced reasoning model — Anthropic\'s default workhorse.',
     capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],
     template: {
       ...claude4xDefaults(),
-      modelId: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
-      modelName: 'Claude Sonnet 4.5',
+      modelId: 'us.anthropic.claude-sonnet-4-6',
+      modelName: 'Claude Sonnet 4.6',
       maxOutputTokens: 64_000,
       inputPricePerMillionTokens: 3.0,
       outputPricePerMillionTokens: 15.0,
@@ -89,11 +89,11 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       knowledgeCutoffDate: '2025-07-01',
       supportedParams: {
         params: {
-          temperature: { supported: true, min: 0, max: 1, default: 1.0 },
+          temperature: { supported: true, min: 0, max: 1, default: 0.7 },
           top_p: { supported: true, min: 0, max: 1, default: null },
           top_k: { supported: true, min: 1, default: null },
           max_tokens: { supported: true, min: 1, max: 64_000, default: 8192 },
-          thinking: { supported: true, min: 1024, max: 48_000, default: 8192 },
+          thinking: { supported: true, min: 1024, max: 48_000, default: 4096 },
         },
       },
     },
@@ -104,7 +104,7 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
     template: {
       ...claude4xDefaults(),
-      modelId: 'global.anthropic.claude-opus-4-7',
+      modelId: 'us.anthropic.claude-opus-4-7',
       modelName: 'Claude Opus 4.7',
       maxOutputTokens: 64_000,
       inputPricePerMillionTokens: 5.0,
