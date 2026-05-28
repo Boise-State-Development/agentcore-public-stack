@@ -3,7 +3,7 @@ Prompt builder for multimodal content (text, images, documents)
 """
 import logging
 import base64
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Union, Dict, Any, Set
 from agents.main_agent.multimodal.image_handler import ImageHandler
 from agents.main_agent.multimodal.document_handler import DocumentHandler
 from agents.main_agent.multimodal.file_sanitizer import FileSanitizer
@@ -51,20 +51,27 @@ class PromptBuilder:
         else:
             content_blocks.append({"text": message})
 
+        # Track sanitized document names used in this turn to prevent
+        # Bedrock ValidationException: "Messages can't contain duplicate document names"
+        used_document_names: Set[str] = set()
+
         # Add each file as appropriate ContentBlock
         for file in files:
-            content_block = self._process_file(file)
+            content_block = self._process_file(file, used_document_names)
             if content_block:
                 content_blocks.append(content_block)
 
         return content_blocks
 
-    def _process_file(self, file: Any) -> Optional[Dict[str, Any]]:
+    def _process_file(self, file: Any, used_document_names: Optional[Set[str]] = None) -> Optional[Dict[str, Any]]:
         """
         Process a single file and create appropriate ContentBlock
 
         Args:
             file: FileContent object with content_type, filename, and base64 bytes
+            used_document_names: Set of already-used document names in this turn.
+                When provided, duplicate document names are made unique by appending
+                a counter suffix to prevent Bedrock ValidationException.
 
         Returns:
             dict: ContentBlock or None if unsupported
@@ -88,6 +95,15 @@ class PromptBuilder:
             # Sanitize filename for Bedrock
             sanitized_name = self.file_sanitizer.sanitize_filename(file.filename)
 
+            # Deduplicate document names within this turn. Bedrock rejects
+            # requests where two document blocks share the same name, even
+            # across different messages in the conversation history. When the
+            # same (or similarly-named) file appears more than once, append
+            # a numeric suffix to make the name unique.
+            if used_document_names is not None:
+                sanitized_name = self._unique_document_name(sanitized_name, used_document_names)
+                used_document_names.add(sanitized_name)
+
             return self.document_handler.create_content_block(
                 file_bytes=file_bytes,
                 filename=filename,
@@ -97,6 +113,23 @@ class PromptBuilder:
         else:
             logger.warning(f"Unsupported file type: {filename} ({content_type})")
             return None
+
+    @staticmethod
+    def _unique_document_name(name: str, used_names: Set[str]) -> str:
+        """Return a name that is not already in used_names.
+
+        If ``name`` is already taken, appends ``_2``, ``_3``, … until a free
+        slot is found. This keeps names deterministic and human-readable while
+        satisfying Bedrock's uniqueness constraint.
+        """
+        if name not in used_names:
+            return name
+        counter = 2
+        while True:
+            candidate = f"{name}_{counter}"
+            if candidate not in used_names:
+                return candidate
+            counter += 1
 
     def get_content_type_summary(self, prompt: Union[str, List[Dict[str, Any]]]) -> str:
         """

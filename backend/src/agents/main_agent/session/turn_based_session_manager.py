@@ -196,6 +196,23 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if not agent.messages:
             return
 
+        # Strip document bytes from history unconditionally — regardless of
+        # whether compaction is enabled. Document content blocks with inline
+        # bytes must never survive in restored history because Bedrock rejects
+        # any request where two document blocks share the same sanitized name
+        # across the conversation (ValidationException: "Messages can't contain
+        # duplicate document names"). This can happen on what feels like a
+        # "first turn" when the user returns to an existing session URL and
+        # re-attaches a file with the same name as one from a prior visit.
+        # The [Attached files: …] text marker already in the user message
+        # preserves the reference for the model without re-sending bytes.
+        # Images are handled the same way inside _truncate_tool_contents, but
+        # that method is gated on compaction being enabled — this one is not.
+        try:
+            agent.messages = self._strip_document_bytes(agent.messages)
+        except Exception as e:
+            logger.warning(f"Document byte stripping failed, continuing: {e}", exc_info=True)
+
         if not self.compaction_config or not self.compaction_config.enabled:
             return
 
@@ -721,6 +738,52 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             return text
         return text[:max_length] + f"\n... [truncated, {len(text) - max_length} chars removed]"
 
+    def _strip_document_bytes(self, messages: List[Dict]) -> List[Dict]:
+        """Replace document content blocks' inline bytes with a text placeholder.
+
+        Called unconditionally on every session restore — independent of whether
+        compaction is enabled. Document blocks with ``source.bytes`` must never
+        survive in restored history because Bedrock rejects any request where two
+        document blocks share the same sanitized name across the conversation
+        (ValidationException: "Messages can't contain duplicate document names").
+
+        Images are handled the same way inside ``_truncate_tool_contents``, but
+        that method is gated on compaction being enabled. This one is not.
+
+        The ``[Attached files: …]`` text marker already present in the user
+        message preserves the reference for the model without re-sending bytes.
+        """
+        stripped_messages = copy.deepcopy(messages)
+        strip_count = 0
+
+        for msg in stripped_messages:
+            content = msg.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for block_idx, block in enumerate(content):
+                if not isinstance(block, dict) or "document" not in block:
+                    continue
+                doc_data = block["document"]
+                source = doc_data.get("source", {})
+                # Only replace blocks that carry inline bytes — s3Location
+                # blocks (enhancement #401) have no bytes to strip and are
+                # safe to leave as-is since they don't accumulate in history.
+                if "bytes" not in source:
+                    continue
+                doc_name = doc_data.get("name", "unknown")
+                doc_format = doc_data.get("format", "unknown")
+                original_bytes = source.get("bytes", b"")
+                original_size = len(original_bytes) if isinstance(original_bytes, bytes) else 0
+                content[block_idx] = {
+                    "text": f"[Document placeholder: name={doc_name}, format={doc_format}, original_size={original_size} bytes]"
+                }
+                strip_count += 1
+
+        if strip_count > 0:
+            logger.debug(f"Stripped inline bytes from {strip_count} document block(s) in history")
+
+        return stripped_messages
+
     def _truncate_tool_contents(
         self,
         messages: List[Dict],
@@ -728,6 +791,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     ) -> tuple:
         """
         Stage 1 Compaction: Truncate long tool inputs/results and replace images.
+
+        Note: document block byte-stripping is handled unconditionally by
+        ``_strip_document_bytes`` (called from ``initialize``) and is therefore
+        not repeated here.
 
         Returns:
             Tuple of (modified_messages, truncation_count, chars_saved)

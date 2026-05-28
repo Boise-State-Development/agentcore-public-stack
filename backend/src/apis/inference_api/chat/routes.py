@@ -814,6 +814,35 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request
 
+    # Deduplicate files by (filename, content_type) before partitioning.
+    # The same file can arrive via both `files` (direct base64) and
+    # `file_upload_ids` (resolved from S3), or a client may submit the same
+    # upload ID twice. Sending two document blocks with the same sanitized
+    # name to Bedrock ConverseStream raises:
+    #   ValidationException: Messages can't contain duplicate document names.
+    # We keep the first occurrence and drop subsequent duplicates.
+    if all_files:
+        seen_file_keys: set = set()
+        deduped_files = []
+        for f in all_files:
+            key = (f.filename.lower(), f.content_type.lower())
+            if key not in seen_file_keys:
+                seen_file_keys.add(key)
+                deduped_files.append(f)
+            else:
+                logger.info(
+                    "Dropping duplicate file attachment: %s (%s)",
+                    f.filename,
+                    f.content_type,
+                )
+        if len(deduped_files) < len(all_files):
+            logger.info(
+                "Deduplicated %d -> %d file(s) before sending to Bedrock",
+                len(all_files),
+                len(deduped_files),
+            )
+        all_files = deduped_files
+
     files_to_send, diverted_tabular, oversized_inline = _partition_attachments(all_files)
     if diverted_tabular:
         logger.info(

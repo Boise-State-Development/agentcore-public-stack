@@ -248,6 +248,18 @@ Please try again."""
 
 Please try again."""
 
+    # Override with specific actionable messages for known Bedrock errors
+    # that can arrive as raw exceptions (not force_stop events) depending
+    # on where in the call stack Strands surfaces them.
+    if "duplicate document name" in error_lower or "can't contain duplicate document" in error_lower:
+        message = (
+            "⚠️ A file you attached has the same name as one already in this "
+            "conversation's context.\n\n"
+            "Try renaming the file before attaching it, or start a new "
+            "conversation."
+        )
+        recoverable = True
+
     metadata: Dict[str, Any] = {}
     if session_id:
         metadata["session_id"] = session_id
