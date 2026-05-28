@@ -329,6 +329,19 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
     reason_str = str(reason or "")
     reason_lower = reason_str.lower()
 
+    # Bedrock rejects requests where two document blocks in the conversation
+    # share the same name. This can happen when the same file (or two files
+    # whose names sanitize identically) appears in both the current turn and
+    # a prior turn that is still in the active context window.
+    if "duplicate document name" in reason_lower or "can't contain duplicate document" in reason_lower:
+        return (
+            "⚠️ A file you attached has the same name as one already in this "
+            "conversation's context.\n\n"
+            "Try renaming the file before attaching it, or start a new "
+            "conversation.",
+            True,
+        )
+
     # Some Bedrock-hosted models (e.g. gpt-oss-120b) reject any document or
     # image content block outright with "This model doesn't support
     # documents." Check this BEFORE the size-limit branch — the AWS message

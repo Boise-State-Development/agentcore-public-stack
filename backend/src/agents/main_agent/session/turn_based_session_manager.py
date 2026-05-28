@@ -769,6 +769,27 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     truncation_count += 1
                     total_chars_saved += original_size
 
+                # Replace document blocks with placeholder.
+                # Document bytes must be stripped from history just like images —
+                # leaving them in causes Bedrock ValidationException
+                # "Messages can't contain duplicate document names" when the user
+                # attaches a file with the same (sanitized) name in a later turn.
+                # The [Attached files: …] text marker already in the user message
+                # preserves the reference for the model without re-sending bytes.
+                elif "document" in block:
+                    doc_data = block["document"]
+                    doc_name = doc_data.get("name", "unknown")
+                    doc_format = doc_data.get("format", "unknown")
+                    source = doc_data.get("source", {})
+                    original_bytes = source.get("bytes", b"")
+                    original_size = len(original_bytes) if isinstance(original_bytes, bytes) else 0
+
+                    content[block_idx] = {
+                        "text": f"[Document placeholder: name={doc_name}, format={doc_format}, original_size={original_size} bytes]"
+                    }
+                    truncation_count += 1
+                    total_chars_saved += original_size
+
                 # Truncate toolUse input
                 elif "toolUse" in block:
                     tool_use = block["toolUse"]
