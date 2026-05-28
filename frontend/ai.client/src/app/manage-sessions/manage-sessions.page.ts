@@ -76,7 +76,7 @@ const MAX_SELECTION = 20;
         <div class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div class="flex items-center gap-3">
             <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
-              {{ selectedCount() }} of {{ selectableCount() }} selected
+              {{ selectedCount() }} {{ selectedCount() === 1 ? 'item' : 'items' }} selected
             </span>
             @if (selectedCount() > 0) {
               <button
@@ -300,9 +300,6 @@ export class ManageSessionsPage implements OnInit {
 
   /** Number of selected sessions */
   readonly selectedCount = computed(() => this.selectedSessionIds().size);
-
-  /** Denominator for the selection counter: capped at maxSelection but never higher than the loaded session count */
-  readonly selectableCount = computed(() => Math.min(this.sessions().length, this.maxSelection));
 
   /** Whether selection limit is reached */
   readonly isAtSelectionLimit = computed(() => this.selectedCount() >= this.maxSelection);
