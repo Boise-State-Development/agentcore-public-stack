@@ -329,28 +329,66 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
     reason_str = str(reason or "")
     reason_lower = reason_str.lower()
 
+    # Bedrock rejects requests where two document blocks in the conversation
+    # share the same name. This can happen when the same file (or two files
+    # whose names sanitize identically) appears in both the current turn and
+    # a prior turn that is still in the active context window.
+    if "duplicate document name" in reason_lower or "can't contain duplicate document" in reason_lower:
+        return (
+            "⚠️ A file you attached has the same name as one already in this "
+            "conversation's context.\n\n"
+            "Try renaming the file before attaching it, or start a new "
+            "conversation.",
+            True,
+        )
+
+    # Some Bedrock-hosted models (e.g. gpt-oss-120b) reject any document or
+    # image content block outright with "This model doesn't support
+    # documents." Check this BEFORE the size-limit branch — the AWS message
+    # contains "ValidationException" + "documents" and would otherwise be
+    # misclassified as a 4.5 MB overflow.
+    #
+    # Copy notes: keep the actionable advice deployment-agnostic — no brand
+    # names (model lineups change), no UI affordance names (might drift),
+    # no references to optional tools like Spreadsheet Analysis (not
+    # guaranteed enabled across forks/deployments).
+    if "doesn't support document" in reason_lower or "does not support document" in reason_lower:
+        return (
+            "⚠️ The selected model can't read attached files.\n\n"
+            "To work with this file, switch to a model that supports "
+            "documents.",
+            True,
+        )
+
+    if "doesn't support image" in reason_lower or "does not support image" in reason_lower:
+        return (
+            "⚠️ The selected model can't read attached images.\n\n"
+            "To work with this image, switch to a model that supports "
+            "images.",
+            True,
+        )
+
     # Bedrock ConverseStream rejects document content blocks over ~4.5 MB
     # internal size. Triggered most often by XLSX files that inflate
-    # significantly during parsing. The fix-forward is to route tabular
-    # files through the spreadsheet analysis tools, but a turn with a
-    # non-tabular file this large (or history that accumulated past the
-    # limit) still needs a friendlier message than the raw AWS error. See
-    # issue #206.
-    if "maximum document size" in reason_lower or (
-        "validationexception" in reason_lower and "document" in reason_lower
+    # significantly during parsing. See issue #206. Narrowed from
+    # `"document" in reason` to size-specific markers so
+    # unsupported-modality errors don't false-positive here.
+    #
+    # Copy notes: keep guidance deployment-agnostic — no references to
+    # optional tools (Spreadsheet Analysis isn't guaranteed enabled across
+    # forks/deployments) and no UI affordance names that might drift.
+    if (
+        "maximum document size" in reason_lower
+        or "document size" in reason_lower
+        or ("document" in reason_lower and ("too large" in reason_lower or "exceeds" in reason_lower or "exceed the" in reason_lower))
     ):
         return (
             "⚠️ One of the attached files is too large for the model to read "
             "directly.\n\n"
-            "Bedrock limits inline documents to 4.5 MB of internal content, "
-            "and spreadsheets (especially XLSX) often expand past that when "
-            "parsed. To work with large data files, enable **Spreadsheet "
-            "Analysis** in the Tools section of the settings panel (gear "
-            "icon next to the message input) and re-attach the file — the "
-            "tool runs pandas on the real file and isn't limited by the "
-            "document size cap.\n\n"
-            "For large PDFs or docs, split them into smaller sections or "
-            "convert to plain text.",
+            "Bedrock limits inline documents to 4.5 MB after parsing, and "
+            "spreadsheets (especially XLSX) often expand past that. Try "
+            "splitting the file into smaller sections, converting to plain "
+            "text or CSV, or sharing only the relevant portion.",
             True,
         )
 
@@ -1465,14 +1503,19 @@ async def process_agent_stream(
         yield _create_event("done", {})
 
     except RuntimeError as e:
-        # RuntimeError may occur during generator cleanup or cancellation
-        # Check if it's related to generator state
+        # The "generator"/"async" matched branch is the load-bearing part of
+        # this clause — it swallows async-generator state errors that aren't
+        # real user-facing failures: e.g. "asynchronous generator is already
+        # running" (re-entry) or "generator ignored GeneratorExit" (cleanup
+        # races). Normal shutdown goes through the GeneratorExit handler
+        # above; this catches the residual edge cases that should not
+        # surface as visible error events to the consumer.
         if "generator" in str(e).lower() or "async" in str(e).lower():
             logger.debug(f"Generator runtime error (likely cleanup): {e}")
         else:
-            # Unexpected RuntimeError - treat as error
+            # Any other RuntimeError: emit a STREAM_ERROR event, same shape
+            # as the generic Exception handler below.
             logger.error(f"Runtime error processing agent stream: {e}", exc_info=True)
-            # Create structured error event
             error_event = StreamErrorEvent(
                 error="Runtime error during streaming",
                 code=ErrorCode.STREAM_ERROR,
