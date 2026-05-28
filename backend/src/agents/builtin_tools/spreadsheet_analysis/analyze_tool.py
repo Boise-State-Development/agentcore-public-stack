@@ -29,6 +29,27 @@ MAX_ERROR_CHARS = 600  # cleaned traceback budget — full pandas tracebacks are
 MAX_SHEETS_TO_CONVERT = int(os.environ.get("ANALYZE_MAX_SHEETS", 25))
 MAX_ROWS_PER_SHEET = int(os.environ.get("ANALYZE_MAX_ROWS_PER_SHEET", 500_000))
 
+# Hard-fail and soft-warning thresholds for the download step.
+# The XLSX path base64-encodes bytes before pushing to Code Interpreter
+# (~33% inflation), so a 100 MB XLSX becomes ~133 MB in memory. These caps
+# stop the tool before that happens. Tunable via env so an operator can
+# adjust without a redeploy.
+ANALYZE_MAX_FILE_SIZE_BYTES = int(
+    os.environ.get("ANALYZE_MAX_FILE_SIZE_BYTES", 25 * 1024 * 1024)
+)
+ANALYZE_WARN_FILE_SIZE_BYTES = int(
+    os.environ.get("ANALYZE_WARN_FILE_SIZE_BYTES", 10 * 1024 * 1024)
+)
+
+if ANALYZE_WARN_FILE_SIZE_BYTES >= ANALYZE_MAX_FILE_SIZE_BYTES:
+    logger.warning(
+        "analyze_tool: ANALYZE_WARN_FILE_SIZE_BYTES (%d) is >= "
+        "ANALYZE_MAX_FILE_SIZE_BYTES (%d) — soft warning will never fire. "
+        "Check ANALYZE_WARN_FILE_SIZE_BYTES and ANALYZE_MAX_FILE_SIZE_BYTES env vars.",
+        ANALYZE_WARN_FILE_SIZE_BYTES,
+        ANALYZE_MAX_FILE_SIZE_BYTES,
+    )
+
 _SCHEMA_MARKER = "[__SCHEMA__]"
 _SHEETS_MARKER = "[__SHEETS__]"
 
@@ -419,6 +440,31 @@ def _extract_schema_preview(stdout: str) -> tuple[str, str]:
     return "", stdout
 
 
+def _format_size_mb(size_bytes: int) -> str:
+    """Format a byte count as a human-readable MB string."""
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _format_oversize_error(filename: str, size_bytes: int) -> str:
+    """Return an actionable error message for files that exceed the hard cap."""
+    limit_mb = _format_size_mb(ANALYZE_MAX_FILE_SIZE_BYTES)
+    actual_mb = _format_size_mb(size_bytes)
+    return (
+        f"❌ `{filename}` is {actual_mb}, which exceeds the analysis size "
+        f"limit ({limit_mb}). To analyze it, filter or sample the file first "
+        f"(e.g. export a date range, drop unused columns, or split into "
+        f"multiple files), then retry."
+    )
+
+
+def _format_size_warning(filename: str, size_bytes: int) -> str:
+    """Return a soft-warning string for files between the warn and hard-cap thresholds."""
+    return (
+        f"⚠ `{filename}` is {_format_size_mb(size_bytes)} — analysis may be "
+        f"slow. If it times out, filter or sample the file and retry."
+    )
+
+
 def _get_code_interpreter_id() -> Optional[str]:
     """Get Code Interpreter ID from environment or SSM."""
     ci_id = os.getenv("AGENTCORE_CODE_INTERPRETER_ID")
@@ -496,9 +542,13 @@ def make_analyze_tool(
         Safety limits
         -------------
         Multi-sheet workbooks convert at most the first 25 sheets; each
-        sheet is truncated at 500,000 rows. When a cap triggers, the
-        response footer tells you what was excluded so you can relay it
-        to the user instead of presenting a partial answer as complete.
+        sheet is truncated at 500,000 rows. Files larger than 25 MB are
+        rejected before download; files between 10 MB and 25 MB proceed
+        with a slow-analysis warning. Both thresholds are tunable via
+        ``ANALYZE_MAX_FILE_SIZE_BYTES`` and ``ANALYZE_WARN_FILE_SIZE_BYTES``
+        environment variables. When a cap triggers, the response footer tells
+        you what was excluded so you can relay it to the user instead of
+        presenting a partial answer as complete.
 
         Best for: aggregations, filtering, trends, comparisons, statistics,
         charts. For simple factual lookups, use knowledge base search.
@@ -528,6 +578,21 @@ def make_analyze_tool(
         file_info = await _find_file(filename, assistant_id, session_id)
         if not file_info:
             return {"content": [{"text": f"❌ File '{filename}' not found or not accessible. Use list_spreadsheets to see available files."}], "status": "error"}
+
+        # 2a. Size guard — check before downloading or base64-encoding.
+        # size_bytes is already on the file_info dict from list_spreadsheets,
+        # so this costs no extra AWS calls.
+        size_bytes = int(file_info.get("size_bytes") or 0)
+        if size_bytes > ANALYZE_MAX_FILE_SIZE_BYTES:
+            return {
+                "content": [{"text": _format_oversize_error(filename, size_bytes)}],
+                "status": "error",
+            }
+        soft_warning = (
+            _format_size_warning(filename, size_bytes)
+            if size_bytes > ANALYZE_WARN_FILE_SIZE_BYTES
+            else ""
+        )
 
         # 3. Download from S3
         try:
@@ -760,6 +825,8 @@ wb.close()
                         error_text += f"\n\nTry: `pd.read_csv('{csv_filename}', low_memory=False)`"
                     if multi_sheet_note:
                         error_text += f"\n\n{multi_sheet_note}"
+                    if soft_warning:
+                        error_text += f"\n\n{soft_warning}"
                     return {"content": [{"text": error_text}], "status": "error"}
                 stdout = result.get("structuredContent", {}).get("stdout", "")
                 if stdout:
@@ -771,6 +838,8 @@ wb.close()
                 success_text = f"{success_text}\n\n---\nDataset: {schema_preview.splitlines()[0] if schema_preview else ''}"
             if multi_sheet_note:
                 success_text = f"{success_text}\n{multi_sheet_note}"
+            if soft_warning:
+                success_text = f"{success_text}\n\n{soft_warning}"
 
             if output_filename and output_filename.endswith(".png"):
                 try:
