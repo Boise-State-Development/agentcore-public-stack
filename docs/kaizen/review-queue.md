@@ -5,6 +5,44 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-05-29] Migrate inference-api model config Opus 4.7 → 4.8
+- **Source**: research/2026-05-29.md ▸ Top 5 #1 — Claude Opus 4.8 on Bedrock (May 28)
+- **Surface**: backend (model config in `inference_api`) + admin model catalog + the `_shape_thinking_value` / `temperature` provider-translation path
+- **Effort × Impact**: M × H
+- **Subtracts**: partial — Opus 4.8's system-in-`messages` caching allowance simplifies the #269 caching wiring (system no longer must sit strictly outside `messages` to preserve cache)
+- **Unlocks**: fewer-step tool turns (lower per-turn cost), best-in-class computer-use, ~4× fewer code-flaw pass-throughs, the `effort` compute-depth knob
+- **Status**: open — verify Bedrock region availability (us-east-1 ✓) and the 4.8 context window on the model card before flipping the pin; confirm the beta.27 Opus-4.7 thinking/`temperature` handling still applies
+
+### [2026-05-29] Adopt Strands `Limits` for per-invocation cost/turn caps (supersedes hand-rolled runaway guardrail)
+- **Source**: research/2026-05-29.md ▸ Top 5 #2 — Strands PR #2360 (merged May 28, ships 1.42). **Supersedes** the 2026-05-22 ▸ Top 5 #5 "Runaway-session cost guardrail" item below.
+- **Surface**: backend (agent invocation in `inference_api`, SSE stop-reason handling for `limit_*`) + infrastructure (CloudWatch Bedrock-spend alarm)
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: yes — adopts library-native `limits=` instead of hand-rolling a hook; the queued "build our own guardrail" collapses to "adopt + alarm"
+- **Unlocks**: native per-turn cost ceiling + `limit_*` stop_reason (real protection against the $72-in-58-min / $30K-invoice failure mode; `stop_runtime_session` does not stop the microVM)
+- **Status**: open — gated on Strands 1.42 release (currently latest is 1.41.0). Pairs with the existing CloudWatch-alarm half of the 2026-05-22 item.
+
+### [2026-05-29] Align MCP Apps capability advertisement to spec-canonical `io.modelcontextprotocol/ui`
+- **Source**: research/2026-05-29.md ▸ Top 5 #3 — SEP-1865 folded into the 2026-07-28 draft spec, PR #2791 (May 27)
+- **Surface**: backend (inference-api `initialize` capability advertisement — currently `experimental.ui`; the `ui_resource` SSE path)
+- **Effort × Impact**: L-M × M
+- **Subtracts**: yes — retires our pre-standard `experimental.ui` identifier in favor of the conformant name
+- **Unlocks**: RC-conformant negotiation with future MCP hosts/servers once the spec stabilizes (~2026-07-28)
+- **Status**: open — on our timeline before the RC stabilizes; diff the merged draft for any change to the declare-templates-ahead-of-time / tool-list prefetch shape
+
+### [2026-05-29] Compaction summary prompt: preserve standing/sensitive user instructions
+- **Source**: research/2026-05-29.md ▸ Top 5 #4 — Claude Code v2.1.152 compaction-prompt change (~May 26)
+- **Surface**: backend (`TurnBasedSessionManager` summarization prompt)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — defensive/quality
+- **Status**: open — cheap; dovetails with the `compaction` SSE event
+
+### [2026-05-29] Sync-in-async defensive sweep (anchored by web-crawler DoS #399)
+- **Source**: research/2026-05-29.md ▸ Top 5 #5 — internal issue #399 (web-crawler DoS, May 28); same class as AgentCore SDK #482
+- **Surface**: backend (web-sources crawler immediate fix, then a sweep of sync-in-async call sites across `inference-api` / `app-api`)
+- **Effort × Impact**: M × M-H
+- **Subtracts**: no — defensive; protects the shared event loop from being wedged by one user's request
+- **Status**: open — #399 already filed; kaizen value is the broader class-of-bug sweep (pairs with the queued SDK #482 guard)
+
 ### [2026-05-22] Strands 1.40 → 1.41 bump + enable Bedrock prompt caching (closes issue #269)
 - **Source**: research/2026-05-22.md ▸ Top 5 #1 — Strands v1.41.0 (PR #2232 `cache_tools_ttl`) + open issue #269
 - **Surface**: backend (`pyproject.toml`, `uv.lock`, `BedrockModel` construction, `CacheConfig` wiring)
