@@ -38,6 +38,7 @@ import type {
 } from '../../../shared/utils/stream-parser';
 import {
   ConsentRequest,
+  DisplayMode,
   HostContext,
   JsonRpcId,
   JsonRpcMessage,
@@ -49,6 +50,7 @@ import {
   M_OPEN_LINK,
   M_PING,
   M_REQUEST_DISPLAY_MODE,
+  RequestDisplayModeParams,
   M_RESOURCE_TEARDOWN,
   M_SANDBOX_PROXY_READY,
   M_SANDBOX_RESOURCE_READY,
@@ -132,6 +134,15 @@ export interface McpAppBridgeDeps {
    * the frame renders, so the bridge only ever asks for `open-link`.
    */
   requestConsent?: (req: ConsentRequest) => Promise<boolean>;
+  /**
+   * Apply an App-initiated `ui/request-display-mode` change (e.g. expand to
+   * fullscreen). The component owns the DOM, so it decides what it can
+   * honor and returns the mode it actually applied — the spec requires the
+   * host respond with the *resulting* mode, not the requested one. Absent
+   * (older hosts / tests) ⇒ the host stays inline-only and every request
+   * resolves to `inline`, advertising only `['inline']` at initialize.
+   */
+  requestDisplayMode?: (mode: DisplayMode) => DisplayMode;
   /** Non-fatal diagnostics (validation drops, protocol slips). */
   onWarn?: (message: string) => void;
 }
@@ -151,6 +162,9 @@ export class McpAppBridge {
 
   /** Whether tool-input was already pushed (spec: at most once). */
   private toolInputSent = false;
+
+  /** Current display mode (host-owned; mirrored to the View on change). */
+  private displayMode: DisplayMode = 'inline';
 
   /** Pending host→View requests awaiting a JSON-RPC response, by id. */
   private readonly pending = new Map<
@@ -342,9 +356,18 @@ export class McpAppBridge {
 
       case M_REQUEST_DISPLAY_MODE: {
         if (!isRequest(msg)) return;
-        // PR #4 host only renders inline; spec: MUST return the resulting
-        // mode (the current one when the request can't be honored).
-        this.respond(msg.id, { mode: 'inline' });
+        const requested = (msg.params as RequestDisplayModeParams | undefined)
+          ?.mode;
+        // Spec: MUST return the *resulting* mode (the current one when the
+        // request can't be honored). The component owns the DOM and decides;
+        // this host supports inline + fullscreen (pip falls back to inline).
+        const resulting: DisplayMode =
+          this.d.requestDisplayMode &&
+          (requested === 'fullscreen' || requested === 'inline')
+            ? this.d.requestDisplayMode(requested)
+            : 'inline';
+        this.setDisplayMode(resulting);
+        this.respond(msg.id, { mode: resulting });
         return;
       }
 
@@ -467,10 +490,32 @@ export class McpAppBridge {
       },
       hostContext: {
         ...this.d.getHostContext(),
-        displayMode: 'inline',
-        availableDisplayModes: ['inline'],
+        displayMode: this.displayMode,
+        availableDisplayModes: this.availableDisplayModes(),
       },
     });
+  }
+
+  /** Modes this host can switch to — fullscreen only when the dep is wired. */
+  private availableDisplayModes(): DisplayMode[] {
+    return this.d.requestDisplayMode ? ['inline', 'fullscreen'] : ['inline'];
+  }
+
+  /**
+   * Record the resulting display mode and, on an actual change, tell the
+   * View via `host-context-changed`. Covers both App-initiated requests
+   * (via `ui/request-display-mode`) and host-initiated exits (the user
+   * dismissing fullscreen — see `notifyDisplayMode`).
+   */
+  private setDisplayMode(mode: DisplayMode): void {
+    if (mode === this.displayMode) return;
+    this.displayMode = mode;
+    this.notifyHostContextChanged({ displayMode: mode });
+  }
+
+  /** Host-initiated display-mode change (e.g. the user exits fullscreen). */
+  notifyDisplayMode(mode: DisplayMode): void {
+    this.setDisplayMode(mode);
   }
 
   // --- outbound -----------------------------------------------------------
