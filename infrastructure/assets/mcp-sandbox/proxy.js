@@ -55,6 +55,23 @@
   var innerReady = false;
   var pendingToInner = []; // host->View messages queued until inner loads
 
+  // Establish a 100%-height chain on this shell so the inner View iframe
+  // (height:100%, set in mountView) fills the OUTER iframe the host sized
+  // instead of collapsing to the CSS default replaced-element height
+  // (150px) — a percentage height resolves to `auto` when no ancestor has a
+  // resolved height. proxy.html ships zero inline styles to keep its served
+  // CSP posture tight; the CSSOM `.style` path here isn't governed by the
+  // `style-src` directive, so this is the CSP-safe place to do it.
+  var docEl = document.documentElement;
+  if (docEl && docEl.style) {
+    docEl.style.height = '100%';
+  }
+  if (document.body && document.body.style) {
+    document.body.style.height = '100%';
+    document.body.style.margin = '0';
+    document.body.style.overflow = 'hidden';
+  }
+
   // --- CSP composition (spec §"Sandbox proxy" point 5 + Host Behavior) ----
 
   function list(domains) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { McpAppBridge } from './mcp-app-bridge';
+import type { DisplayMode } from './mcp-app-protocol';
 import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
 
 const SANDBOX_ORIGIN = 'https://mcp-sandbox.example.com';
@@ -64,12 +65,13 @@ interface Harness {
   sendMessage: ReturnType<typeof vi.fn>;
   updateModelContext: ReturnType<typeof vi.fn>;
   requestConsent: ReturnType<typeof vi.fn>;
+  requestDisplayMode: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
   toolResult: { value: unknown | null };
 }
 
 function makeBridge(
-  opts: { withProxy?: boolean; pr6?: boolean } = {},
+  opts: { withProxy?: boolean; pr6?: boolean; displayMode?: boolean } = {},
 ): Harness {
   const host = new FakeHostWindow();
   const proxy = new FakeProxyWindow();
@@ -84,6 +86,9 @@ function makeBridge(
   const sendMessage = vi.fn(async () => undefined);
   const updateModelContext = vi.fn(async () => undefined);
   const requestConsent = vi.fn(async () => true);
+  // Echoes the requested mode (the real component clamps pip→inline; the
+  // bridge already only forwards inline/fullscreen here).
+  const requestDisplayMode = vi.fn((mode: DisplayMode): DisplayMode => mode);
   const warn = vi.fn();
   const toolResult: { value: unknown | null } = {
     value: { content: [{ type: 'text', text: 'ok' }], isError: false },
@@ -101,6 +106,7 @@ function makeBridge(
     // Default harness can proxy; opt out to assert the no-capability path.
     ...(opts.withProxy === false ? {} : { proxyToolCall }),
     ...(opts.pr6 ? { sendMessage, updateModelContext, requestConsent } : {}),
+    ...(opts.displayMode ? { requestDisplayMode } : {}),
     onWarn: warn,
   });
   bridge.start();
@@ -113,6 +119,7 @@ function makeBridge(
     sendMessage,
     updateModelContext,
     requestConsent,
+    requestDisplayMode,
     warn,
     toolResult,
   };
@@ -258,7 +265,7 @@ describe('McpAppBridge', () => {
     expect(h.proxy.byId('l2').error.code).toBe(-32000);
   });
 
-  it('answers ui/request-display-mode with the resulting mode', () => {
+  it('answers ui/request-display-mode with inline when the host lacks the dep', () => {
     handshake(h);
     h.host.deliver(
       {
@@ -270,8 +277,73 @@ describe('McpAppBridge', () => {
       },
       h.proxy,
     );
-    expect(h.proxy.byId('d1').result).toEqual({
-      mode: 'inline',
+    expect(h.proxy.byId('d1').result).toEqual({ mode: 'inline' });
+    // Mode never changed → no host-context-changed churn toward the View.
+    expect(h.proxy.byMethod('ui/notifications/host-context-changed')).toHaveLength(0);
+  });
+
+  describe('with the requestDisplayMode dep wired', () => {
+    beforeEach(() => {
+      h = makeBridge({ displayMode: true });
+    });
+
+    it('advertises inline + fullscreen at initialize', () => {
+      handshake(h);
+      h.host.deliver(
+        { jsonrpc: '2.0', id: 'i1', method: 'ui/initialize', nonce: NONCE, params: {} },
+        h.proxy,
+      );
+      const resp = h.proxy.byId('i1');
+      expect(resp.result.hostContext.displayMode).toBe('inline');
+      expect(resp.result.hostContext.availableDisplayModes).toEqual([
+        'inline',
+        'fullscreen',
+      ]);
+    });
+
+    it('honors a fullscreen request and mirrors it via host-context-changed', () => {
+      handshake(h);
+      // initialized so the host-context-changed notification flushes.
+      h.host.deliver(
+        { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+        h.proxy,
+      );
+      h.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'd1',
+          method: 'ui/request-display-mode',
+          nonce: NONCE,
+          params: { mode: 'fullscreen' },
+        },
+        h.proxy,
+      );
+      expect(h.requestDisplayMode).toHaveBeenCalledWith('fullscreen');
+      expect(h.proxy.byId('d1').result).toEqual({ mode: 'fullscreen' });
+      const changes = h.proxy.byMethod('ui/notifications/host-context-changed');
+      expect(changes.at(-1).params).toEqual({ displayMode: 'fullscreen' });
+    });
+
+    it('exposes host-initiated exit via notifyDisplayMode', () => {
+      handshake(h);
+      h.host.deliver(
+        { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+        h.proxy,
+      );
+      // Enter fullscreen, then the user dismisses it host-side.
+      h.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'd1',
+          method: 'ui/request-display-mode',
+          nonce: NONCE,
+          params: { mode: 'fullscreen' },
+        },
+        h.proxy,
+      );
+      h.bridge.notifyDisplayMode('inline');
+      const changes = h.proxy.byMethod('ui/notifications/host-context-changed');
+      expect(changes.at(-1).params).toEqual({ displayMode: 'inline' });
     });
   });
 
