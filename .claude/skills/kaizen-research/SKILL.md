@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns, agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~2 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -72,6 +72,16 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~2 hours later (~8am M
    - https://www.anthropic.com/engineering (Claude Code, agent design posts)
    - https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
    - LangChain / LlamaIndex / Pydantic-AI release notes — for ideas, not adoption.
+
+6a. **opencode** (`anomalyco/opencode`) — open-source, terminal-native AI coding agent (a Claude Code analog; TypeScript/MIT; very active). Track as a parallel coding-agent-harness reference: how a fast-moving competing harness solves the same problems we face in `backend/src/agents/main_agent/`. Light-touch scan (releases-first); deeper dives only when a release headline maps onto our agent loop, tool layer, or context handling.
+   - https://github.com/anomalyco/opencode/releases (primary — read the latest release notes)
+   - https://github.com/anomalyco/opencode/commits (supplementary — skim recent commits only if a release headline warrants a closer look; confirm the default branch before relying on a path)
+   - Web budget: 1–2 requests per week.
+   - Identify across the three lenses we track this repo for:
+     - **Tooling** — how tools are defined, surfaced, gated/permissioned, and composed; the built-in tool set; tool-call/permission UX; sub-agent / task delegation. *Maps to*: our ToolRegistry, `agents/main_agent/tools/__init__.py`, RBAC/`enabled_tools`, and the multi-protocol tool architecture (direct / AWS SDK / MCP+SigV4 / A2A).
+     - **Cost-effectiveness** — model routing and selection, cheap-vs-capable fallback, prompt caching, token-spend controls, anything that lowers per-turn cost. *Maps to*: model selection in `inference_api`, and our caching/compaction story.
+     - **Context engineering** — context-window management, compaction/summarization, file/context selection, prompt assembly, retrieval into the window. *Maps to*: our `compaction` SSE event, session/AgentCore-Memory restore, and agent prompt assembly.
+   - TypeScript/CLI app, so any UI items are pattern-only references (extract the idea, implement in Angular signals). If a release headlines something material *outside* these three lenses (e.g., a new MCP capability or UX pattern), flag it for the relevant section rather than expanding the opencode scan inline.
 
 7. **AWS Bedrock pricing + quota**
    - https://aws.amazon.com/bedrock/pricing/
@@ -308,7 +318,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (14 categories total including 4a FastMCP, 4b Agentic UI/UX, and 12 LibreChat). LibreChat gets a *light* subagent — releases-first, 1–2 web requests; do not fan it out further unless a headline maps onto something we're shipping. Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (15 categories total including 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
