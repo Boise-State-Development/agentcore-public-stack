@@ -131,13 +131,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — additive but pattern-validated across Linear/ChatGPT/Cursor
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
-### [2026-05-22] Pin `backup-data.yml` runner + actions to restore the CI gate
-- **Source**: reviews/2026-05-22.md ▸ Proposal #1 (direct observation — CI failure analysis). `kaizen-research` did not run 2026-05-22; this item surfaced from review-prep's repo-activity scan.
-- **Surface**: infrastructure / CI — `.github/workflows/backup-data.yml`
-- **Effort × Impact**: L × H
-- **Subtracts**: no — corrective; restores the supply-chain pinning control currently bypassed by a red gate
-- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #1 (Ship — recommended ship-first); no decision logged yet. CI red *now*: ~8+ Deploy App API / Deploy Inference API / Nightly failures since PR #361 (May 20).
-
 ### [2026-05-22] Re-bump `bedrock-agentcore` 1.9.1 → 1.11.0 + adopt `async_mode`
 - **Source**: reviews/2026-05-22.md ▸ Proposal #2 — re-evaluation of the `async_mode`/#452 risk the 2026-05-15 review explicitly deferred "to the 2026-05-22 review".
 - **Surface**: backend (`backend/pyproject.toml`, `backend/uv.lock`, `AgentCoreMemoryConfig` construction)
@@ -153,6 +146,11 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #6 (Ship scoped, or Defer 2 weeks); no decision logged yet.
 
 ## Resolved
+
+### [2026-05-22] Pin `backup-data.yml` runner + actions to restore the CI gate → RESOLVED — pinned, CI green
+- **Decision**: Resolved (not a logged kaizen decision — landed incidentally via the beta.27 release merge #365, May 21).
+- **Reasoning**: `.github/workflows/backup-data.yml` is now correctly pinned — `runs-on: ubuntu-24.04`, `actions/checkout@de0fac2…# v6.0.2`, `astral-sh/setup-uv@d0cc045…# v6.8.0`. Deploy App API / Deploy Inference API failures stopped after May 20; Nightly Build & Test is green (May 24, 25, 28, 29; one isolated May 27 failure). The supply-chain pinning gate is restored. Flagged in reviews/2026-05-29.md ▸ What Shipped: the fix came through the release branch, not a deliberate kaizen action.
+- **Reviewed-in**: reviews/2026-05-22.md ▸ Proposal #1 (verified resolved in reviews/2026-05-29.md)
 
 ### [2026-05-10] MCP Apps host renderer — multi-PR build (PRs #1–#7) → RESOLVED — shipped, host enabled
 - **Decision**: Ship — build-out of the multi-PR initiative scoped in reviews/2026-05-10.md ▸ Proposal #1
