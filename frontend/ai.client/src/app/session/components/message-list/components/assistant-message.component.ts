@@ -242,23 +242,35 @@ interface DisplayBlock {
       min-width: 0;
     }
 
+    /*
+     * Entry animation. Uses animation-fill-mode: BACKWARDS (not forwards),
+     * and the blocks' resting style is left transform-free.
+     *
+     * Why not forwards: forwards retains the 100% keyframe after the
+     * animation ends, and transform interpolation settles to an identity
+     * MATRIX (not the keyword none). Any retained transform — even identity
+     * — makes the element a containing block for fixed/absolute descendants.
+     * That silently re-anchored the MCP-app fullscreen overlay's
+     * position:fixed to the collapsed 0-height message block instead of the
+     * viewport (measured: 656x0 vs the expected full 1620x933). backwards
+     * applies the 0% frame only during the start delay and then reverts to
+     * the resting style, so no transform lingers.
+     */
     .message-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      opacity: 0;
-      transform: translateY(12px);
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
       min-width: 0;
     }
 
     .text-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     .tool-use-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     .reasoning-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     @keyframes slideInFade {
