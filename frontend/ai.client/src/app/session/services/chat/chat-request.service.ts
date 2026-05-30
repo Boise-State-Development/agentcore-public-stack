@@ -17,6 +17,7 @@ import {
 } from '../../../services/tool-approval/tool-approval.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { StreamParserService } from './stream-parser.service';
+import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { HttpErrorResponse } from '@angular/common/http';
 
 export interface ContentFile {
@@ -43,6 +44,7 @@ export class ChatRequestService implements OnDestroy {
   private toolApprovalService = inject(ToolApprovalService);
   private streamParserService = inject(StreamParserService);
   private errorService = inject(ErrorService);
+  private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
   // TODO: Inject proper logging service
 
@@ -86,6 +88,11 @@ export class ChatRequestService implements OnDestroy {
 
       // Add the new session to the cache so it appears in the sidenav immediately
       this.sessionService.addSessionToCache(sessionId, userId);
+
+      // If the user picked a conversation mode on the home page (before
+      // any session existed), claim it for this new session so the
+      // metadata-arrival effect doesn't wipe it.
+      this.systemPromptsService.bindToSession(sessionId);
     }
 
     // Preserve assistantId in URL when navigating to new session
@@ -232,6 +239,18 @@ export class ChatRequestService implements OnDestroy {
       requestObject['rag_assistant_id'] = assistantId;
       // Assistants are KB-grounded with no external tools. Backend enforces this too.
       requestObject['enabled_tools'] = [];
+    } else {
+      // Forward the active conversation mode for non-assistant turns. The
+      // assistant path is intentionally excluded server-side too — assistants
+      // are KB-grounded and a "mode" prompt could contradict the assistant's
+      // own instructions. Sending the id every turn lets the inference path
+      // resolve the prompt without round-tripping session metadata, which
+      // matters on the first turn of a brand-new session (no metadata row
+      // exists yet).
+      const activePromptId = this.systemPromptsService.activePromptId();
+      if (activePromptId) {
+        requestObject['selected_prompt_id'] = activePromptId;
+      }
     }
 
     return requestObject;

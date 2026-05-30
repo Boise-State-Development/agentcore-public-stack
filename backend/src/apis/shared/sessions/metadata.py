@@ -967,6 +967,95 @@ async def update_session_activity(
         return False
 
 
+async def set_selected_prompt_id(
+    session_id: str,
+    user_id: str,
+    prompt_id: Optional[str],
+) -> bool:
+    """Set ``preferences.selected_prompt_id`` on the session row, in place.
+
+    Targeted SET on the existing row — does NOT rotate the SK, does NOT
+    bump ``messageCount``. Safe to call alongside ``update_session_activity``
+    in the same turn without double-counting.
+
+    Self-heals via ``ensure_session_metadata_exists`` if the row is
+    missing (first-turn-of-new-session case). No-op for preview sessions.
+    Pass ``None`` to clear the preference.
+
+    Returns ``True`` on success, ``False`` if the row could not be located
+    or the update failed. Failures are logged, never raised — a missing
+    preference write must not break a conversation turn.
+
+    Concurrency: this is a Read-Modify-Write on the whole ``preferences``
+    map. If another writer (``update_session_activity`` finishing a
+    parallel turn, the BFF metadata PUT, etc.) lands between the GetItem
+    and UpdateItem here, last-write-wins on the full map. The window is
+    short and the same race already exists for every preference field
+    written through ``update_session_activity``. The proper fix is a
+    nested-attribute SET (``SET preferences.selectedPromptId = :p``),
+    which DynamoDB supports but rejects when the parent map is missing —
+    so we'd need to pre-create ``preferences`` everywhere first. Tracked
+    separately from this feature.
+    """
+    if is_preview_session(session_id):
+        return False
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set — skipping prompt-id persist")
+        return False
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            await ensure_session_metadata_exists(session_id, user_id)
+            existing = await _get_session_by_gsi(session_id, user_id, table)
+            if not existing:
+                logger.warning("set_selected_prompt_id: session %s could not be located", session_id)
+                return False
+
+        sk = existing.get("SK")
+        if not sk:
+            return False
+
+        existing_prefs_raw = existing.get("preferences") or {}
+        try:
+            existing_prefs = SessionPreferences.model_validate(existing_prefs_raw)
+        except Exception:
+            existing_prefs = SessionPreferences()
+
+        prefs_dict = existing_prefs.model_dump(by_alias=False, exclude_none=True)
+        if prompt_id is None:
+            prefs_dict.pop("selected_prompt_id", None)
+        else:
+            prefs_dict["selected_prompt_id"] = prompt_id
+
+        # Idempotent no-op: skip the round-trip when the persisted value
+        # already matches. Common for follow-up turns within the same
+        # conversation, where the frontend re-sends the same selection.
+        if existing_prefs.selected_prompt_id == prompt_id:
+            return True
+
+        merged_prefs = SessionPreferences(**prefs_dict).model_dump(
+            by_alias=True, exclude_none=True
+        )
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET preferences = :p",
+            ExpressionAttributeValues={":p": _convert_floats_to_decimal(merged_prefs)},
+        )
+        return True
+    except Exception as e:
+        logger.error("set_selected_prompt_id failed for %s: %s", session_id, e, exc_info=True)
+        return False
+
+
 async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[dict]:
     """
     Get session record using GSI (SessionLookupIndex)

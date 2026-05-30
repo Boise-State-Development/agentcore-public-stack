@@ -707,6 +707,23 @@ export class InferenceApiStack extends cdk.Stack {
       ],
     }));
 
+    // Read-only access to system prompts table (prompt text resolved at invocation time).
+    // Only GetItem is needed — the table has no GSIs and the inference path
+    // never lists prompts.
+    const systemPromptsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/admin/system-prompts-table-arn`
+    );
+
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'SystemPromptsTableReadAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+      ],
+      resources: [systemPromptsTableArn],
+    }));
+
     // Secrets Manager permissions for auth provider client secrets
     const authProviderSecretsArn = ssm.StringParameter.valueForStringParameter(
       this,
@@ -977,6 +994,9 @@ export class InferenceApiStack extends cdk.Stack {
     const userFilesTableName = ssm.StringParameter.valueForStringParameter(
       this, `/${config.projectPrefix}/user-file-uploads/table-name`
     );
+    const systemPromptsTableName = ssm.StringParameter.valueForStringParameter(
+      this, `/${config.projectPrefix}/admin/system-prompts-table-name`
+    );
 
     // S3 / RAG
     const vectorBucketName = ssm.StringParameter.valueForStringParameter(
@@ -1039,9 +1059,8 @@ export class InferenceApiStack extends cdk.Stack {
         DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
         DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
-
-        // Auth providers
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
+        DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
         // OAuth configuration

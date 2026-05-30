@@ -18,6 +18,7 @@ import {
   heroKey,
   heroFingerPrint,
   heroBars3,
+  heroSparkles,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -49,6 +50,7 @@ interface NavGroup {
       heroKey,
       heroFingerPrint,
       heroBars3,
+      heroSparkles,
     }),
   ],
   host: { class: 'block' },
@@ -163,6 +165,7 @@ export class AdminLayout {
       label: 'Customization',
       items: [
         { label: 'User Menu Links', icon: 'heroBars3', route: '/admin/manage-user-menu-links' },
+        { label: 'Conversation Modes', icon: 'heroSparkles', route: '/admin/system-prompts' },
       ],
     },
   ];

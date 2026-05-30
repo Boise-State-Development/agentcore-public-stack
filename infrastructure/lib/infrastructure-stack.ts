@@ -1281,6 +1281,36 @@ export class InfrastructureStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // ============================================================
+    // System Prompts Table
+    // Admin-managed custom system prompt catalog. Users opt in per
+    // conversation via selectedPromptId in SessionPreferences.
+    // PK: PROMPT#<uuid>, SK: METADATA.
+    // ============================================================
+    const systemPromptsTable = new dynamodb.Table(this, "SystemPromptsTable", {
+      tableName: getResourceName(config, "system-prompts"),
+      partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: getRemovalPolicy(config),
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    });
+
+    new ssm.StringParameter(this, "SystemPromptsTableNameParameter", {
+      parameterName: `/${config.projectPrefix}/admin/system-prompts-table-name`,
+      stringValue: systemPromptsTable.tableName,
+      description: "System prompts DynamoDB table name",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, "SystemPromptsTableArnParameter", {
+      parameterName: `/${config.projectPrefix}/admin/system-prompts-table-arn`,
+      stringValue: systemPromptsTable.tableArn,
+      description: "System prompts DynamoDB table ARN",
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
     // AuthProviders Table - OIDC authentication provider configuration
     const authProvidersTable = new dynamodb.Table(this, "AuthProvidersTable", {
       tableName: getResourceName(config, "auth-providers"),

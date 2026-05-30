@@ -140,4 +140,16 @@ export const adminRoutes: Routes = [
     path: 'manage-user-menu-links/edit/:id',
     loadComponent: () => import('./manage-user-menu-links/user-menu-link-form.page').then(m => m.UserMenuLinkFormPage),
   },
+  {
+    path: 'system-prompts',
+    loadComponent: () => import('./system-prompts/manage-system-prompts.page').then(m => m.ManageSystemPromptsPage),
+  },
+  {
+    path: 'system-prompts/new',
+    loadComponent: () => import('./system-prompts/system-prompt-form.page').then(m => m.SystemPromptFormPage),
+  },
+  {
+    path: 'system-prompts/edit/:promptId',
+    loadComponent: () => import('./system-prompts/system-prompt-form.page').then(m => m.SystemPromptFormPage),
+  },
 ];

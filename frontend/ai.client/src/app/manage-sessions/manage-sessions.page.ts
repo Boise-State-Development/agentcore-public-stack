@@ -78,6 +78,14 @@ const MAX_SELECTION = 20;
             <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
               {{ selectedCount() }} {{ selectedCount() === 1 ? 'item' : 'items' }} selected
             </span>
+            <button
+              type="button"
+              (click)="selectAll()"
+              [disabled]="sessions().length === 0"
+              class="text-sm/6 font-medium text-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:text-blue-300"
+            >
+              Select all
+            </button>
             @if (selectedCount() > 0) {
               <button
                 type="button"
@@ -366,6 +374,13 @@ export class ManageSessionsPage implements OnInit {
       }
       return newIds;
     });
+  }
+
+  selectAll(): void {
+    const ids = this.sessions()
+      .slice(0, this.maxSelection)
+      .map(s => s.sessionId);
+    this.selectedSessionIds.set(new Set(ids));
   }
 
   clearSelection(): void {

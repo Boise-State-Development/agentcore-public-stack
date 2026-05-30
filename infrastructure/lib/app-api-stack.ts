@@ -322,6 +322,14 @@ export class AppApiStack extends cdk.Stack {
       this,
       `/${config.projectPrefix}/admin/user-menu-links-table-arn`
     );
+    const systemPromptsTableName = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/admin/system-prompts-table-name`
+    );
+    const systemPromptsTableArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      `/${config.projectPrefix}/admin/system-prompts-table-arn`
+    );
     const authProviderSecretsArn = ssm.StringParameter.valueForStringParameter(
       this,
       `/${config.projectPrefix}/auth/auth-provider-secrets-arn`
@@ -531,6 +539,7 @@ export class AppApiStack extends cdk.Stack {
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
         DYNAMODB_USER_MENU_LINKS_TABLE_NAME: userMenuLinksTableName,
+        DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
         // Cognito configuration (imported from Infrastructure Stack)
         COGNITO_USER_POOL_ID: cognitoUserPoolId,
         COGNITO_APP_CLIENT_ID: cognitoAppClientId,
@@ -1354,6 +1363,23 @@ export class AppApiStack extends cdk.Stack {
           'dynamodb:Query',
         ],
         resources: [userMenuLinksTableArn],
+      })
+    );
+
+    // Grant CRUD on the system prompts table (admin-managed, user-readable)
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'SystemPromptsTableAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:Query',
+          'dynamodb:Scan',
+        ],
+        resources: [systemPromptsTableArn],
       })
     );
 
