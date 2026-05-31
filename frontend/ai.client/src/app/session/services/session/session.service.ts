@@ -5,6 +5,7 @@ import { ConfigService } from '../../../services/config.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
+import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
 
 /**
  * Query parameters for listing sessions.
@@ -72,6 +73,12 @@ export interface MessagesListResponse {
   nextToken: string | null;
   /** OAuth consent interrupts that paused agent turns and are awaiting user action */
   pendingInterrupts?: PendingInterrupt[];
+  /**
+   * Persisted MCP App UI resources (SEP-1865), each shaped like the inline
+   * `ui_resource` SSE event. Replayed on load to re-seed McpAppStateService
+   * so the `mcp-app-frame` survives a refresh. Present only on the first page.
+   */
+  uiResources?: UiResourceEvent[];
 }
 
 /**

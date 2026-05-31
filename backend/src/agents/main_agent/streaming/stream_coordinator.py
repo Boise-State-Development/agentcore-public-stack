@@ -654,6 +654,8 @@ class StreamCoordinator:
                         event,
                         ui_tool_use_names,
                         ui_resource_emitted,
+                        session_id=session_id,
+                        user_id=user_id,
                     ):
                         yield sse
 
@@ -1181,6 +1183,8 @@ class StreamCoordinator:
         event: Dict[str, Any],
         tool_use_names: Dict[str, str],
         emitted: set,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[str]:
         """Yield a `ui_resource` SSE for a tool_result that ships an MCP App.
 
@@ -1230,6 +1234,39 @@ class StreamCoordinator:
                 return []
 
             emitted.add(tool_use_id)
+
+            # Persist for reload survival (best-effort). The `ui_resource`
+            # event is inline and never re-streams, so without this the
+            # `mcp-app-frame` falls back to a plain tool card after a refresh.
+            # Mirrors how artifacts persist + stamp from this same coordinator;
+            # the read side is the app-api messages endpoint's `uiResources`
+            # sidecar. Inert when the sessions-metadata table is absent (dev).
+            if session_id and user_id:
+                try:
+                    from apis.shared.mcp_apps.ui_resource_store import (
+                        get_ui_resource_store,
+                    )
+
+                    await asyncio.to_thread(
+                        get_ui_resource_store().store,
+                        user_id=user_id,
+                        session_id=session_id,
+                        tool_use_id=tool_use_id,
+                        resource_uri=payload.get("resourceUri", ""),
+                        html=payload.get("html", ""),
+                        mime_type=payload.get("mimeType", ""),
+                        csp=payload.get("csp", {}),
+                        permissions=payload.get("permissions", {}),
+                        sandbox_origin=payload.get("sandboxOrigin", ""),
+                    )
+                except Exception:  # noqa: BLE001 - persistence is best-effort
+                    logger.warning(
+                        "Failed to persist ui_resource for reload "
+                        "(toolUseId=%s)",
+                        tool_use_id,
+                        exc_info=True,
+                    )
+
             return [f"event: ui_resource\ndata: {json.dumps(payload)}\n\n"]
         except Exception as e:  # noqa: BLE001 - best-effort side channel
             logger.warning("Failed to emit ui_resource event: %s", e)

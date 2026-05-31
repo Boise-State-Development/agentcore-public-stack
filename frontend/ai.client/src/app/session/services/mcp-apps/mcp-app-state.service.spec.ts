@@ -58,4 +58,26 @@ describe('McpAppStateService', () => {
     expect(svc.hasApps()).toBe(false);
     expect(svc.has('tu-1')).toBe(false);
   });
+
+  describe('seedFromHydration', () => {
+    it('seeds persisted resources so the frame re-renders on reload', () => {
+      svc.seedFromHydration([ev('tu-1'), ev('tu-2')]);
+      expect(svc.has('tu-1')).toBe(true);
+      expect(svc.get('tu-2')?.resourceUri).toBe('ui://srv/tu-2');
+      expect(svc.hasApps()).toBe(true);
+    });
+
+    it('is a no-op for an empty list', () => {
+      svc.seedFromHydration([]);
+      expect(svc.hasApps()).toBe(false);
+    });
+
+    it('does not clobber a live recordLive entry (non-clobbering)', () => {
+      svc.recordLive(ev('tu-1', '<live>'));
+      // A slow hydration response arriving after the live event must not
+      // overwrite the fresher live resource.
+      svc.seedFromHydration([ev('tu-1', '<stale>')]);
+      expect(svc.get('tu-1')?.html).toBe('<live>');
+    });
+  });
 });

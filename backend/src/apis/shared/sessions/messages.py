@@ -422,9 +422,28 @@ async def get_messages_from_cloud(
 
             return await get_pending_interrupts(session_id, user_id)
 
+        async def fetch_ui_resources():
+            """Fetch persisted MCP App UI resources (SEP-1865) for reload.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev) or the feature is off.
+            """
+            from apis.shared.mcp_apps.ui_resource_store import get_ui_resource_store
+
+            return await asyncio.to_thread(
+                get_ui_resource_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
         # Run fetches in parallel
-        messages_raw, metadata_index, pending_interrupts = await asyncio.gather(
-            fetch_messages(), fetch_metadata(), fetch_pending_interrupts()
+        messages_raw, metadata_index, pending_interrupts, ui_resource_rows = (
+            await asyncio.gather(
+                fetch_messages(),
+                fetch_metadata(),
+                fetch_pending_interrupts(),
+                fetch_ui_resources(),
+            )
         )
 
         messages_raw = list(messages_raw or [])
@@ -473,10 +492,38 @@ async def get_messages_from_cloud(
 
         message_responses = [_convert_message_to_response(msg, session_id, start_seq + idx) for idx, msg in enumerate(paginated_messages)]
 
+        # MCP Apps (SEP-1865): replay persisted UI resources so the
+        # `mcp-app-frame` survives a reload. The inline `ui_resource` event
+        # never re-streams, so without this the App falls back to a plain
+        # tool card. Shape each row like the live SSE event the SPA already
+        # consumes, and prefer this process's sandbox origin when wired
+        # (freshest), else the value captured at write time. First page only:
+        # the SPA keys by toolUseId and holds them all regardless of which
+        # message page renders the correlated tool_use block.
+        ui_resources: List[Dict[str, Any]] = []
+        if not next_token:
+            fresh_origin = os.environ.get(
+                "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN", ""
+            ).strip()
+            for row in ui_resource_rows:
+                ui_resources.append(
+                    {
+                        "type": "ui_resource",
+                        "toolUseId": row.get("toolUseId", ""),
+                        "resourceUri": row.get("resourceUri", ""),
+                        "html": row.get("html", ""),
+                        "mimeType": row.get("mimeType", ""),
+                        "csp": row.get("csp") or {},
+                        "permissions": row.get("permissions") or {},
+                        "sandboxOrigin": fresh_origin or row.get("sandboxOrigin", ""),
+                    }
+                )
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
             pending_interrupts=pending_interrupts,
+            ui_resources=ui_resources,
         )
 
     except Exception as e:

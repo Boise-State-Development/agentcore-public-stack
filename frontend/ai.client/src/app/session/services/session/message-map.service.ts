@@ -6,6 +6,7 @@ import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -57,6 +58,7 @@ export class MessageMapService {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
+  private mcpAppState = inject(McpAppStateService);
 
   constructor() {
     // Reactive effect: automatically sync streaming messages to the message map
@@ -341,6 +343,14 @@ export class MessageMapService {
       // matching how the live SSE flow already attaches prompts. Authorization
       // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
       this.hydratePendingInterrupts(sessionId, messagesResponse.pendingInterrupts, processedMessages);
+
+      // MCP Apps (SEP-1865): re-seed the App registry from the persisted
+      // resources the backend replays on this response. The inline
+      // `ui_resource` event never re-streams, so without this the
+      // `mcp-app-frame` falls back to a plain tool card after a refresh.
+      // session.page resets McpAppStateService before this load, so the
+      // non-clobbering seed lands cleanly.
+      this.mcpAppState.seedFromHydration(messagesResponse.uiResources ?? []);
     } catch (error) {
       console.error('Failed to load messages for session:', sessionId, error);
       throw error;

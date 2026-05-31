@@ -8,13 +8,15 @@ import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
  * the session page calls on conversation change.
  *
  * The `ui_resource` event is INLINE (it arrives right after its
- * `tool_result`), so unlike artifacts there is no session-load hydration
- * path — a refreshed conversation re-streams nothing, and a persisted MCP
- * App is out of scope until a later PR. Iframes persist for the lifetime of
- * the conversation per the scoping doc; teardown is on `reset()`.
+ * `tool_result`), so a refreshed conversation re-streams nothing. To survive
+ * a reload, app-api persists each resource and replays it on the
+ * `GET /messages` response's `uiResources` sidecar; `seedFromHydration`
+ * re-seeds this registry from that list so the `mcp-app-frame` re-renders.
+ * Iframes otherwise persist for the lifetime of the conversation per the
+ * scoping doc; teardown is on `reset()`.
  *
  * The whole surface is dark until the backend `AGENTCORE_MCP_APPS_HOST_ENABLED`
- * flag is flipped (PR #7), so in practice nothing is recorded here yet.
+ * flag is flipped, so when it's off nothing is recorded or hydrated.
  */
 @Injectable({ providedIn: 'root' })
 export class McpAppStateService {
@@ -33,6 +35,21 @@ export class McpAppStateService {
   recordLive(event: UiResourceEvent): void {
     const next = new Map(this.byToolUseId());
     next.set(event.toolUseId, event);
+    this.byToolUseId.set(next);
+  }
+
+  /**
+   * Seed resources persisted server-side, replayed on the `GET /messages`
+   * `uiResources` sidecar at conversation load. Non-clobbering by
+   * `toolUseId` so a slow response can't undo a live `recordLive` entry
+   * (matches `ArtifactStateService.seedFromHydration` semantics).
+   */
+  seedFromHydration(list: readonly UiResourceEvent[]): void {
+    if (!list.length) return;
+    const next = new Map(this.byToolUseId());
+    for (const event of list) {
+      if (!next.has(event.toolUseId)) next.set(event.toolUseId, event);
+    }
     this.byToolUseId.set(next);
   }
 

@@ -27,6 +27,7 @@ from agents.main_agent.integrations.mcp_apps import (
     record_and_filter_ui_tools,
 )
 from agents.main_agent.streaming.stream_coordinator import StreamCoordinator
+from apis.shared.mcp_apps import ui_resource_store
 
 _ENV_FLAG = "AGENTCORE_MCP_APPS_HOST_ENABLED"
 _ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
@@ -208,6 +209,90 @@ async def test_noop_for_non_ui_tool(coord, catalog_clean, monkeypatch):
         _tool_result_event("tu-1"), {"tu-1": "plain_tool"}, set()
     )
     assert out == []
+
+
+class _FakeUiResourceStore:
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def store(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_persists_resource_when_session_and_user_provided(
+    coord, catalog_clean, monkeypatch
+):
+    client = _FakeMCPClient(_html_result("<main>app</main>"))
+    _seed(monkeypatch, client)
+    fake = _FakeUiResourceStore()
+    monkeypatch.setattr(ui_resource_store, "get_ui_resource_store", lambda: fake)
+
+    out = await coord._extract_ui_resource_events(
+        _tool_result_event("tu-1"),
+        {"tu-1": "widget"},
+        set(),
+        session_id="sess-1",
+        user_id="user-1",
+    )
+
+    # The live event still streams unchanged...
+    assert len(out) == 1
+    # ...and the resource is persisted for reload survival with the same
+    # fields the SPA re-seeds McpAppStateService from.
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["session_id"] == "sess-1"
+    assert call["user_id"] == "user-1"
+    assert call["tool_use_id"] == "tu-1"
+    assert call["resource_uri"] == "ui://srv/widget"
+    assert call["html"] == "<main>app</main>"
+    assert call["mime_type"] == MCP_APPS_UI_MIME_TYPE
+    assert call["csp"] == {"connectDomains": ["https://api.test"]}
+    assert call["permissions"] == {"clipboardWrite": {}}
+
+
+@pytest.mark.asyncio
+async def test_does_not_persist_without_session_or_user(
+    coord, catalog_clean, monkeypatch
+):
+    client = _FakeMCPClient(_html_result())
+    _seed(monkeypatch, client)
+    fake = _FakeUiResourceStore()
+    monkeypatch.setattr(ui_resource_store, "get_ui_resource_store", lambda: fake)
+
+    # No session/user (e.g. a context without a persisted conversation) →
+    # emit live but skip persistence.
+    out = await coord._extract_ui_resource_events(
+        _tool_result_event("tu-1"), {"tu-1": "widget"}, set()
+    )
+    assert len(out) == 1
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_persistence_failure_does_not_break_stream(
+    coord, catalog_clean, monkeypatch
+):
+    _seed(monkeypatch, _FakeMCPClient(_html_result()))
+
+    class _Boom:
+        def store(self, **kwargs):
+            raise RuntimeError("dynamo exploded")
+
+    monkeypatch.setattr(
+        ui_resource_store, "get_ui_resource_store", lambda: _Boom()
+    )
+
+    # A persistence failure is best-effort — the live event still streams.
+    out = await coord._extract_ui_resource_events(
+        _tool_result_event("tu-1"),
+        {"tu-1": "widget"},
+        set(),
+        session_id="sess-1",
+        user_id="user-1",
+    )
+    assert len(out) == 1
 
 
 @pytest.mark.asyncio
