@@ -87,12 +87,18 @@
   function defaultCsp() {
     return [
       "default-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
-      "media-src 'self' data:",
-      "font-src 'self'",
+      // Keyword sources ('unsafe-eval' blob: data:) MUST match the
+      // CloudFront-header CSP (assets/mcp-sandbox/csp-function.js). The
+      // browser enforces the INTERSECTION of this injected <meta> and that
+      // header, so any source the meta omits is silently re-denied even
+      // though the header allows it — that drift is what blocked App `eval`.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+      "style-src 'self' 'unsafe-inline' blob: data:",
+      "img-src 'self' data: blob:",
+      "media-src 'self' data: blob:",
+      "font-src 'self' data: blob:",
       "connect-src 'none'",
+      "worker-src 'self' blob:",
       "frame-src 'none'",
       "base-uri 'self'",
       "object-src 'none'",
@@ -114,12 +120,18 @@
     var base = list(csp.baseUriDomains).join(' ');
     return [
       "default-src 'none'",
-      ("script-src 'self' 'unsafe-inline'" + (res ? ' ' + res : '')),
-      ("style-src 'self' 'unsafe-inline'" + (res ? ' ' + res : '')),
-      ("img-src 'self' data:" + (res ? ' ' + res : '')),
-      ("font-src 'self'" + (res ? ' ' + res : '')),
-      ("media-src 'self' data:" + (res ? ' ' + res : '')),
+      // Keyword sources ('unsafe-eval' blob: data:) MUST match the
+      // CloudFront-header CSP (assets/mcp-sandbox/csp-function.js). The
+      // browser enforces the INTERSECTION of this <meta> and that header, so
+      // a source omitted here is silently re-denied regardless of the header
+      // — declared resourceDomains are appended on top, as before.
+      ("script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:" + (res ? ' ' + res : '')),
+      ("style-src 'self' 'unsafe-inline' blob: data:" + (res ? ' ' + res : '')),
+      ("img-src 'self' data: blob:" + (res ? ' ' + res : '')),
+      ("font-src 'self' data: blob:" + (res ? ' ' + res : '')),
+      ("media-src 'self' data: blob:" + (res ? ' ' + res : '')),
       ('connect-src ' + (conn || "'none'")),
+      ("worker-src 'self' blob:" + (res ? ' ' + res : '')),
       ('frame-src ' + (frame || "'none'")),
       ('base-uri ' + (base || "'self'")),
       "object-src 'none'",
