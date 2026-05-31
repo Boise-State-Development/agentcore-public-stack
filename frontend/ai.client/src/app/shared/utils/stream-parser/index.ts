@@ -61,6 +61,7 @@ export {
   validateCompactionEvent,
   validateArtifactEvent,
   validateUiResourceEvent,
+  validateToolInputPartialEvent,
 } from './stream-parser-core';
 
 // Types
@@ -85,6 +86,7 @@ export type {
   CompactionEvent,
   ArtifactEvent,
   UiResourceEvent,
+  ToolInputPartialEvent,
   McpUiCsp,
   McpUiPermissions,
   StreamEventType,

@@ -41,6 +41,7 @@ import type {
   CompactionEvent,
   ArtifactEvent,
   UiResourceEvent,
+  ToolInputPartialEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -97,6 +98,12 @@ export interface StreamParserCallbacks {
   // correlated to its tool-use block by toolUseId; carries the HTML to
   // render in the sandbox-proxy iframe.
   onUiResource?: (data: UiResourceEvent) => void;
+
+  // Streamed partial tool input for a UI tool (SEP-1865
+  // ui/notifications/tool-input-partial). Fires repeatedly while a UI tool's
+  // arguments are still streaming, after its frame was mounted early; the
+  // frame relays each healed prefix to the App for progressive rendering.
+  onToolInputPartial?: (data: ToolInputPartialEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -461,6 +468,29 @@ export function validateUiResourceEvent(data: unknown): data is UiResourceEvent 
 }
 
 /**
+ * Validate a tool-input-partial event (SEP-1865). `arguments` is the
+ * server-healed streamed prefix of the tool input — always an object.
+ */
+export function validateToolInputPartialEvent(
+  data: unknown,
+): data is ToolInputPartialEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<ToolInputPartialEvent>;
+
+  return (
+    event.type === 'ui_tool_input_partial' &&
+    typeof event.toolUseId === 'string' &&
+    event.toolUseId.length > 0 &&
+    typeof event.arguments === 'object' &&
+    event.arguments !== null &&
+    !Array.isArray(event.arguments)
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -662,6 +692,16 @@ export function processStreamEvent(
           callbacks.onUiResource?.(data);
         } else {
           callbacks.onParseError?.('ui_resource: invalid data structure');
+        }
+        break;
+
+      case 'ui_tool_input_partial':
+        if (validateToolInputPartialEvent(data)) {
+          callbacks.onToolInputPartial?.(data);
+        } else {
+          callbacks.onParseError?.(
+            'ui_tool_input_partial: invalid data structure',
+          );
         }
         break;
 

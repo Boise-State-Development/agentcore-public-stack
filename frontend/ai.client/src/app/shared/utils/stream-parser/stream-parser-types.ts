@@ -227,6 +227,23 @@ export interface UiResourceEvent {
 }
 
 /**
+ * Tool-input-partial event — emitted by the backend (SEP-1865
+ * `ui/notifications/tool-input-partial`) repeatedly while the model is still
+ * STREAMING a UI tool's arguments, after the App frame has been mounted early
+ * (at the tool's `content_block_start`). `arguments` is the streamed prefix of
+ * the tool input, server-side "healed" into a valid object. The frame relays
+ * each one to the App so a progressively-rendering App (e.g. Excalidraw's
+ * guided camera tour) animates as arguments arrive, then receives the complete
+ * `tool-input` once streaming finishes. Correlated to its tool-use block by
+ * `toolUseId`. Inert behind the backend host flag, like `ui_resource`.
+ */
+export interface ToolInputPartialEvent {
+  type: 'ui_tool_input_partial';
+  toolUseId: string;
+  arguments: Record<string, unknown>;
+}
+
+/**
  * Tool result event data structure
  */
 export interface ToolResultEventData {
@@ -267,7 +284,8 @@ export type StreamEventType =
   | 'oauth_required'
   | 'compaction'
   | 'artifact'
-  | 'ui_resource';
+  | 'ui_resource'
+  | 'ui_tool_input_partial';
 
 /**
  * Union type of all possible event data types
@@ -291,6 +309,7 @@ export type StreamEventData =
   | CompactionEvent
   | ArtifactEvent
   | UiResourceEvent
+  | ToolInputPartialEvent
   | null
   | undefined;
 

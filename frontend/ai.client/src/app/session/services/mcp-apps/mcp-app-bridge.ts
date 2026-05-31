@@ -58,6 +58,7 @@ import {
   M_TOOLS_CALL,
   M_TOOL_CANCELLED,
   M_TOOL_INPUT,
+  M_TOOL_INPUT_PARTIAL,
   M_TOOL_RESULT,
   M_UI_INITIALIZE,
   M_UI_INITIALIZED,
@@ -95,6 +96,21 @@ export interface McpAppBridgeDeps {
   nonce: string;
   /** Complete tool-call arguments for `ui/notifications/tool-input`. */
   getToolInput: () => Record<string, unknown>;
+  /**
+   * Latest server-healed streamed PARTIAL tool input, or null if none yet
+   * (SEP-1865 `tool-input-partial`). Optional: absent ⇒ no progressive
+   * streaming, the bridge sends only the complete `tool-input` (PR #4
+   * behavior). The component drives subsequent partials via
+   * `sendToolInputPartial`; this getter only seeds the value at init time.
+   */
+  getPartialToolInput?: () => Record<string, unknown> | null;
+  /**
+   * Whether the tool's input has finished streaming. Optional: absent ⇒
+   * treated as final (PR #4 behavior — send the complete `tool-input` at
+   * init). When present and false at init, the bridge sends the latest
+   * partial instead and waits for the component to call `sendToolInputFinal`.
+   */
+  isToolInputFinal?: () => boolean;
   /** Tool result as an MCP `CallToolResult`, or null if not yet available. */
   getToolResult: () => unknown | null;
   /** Current host UI context (theme, displayMode, …). */
@@ -160,7 +176,8 @@ export class McpAppBridge {
   /** Notifications deferred until the View reports `initialized`. */
   private readonly preInitQueue: Array<{ method: string; params: unknown }> = [];
 
-  /** Whether tool-input was already pushed (spec: at most once). */
+  /** Whether the COMPLETE tool-input was sent (spec: at most once). Partials
+   *  (`tool-input-partial`) may stream freely before this flips true. */
   private toolInputSent = false;
 
   /** Current display mode (host-owned; mirrored to the View on change). */
@@ -552,16 +569,42 @@ export class McpAppBridge {
     this.nonceArmed = true;
   }
 
-  /** Push `tool-input` (once) then `tool-result` if it's available. */
+  /**
+   * Push tool input + result on `initialized`. If the input is still
+   * streaming (`isToolInputFinal` present and false), send the latest healed
+   * PARTIAL — the App renders progressively — and defer the complete
+   * `tool-input` until the component calls `sendToolInputFinal`. Otherwise
+   * (final, or no streaming wired) send the complete `tool-input` once. The
+   * `tool-result` follows when available.
+   */
   private pushToolData(): void {
-    if (!this.toolInputSent) {
-      this.toolInputSent = true;
-      this.sendNotification(M_TOOL_INPUT, { arguments: this.d.getToolInput() });
+    const final = this.d.isToolInputFinal?.() ?? true;
+    if (final) {
+      this.sendToolInputFinal();
+    } else {
+      const partial = this.d.getPartialToolInput?.();
+      if (partial) this.sendToolInputPartial(partial);
     }
     const result = this.d.getToolResult();
     if (result != null) {
       this.sendNotification(M_TOOL_RESULT, result);
     }
+  }
+
+  /**
+   * Relay a streamed partial tool-input (SEP-1865). No-op once the complete
+   * `tool-input` has been sent — late partials must never clobber the final.
+   */
+  sendToolInputPartial(args: Record<string, unknown>): void {
+    if (this.toolInputSent) return;
+    this.sendNotification(M_TOOL_INPUT_PARTIAL, { arguments: args });
+  }
+
+  /** Send the complete `tool-input` exactly once (spec: at most one). */
+  sendToolInputFinal(): void {
+    if (this.toolInputSent) return;
+    this.toolInputSent = true;
+    this.sendNotification(M_TOOL_INPUT, { arguments: this.d.getToolInput() });
   }
 
   /** Re-push the tool result if it arrives/changes after init. */

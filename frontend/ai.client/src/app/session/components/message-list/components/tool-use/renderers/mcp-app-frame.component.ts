@@ -142,6 +142,25 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return id ? this.mcpAppState.get(id) : undefined;
   });
 
+  /**
+   * Latest server-healed streamed partial tool input for this invocation, or
+   * undefined. Updated repeatedly while the tool's arguments stream (after the
+   * frame mounts early); relayed to the App for progressive rendering.
+   */
+  protected readonly partialInput = computed(() => {
+    const id = this.toolUseId();
+    return id ? this.mcpAppState.getPartialInput(id) : undefined;
+  });
+
+  /**
+   * Whether the tool's input has finished streaming. The result only exists
+   * once the tool has executed, which is strictly after its arguments fully
+   * streamed — so a present result is a safe "input is final" signal. Until
+   * then the App receives `tool-input-partial`; on finality it gets the
+   * complete `tool-input`.
+   */
+  protected readonly inputFinal = computed(() => this.result() != null);
+
   /** Capabilities the resource declares (`_meta.ui.permissions`). */
   private readonly requestedCaps = computed<CapabilityKey[]>(() => {
     const p = this.resource()?.permissions ?? {};
@@ -221,9 +240,20 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       const theme = this.theme.theme();
       this.bridge?.notifyHostContextChanged({ theme });
     });
-    // Re-push the tool result if it lands/changes after the App initialized.
+    // Relay streamed partial tool input to the App while its arguments are
+    // still streaming, so a progressively-rendering App (e.g. Excalidraw's
+    // guided camera tour) animates as the model generates them. Stops once
+    // the input is final (the final `tool-input` is sent by the effect below).
+    effect(() => {
+      const partial = this.partialInput();
+      if (!partial || this.inputFinal()) return;
+      this.bridge?.sendToolInputPartial(partial);
+    });
+    // On finality, send the complete `tool-input` (once) then (re-)push the
+    // tool result if it's landed/changed after the App initialized.
     effect(() => {
       this.result();
+      if (this.inputFinal()) this.bridge?.sendToolInputFinal();
       this.bridge?.refreshToolResult();
     });
     // Render-time capability consent: when the resource requests sensitive
@@ -356,6 +386,8 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       resource: effectiveRes,
       nonce: this.nonce,
       getToolInput: () => this.lookupToolInput(),
+      getPartialToolInput: () => this.partialInput() ?? null,
+      isToolInputFinal: () => this.inputFinal(),
       getToolResult: () => this.toCallToolResult(),
       getHostContext: () => ({
         theme: this.theme.theme(),

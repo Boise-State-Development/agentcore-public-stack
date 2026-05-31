@@ -90,6 +90,15 @@ class StreamCoordinator:
         # empty and unused unless AGENTCORE_MCP_APPS_HOST_ENABLED=true.
         ui_tool_use_names: Dict[str, str] = {}
         ui_resource_emitted: set[str] = set()
+        # MCP Apps (streaming tool input, SEP-1865): a UI tool's frame is
+        # mounted early at its `content_block_start` so the App's bridge is
+        # live *while* the model streams the tool's arguments. We map a
+        # tool-use block's index -> toolUseId (deltas carry only the index)
+        # and accumulate the raw `toolUse.input` fragments per toolUseId, then
+        # emit healed `ui_tool_input_partial` SSEs so a progressively-rendering
+        # App (e.g. Excalidraw's guided camera tour) animates as args arrive.
+        ui_block_index_to_tool_use_id: Dict[int, str] = {}
+        ui_partial_input_acc: Dict[str, str] = {}
 
         # Accumulate metadata from stream
         accumulated_metadata: Dict[str, Any] = {"usage": {}, "metrics": {}}
@@ -203,6 +212,12 @@ class StreamCoordinator:
                         tuid = tu.get("toolUseId") or tu.get("tool_use_id")
                         if tn and tuid:
                             ui_tool_use_names[tuid] = tn
+                        # Map block index -> toolUseId so streaming
+                        # `content_block_delta`s (which carry only the index)
+                        # can be attributed to a toolUseId for partial input.
+                        bidx = bd.get("contentBlockIndex")
+                        if tuid and bidx is not None:
+                            ui_block_index_to_tool_use_id[bidx] = tuid
 
                 # Track when assistant messages end
                 if event.get("type") == "message_stop":
@@ -658,6 +673,44 @@ class StreamCoordinator:
                         user_id=user_id,
                     ):
                         yield sse
+
+                # MCP Apps (streaming tool input): mount a UI tool's frame at
+                # its `content_block_start` — BEFORE the model streams the
+                # tool's arguments — so the App's bridge is live for the
+                # progressive `ui_tool_input_partial` stream below. Deduped vs
+                # the `tool_result` path above by `ui_resource_emitted`.
+                elif event.get("type") == "content_block_start":
+                    bd = event.get("data", {})
+                    if bd.get("type") == "tool_use":
+                        tu = bd.get("toolUse", {})
+                        tuid = tu.get("toolUseId") or tu.get("tool_use_id")
+                        for sse in await self._emit_ui_resource_for_tool(
+                            ui_tool_use_names.get(tuid) if tuid else None,
+                            tuid,
+                            ui_resource_emitted,
+                            session_id=session_id,
+                            user_id=user_id,
+                        ):
+                            yield sse
+
+                # Accumulate streamed `toolUse.input` fragments and emit a
+                # healed `ui_tool_input_partial` per delta — only for tools
+                # whose frame we actually mounted (a cheap dict-miss otherwise).
+                elif event.get("type") == "content_block_delta":
+                    bd = event.get("data", {})
+                    frag = bd.get("input")
+                    if bd.get("type") == "tool_use" and isinstance(frag, str):
+                        tuid = ui_block_index_to_tool_use_id.get(
+                            bd.get("contentBlockIndex")
+                        )
+                        if tuid and tuid in ui_resource_emitted:
+                            ui_partial_input_acc[tuid] = (
+                                ui_partial_input_acc.get(tuid, "") + frag
+                            )
+                            for sse in self._emit_tool_input_partial(
+                                tuid, ui_partial_input_acc[tuid]
+                            ):
+                                yield sse
 
             # Calculate end-to-end latency (fallback if done event wasn't received)
             stream_end_time = time.time()
@@ -1178,32 +1231,40 @@ class StreamCoordinator:
             )
         return events
 
-    async def _extract_ui_resource_events(
+    async def _emit_ui_resource_for_tool(
         self,
-        event: Dict[str, Any],
-        tool_use_names: Dict[str, str],
+        tool_name: Optional[str],
+        tool_use_id: Optional[str],
         emitted: set,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> List[str]:
-        """Yield a `ui_resource` SSE for a tool_result that ships an MCP App.
+        """Fetch, emit, and persist a tool's MCP App `ui_resource` (deduped).
 
         PR #3 of the MCP Apps host-renderer initiative
-        (`docs/kaizen/scoping/mcp-apps-host-renderer.md`). When the host flag
-        is on and this tool_result's tool declared a `ui://` resource in its
-        `tools/list` `_meta.ui` (recorded in the catalog by PR #2), fetch that
-        resource via the spec-mandated `resources/read` against the same MCP
-        client that surfaced the tool, and emit a single
+        (`docs/kaizen/scoping/mcp-apps-host-renderer.md`), generalised so the
+        frame can mount EARLY. When the host flag is on and the tool declared
+        a `ui://` resource in its `tools/list` `_meta.ui` (recorded in the
+        catalog by PR #2), fetch that resource via the spec-mandated
+        `resources/read` against the same MCP client that surfaced the tool,
+        and emit a single
 
             `{type, toolUseId, resourceUri, html, mimeType, csp, permissions}`
 
-        event with the HTML inlined (so the frontend needs no MCP client).
-        The blocking `resources/read` runs in a worker thread so the live
-        stream is not stalled.
+        event with the HTML inlined (so the frontend needs no MCP client). The
+        blocking `resources/read` runs in a worker thread so the live stream
+        is not stalled.
+
+        Two call sites share this via the `emitted` dedupe set: the early
+        mount at a UI tool's `content_block_start` (so the App's bridge is
+        live *before* arguments stream — the window the `ui_tool_input_partial`
+        stream needs) and the legacy post-`tool_result` fallback (covers a
+        tool whose name wasn't captured at block start). The resource shell is
+        static per `resourceUri` — independent of the tool's args/result — so
+        fetching it at block start yields the same payload as at result time.
 
         Inert and zero-cost when `AGENTCORE_MCP_APPS_HOST_ENABLED` is false.
-        Best-effort: deduped per toolUseId, and any failure logs and returns
-        [] — it never breaks the stream.
+        Best-effort: any failure logs and returns [] — never breaks the stream.
         """
         from agents.main_agent.integrations.mcp_apps import (
             fetch_ui_resource,
@@ -1212,21 +1273,10 @@ class StreamCoordinator:
 
         if not is_mcp_apps_host_enabled():
             return []
+        if not tool_use_id or tool_use_id in emitted or not tool_name:
+            return []
 
         try:
-            tool_result = event.get("data", {}).get("tool_result", {})
-            if not isinstance(tool_result, dict):
-                return []
-            tool_use_id = tool_result.get("toolUseId") or tool_result.get(
-                "tool_use_id"
-            )
-            if not tool_use_id or tool_use_id in emitted:
-                return []
-
-            tool_name = tool_use_names.get(tool_use_id)
-            if not tool_name:
-                return []
-
             payload = await asyncio.to_thread(
                 fetch_ui_resource, tool_name, tool_use_id
             )
@@ -1270,6 +1320,69 @@ class StreamCoordinator:
             return [f"event: ui_resource\ndata: {json.dumps(payload)}\n\n"]
         except Exception as e:  # noqa: BLE001 - best-effort side channel
             logger.warning("Failed to emit ui_resource event: %s", e)
+            return []
+
+    async def _extract_ui_resource_events(
+        self,
+        event: Dict[str, Any],
+        tool_use_names: Dict[str, str],
+        emitted: set,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Post-`tool_result` fallback emit of a tool's `ui_resource`.
+
+        Pulls the toolUseId from the tool_result and delegates to
+        `_emit_ui_resource_for_tool` (which dedupes against the early mount).
+        """
+        try:
+            tool_result = event.get("data", {}).get("tool_result", {})
+            if not isinstance(tool_result, dict):
+                return []
+            tool_use_id = tool_result.get("toolUseId") or tool_result.get(
+                "tool_use_id"
+            )
+            tool_name = tool_use_names.get(tool_use_id) if tool_use_id else None
+            return await self._emit_ui_resource_for_tool(
+                tool_name,
+                tool_use_id,
+                emitted,
+                session_id=session_id,
+                user_id=user_id,
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort side channel
+            logger.warning("Failed to emit ui_resource event: %s", e)
+            return []
+
+    def _emit_tool_input_partial(
+        self, tool_use_id: str, accumulated: str
+    ) -> List[str]:
+        """Emit a `ui_tool_input_partial` SSE from accumulated input fragments.
+
+        Heals the streamed prefix of `toolUse.input` into the largest valid
+        object it can (`heal_partial_json`) and ships it as the SEP-1865
+        `tool-input-partial` payload, so an App that renders progressively
+        (e.g. Excalidraw's guided camera tour) animates as the model generates
+        the arguments. Skipped silently until the prefix heals to an object.
+        Best-effort — never raises into the stream.
+        """
+        from apis.shared.mcp_apps.partial_json import heal_partial_json
+
+        try:
+            args = heal_partial_json(accumulated)
+            if not args:
+                return []
+            payload = {
+                "type": "ui_tool_input_partial",
+                "toolUseId": tool_use_id,
+                "arguments": args,
+            }
+            return [
+                "event: ui_tool_input_partial\n"
+                f"data: {json.dumps(payload)}\n\n"
+            ]
+        except Exception as e:  # noqa: BLE001 - best-effort side channel
+            logger.warning("Failed to emit ui_tool_input_partial event: %s", e)
             return []
 
     def _format_sse_event(self, event: Dict[str, Any]) -> str:
