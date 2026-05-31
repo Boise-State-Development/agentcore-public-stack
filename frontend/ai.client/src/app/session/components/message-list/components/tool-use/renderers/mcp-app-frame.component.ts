@@ -153,13 +153,22 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   });
 
   /**
-   * Whether the tool's input has finished streaming. The result only exists
-   * once the tool has executed, which is strictly after its arguments fully
-   * streamed — so a present result is a safe "input is final" signal. Until
-   * then the App receives `tool-input-partial`; on finality it gets the
-   * complete `tool-input`.
+   * Whether the tool's input has finished streaming. The stream parser leaves
+   * an in-flight tool-use block's `input` as `{}` (its accumulating JSON can't
+   * parse yet) and fills the parsed object only once the block finalizes at
+   * `content_block_stop` — so a non-empty `lookupToolInput()` is a precise
+   * "arguments fully streamed" signal that fires BEFORE the tool executes.
+   * Keying on it (rather than the later `tool_result`) lets the App receive
+   * the complete `tool-input` — and render every element, including the last —
+   * as soon as streaming ends, instead of lagging until the result lands. A
+   * present result is a fallback (empty-input tools; the reload path, where
+   * the live stream isn't replayed). Until final, the App gets
+   * `tool-input-partial`.
    */
-  protected readonly inputFinal = computed(() => this.result() != null);
+  protected readonly inputFinal = computed(
+    () =>
+      Object.keys(this.lookupToolInput()).length > 0 || this.result() != null,
+  );
 
   /** Capabilities the resource declares (`_meta.ui.permissions`). */
   private readonly requestedCaps = computed<CapabilityKey[]>(() => {
