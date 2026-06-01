@@ -170,6 +170,24 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       Object.keys(this.lookupToolInput()).length > 0 || this.result() != null,
   );
 
+  /**
+   * The complete tool arguments to deliver as the final `tool-input`. Prefers
+   * the stream parser's parsed input, but falls back to the last server-healed
+   * streamed partial when the parser has none — which is the common case for
+   * an MCP App frame: the parser's live `allMessages()` no longer carries this
+   * tool's parsed input by the time the frame relays it (turn finished, or the
+   * mount was deferred behind a capability-consent prompt). The accumulated
+   * partial IS the complete input once streaming ends, so this is what lets
+   * the App actually render its elements instead of receiving `{}` (the
+   * long-standing "blank canvas"). Used only for the FINAL send; `inputFinal`
+   * stays keyed on stream completion so partials still drive the live tour.
+   */
+  private resolvedToolInput(): Record<string, unknown> {
+    const live = this.lookupToolInput();
+    if (Object.keys(live).length > 0) return live;
+    return this.partialInput() ?? {};
+  }
+
   /** Capabilities the resource declares (`_meta.ui.permissions`). */
   private readonly requestedCaps = computed<CapabilityKey[]>(() => {
     const p = this.resource()?.permissions ?? {};
@@ -394,7 +412,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       sandboxOrigin: res.sandboxOrigin.replace(/\/$/, ''),
       resource: effectiveRes,
       nonce: this.nonce,
-      getToolInput: () => this.lookupToolInput(),
+      getToolInput: () => this.resolvedToolInput(),
       getPartialToolInput: () => this.partialInput() ?? null,
       isToolInputFinal: () => this.inputFinal(),
       getToolResult: () => this.toCallToolResult(),
