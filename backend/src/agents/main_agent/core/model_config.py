@@ -11,6 +11,13 @@ from agents.main_agent.config.constants import EnvVars, Defaults
 
 logger = logging.getLogger(__name__)
 
+# Anthropic "fine-grained tool streaming" beta. WITHOUT it, Bedrock/Anthropic
+# BUFFERS a tool_use block's input JSON and flushes every `input_json_delta`
+# in one burst once the block is complete; WITH it, the deltas stream as the
+# model generates them. Required for MCP Apps (SEP-1865) progressive
+# tool-input rendering — see `ModelConfig.to_bedrock_config`.
+_FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
+
 
 class ModelProvider(str, Enum):
     """Supported LLM providers"""
@@ -301,6 +308,33 @@ class ModelConfig:
                 connect_timeout=self.retry_config.connect_timeout,
                 read_timeout=self.retry_config.read_timeout,
             )
+
+        # MCP Apps (SEP-1865) progressive tool-input streaming. By default
+        # Bedrock/Anthropic buffers a tool_use block's input JSON and flushes
+        # every `input_json_delta` in one burst once the block is complete —
+        # verified directly against `converse_stream`: a ~5.6KB `create_view`
+        # input arrives as a single ~1s burst after ~10s of silence, which
+        # defeats an App that renders progressively as arguments arrive (the
+        # camera tour flashes all at once). Anthropic's fine-grained tool
+        # streaming beta emits the input deltas as the model generates them
+        # (same input verified spread evenly over ~8s), so the host's
+        # `ui_tool_input_partial` relay flows in true real time. Scoped to
+        # Bedrock Anthropic (Claude) models and gated on the MCP Apps host
+        # flag — the only feature that needs it — so opted-out environments
+        # keep Anthropic's default JSON-validated tool input. Merge into any
+        # existing `additional_request_fields` (thinking/top_k/effort) rather
+        # than clobbering it.
+        if "claude" in self.model_id.lower():
+            from agents.main_agent.integrations.mcp_apps import (
+                is_mcp_apps_host_enabled,
+            )
+
+            if is_mcp_apps_host_enabled():
+                arf = config.setdefault("additional_request_fields", {})
+                betas = list(arf.get("anthropic_beta") or [])
+                if _FINE_GRAINED_TOOL_STREAMING_BETA not in betas:
+                    betas.append(_FINE_GRAINED_TOOL_STREAMING_BETA)
+                arf["anthropic_beta"] = betas
 
         return config
 

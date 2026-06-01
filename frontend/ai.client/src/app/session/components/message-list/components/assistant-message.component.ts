@@ -123,6 +123,11 @@ interface DisplayBlock {
   toolUseId?: string;
   // For MCP App frames (SEP-1865): the tool result re-shaped for the renderer.
   mcpResult?: ToolResultData;
+  // For MCP App frames: whether the REAL tool result has landed. `mcpResult`
+  // is a non-null success stub until then, so it can't convey this — the frame
+  // needs it as its authoritative "input is final" signal (gates the
+  // partial-tool-input relay vs. the complete `tool-input` send).
+  inputComplete?: boolean;
   // For inline OAuth consent prompts
   oauthRequest?: OAuthConsentRequest;
 }
@@ -212,6 +217,7 @@ interface DisplayBlock {
                 class="block w-full"
                 [result]="block.mcpResult!"
                 [toolUseId]="block.toolUseId!"
+                [inputComplete]="block.inputComplete ?? false"
               />
             </div>
           }
@@ -392,6 +398,9 @@ export class AssistantMessageComponent {
               type: 'mcp_app_frame',
               toolUseId: toolUse.toolUseId,
               mcpResult: this.toResultData(toolUse),
+              // The REAL result presence — distinct from `mcpResult`'s stub —
+              // tells the frame the tool's arguments are done streaming.
+              inputComplete: !!toolUse.result,
             });
           }
         } else {

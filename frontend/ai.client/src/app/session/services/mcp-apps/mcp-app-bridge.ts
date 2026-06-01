@@ -202,6 +202,15 @@ export class McpAppBridge {
   }
 
   /**
+   * Whether the View has reported `initialized`. A paced partial-input relay
+   * reads this so it doesn't push sends into `preInitQueue` (which flushes all
+   * at once on initialize) — which would collapse the pacing back into a burst.
+   */
+  get viewIsInitialized(): boolean {
+    return this.viewInitialized;
+  }
+
+  /**
    * Tear down: best-effort `ui/resource-teardown` toward the View, then
    * detach. Safe to call multiple times.
    */

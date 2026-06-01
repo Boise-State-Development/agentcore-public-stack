@@ -176,7 +176,11 @@ class TestToBedrockConfig:
         )
         result = cfg.to_bedrock_config()
 
-        assert "additional_request_fields" not in result
+        # No thinking config is added when thinking is disabled. (Claude models
+        # may still carry `additional_request_fields.anthropic_beta` for
+        # fine-grained tool streaming — see the dedicated tests below — so we
+        # assert thinking absence specifically rather than the whole key.)
+        assert "thinking" not in result.get("additional_request_fields", {})
         assert result["temperature"] == 0.5
         assert result["top_p"] == 0.8
 
@@ -303,6 +307,51 @@ class TestToBedrockConfig:
         result = cfg.to_bedrock_config()
 
         assert "boto_client_config" not in result
+
+    # -- MCP Apps (SEP-1865) fine-grained tool streaming ---------------------
+
+    _FGTS_BETA = "fine-grained-tool-streaming-2025-05-14"
+
+    def test_bedrock_config_adds_fine_grained_tool_streaming_for_claude(self, monkeypatch):
+        """Claude model + MCP Apps host on → fine-grained tool streaming beta
+        is added so Bedrock streams tool input incrementally (not buffered)."""
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "true")
+        cfg = ModelConfig(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        result = cfg.to_bedrock_config()
+
+        assert result["additional_request_fields"]["anthropic_beta"] == [self._FGTS_BETA]
+
+    def test_bedrock_config_no_fine_grained_streaming_when_mcp_apps_disabled(self, monkeypatch):
+        """MCP Apps host off → the beta is not added (opted-out environments
+        keep Anthropic's default JSON-validated tool input)."""
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "false")
+        cfg = ModelConfig(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        result = cfg.to_bedrock_config()
+
+        assert "anthropic_beta" not in result.get("additional_request_fields", {})
+
+    def test_bedrock_config_no_fine_grained_streaming_for_non_claude(self, monkeypatch):
+        """Non-Claude Bedrock model → the Anthropic-only beta is never added
+        (would be rejected by other providers' models)."""
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "true")
+        cfg = ModelConfig(model_id="us.amazon.nova-pro-v1:0")
+        result = cfg.to_bedrock_config()
+
+        assert "anthropic_beta" not in result.get("additional_request_fields", {})
+
+    def test_bedrock_config_fine_grained_streaming_merges_with_thinking(self, monkeypatch):
+        """The beta is added alongside an existing `additional_request_fields`
+        block (e.g. thinking) rather than clobbering it."""
+        monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "true")
+        cfg = ModelConfig(
+            model_id="us.anthropic.claude-sonnet-4-6",
+            inference_params={"thinking": 2048, "max_tokens": 8192},
+        )
+        result = cfg.to_bedrock_config()
+
+        arf = result["additional_request_fields"]
+        assert arf["anthropic_beta"] == [self._FGTS_BETA]
+        assert "thinking" in arf
 
 
 # ---------------------------------------------------------------------------

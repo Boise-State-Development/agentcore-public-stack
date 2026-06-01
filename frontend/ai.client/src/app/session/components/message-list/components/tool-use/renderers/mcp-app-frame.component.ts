@@ -85,6 +85,27 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   /** Originating tool-use id — keys the resource + correlates tool data. */
   readonly toolUseId = input<string>();
 
+  /**
+   * Whether the tool's argument streaming has finished — bound by the host to
+   * the arrival of the REAL tool result (`!!toolUse.result`). This is the
+   * authoritative "input is final" signal for an early-mounted frame.
+   *
+   * It exists because `result` is a non-null *success stub*
+   * (`{content: [], status: 'success'}`) from the moment the frame mounts at
+   * the tool's `content_block_start` — the host passes the stub so the
+   * required `result` input is satisfied while the tool is still running. That
+   * makes `result() != null` true from the very first frame, so it CANNOT
+   * distinguish "arguments still streaming" from "tool done". Keying finality
+   * on this flag instead lets the partial-tool-input stream actually relay
+   * while the model generates the arguments (the progressive camera tour) and
+   * defers the complete `tool-input` until the input is genuinely final —
+   * preventing a premature empty final from latching `toolInputSent` and
+   * leaving the App with `{}` (the blank canvas). The live stream parser does
+   * not retain an MCP tool's parsed input by relay time, so `lookupToolInput()`
+   * can't serve as this signal either.
+   */
+  readonly inputComplete = input<boolean>(false);
+
   private readonly mcpAppState = inject(McpAppStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly mcpAppMessage = inject(McpAppMessageService);
@@ -157,14 +178,19 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * "arguments fully streamed" signal that fires BEFORE the tool executes.
    * Keying on it (rather than the later `tool_result`) lets the App receive
    * the complete `tool-input` — and render every element, including the last —
-   * as soon as streaming ends, instead of lagging until the result lands. A
-   * present result is a fallback (empty-input tools; the reload path, where
-   * the live stream isn't replayed). Until final, the App gets
-   * `tool-input-partial`.
+   * as soon as streaming ends, instead of lagging until the result lands.
+   * `inputComplete` (the real tool result having landed) is the fallback for
+   * empty-input tools and the reload path, where the live stream isn't
+   * replayed. Until final, the App gets `tool-input-partial`.
+   *
+   * NB: this keys on `inputComplete()`, NOT `result() != null` — the latter is
+   * true from first mount because the host passes a non-null success stub for
+   * the still-pending tool, which would force this true immediately, suppress
+   * the partial relay, and fire an empty final. See `inputComplete`.
    */
   protected readonly inputFinal = computed(
     () =>
-      Object.keys(this.lookupToolInput()).length > 0 || this.result() != null,
+      Object.keys(this.lookupToolInput()).length > 0 || this.inputComplete(),
   );
 
   /**
@@ -248,14 +274,22 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       const theme = this.theme.theme();
       this.bridge?.notifyHostContextChanged({ theme });
     });
-    // Relay streamed partial tool input to the App while its arguments are
-    // still streaming, so a progressively-rendering App (e.g. Excalidraw's
-    // guided camera tour) animates as the model generates them. Stops once
-    // the input is final (the final `tool-input` is sent by the effect below).
+    // Relay each streamed partial tool input to the App as it arrives, so a
+    // progressively-rendering App (e.g. Excalidraw's guided camera tour)
+    // animates in lockstep with the model generating the arguments. The
+    // backend streams `ui_tool_input_partial` in true real time (Bedrock's
+    // fine-grained tool streaming — see `model_config.to_bedrock_config`), so
+    // no host-side pacing is needed; each partial is forwarded straight
+    // through. Gated on `viewIsInitialized`: partials that arrive before the
+    // bridge handshake completes are skipped here and instead caught up in one
+    // shot by the init seed (`getPartialToolInput` below), so they don't pile
+    // into `preInitQueue` and flush as a burst. Stops once the input is final
+    // (the complete `tool-input` is sent by the effect below).
     effect(() => {
       const partial = this.partialInput();
       if (!partial || this.inputFinal()) return;
-      this.bridge?.sendToolInputPartial(partial);
+      if (!this.bridge?.viewIsInitialized) return;
+      this.bridge.sendToolInputPartial(partial);
     });
     // On finality, send the complete `tool-input` (once) then (re-)push the
     // tool result if it's landed/changed after the App initialized.
@@ -378,6 +412,12 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       resource: effectiveRes,
       nonce: this.nonce,
       getToolInput: () => this.resolvedToolInput(),
+      // Seeds the latest accumulated partial when the bridge handshake
+      // completes, catching the App up to the current streamed state in one
+      // shot. The relay effect skips partials that arrive before init (they'd
+      // otherwise pile into `preInitQueue` and flush as a burst), so this seed
+      // is how the App picks up the in-progress tour; subsequent partials then
+      // stream straight through.
       getPartialToolInput: () => this.partialInput() ?? null,
       isToolInputFinal: () => this.inputFinal(),
       getToolResult: () => this.toCallToolResult(),
