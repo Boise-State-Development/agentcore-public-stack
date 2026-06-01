@@ -128,6 +128,11 @@ interface DisplayBlock {
   // needs it as its authoritative "input is final" signal (gates the
   // partial-tool-input relay vs. the complete `tool-input` send).
   inputComplete?: boolean;
+  // For MCP App frames: the tool's persisted arguments. On the live path the
+  // frame gets the input from the stream parser / captured partial; on reload
+  // those are empty, so the frame falls back to this (the input that came back
+  // from `GET /messages`) to render the final state instead of a blank canvas.
+  toolInput?: Record<string, unknown>;
   // For inline OAuth consent prompts
   oauthRequest?: OAuthConsentRequest;
 }
@@ -218,6 +223,7 @@ interface DisplayBlock {
                 [result]="block.mcpResult!"
                 [toolUseId]="block.toolUseId!"
                 [inputComplete]="block.inputComplete ?? false"
+                [toolInput]="block.toolInput ?? {}"
               />
             </div>
           }
@@ -401,6 +407,9 @@ export class AssistantMessageComponent {
               // The REAL result presence — distinct from `mcpResult`'s stub —
               // tells the frame the tool's arguments are done streaming.
               inputComplete: !!toolUse.result,
+              // The persisted arguments — the frame's reload fallback when the
+              // live stream parser / captured partial are gone.
+              toolInput: toolUse.input,
             });
           }
         } else {

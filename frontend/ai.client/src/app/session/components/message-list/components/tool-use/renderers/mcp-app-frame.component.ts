@@ -106,6 +106,18 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   readonly inputComplete = input<boolean>(false);
 
+  /**
+   * The tool's persisted arguments, from `GET /messages` on reload. The live
+   * path resolves the input from the stream parser / captured partial, but
+   * after a refresh both are empty (the live stream isn't replayed); this is
+   * the fallback that lets the App render its final state instead of a blank
+   * canvas. On the live path it's `{}` until the tool-use block finalizes (the
+   * parser leaves an in-flight block's input empty), so it never pre-empts the
+   * streaming tour. No tour is replayed on reload — the App snaps to the
+   * complete input, the spec's `tool-input` (final) path.
+   */
+  readonly toolInput = input<Record<string, unknown>>({});
+
   private readonly mcpAppState = inject(McpAppStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
   private readonly mcpAppMessage = inject(McpAppMessageService);
@@ -190,7 +202,12 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   protected readonly inputFinal = computed(
     () =>
-      Object.keys(this.lookupToolInput()).length > 0 || this.inputComplete(),
+      Object.keys(this.lookupToolInput()).length > 0 ||
+      this.inputComplete() ||
+      // Reload: a non-empty persisted input is itself a "final" signal, so an
+      // interrupted tool (input persisted, no result → `inputComplete` false)
+      // still renders instead of waiting on a result that never lands.
+      Object.keys(this.toolInput()).length > 0,
   );
 
   /**
@@ -202,13 +219,20 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * mount was deferred behind a capability-consent prompt). The accumulated
    * partial IS the complete input once streaming ends, so this is what lets
    * the App actually render its elements instead of receiving `{}` (the
-   * long-standing "blank canvas"). Used only for the FINAL send; `inputFinal`
-   * stays keyed on stream completion so partials still drive the live tour.
+   * long-standing "blank canvas"). On reload both the live parser and the
+   * captured partial are empty (the stream isn't replayed), so it falls back
+   * to `toolInput()` — the arguments persisted with the message. Used only for
+   * the FINAL send; `inputFinal` stays keyed on stream completion so partials
+   * still drive the live tour.
    */
   private resolvedToolInput(): Record<string, unknown> {
     const live = this.lookupToolInput();
     if (Object.keys(live).length > 0) return live;
-    return this.partialInput() ?? {};
+    const partial = this.partialInput();
+    if (partial) return partial;
+    // Reload fallback: the live parser and captured partial are both gone
+    // after a refresh, so use the arguments persisted with the message.
+    return this.toolInput();
   }
 
   /** Id of this frame's currently-open consent prompt (`ui/open-link`),
