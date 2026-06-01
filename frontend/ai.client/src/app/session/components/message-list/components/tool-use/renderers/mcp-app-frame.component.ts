@@ -24,10 +24,7 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
-import type {
-  CapabilityKey,
-  DisplayMode,
-} from '../../../../../services/mcp-apps/mcp-app-protocol';
+import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
 import { SessionService } from '../../../../../services/session/session.service';
 
@@ -188,30 +185,9 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return this.partialInput() ?? {};
   }
 
-  /** Capabilities the resource declares (`_meta.ui.permissions`). */
-  private readonly requestedCaps = computed<CapabilityKey[]>(() => {
-    const p = this.resource()?.permissions ?? {};
-    const caps: CapabilityKey[] = [];
-    if (p.camera) caps.push('camera');
-    if (p.microphone) caps.push('microphone');
-    if (p.geolocation) caps.push('geolocation');
-    if (p.clipboardWrite) caps.push('clipboardWrite');
-    return caps;
-  });
-
-  /**
-   * Render-time capability consent (PR #6). `null` = undecided. When the
-   * resource requests sensitive sandbox features we hold the frame until
-   * the user answers an inline prompt, then grant only what was approved
-   * (all-or-nothing for v1). Frontend-only — the request never reaches a
-   * backend turn, same justification as `McpAppConsentService`.
-   */
-  private readonly capabilityGrant = signal<boolean | null>(null);
-  private capabilityAsked = false;
-
-  /** Id of this frame's currently-open consent prompt (capability ask or
-   *  open-link), used to render it inline above the iframe instead of in
-   *  an unanchored message-list strip. */
+  /** Id of this frame's currently-open consent prompt (`ui/open-link`),
+   *  rendered inline above the iframe instead of in an unanchored
+   *  message-list strip. */
   private readonly openPromptId = signal<string | null>(null);
   protected readonly currentPrompt = computed(() => {
     const id = this.openPromptId();
@@ -219,24 +195,30 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return this.mcpAppConsent.pending().find((p) => p.id === id) ?? null;
   });
 
-  /** True once requested capabilities are decided (or none were asked). */
-  private readonly capabilitiesResolved = computed(
-    () => this.requestedCaps().length === 0 || this.capabilityGrant() !== null,
+  /**
+   * Permissions applied to the frame — the App's declared
+   * `_meta.ui.permissions` mapped straight onto the iframe `allow`
+   * (Permissions-Policy), matching the SEP-1865 reference host (and Claude).
+   * We deliberately do NOT pre-prompt for capabilities: delegating a feature
+   * via `allow` does not *activate* it — the BROWSER prompts at use-time for
+   * camera/microphone/geolocation, and clipboard-write is low-risk and needs
+   * no prompt. An earlier PR #6 gate held the mount behind an inline consent
+   * prompt; that was stricter than the reference, confused users (Claude
+   * shows no such prompt), and — fatally — delayed the iframe mount past the
+   * argument-streaming window, breaking progressive rendering (the camera
+   * tour). `ui/open-link` still routes through `McpAppConsentService`.
+   */
+  private readonly effectivePermissions = computed(
+    () => this.resource()?.permissions ?? {},
   );
 
-  /** Permissions actually applied to the frame: declared ∩ consent. */
-  private readonly effectivePermissions = computed(() => {
-    const declared = this.resource()?.permissions ?? {};
-    if (this.requestedCaps().length === 0) return declared;
-    return this.capabilityGrant() ? declared : {};
-  });
-
   /**
-   * Plain string URL the iframe `src` is set to. Stays null until consent
-   * resolves so the @if-gated host div doesn't appear. Trusted single
-   * value from our authenticated backend (SSM-sourced); the imperative
-   * sandbox attribute + the proxy's per-resource CSP are the real
-   * containment, same justification as the artifact panel.
+   * Plain string URL the iframe `src` is set to. Null until the resource +
+   * sandbox origin are known; the App is then framed immediately (no consent
+   * gate) so the bridge is live while arguments stream. Trusted single value
+   * from our authenticated backend (SSM-sourced); the imperative sandbox
+   * attribute + the proxy's per-resource CSP are the real containment, same
+   * justification as the artifact panel.
    *
    * The `?csp=` query the proxy CFN reads is built from the resource's
    * declared `_meta.ui.csp` (`buildProxyUrl`). Apps that declare nothing
@@ -246,7 +228,6 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   protected readonly proxyUrl = computed<string | null>(() => {
     const res = this.resource();
     if (!res || !res.sandboxOrigin) return null;
-    if (!this.capabilitiesResolved()) return null;
     return buildProxyUrl(res.sandboxOrigin, res.csp);
   });
 
@@ -283,26 +264,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       if (this.inputFinal()) this.bridge?.sendToolInputFinal();
       this.bridge?.refreshToolResult();
     });
-    // Render-time capability consent: when the resource requests sensitive
-    // sandbox features, ask once and hold the frame until answered.
-    effect(() => {
-      const caps = this.requestedCaps();
-      if (caps.length === 0 || this.capabilityAsked) return;
-      this.capabilityAsked = true;
-      const { id, granted } = this.mcpAppConsent.request({
-        kind: 'capabilities',
-        capabilities: caps,
-      });
-      this.openPromptId.set(id);
-      granted
-        .then((g) => this.capabilityGrant.set(g))
-        .catch(() => this.capabilityGrant.set(false))
-        .finally(() => this.openPromptId.set(null));
-    });
-    // Imperatively create the iframe once the host div mounts and consent
-    // is resolved. Angular 21 forbids dynamic `[attr.allow]` on <iframe>
-    // (NG0910), so we build the element by hand with all attributes set
-    // before src — the browser only consults `allow` at load-start.
+    // Imperatively create the iframe once the host div mounts. Angular 21
+    // forbids dynamic `[attr.allow]` on <iframe> (NG0910), so we build the
+    // element by hand with all attributes set before src — the browser only
+    // consults `allow` at load-start.
     effect(() => {
       const host = this.hostRef();
       const url = this.proxyUrl();
