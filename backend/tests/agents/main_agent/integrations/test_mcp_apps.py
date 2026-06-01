@@ -16,6 +16,8 @@ UI-bearing tools, mirroring the mock-the-boundary style already used in
 `test_external_mcp_client.py`.
 """
 
+import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -47,8 +49,10 @@ _ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
 
 @pytest.fixture
 def mcp_apps_clean(monkeypatch):
-    """Isolate the global catalog and the strands ClientSession symbol."""
+    """Isolate the global catalog, the strands ClientSession symbol, and the
+    per-origin served-manifest icon cache."""
     get_ui_tool_catalog().clear()
+    mcp_apps._server_icon_by_origin.clear()
     original_session = strands_mcp_client_mod.ClientSession
     monkeypatch.delenv(_ENV_FLAG, raising=False)
     monkeypatch.delenv(_ENV_SANDBOX_ORIGIN, raising=False)
@@ -57,6 +61,7 @@ def mcp_apps_clean(monkeypatch):
     finally:
         strands_mcp_client_mod.ClientSession = original_session
         get_ui_tool_catalog().clear()
+        mcp_apps._server_icon_by_origin.clear()
 
 
 def _fake_tool(tool_name, ui=None, mcp_name=None):
@@ -656,3 +661,89 @@ class TestBuildUiAppHeader:
     def test_none_for_non_ui_tool(self, mcp_apps_clean, monkeypatch):
         monkeypatch.setenv(_ENV_FLAG, "true")
         assert build_ui_app_header("never-seen", "tu-1") is None
+
+
+class TestServedManifestIcon:
+    """Auto-resolve a server's icon from its served MCPB `manifest.json`."""
+
+    def test_fetches_manifest_and_inlines_icon(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        calls: list = []
+
+        def fake_get(url, max_bytes):
+            calls.append(url)
+            if url.endswith("/manifest.json"):
+                return json.dumps({"icon": "docs/logo.png"}).encode(), "application/json"
+            if url.endswith("/docs/logo.png"):
+                return b"\x89PNG\r\nFAKE", "image/png"
+            raise AssertionError(f"unexpected fetch: {url}")
+
+        monkeypatch.setattr(mcp_apps, "_http_get", fake_get)
+
+        icon = mcp_apps.resolve_server_icon("https://mcp.excalidraw.com/mcp")
+
+        assert icon.startswith("data:image/png;base64,")
+        assert base64.b64decode(icon.split(",", 1)[1]) == b"\x89PNG\r\nFAKE"
+        # Manifest then same-origin icon, resolved against the origin (not /mcp).
+        assert calls == [
+            "https://mcp.excalidraw.com/manifest.json",
+            "https://mcp.excalidraw.com/docs/logo.png",
+        ]
+
+        # Cached per origin: a second resolve issues no further fetches.
+        calls.clear()
+        assert mcp_apps.resolve_server_icon("https://mcp.excalidraw.com/mcp") == icon
+        assert calls == []
+
+    def test_caches_empty_on_failure(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+
+        def boom(url, max_bytes):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(mcp_apps, "_http_get", boom)
+        assert mcp_apps.resolve_server_icon("https://srv.test/mcp") == ""
+        assert mcp_apps.get_cached_server_icon("https://srv.test/mcp") == ""
+
+    def test_inert_when_flag_disabled(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "false")
+        called: list = []
+        monkeypatch.setattr(
+            mcp_apps, "_http_get", lambda u, m: called.append(u) or (b"", "")
+        )
+        assert mcp_apps.resolve_server_icon("https://srv.test/mcp") == ""
+        assert called == []  # never touched the network
+
+    def test_foreign_origin_icon_is_refused(self, mcp_apps_clean, monkeypatch):
+        """An absolute icon URL on a different host is not followed (SSRF bound)."""
+        monkeypatch.setenv(_ENV_FLAG, "true")
+
+        def fake_get(url, max_bytes):
+            if url.endswith("/manifest.json"):
+                return (
+                    json.dumps({"icon": "https://evil.test/x.png"}).encode(),
+                    "application/json",
+                )
+            raise AssertionError(f"must not fetch foreign icon: {url}")
+
+        monkeypatch.setattr(mcp_apps, "_http_get", fake_get)
+        assert mcp_apps.resolve_server_icon("https://srv.test/mcp") == ""
+
+    def test_identity_falls_back_to_served_icon(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        # serverInfo carries NO icons; the per-origin cache has the served one;
+        # the client exposes its server_url → identity uses the served icon.
+        mcp_apps._server_icon_by_origin["https://mcp.excalidraw.com"] = (
+            "data:image/png;base64,QUJD"
+        )
+        client = _FakeMCPClient(
+            result=_html_resource(),
+            server_info=mcp_types.Implementation(name="Excalidraw", version="1"),
+        )
+        client.server_url = "https://mcp.excalidraw.com/mcp"
+
+        name, icon = mcp_apps._resolve_server_identity(
+            client, "ui://excalidraw/canvas"
+        )
+        assert name == "Excalidraw"
+        assert icon == "data:image/png;base64,QUJD"

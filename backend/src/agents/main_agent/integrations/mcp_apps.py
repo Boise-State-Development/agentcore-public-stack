@@ -31,11 +31,14 @@ asserts the capability appears on the wire fails loudly if a Strands upgrade
 ever changes how the session is constructed.
 """
 
+import base64
+import json
 import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
+from urllib.request import Request, urlopen
 
 import mcp.types as mcp_types
 from mcp.client.session import ClientSession
@@ -182,6 +185,14 @@ def record_and_filter_ui_tools(
             mcp_tool, "name", "<unknown>"
         )
         catalog.record(tool_name, ui_metadata, client=client)
+
+        # Pre-warm the served-manifest icon for this server (best-effort,
+        # cached per origin) so the request-path identity resolver stays a
+        # cache lookup. Only external clients carry a usable `server_url`;
+        # Gateway-fronted ones don't (their origin won't serve a manifest).
+        server_url = getattr(client, "server_url", None)
+        if server_url:
+            resolve_server_icon(server_url)
 
         if ui_metadata.visible_to_model():
             visible.append(tool)
@@ -333,16 +344,116 @@ def _pick_icon(icons: Any) -> str:
     return ""
 
 
+# --- Served-manifest icon resolution (Claude-parity, automatic) -------------
+# The MCP runtime protocol carries no icon (no `serverInfo.icons`/tool `icons`
+# for e.g. Excalidraw). Claude shows the logo because it installs the server's
+# MCPB *bundle*, which contains the icon file referenced by `manifest.json`
+# (`"icon": "docs/logo.png"`), and inlines it as a `data:` URI. Many of these
+# deployable servers ALSO serve that manifest + icon over HTTP at their origin
+# (verified: `https://mcp.excalidraw.com/manifest.json` + `/docs/logo.png`), so
+# we replicate it server-side: fetch the manifest, resolve its icon
+# same-origin, and base64-inline it. Cached per origin (process lifetime), so
+# it runs at most once per server. Entirely best-effort → "" → generic glyph.
+
+_ICON_FETCH_TIMEOUT_S = 5
+_MAX_ICON_BYTES = 256 * 1024  # decoded image size cap (excalidraw logo ~87KB)
+_MAX_MANIFEST_BYTES = 64 * 1024
+#: origin -> resolved icon `data:` URI, or "" (resolved-but-none / failed).
+_server_icon_by_origin: Dict[str, str] = {}
+
+
+def _url_origin(url: Any) -> str:
+    """`scheme://netloc` for an http(s) URL, else "" (guards file:// etc.)."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        parts = urlsplit(url)
+    except Exception:
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _http_get(url: str, max_bytes: int) -> Tuple[bytes, str]:
+    """GET with a timeout; return (body, content-type). Caps the body size and
+    refuses non-http(s) schemes (the URL is an admin-trusted MCP origin)."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("refusing non-http(s) URL")
+    req = Request(url, headers={"User-Agent": "agentcore-mcp-apps"})
+    with urlopen(req, timeout=_ICON_FETCH_TIMEOUT_S) as resp:  # noqa: S310 - trusted MCP origin
+        ctype = resp.headers.get("Content-Type", "") or ""
+        body = resp.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ValueError("response exceeds size cap")
+    return body, ctype
+
+
+def _fetch_manifest_icon(origin: str) -> str:
+    """Fetch `<origin>/manifest.json`, resolve its `icon` same-origin, and
+    return a base64 `data:` URI (or "")."""
+    body, _ = _http_get(f"{origin}/manifest.json", _MAX_MANIFEST_BYTES)
+    manifest = json.loads(body.decode("utf-8"))
+    icon_ref = manifest.get("icon") if isinstance(manifest, dict) else None
+    if not isinstance(icon_ref, str) or not icon_ref.strip():
+        return ""
+    icon_ref = icon_ref.strip()
+    if icon_ref.startswith("data:"):
+        return icon_ref  # already inline
+    icon_url = urljoin(origin + "/", icon_ref)
+    # Same-origin only: never follow an absolute icon URL to a foreign host
+    # (bounds the fetch to the already-trusted, admin-configured MCP origin).
+    if _url_origin(icon_url) != origin:
+        return ""
+    img, ctype = _http_get(icon_url, _MAX_ICON_BYTES)
+    mime = ctype.split(";")[0].strip()
+    if not mime.startswith("image/"):
+        return ""
+    return f"data:{mime};base64,{base64.b64encode(img).decode('ascii')}"
+
+
+def resolve_server_icon(server_url: Any) -> str:
+    """Resolve + cache a server origin's served-manifest icon (best-effort).
+
+    Pre-warmed from `record_and_filter_ui_tools` at `tools/list` so the
+    request-path resolvers stay a cache lookup. Caches "" on miss/failure too,
+    so a server that serves no manifest is probed at most once. Never raises.
+    """
+    if not is_mcp_apps_host_enabled():
+        return ""
+    origin = _url_origin(server_url)
+    if not origin:
+        return ""
+    if origin in _server_icon_by_origin:
+        return _server_icon_by_origin[origin]
+    icon = ""
+    try:
+        icon = _fetch_manifest_icon(origin)
+    except Exception:
+        logger.debug(
+            "MCP Apps: served-manifest icon resolution failed for %s",
+            origin,
+            exc_info=True,
+        )
+        icon = ""
+    _server_icon_by_origin[origin] = icon
+    return icon
+
+
+def get_cached_server_icon(server_url: Any) -> str:
+    """Cache-only lookup (no network) of a server origin's resolved icon."""
+    return _server_icon_by_origin.get(_url_origin(server_url), "")
+
+
 def _resolve_server_identity(
     client: Any, resource_uri: str
 ) -> Tuple[str, str]:
     """Resolve `(serverName, icon)` for a tool's `ui_resource` event.
 
-    Prefers the server-advertised `serverInfo` (`title` > `name`, plus its
-    `icons`) captured off `initialize` by `_UIExtensionClientSession`, falling
-    back to the `ui://` authority for the name and "" for the icon. Wholly
-    best-effort: any failure yields the authority-derived name + no icon so the
-    frontend renders its generic glyph.
+    Name: server-advertised `serverInfo` (`title` > `name`, captured off
+    `initialize`) → `ui://` authority. Icon: `serverInfo.icons` (spec) → the
+    server's served-manifest icon (Claude parity, pre-warmed cache keyed by the
+    client's `server_url`) → "" (frontend glyph). Wholly best-effort.
     """
     info = getattr(
         getattr(client, "_background_thread_session", None),
@@ -351,6 +462,10 @@ def _resolve_server_identity(
     )
     name = getattr(info, "title", None) or getattr(info, "name", None) or ""
     icon = _pick_icon(getattr(info, "icons", None))
+    if not icon:
+        server_url = getattr(client, "server_url", None)
+        if server_url:
+            icon = get_cached_server_icon(server_url)
     if not name:
         name = _server_name_from_uri(resource_uri)
     return name, icon
@@ -594,9 +709,17 @@ class UICapableMCPClient(MCPClient):
     `list_tools_sync` is the seam Strands calls to build the model's tool
     list, so filtering here guarantees the model never sees app-only tools
     while the full metadata is retained in the catalog.
+
+    `server_url` is the configured MCP endpoint (`MCPServerConfig.server_url`);
+    retained so the App-header icon resolver can derive the server origin and
+    fetch its served bundle manifest's icon. Strands' `MCPClient` only gets a
+    transport callable, so it can't expose the URL itself.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, server_url: Optional[str] = None, **kwargs: Any
+    ) -> None:
+        self.server_url = server_url
         ensure_ui_extension_session_patch()
         super().__init__(*args, **kwargs)
 

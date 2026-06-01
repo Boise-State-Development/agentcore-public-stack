@@ -190,7 +190,10 @@ def create_external_mcp_client(
                 lambda url=config.server_url, auth=auth: streamablehttp_client(
                     url,
                     auth=auth
-                )
+                ),
+                # Retained so the MCP Apps header can resolve the server's
+                # served-manifest icon from this origin (best-effort).
+                server_url=config.server_url,
             )
             logger.info(f"✅ External MCP client created for {tool_id}: {config.server_url}")
             return mcp_client

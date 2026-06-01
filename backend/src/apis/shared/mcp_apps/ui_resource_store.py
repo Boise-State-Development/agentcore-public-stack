@@ -206,7 +206,12 @@ class UiResourceStore:
             # reload (the read side copies all non-key attrs back onto the
             # resource), so a refreshed conversation re-shows the same header.
             "serverName": server_name or "",
-            "icon": icon or "",
+            # Only persist a SMALL icon (e.g. a URL). A large base64 `data:` URI
+            # (the auto-fetched server-manifest logo, ~100KB+) would risk the
+            # 400KB DynamoDB item limit alongside the gzipped HTML and regress
+            # HTML persistence — so it's dropped here; the live event still
+            # carried it, and reload falls back to the generic glyph.
+            "icon": icon if (icon and len(icon) <= 8192) else "",
             "toolName": tool_name or "",
             "createdAt": created_at,
             "producedByMessageIndex": produced_by_message_index,
