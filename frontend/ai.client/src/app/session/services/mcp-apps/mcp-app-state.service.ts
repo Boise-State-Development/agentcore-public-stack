@@ -24,6 +24,17 @@ export class McpAppStateService {
     new Map(),
   );
 
+  /**
+   * Latest streamed partial tool input per `toolUseId` (SEP-1865
+   * `tool-input-partial`). Populated while a UI tool's arguments are still
+   * streaming, after the frame mounts early; the frame relays each healed
+   * prefix to the App for progressive rendering. Last write wins (the backend
+   * sends the growing healed prefix). Cleared on `reset()`.
+   */
+  private readonly partialInputByToolUseId = signal<
+    ReadonlyMap<string, Record<string, unknown>>
+  >(new Map());
+
   /** True once any MCP App resource has been recorded this conversation. */
   readonly hasApps = computed(() => this.byToolUseId().size > 0);
 
@@ -53,6 +64,25 @@ export class McpAppStateService {
     this.byToolUseId.set(next);
   }
 
+  /**
+   * Record the latest streamed partial tool input for a tool invocation
+   * (SEP-1865 `tool-input-partial`). Last write wins — the backend streams a
+   * growing, server-healed prefix of the arguments object.
+   */
+  recordPartialInput(
+    toolUseId: string,
+    args: Record<string, unknown>,
+  ): void {
+    const next = new Map(this.partialInputByToolUseId());
+    next.set(toolUseId, args);
+    this.partialInputByToolUseId.set(next);
+  }
+
+  /** Latest streamed partial tool input for a tool invocation, or undefined. */
+  getPartialInput(toolUseId: string): Record<string, unknown> | undefined {
+    return this.partialInputByToolUseId().get(toolUseId);
+  }
+
   /** The UI resource for a tool invocation, or undefined. */
   get(toolUseId: string): UiResourceEvent | undefined {
     return this.byToolUseId().get(toolUseId);
@@ -70,5 +100,6 @@ export class McpAppStateService {
   /** Drop all resources — called on conversation change (teardown). */
   reset(): void {
     this.byToolUseId.set(new Map());
+    this.partialInputByToolUseId.set(new Map());
   }
 }

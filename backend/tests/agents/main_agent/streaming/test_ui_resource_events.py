@@ -136,6 +136,10 @@ async def test_emits_ui_resource_with_inline_html(
         "csp": {"connectDomains": ["https://api.test"]},
         "permissions": {"clipboardWrite": {}},
         "sandboxOrigin": "",
+        # No serverInfo on the fake client → authority fallback ("srv" → "Srv").
+        "serverName": "Srv",
+        "icon": "",
+        "toolName": "widget",
     }
 
 
@@ -309,3 +313,134 @@ async def test_failure_is_swallowed(coord, catalog_clean, monkeypatch):
         _tool_result_event("tu-1"), {"tu-1": "widget"}, set()
     )
     assert out == []
+
+
+# ---------------------------------------------------------------------------
+# Early frame mount + streamed partial tool input (SEP-1865 tool-input-partial)
+# ---------------------------------------------------------------------------
+
+
+def _parse_partial(raw: str) -> dict:
+    prefix = "event: ui_tool_input_partial\ndata: "
+    assert raw.startswith(prefix)
+    assert raw.endswith("\n\n")
+    return json.loads(raw[len(prefix) :].strip())
+
+
+@pytest.mark.asyncio
+async def test_early_mount_emits_and_dedupes_against_tool_result(
+    coord, catalog_clean, monkeypatch
+):
+    """The frame mounts at content_block_start; the later tool_result no-ops."""
+    client = _FakeMCPClient(_html_result("<main>app</main>"))
+    _seed(monkeypatch, client)
+    emitted: set = set()
+
+    mount = await coord._emit_ui_resource_for_tool(
+        "widget", "tu-1", emitted
+    )
+    assert len(mount) == 1
+    assert _parse(mount[0])["toolUseId"] == "tu-1"
+    assert emitted == {"tu-1"}
+
+    # The post-tool_result fallback path must not emit a second frame.
+    again = await coord._extract_ui_resource_events(
+        _tool_result_event("tu-1"), {"tu-1": "widget"}, emitted
+    )
+    assert again == []
+    assert client.read_calls == ["ui://srv/widget"]  # only fetched once
+
+
+@pytest.mark.asyncio
+async def test_early_mount_noop_for_non_ui_tool(coord, catalog_clean, monkeypatch):
+    monkeypatch.setenv(_ENV_FLAG, "true")
+    out = await coord._emit_ui_resource_for_tool("plain_tool", "tu-1", set())
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_early_mount_inert_when_flag_disabled(
+    coord, catalog_clean, monkeypatch
+):
+    _seed(monkeypatch, _FakeMCPClient(_html_result()))
+    monkeypatch.setenv(_ENV_FLAG, "false")
+    out = await coord._emit_ui_resource_for_tool("widget", "tu-1", set())
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_header_shell_emits_instantly_without_read(
+    coord, catalog_clean, monkeypatch
+):
+    """The header-only shell ships an empty-html `ui_resource` with NO
+    resources/read, so the App frame's header replaces the tool rail at once;
+    its own dedupe set is independent of the full-emit set."""
+    client = _FakeMCPClient(_html_result("<main>app</main>"))
+    _seed(monkeypatch, client)
+    header_emitted: set = set()
+
+    header = coord._emit_ui_app_header_for_tool(
+        "widget", "tu-1", header_emitted
+    )
+    assert len(header) == 1
+    payload = _parse(header[0])
+    assert payload["toolUseId"] == "tu-1"
+    assert payload["html"] == ""  # shell — iframe waits for the full emit
+    assert payload["resourceUri"] == "ui://srv/widget"
+    assert client.read_calls == []  # the whole point: no slow read
+    assert header_emitted == {"tu-1"}
+
+    # Deduped on its own set...
+    assert coord._emit_ui_app_header_for_tool("widget", "tu-1", header_emitted) == []
+
+    # ...but the full html-bearing emit (separate set) is NOT blocked by it.
+    full = await coord._emit_ui_resource_for_tool("widget", "tu-1", set())
+    assert len(full) == 1
+    assert _parse(full[0])["html"] == "<main>app</main>"
+
+
+def test_header_shell_inert_when_flag_disabled(
+    coord, catalog_clean, monkeypatch
+):
+    _seed(monkeypatch, _FakeMCPClient(_html_result()))
+    monkeypatch.setenv(_ENV_FLAG, "false")
+    assert coord._emit_ui_app_header_for_tool("widget", "tu-1", set()) == []
+
+
+def test_header_shell_noop_for_non_ui_tool(coord, catalog_clean, monkeypatch):
+    monkeypatch.setenv(_ENV_FLAG, "true")
+    assert coord._emit_ui_app_header_for_tool("plain_tool", "tu-1", set()) == []
+
+
+def test_partial_input_emits_healed_arguments(coord):
+    # An incomplete streamed prefix heals to a valid object and ships as the
+    # tool-input-partial payload.
+    out = coord._emit_tool_input_partial(
+        "tu-1", '{"elements": [{"type": "rectangle"}, {"type": "came'
+    )
+    assert len(out) == 1
+    payload = _parse_partial(out[0])
+    assert payload["type"] == "ui_tool_input_partial"
+    assert payload["toolUseId"] == "tu-1"
+    assert isinstance(payload["arguments"], dict)
+    assert payload["arguments"]["elements"][0]["type"] == "rectangle"
+
+
+def test_partial_input_skips_until_object_heals(coord):
+    # Empty / whitespace → nothing to emit.
+    assert coord._emit_tool_input_partial("tu-1", "") == []
+    assert coord._emit_tool_input_partial("tu-1", "   ") == []
+    # A prefix that only heals to an empty object carries nothing useful yet,
+    # so we wait for more fragments rather than emitting a bare `{}`.
+    assert coord._emit_tool_input_partial("tu-1", '{"ele') == []
+
+
+def test_partial_input_failure_is_swallowed(coord, monkeypatch):
+    import agents.main_agent.streaming.stream_coordinator as sc
+
+    # Even if healing blows up, the stream is never broken.
+    monkeypatch.setattr(
+        "apis.shared.mcp_apps.partial_json.heal_partial_json",
+        lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert coord._emit_tool_input_partial("tu-1", '{"a":1}') == []

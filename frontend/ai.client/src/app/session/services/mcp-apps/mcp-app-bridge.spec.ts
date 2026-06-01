@@ -619,3 +619,95 @@ describe('McpAppBridge', () => {
     expect(np.proxy.byId('c4').error.code).toBe(-32601);
   });
 });
+
+describe('McpAppBridge — streamed partial tool input (SEP-1865)', () => {
+  // Controllable streaming state: `final` flips when the input is complete.
+  function makeStreamingBridge(initial: {
+    partial: Record<string, unknown> | null;
+    final: boolean;
+  }) {
+    const host = new FakeHostWindow();
+    const proxy = new FakeProxyWindow();
+    const state = { ...initial };
+    const bridge = new McpAppBridge({
+      hostWindow: host,
+      getProxyWindow: () => proxy as unknown as Window,
+      sandboxOrigin: SANDBOX_ORIGIN,
+      resource: resource(),
+      nonce: NONCE,
+      getToolInput: () => ({ elements: [{ type: 'rect' }, { type: 'cam' }] }),
+      getPartialToolInput: () => state.partial,
+      isToolInputFinal: () => state.final,
+      getToolResult: () => null,
+      getHostContext: () => ({ theme: 'dark' }),
+      openLink: vi.fn(),
+    });
+    bridge.start();
+    return { bridge, host, proxy, state };
+  }
+
+  function toInitialized(h: { host: FakeHostWindow; proxy: FakeProxyWindow }) {
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', params: {} },
+      h.proxy,
+    );
+    h.host.deliver(
+      { jsonrpc: '2.0', id: 'i1', method: 'ui/initialize', nonce: NONCE, params: {} },
+      h.proxy,
+    );
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+      h.proxy,
+    );
+  }
+
+  const PARTIAL = 'ui/notifications/tool-input-partial';
+  const FINAL = 'ui/notifications/tool-input';
+
+  it('on initialized while streaming, sends the partial and NOT the final', () => {
+    const h = makeStreamingBridge({ partial: { elements: [{ type: 'rect' }] }, final: false });
+    toInitialized(h);
+    const partials = h.proxy.byMethod(PARTIAL);
+    expect(partials).toHaveLength(1);
+    expect(partials[0].params).toEqual({ arguments: { elements: [{ type: 'rect' }] } });
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(0);
+  });
+
+  it('on initialized when already final, sends the complete tool-input', () => {
+    const h = makeStreamingBridge({ partial: null, final: true });
+    toInitialized(h);
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(0);
+    const finals = h.proxy.byMethod(FINAL);
+    expect(finals).toHaveLength(1);
+    expect(finals[0].params).toEqual({
+      arguments: { elements: [{ type: 'rect' }, { type: 'cam' }] },
+    });
+  });
+
+  it('streams further partials, then the final exactly once; late partials are ignored', () => {
+    const h = makeStreamingBridge({ partial: { elements: [{ type: 'rect' }] }, final: false });
+    toInitialized(h);
+
+    h.bridge.sendToolInputPartial({ elements: [{ type: 'rect' }, { type: 'cam' }] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(2);
+
+    // Input completes → final goes out once.
+    h.bridge.sendToolInputFinal();
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(1);
+    h.bridge.sendToolInputFinal();
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(1);
+
+    // A late partial after the final must not clobber it.
+    h.bridge.sendToolInputPartial({ elements: [] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(2);
+  });
+
+  it('queues a pre-initialized partial and flushes it on initialized', () => {
+    const h = makeStreamingBridge({ partial: null, final: false });
+    // Before initialized: a partial should queue, not post.
+    h.bridge.sendToolInputPartial({ elements: [{ type: 'rect' }] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(0);
+    toInitialized(h);
+    expect(h.proxy.byMethod(PARTIAL).length).toBeGreaterThanOrEqual(1);
+  });
+});

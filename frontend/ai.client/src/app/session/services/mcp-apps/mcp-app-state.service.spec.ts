@@ -54,9 +54,38 @@ describe('McpAppStateService', () => {
 
   it('reset() drops everything (conversation teardown)', () => {
     svc.recordLive(ev('tu-1'));
+    svc.recordPartialInput('tu-1', { elements: [] });
     svc.reset();
     expect(svc.hasApps()).toBe(false);
     expect(svc.has('tu-1')).toBe(false);
+    expect(svc.getPartialInput('tu-1')).toBeUndefined();
+  });
+
+  describe('recordPartialInput', () => {
+    it('records and retrieves the latest streamed partial input', () => {
+      expect(svc.getPartialInput('tu-1')).toBeUndefined();
+      svc.recordPartialInput('tu-1', { elements: [{ type: 'rect' }] });
+      expect(svc.getPartialInput('tu-1')).toEqual({
+        elements: [{ type: 'rect' }],
+      });
+    });
+
+    it('last write wins (the backend streams a growing healed prefix)', () => {
+      svc.recordPartialInput('tu-1', { elements: [{ type: 'rect' }] });
+      svc.recordPartialInput('tu-1', {
+        elements: [{ type: 'rect' }, { type: 'cameraUpdate' }],
+      });
+      expect(
+        (svc.getPartialInput('tu-1')?.['elements'] as unknown[]).length,
+      ).toBe(2);
+    });
+
+    it('keeps partial input separate per toolUseId', () => {
+      svc.recordPartialInput('tu-1', { a: 1 });
+      svc.recordPartialInput('tu-2', { b: 2 });
+      expect(svc.getPartialInput('tu-1')).toEqual({ a: 1 });
+      expect(svc.getPartialInput('tu-2')).toEqual({ b: 2 });
+    });
   });
 
   describe('seedFromHydration', () => {

@@ -24,10 +24,8 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
-import type {
-  CapabilityKey,
-  DisplayMode,
-} from '../../../../../services/mcp-apps/mcp-app-protocol';
+import { JsonSyntaxHighlightPipe } from '../json-syntax-highlight.pipe';
+import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
 import { SessionService } from '../../../../../services/session/session.service';
 
@@ -51,15 +49,103 @@ import { SessionService } from '../../../../../services/session/session.service'
 @Component({
   selector: 'app-mcp-app-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [McpAppConsentPromptComponent],
-  styles: ':host { display: block; }',
+  imports: [McpAppConsentPromptComponent, JsonSyntaxHighlightPipe],
+  styles: `
+    :host {
+      display: block;
+    }
+
+    /*
+     * Tool-name shimmer while the App's tool is still running (SEP-1865
+     * Claude parity). A moving highlight masked to the text via
+     * background-clip:text. The gradient uses EXPLICIT gray tones, NOT
+     * currentColor — because this rule also sets the text fill transparent so
+     * the gradient shows through, and a currentColor gradient would resolve to
+     * transparent (= invisible text). Light + dark handled via :host-context.
+     */
+    .tool-name-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        #6b7280 25%,
+        #d1d5db 50%,
+        #6b7280 75%
+      );
+      background-size: 200% 100%;
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+      animation: tool-name-shimmer 1.4s linear infinite;
+    }
+
+    :host-context(.dark) .tool-name-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        #9ca3af 25%,
+        #e5e7eb 50%,
+        #9ca3af 75%
+      );
+    }
+
+    @keyframes tool-name-shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .tool-name-shimmer {
+        animation: none;
+        background-image: none;
+        -webkit-text-fill-color: #6b7280;
+        color: #6b7280;
+      }
+
+      :host-context(.dark) .tool-name-shimmer {
+        -webkit-text-fill-color: #9ca3af;
+        color: #9ca3af;
+      }
+    }
+
+    /* Loading skeleton shown while the App HTML is fetched (header is already
+       up). A slow sweep over a faint surface, theme-derived via currentColor. */
+    .mcp-app-skeleton {
+      background: linear-gradient(
+        100deg,
+        color-mix(in srgb, currentColor 4%, transparent) 30%,
+        color-mix(in srgb, currentColor 9%, transparent) 50%,
+        color-mix(in srgb, currentColor 4%, transparent) 70%
+      );
+      color: rgb(107 114 128); /* gray-500 — only feeds the color-mix above */
+      background-size: 200% 100%;
+      animation: mcp-app-skeleton 1.6s ease-in-out infinite;
+    }
+
+    @keyframes mcp-app-skeleton {
+      0% {
+        background-position: 200% 0;
+      }
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .mcp-app-skeleton {
+        animation: none;
+      }
+    }
+  `,
   template: `
     @if (currentPrompt(); as prompt) {
       <div class="mb-2 flex justify-start">
         <app-mcp-app-consent-prompt [prompt]="prompt" />
       </div>
     }
-    @if (proxyUrl(); as url) {
+    @if (canRenderApp()) {
       <div
         [class]="containerClasses()"
         [attr.role]="displayMode() === 'fullscreen' ? 'dialog' : null"
@@ -76,7 +162,138 @@ import { SessionService } from '../../../../../services/session/session.service'
             Exit fullscreen
           </button>
         }
-        <div #host class="block"></div>
+
+        <!--
+          Connected header — the App's provenance (icon + server + tool +
+          status), styled as the iframe's title bar. Hidden in fullscreen
+          (the iframe is a fixed full-viewport overlay then; the header would
+          be stranded behind it).
+        -->
+        @if (displayMode() !== 'fullscreen') {
+          <div
+            class="flex items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            @if (icon() && !iconFailed()) {
+              <img
+                [src]="icon()"
+                [alt]="serverName() + ' icon'"
+                class="size-4 shrink-0 rounded-sm object-contain"
+                (error)="iconFailed.set(true)"
+              />
+            } @else {
+              <!-- Generic MCP/app glyph fallback -->
+              <svg
+                class="size-4 shrink-0 text-gray-400 dark:text-gray-500"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M4 7l8-4 8 4v10l-8 4-8-4V7zm8-4v18m8-14l-8 4-8-4"
+                />
+              </svg>
+            }
+
+            @if (serverName()) {
+              <span
+                class="shrink-0 text-sm font-medium text-gray-700 dark:text-gray-200"
+                >{{ serverName() }}</span
+              >
+              <span class="shrink-0 text-gray-300 dark:text-gray-600" aria-hidden="true"
+                >·</span
+              >
+            }
+
+            <span
+              class="min-w-0 truncate font-mono text-sm text-gray-500 dark:text-gray-400"
+              [class.tool-name-shimmer]="isRunning()"
+              >{{ displayToolName() }}</span
+            >
+
+            @if (isError()) {
+              <span
+                class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
+                >Failed</span
+              >
+            }
+
+            <button
+              type="button"
+              class="ml-auto shrink-0 rounded-sm p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              [attr.aria-expanded]="detailsExpanded()"
+              [attr.aria-label]="
+                detailsExpanded() ? 'Hide request and response' : 'Show request and response'
+              "
+              (click)="toggleDetails()"
+            >
+              <svg
+                class="size-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M8 9l-4 3 4 3m8-6l4 3-4 3"
+                />
+              </svg>
+            </button>
+          </div>
+
+          @if (detailsExpanded()) {
+            <div
+              class="space-y-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+            >
+              <div>
+                <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                  Request
+                </div>
+                <pre
+                  class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
+                ><code [innerHTML]="requestJson() | jsonSyntaxHighlight"></code></pre>
+              </div>
+              @if (responseText()) {
+                <div>
+                  <div
+                    class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    <span>Response</span>
+                    @if (isError()) {
+                      <span class="text-red-600 dark:text-red-400">(Error)</span>
+                    }
+                  </div>
+                  <pre
+                    class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
+                  ><code [innerHTML]="responseText() | jsonSyntaxHighlight"></code></pre>
+                </div>
+              }
+            </div>
+          }
+        }
+
+        @if (proxyUrl(); as url) {
+          <div #host class="block"></div>
+        } @else {
+          <!-- App HTML still loading (between the header shell and the full
+               ui_resource). A skeleton sized to the frame so the card doesn't
+               jump when the iframe mounts. Hidden in fullscreen. -->
+          @if (displayMode() !== 'fullscreen') {
+            <div
+              class="flex items-center justify-center bg-white dark:bg-gray-900"
+              [style.height.px]="frameHeight()"
+              aria-hidden="true"
+            >
+              <div class="mcp-app-skeleton h-full w-full"></div>
+            </div>
+          }
+        }
       </div>
     }
   `,
@@ -87,6 +304,47 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   readonly minimized = input<boolean>(false);
   /** Originating tool-use id — keys the resource + correlates tool data. */
   readonly toolUseId = input<string>();
+
+  /**
+   * Whether the tool's argument streaming has finished — bound by the host to
+   * the arrival of the REAL tool result (`!!toolUse.result`). This is the
+   * authoritative "input is final" signal for an early-mounted frame.
+   *
+   * It exists because `result` is a non-null *success stub*
+   * (`{content: [], status: 'success'}`) from the moment the frame mounts at
+   * the tool's `content_block_start` — the host passes the stub so the
+   * required `result` input is satisfied while the tool is still running. That
+   * makes `result() != null` true from the very first frame, so it CANNOT
+   * distinguish "arguments still streaming" from "tool done". Keying finality
+   * on this flag instead lets the partial-tool-input stream actually relay
+   * while the model generates the arguments (the progressive camera tour) and
+   * defers the complete `tool-input` until the input is genuinely final —
+   * preventing a premature empty final from latching `toolInputSent` and
+   * leaving the App with `{}` (the blank canvas). The live stream parser does
+   * not retain an MCP tool's parsed input by relay time, so `lookupToolInput()`
+   * can't serve as this signal either.
+   */
+  readonly inputComplete = input<boolean>(false);
+
+  /**
+   * The tool's persisted arguments, from `GET /messages` on reload. The live
+   * path resolves the input from the stream parser / captured partial, but
+   * after a refresh both are empty (the live stream isn't replayed); this is
+   * the fallback that lets the App render its final state instead of a blank
+   * canvas. On the live path it's `{}` until the tool-use block finalizes (the
+   * parser leaves an in-flight block's input empty), so it never pre-empts the
+   * streaming tour. No tour is replayed on reload — the App snaps to the
+   * complete input, the spec's `tool-input` (final) path.
+   */
+  readonly toolInput = input<Record<string, unknown>>({});
+
+  /**
+   * The agent-facing tool name (e.g. `create_view`), shown in the App header
+   * next to the server identity. Bound by the host from the tool-use block;
+   * the server name + icon come from the `ui_resource` instead (see
+   * `serverName`/`icon`).
+   */
+  readonly toolName = input<string>('');
 
   private readonly mcpAppState = inject(McpAppStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
@@ -142,30 +400,156 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return id ? this.mcpAppState.get(id) : undefined;
   });
 
-  /** Capabilities the resource declares (`_meta.ui.permissions`). */
-  private readonly requestedCaps = computed<CapabilityKey[]>(() => {
-    const p = this.resource()?.permissions ?? {};
-    const caps: CapabilityKey[] = [];
-    if (p.camera) caps.push('camera');
-    if (p.microphone) caps.push('microphone');
-    if (p.geolocation) caps.push('geolocation');
-    if (p.clipboardWrite) caps.push('clipboardWrite');
-    return caps;
+  /** Whether the header's server icon `<img>` failed to load (→ glyph). */
+  protected readonly iconFailed = signal(false);
+
+  /** Whether the request/response details strip is expanded (the `</>` toggle). */
+  protected readonly detailsExpanded = signal(false);
+
+  /**
+   * Server display name for the header. Prefers the backend-resolved
+   * `serverName` on the resource (serverInfo title/name → `ui://` authority),
+   * with a client-side authority parse as a last resort for resources
+   * persisted before that field shipped.
+   */
+  protected readonly serverName = computed(() => {
+    const res = this.resource();
+    if (res?.serverName) return res.serverName;
+    return this.serverNameFromUri(res?.resourceUri ?? '');
+  });
+
+  /** Server icon `src` from the resource, or "" (→ glyph fallback). */
+  protected readonly icon = computed(() => this.resource()?.icon ?? '');
+
+  /**
+   * Tool name for the header. Prefers the name carried on the `ui_resource`
+   * (recorded atomically with the frame's promotion, so the name + shimmer
+   * appear immediately), falling back to the `toolName` input from the streamed
+   * message content (the reload path, and resources persisted before the event
+   * carried it).
+   */
+  protected readonly displayToolName = computed(
+    () => this.resource()?.toolName || this.toolName(),
+  );
+
+  /** The tool produced an error result (drives the header's "Failed" badge). */
+  protected readonly isError = computed(
+    () => this.result()?.status === 'error',
+  );
+
+  /**
+   * Whether the tool is still running — drives the tool-name shimmer. True
+   * from mount until the real result lands (`inputComplete`), covering both
+   * the argument-streaming and tool-execution windows. Never shimmers a
+   * failed call.
+   */
+  protected readonly isRunning = computed(
+    () => !this.inputComplete() && !this.isError(),
+  );
+
+  /** Pretty-printed request arguments for the expanded details strip. */
+  protected readonly requestJson = computed(() =>
+    JSON.stringify(this.resolvedToolInput(), null, 2),
+  );
+
+  /** Tool response rendered as text/JSON for the expanded details strip. */
+  protected readonly responseText = computed(() => {
+    const content = this.result()?.content ?? [];
+    const parts = content.map((item) => {
+      if (item.json !== undefined) return JSON.stringify(item.json, null, 2);
+      if (item.text) return item.text;
+      if (item.image) return `[image/${item.image.format}]`;
+      return '';
+    });
+    return parts.filter(Boolean).join('\n');
+  });
+
+  protected toggleDetails(): void {
+    this.detailsExpanded.update((v) => !v);
+  }
+
+  /**
+   * Title-case a `ui://<authority>/…` authority as a server-name fallback
+   * (`ui://excalidraw/canvas` → "Excalidraw"), mirroring the backend's
+   * `_server_name_from_uri`. Used only when the resource carries no
+   * `serverName`.
+   */
+  private serverNameFromUri(resourceUri: string): string {
+    const match = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)/i.exec(resourceUri);
+    const authority = match?.[1] ?? '';
+    return authority
+      .split(/[-_.\s]+/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  }
+
+  /**
+   * Latest server-healed streamed partial tool input for this invocation, or
+   * undefined. Updated repeatedly while the tool's arguments stream (after the
+   * frame mounts early); relayed to the App for progressive rendering.
+   */
+  protected readonly partialInput = computed(() => {
+    const id = this.toolUseId();
+    return id ? this.mcpAppState.getPartialInput(id) : undefined;
   });
 
   /**
-   * Render-time capability consent (PR #6). `null` = undecided. When the
-   * resource requests sensitive sandbox features we hold the frame until
-   * the user answers an inline prompt, then grant only what was approved
-   * (all-or-nothing for v1). Frontend-only — the request never reaches a
-   * backend turn, same justification as `McpAppConsentService`.
+   * Whether the tool's input has finished streaming. The stream parser leaves
+   * an in-flight tool-use block's `input` as `{}` (its accumulating JSON can't
+   * parse yet) and fills the parsed object only once the block finalizes at
+   * `content_block_stop` — so a non-empty `lookupToolInput()` is a precise
+   * "arguments fully streamed" signal that fires BEFORE the tool executes.
+   * Keying on it (rather than the later `tool_result`) lets the App receive
+   * the complete `tool-input` — and render every element, including the last —
+   * as soon as streaming ends, instead of lagging until the result lands.
+   * `inputComplete` (the real tool result having landed) is the fallback for
+   * empty-input tools and the reload path, where the live stream isn't
+   * replayed. Until final, the App gets `tool-input-partial`.
+   *
+   * NB: this keys on `inputComplete()`, NOT `result() != null` — the latter is
+   * true from first mount because the host passes a non-null success stub for
+   * the still-pending tool, which would force this true immediately, suppress
+   * the partial relay, and fire an empty final. See `inputComplete`.
    */
-  private readonly capabilityGrant = signal<boolean | null>(null);
-  private capabilityAsked = false;
+  protected readonly inputFinal = computed(
+    () =>
+      Object.keys(this.lookupToolInput()).length > 0 ||
+      this.inputComplete() ||
+      // Reload: a non-empty persisted input is itself a "final" signal, so an
+      // interrupted tool (input persisted, no result → `inputComplete` false)
+      // still renders instead of waiting on a result that never lands.
+      Object.keys(this.toolInput()).length > 0,
+  );
 
-  /** Id of this frame's currently-open consent prompt (capability ask or
-   *  open-link), used to render it inline above the iframe instead of in
-   *  an unanchored message-list strip. */
+  /**
+   * The complete tool arguments to deliver as the final `tool-input`. Prefers
+   * the stream parser's parsed input, but falls back to the last server-healed
+   * streamed partial when the parser has none — which is the common case for
+   * an MCP App frame: the parser's live `allMessages()` no longer carries this
+   * tool's parsed input by the time the frame relays it (turn finished, or the
+   * mount was deferred behind a capability-consent prompt). The accumulated
+   * partial IS the complete input once streaming ends, so this is what lets
+   * the App actually render its elements instead of receiving `{}` (the
+   * long-standing "blank canvas"). On reload both the live parser and the
+   * captured partial are empty (the stream isn't replayed), so it falls back
+   * to `toolInput()` — the arguments persisted with the message. Used only for
+   * the FINAL send; `inputFinal` stays keyed on stream completion so partials
+   * still drive the live tour.
+   */
+  private resolvedToolInput(): Record<string, unknown> {
+    const live = this.lookupToolInput();
+    if (Object.keys(live).length > 0) return live;
+    const partial = this.partialInput();
+    if (partial) return partial;
+    // Reload fallback: the live parser and captured partial are both gone
+    // after a refresh, so use the arguments persisted with the message.
+    return this.toolInput();
+  }
+
+  /** Id of this frame's currently-open consent prompt (`ui/open-link`),
+   *  rendered inline above the iframe instead of in an unanchored
+   *  message-list strip. */
   private readonly openPromptId = signal<string | null>(null);
   protected readonly currentPrompt = computed(() => {
     const id = this.openPromptId();
@@ -173,24 +557,30 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     return this.mcpAppConsent.pending().find((p) => p.id === id) ?? null;
   });
 
-  /** True once requested capabilities are decided (or none were asked). */
-  private readonly capabilitiesResolved = computed(
-    () => this.requestedCaps().length === 0 || this.capabilityGrant() !== null,
+  /**
+   * Permissions applied to the frame — the App's declared
+   * `_meta.ui.permissions` mapped straight onto the iframe `allow`
+   * (Permissions-Policy), matching the SEP-1865 reference host (and Claude).
+   * We deliberately do NOT pre-prompt for capabilities: delegating a feature
+   * via `allow` does not *activate* it — the BROWSER prompts at use-time for
+   * camera/microphone/geolocation, and clipboard-write is low-risk and needs
+   * no prompt. An earlier PR #6 gate held the mount behind an inline consent
+   * prompt; that was stricter than the reference, confused users (Claude
+   * shows no such prompt), and — fatally — delayed the iframe mount past the
+   * argument-streaming window, breaking progressive rendering (the camera
+   * tour). `ui/open-link` still routes through `McpAppConsentService`.
+   */
+  private readonly effectivePermissions = computed(
+    () => this.resource()?.permissions ?? {},
   );
 
-  /** Permissions actually applied to the frame: declared ∩ consent. */
-  private readonly effectivePermissions = computed(() => {
-    const declared = this.resource()?.permissions ?? {};
-    if (this.requestedCaps().length === 0) return declared;
-    return this.capabilityGrant() ? declared : {};
-  });
-
   /**
-   * Plain string URL the iframe `src` is set to. Stays null until consent
-   * resolves so the @if-gated host div doesn't appear. Trusted single
-   * value from our authenticated backend (SSM-sourced); the imperative
-   * sandbox attribute + the proxy's per-resource CSP are the real
-   * containment, same justification as the artifact panel.
+   * Plain string URL the iframe `src` is set to. Null until the resource +
+   * sandbox origin are known; the App is then framed immediately (no consent
+   * gate) so the bridge is live while arguments stream. Trusted single value
+   * from our authenticated backend (SSM-sourced); the imperative sandbox
+   * attribute + the proxy's per-resource CSP are the real containment, same
+   * justification as the artifact panel.
    *
    * The `?csp=` query the proxy CFN reads is built from the resource's
    * declared `_meta.ui.csp` (`buildProxyUrl`). Apps that declare nothing
@@ -199,10 +589,24 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   protected readonly proxyUrl = computed<string | null>(() => {
     const res = this.resource();
-    if (!res || !res.sandboxOrigin) return null;
-    if (!this.capabilitiesResolved()) return null;
+    // Gate the iframe mount on a non-empty `html`: the App frame is promoted
+    // (and its header shown) the instant the backend emits the header-only
+    // `ui_resource` shell at the tool's `content_block_start` — but that shell
+    // carries `html: ''` (the real HTML follows after `resources/read`). Wait
+    // for it so the iframe mounts ONCE with the full App, not an empty shell.
+    if (!res || !res.sandboxOrigin || !res.html) return null;
     return buildProxyUrl(res.sandboxOrigin, res.csp);
   });
+
+  /**
+   * Whether to render the App card at all — true once a resource with a
+   * sandbox origin exists (the header-only shell qualifies). An empty
+   * `sandboxOrigin` means the mcp-sandbox stack isn't wired, so the SPA can't
+   * frame the App: render nothing and let the tool fall back to a plain card.
+   */
+  protected readonly canRenderApp = computed(
+    () => !!this.resource()?.sandboxOrigin,
+  );
 
   /** Permissions-Policy `allow` for the outer frame (delegates to inner). */
   protected readonly allowAttr = computed(() => {
@@ -221,31 +625,34 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       const theme = this.theme.theme();
       this.bridge?.notifyHostContextChanged({ theme });
     });
-    // Re-push the tool result if it lands/changes after the App initialized.
+    // Relay each streamed partial tool input to the App as it arrives, so a
+    // progressively-rendering App (e.g. Excalidraw's guided camera tour)
+    // animates in lockstep with the model generating the arguments. The
+    // backend streams `ui_tool_input_partial` in true real time (Bedrock's
+    // fine-grained tool streaming — see `model_config.to_bedrock_config`), so
+    // no host-side pacing is needed; each partial is forwarded straight
+    // through. Gated on `viewIsInitialized`: partials that arrive before the
+    // bridge handshake completes are skipped here and instead caught up in one
+    // shot by the init seed (`getPartialToolInput` below), so they don't pile
+    // into `preInitQueue` and flush as a burst. Stops once the input is final
+    // (the complete `tool-input` is sent by the effect below).
+    effect(() => {
+      const partial = this.partialInput();
+      if (!partial || this.inputFinal()) return;
+      if (!this.bridge?.viewIsInitialized) return;
+      this.bridge.sendToolInputPartial(partial);
+    });
+    // On finality, send the complete `tool-input` (once) then (re-)push the
+    // tool result if it's landed/changed after the App initialized.
     effect(() => {
       this.result();
+      if (this.inputFinal()) this.bridge?.sendToolInputFinal();
       this.bridge?.refreshToolResult();
     });
-    // Render-time capability consent: when the resource requests sensitive
-    // sandbox features, ask once and hold the frame until answered.
-    effect(() => {
-      const caps = this.requestedCaps();
-      if (caps.length === 0 || this.capabilityAsked) return;
-      this.capabilityAsked = true;
-      const { id, granted } = this.mcpAppConsent.request({
-        kind: 'capabilities',
-        capabilities: caps,
-      });
-      this.openPromptId.set(id);
-      granted
-        .then((g) => this.capabilityGrant.set(g))
-        .catch(() => this.capabilityGrant.set(false))
-        .finally(() => this.openPromptId.set(null));
-    });
-    // Imperatively create the iframe once the host div mounts and consent
-    // is resolved. Angular 21 forbids dynamic `[attr.allow]` on <iframe>
-    // (NG0910), so we build the element by hand with all attributes set
-    // before src — the browser only consults `allow` at load-start.
+    // Imperatively create the iframe once the host div mounts. Angular 21
+    // forbids dynamic `[attr.allow]` on <iframe> (NG0910), so we build the
+    // element by hand with all attributes set before src — the browser only
+    // consults `allow` at load-start.
     effect(() => {
       const host = this.hostRef();
       const url = this.proxyUrl();
@@ -355,7 +762,15 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       sandboxOrigin: res.sandboxOrigin.replace(/\/$/, ''),
       resource: effectiveRes,
       nonce: this.nonce,
-      getToolInput: () => this.lookupToolInput(),
+      getToolInput: () => this.resolvedToolInput(),
+      // Seeds the latest accumulated partial when the bridge handshake
+      // completes, catching the App up to the current streamed state in one
+      // shot. The relay effect skips partials that arrive before init (they'd
+      // otherwise pile into `preInitQueue` and flush as a burst), so this seed
+      // is how the App picks up the in-progress tour; subsequent partials then
+      // stream straight through.
+      getPartialToolInput: () => this.partialInput() ?? null,
+      isToolInputFinal: () => this.inputFinal(),
       getToolResult: () => this.toCallToolResult(),
       getHostContext: () => ({
         theme: this.theme.theme(),

@@ -107,6 +107,23 @@ def test_store_compresses_large_html_that_old_raw_cap_rejected():
     assert gzip.decompress(stored).decode("utf-8") == html
 
 
+def test_store_persists_small_icon_but_drops_large_data_uri():
+    table = _FakeTable()
+    s = _store_with(table)
+    # A small icon (e.g. a URL) round-trips; a large base64 data: URI (the
+    # auto-fetched server-manifest logo) is dropped to protect the 400KB item
+    # limit — reload then falls back to the glyph.
+    s.store(**_store_kwargs(server_name="Excalidraw", icon="https://x/i.png"))
+    s.store(
+        **_store_kwargs(
+            tool_use_id="tu2", icon="data:image/png;base64," + ("A" * 200_000)
+        )
+    )
+    assert table.puts[0]["icon"] == "https://x/i.png"
+    assert table.puts[0]["serverName"] == "Excalidraw"
+    assert table.puts[1]["icon"] == ""  # large data URI not persisted
+
+
 def test_store_last_write_wins_same_tool_use_id():
     table = _FakeTable()
     s = _store_with(table)
