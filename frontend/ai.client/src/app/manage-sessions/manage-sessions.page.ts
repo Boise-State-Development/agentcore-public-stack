@@ -76,7 +76,7 @@ const MAX_SELECTION = 20;
         <div class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div class="flex items-center gap-3">
             <span class="text-sm/6 font-medium text-gray-900 dark:text-white">
-              {{ selectedCount() }} of {{ maxSelection }} selected
+              {{ selectedCount() }} {{ selectedCount() === 1 ? 'item' : 'items' }} selected
             </span>
             @if (selectedCount() > 0) {
               <button

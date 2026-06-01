@@ -34,6 +34,10 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./manage-models/manage-models.page').then(m => m.ManageModelsPage),
   },
   {
+    path: 'manage-models/catalog',
+    loadComponent: () => import('./manage-models/model-catalog.page').then(m => m.ModelCatalogPage),
+  },
+  {
     path: 'manage-models/new',
     loadComponent: () => import('./manage-models/model-form.page').then(m => m.ModelFormPage),
   },

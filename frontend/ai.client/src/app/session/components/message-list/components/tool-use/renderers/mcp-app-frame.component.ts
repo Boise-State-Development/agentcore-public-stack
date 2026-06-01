@@ -24,7 +24,10 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
-import type { CapabilityKey } from '../../../../../services/mcp-apps/mcp-app-protocol';
+import type {
+  CapabilityKey,
+  DisplayMode,
+} from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
 import { SessionService } from '../../../../../services/session/session.service';
 
@@ -58,9 +61,23 @@ import { SessionService } from '../../../../../services/session/session.service'
     }
     @if (proxyUrl(); as url) {
       <div
-        #host
-        class="overflow-hidden rounded-sm border border-gray-300 dark:border-gray-600 bg-white"
-      ></div>
+        [class]="containerClasses()"
+        [attr.role]="displayMode() === 'fullscreen' ? 'dialog' : null"
+        [attr.aria-modal]="displayMode() === 'fullscreen' ? 'true' : null"
+        [attr.aria-label]="displayMode() === 'fullscreen' ? 'MCP App, fullscreen' : null"
+        (keydown.escape)="exitFullscreen()"
+      >
+        @if (displayMode() === 'fullscreen') {
+          <button
+            type="button"
+            class="fixed top-3 right-3 z-[10000] rounded-md bg-gray-900/80 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+            (click)="exitFullscreen()"
+          >
+            Exit fullscreen
+          </button>
+        }
+        <div #host class="block"></div>
+      </div>
     }
   `,
 })
@@ -86,9 +103,34 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   private readonly hostRef =
     viewChild<ElementRef<HTMLDivElement>>('host');
   private iframeEl: HTMLIFrameElement | null = null;
+  /** Prior `body.overflow` saved while this frame holds the fullscreen lock
+   *  (null ⇒ this frame isn't locking — never restore what we didn't set). */
+  private lockedBodyOverflow: string | null = null;
 
   /** Initial height; the App drives it via `ui/notifications/size-changed`. */
   protected readonly frameHeight = signal(360);
+
+  /**
+   * Current display mode. The App requests changes via
+   * `ui/request-display-mode` (routed through the bridge); the user can
+   * leave fullscreen via the Exit button or Escape. In `fullscreen` the
+   * iframe ITSELF is promoted to a fixed full-viewport overlay (see the
+   * style effect) — sizing it via its own insets avoids a percentage-height
+   * chain, and a CSS change (unlike a DOM move) never reloads the iframe, so
+   * the running App keeps its state.
+   */
+  protected readonly displayMode = signal<DisplayMode>('inline');
+
+  /**
+   * Outer wrapper classes. In fullscreen the iframe is lifted out of flow
+   * (fixed), so the wrapper collapses behind the overlay — drop its border
+   * and rounding so nothing peeks through.
+   */
+  protected readonly containerClasses = computed(() =>
+    this.displayMode() === 'fullscreen'
+      ? 'relative'
+      : 'relative overflow-hidden rounded-sm border border-gray-300 bg-white dark:border-gray-600',
+  );
 
   private bridge: McpAppBridge | null = null;
   private readonly nonce =
@@ -222,7 +264,11 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       iframe.setAttribute('loading', 'lazy');
       const allow = this.allowAttr();
       if (allow) iframe.setAttribute('allow', allow);
-      iframe.className = 'block w-full border-0 bg-white';
+      // Width/height/position are driven entirely by the style effect below
+      // (so fullscreen can promote the iframe itself to a fixed overlay
+      // without a `w-full` class fighting the inset sizing).
+      iframe.className = 'block border-0 bg-white';
+      iframe.style.width = '100%';
       iframe.style.height = `${this.frameHeight()}px`;
       // Append BEFORE setting src so contentWindow exists, then start the
       // bridge so the host listener is registered before the proxy script
@@ -235,12 +281,64 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       this.startBridge();
       iframe.src = url;
     });
-    // Keep the iframe height in sync as the App reports size changes.
+    // Size + position the iframe per display mode. Inline: a normal block
+    // tracking the App's reported height (`size-changed`). Fullscreen: the
+    // iframe itself becomes a fixed full-viewport overlay at z-[9999] (the
+    // app's top modal layer — matching the image/markdown lightboxes).
+    //
+    // An <iframe> is a REPLACED element: with width/height:auto it falls back
+    // to its intrinsic size (~300x150) and ignores right/bottom insets, so
+    // `inset:0` alone leaves a small sliver. It must get explicit dimensions.
+    // `100%` resolves against the viewport (the ICB is the fixed containing
+    // block) and, unlike `100vw/100vh`, excludes the scrollbar gutter.
     effect(() => {
       const h = this.frameHeight();
-      if (this.iframeEl) this.iframeEl.style.height = `${h}px`;
+      const mode = this.displayMode();
+      const el = this.iframeEl;
+      if (!el) return;
+      if (mode === 'fullscreen') {
+        el.style.position = 'fixed';
+        el.style.top = '0';
+        el.style.left = '0';
+        el.style.right = '';
+        el.style.bottom = '';
+        el.style.width = '100%';
+        el.style.height = '100%';
+        el.style.zIndex = '9999';
+      } else {
+        el.style.position = '';
+        el.style.top = '';
+        el.style.left = '';
+        el.style.right = '';
+        el.style.bottom = '';
+        el.style.zIndex = '';
+        el.style.width = '100%';
+        el.style.height = `${h}px`;
+      }
     });
-    this.destroyRef.onDestroy(() => this.bridge?.dispose('component-destroyed'));
+    // Lock background scroll while fullscreen so the page scrollbar gutter
+    // doesn't show beside the overlay and the chat can't scroll behind it.
+    // Per-frame save/restore: only ever restore the value this frame saved.
+    effect(() => {
+      const fullscreen = this.displayMode() === 'fullscreen';
+      const body = this.doc.body;
+      if (!body) return;
+      if (fullscreen && this.lockedBodyOverflow === null) {
+        this.lockedBodyOverflow = body.style.overflow;
+        body.style.overflow = 'hidden';
+      } else if (!fullscreen && this.lockedBodyOverflow !== null) {
+        body.style.overflow = this.lockedBodyOverflow;
+        this.lockedBodyOverflow = null;
+      }
+    });
+    this.destroyRef.onDestroy(() => {
+      // Restore scroll if torn down while still fullscreen.
+      if (this.lockedBodyOverflow !== null && this.doc.body) {
+        this.doc.body.style.overflow = this.lockedBodyOverflow;
+        this.lockedBodyOverflow = null;
+      }
+      this.bridge?.dispose('component-destroyed');
+    });
   }
 
   private startBridge(): void {
@@ -285,11 +383,30 @@ export class McpAppFrameComponent implements ToolResultRenderer {
         this.openPromptId.set(id);
         return granted.finally(() => this.openPromptId.set(null));
       },
+      requestDisplayMode: (mode) => {
+        // This host supports inline + fullscreen; anything else (pip) stays
+        // inline. Return the mode actually applied — the bridge relays it
+        // back to the App as the resulting mode.
+        const resulting: DisplayMode = mode === 'fullscreen' ? 'fullscreen' : 'inline';
+        this.displayMode.set(resulting);
+        return resulting;
+      },
     });
     this.bridge.onSizeChanged((_w, h) => {
       if (h > 0) this.frameHeight.set(Math.ceil(h));
     });
     this.bridge.start();
+  }
+
+  /**
+   * Host-initiated exit from fullscreen (Exit button / Escape). Collapses
+   * back to inline and tells the App via `host-context-changed` so it can
+   * re-render its inline affordances.
+   */
+  protected exitFullscreen(): void {
+    if (this.displayMode() === 'inline') return;
+    this.displayMode.set('inline');
+    this.bridge?.notifyDisplayMode('inline');
   }
 
   /** Complete tool-call arguments, found by toolUseId in the live stream. */

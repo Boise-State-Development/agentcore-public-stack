@@ -9,7 +9,7 @@
         </p>
       </div>
       <a
-        routerLink="/admin/manage-models/new"
+        routerLink="/admin/manage-models/catalog"
         class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
       >
         <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
@@ -84,8 +84,33 @@
       </div>
     </div>
 
-    <!-- Models List -->
-    @if (filteredModels().length === 0) {
+    <!-- Loading State (initial fetch only) -->
+    @if (isInitialLoad()) {
+      <div class="flex h-64 items-center justify-center rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex flex-col items-center gap-4">
+          <div
+            class="size-12 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+            role="status"
+            aria-label="Loading models"
+          ></div>
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+            Loading models…
+          </p>
+        </div>
+      </div>
+    } @else if (modelsResource.error()) {
+      <div class="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+        <p class="font-medium">Failed to load models</p>
+        <p class="mt-1 text-sm/6">Please check your connection and try again.</p>
+        <button
+          type="button"
+          (click)="modelsResource.reload()"
+          class="mt-3 text-sm/6 font-medium underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
+        >
+          Retry
+        </button>
+      </div>
+    } @else if (filteredModels().length === 0) {
       <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
         <p class="text-sm/6 text-gray-500 dark:text-gray-400">
           No models found matching the current filters.
@@ -175,10 +200,11 @@
                 </a>
                 <button
                   type="button"
-                  (click)="deleteModel(model.id)"
+                  (click)="deleteModel(model)"
+                  [disabled]="isDeleting(model.id)"
                   [attr.aria-label]="'Delete ' + model.modelName"
                   [title]="'Delete ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
                 >
                   <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                 </button>

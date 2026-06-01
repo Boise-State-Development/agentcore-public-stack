@@ -54,3 +54,13 @@ You are an expert in TypeScript, Angular, and scalable web application developme
 - Design services around a single responsibility
 - Use the `providedIn: 'root'` option for singleton services
 - Use the `inject()` function instead of constructor injection
+
+## Dialogs / Modals
+
+- Use **`@angular/cdk/dialog`** for all modals. Do NOT use the native `<dialog>` element — it appears positioned correctly in isolation but breaks when an ancestor in the app shell creates a containing block (transforms, `will-change`, etc.), landing in the top-left of the viewport instead of centered.
+- Each dialog is a **standalone component** in a `components/` subfolder of the feature that owns it (e.g. `admin/manage-models/components/add-curated-model-dialog.component.ts`).
+- Export a `…DialogData` type for inputs and a `…DialogResult` type for the return value alongside the component. `undefined` from `dialogRef.closed` MUST mean "cancelled"; any concrete value means "confirmed."
+- Inject `DialogRef<Result>` and `DIALOG_DATA` in the dialog component. Close via `this.dialogRef.close(value)`.
+- Parent opens the dialog via `inject(Dialog).open<Result>(Component, { data })` and awaits the result with `firstValueFrom(dialogRef.closed)`. Bind `(keydown.escape)` in the dialog's `host` to call the cancel path so Escape, backdrop click, and the explicit Cancel button all converge.
+- **Design tokens for dialogs match the host page's list-page idiom**, NOT the legacy form idiom: `rounded-2xl` (not `rounded-md` / `rounded-sm`), `text-sm/6` (not `text-sm`), `bg-blue-600` for the primary action (not indigo), with the panel built as `rounded-2xl border border-gray-200 bg-white … dark:border-gray-700 dark:bg-gray-800`. Older dialogs in the codebase (e.g. `admin/tools/components/tool-role-dialog.component.ts`) use the pre-redesign tokens — match their **structure** (backdrop div + centered panel + DialogRef wiring), not their **styling**.
+- Canonical example: `admin/manage-models/components/add-curated-model-dialog.component.ts`.

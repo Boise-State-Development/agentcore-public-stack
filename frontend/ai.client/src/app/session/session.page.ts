@@ -315,8 +315,10 @@ export class ConversationPage implements OnDestroy {
       this.artifactState.reset();
 
       // MCP App frames persist for the conversation's lifetime per the
-      // scoping doc; teardown is on conversation change. No re-hydration:
-      // the inline `ui_resource` event only arrives live during a stream.
+      // scoping doc; teardown is on conversation change. Clear before the
+      // next load — loadMessagesForSession re-seeds from the persisted
+      // `uiResources` sidecar on the messages response so frames survive a
+      // refresh (the inline `ui_resource` event itself only arrives live).
       this.mcpAppState.reset();
 
       // Option A (PR #6): app-initiated tool cards DO re-hydrate (the
