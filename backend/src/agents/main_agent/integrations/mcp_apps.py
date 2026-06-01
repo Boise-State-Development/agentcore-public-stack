@@ -33,7 +33,9 @@ ever changes how the session is constructed.
 
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import mcp.types as mcp_types
 from mcp.client.session import ClientSession
@@ -296,6 +298,64 @@ def _extract_csp_permissions(
     return csp, permissions
 
 
+def _server_name_from_uri(resource_uri: str) -> str:
+    """Title-case the `ui://<authority>/…` authority as a server-name fallback.
+
+    `ui://excalidraw/canvas` -> "Excalidraw". Used only when the server did
+    not advertise a `serverInfo.title`/`name` — a host-side approximation that
+    needs no server cooperation (matches the label Claude shows). Returns "" if
+    no authority can be parsed.
+    """
+    try:
+        authority = urlsplit(resource_uri).netloc or ""
+    except Exception:
+        return ""
+    # Split on common separators so "my-cool-server" reads as "My Cool Server".
+    words = [w for w in re.split(r"[-_.\s]+", authority) if w]
+    return " ".join(word[:1].upper() + word[1:] for word in words)
+
+
+def _pick_icon(icons: Any) -> str:
+    """Pick a usable icon `src` from a `serverInfo.icons` / tool `icons` list.
+
+    Each entry is an MCP `Icon` (`{src, mimeType, sizes}`) — a model or a dict.
+    Returns the first non-empty `src` (an http(s) or `data:` URL the SPA header
+    renders in an `<img>`, with a glyph fallback on error), or "" if none.
+    """
+    if not isinstance(icons, (list, tuple)):
+        return ""
+    for icon in icons:
+        src = getattr(icon, "src", None)
+        if src is None and isinstance(icon, dict):
+            src = icon.get("src")
+        if isinstance(src, str) and src.strip():
+            return src.strip()
+    return ""
+
+
+def _resolve_server_identity(
+    client: Any, resource_uri: str
+) -> Tuple[str, str]:
+    """Resolve `(serverName, icon)` for a tool's `ui_resource` event.
+
+    Prefers the server-advertised `serverInfo` (`title` > `name`, plus its
+    `icons`) captured off `initialize` by `_UIExtensionClientSession`, falling
+    back to the `ui://` authority for the name and "" for the icon. Wholly
+    best-effort: any failure yields the authority-derived name + no icon so the
+    frontend renders its generic glyph.
+    """
+    info = getattr(
+        getattr(client, "_background_thread_session", None),
+        "_mcp_apps_server_info",
+        None,
+    )
+    name = getattr(info, "title", None) or getattr(info, "name", None) or ""
+    icon = _pick_icon(getattr(info, "icons", None))
+    if not name:
+        name = _server_name_from_uri(resource_uri)
+    return name, icon
+
+
 def fetch_ui_resource(
     tool_name: str, tool_use_id: str
 ) -> Optional[Dict[str, Any]]:
@@ -354,6 +414,7 @@ def fetch_ui_resource(
         return None
 
     csp, permissions = _extract_csp_permissions(result, ui_metadata)
+    server_name, icon = _resolve_server_identity(client, ui_metadata.resource_uri)
     return {
         "type": "ui_resource",
         "toolUseId": tool_use_id,
@@ -362,9 +423,72 @@ def fetch_ui_resource(
         "mimeType": mime_type or MCP_APPS_UI_MIME_TYPE,
         "csp": csp,
         "permissions": permissions,
+        # Server identity for the App header (SEP-1865 Claude parity): the
+        # server's display name + optional icon. `serverName` falls back to the
+        # `ui://` authority; `icon` is "" when the server advertised none (the
+        # frontend then renders a generic glyph).
+        "serverName": server_name,
+        "icon": icon,
+        # Agent-facing tool name, carried on the event so the App frame's header
+        # shows it (with the running shimmer) the instant the frame promotes —
+        # independent of when the streamed message content lands.
+        "toolName": tool_name,
         # Origin the SPA frames the sandbox-proxy at (PR #1's proxy.html).
         # Carried on the event so the frontend needs no separate config
         # fetch. Empty until the mcp-sandbox stack is deployed + wired.
+        "sandboxOrigin": mcp_apps_sandbox_origin(),
+    }
+
+
+def build_ui_app_header(
+    tool_name: str, tool_use_id: str
+) -> Optional[Dict[str, Any]]:
+    """Build a metadata-only `ui_resource` (empty `html`) WITHOUT `resources/read`.
+
+    The full `ui_resource` requires a `resources/read` of the App HTML, which
+    can be large/slow; that latency is the window where a UI tool would briefly
+    show in the plain tool rail before its frame mounts. This builds the same
+    event shape with everything that's known *instantly* at the tool's
+    `content_block_start` — `resourceUri` + `serverName` + `icon` (from the
+    catalog + captured `serverInfo`) + tool-level `csp`/`permissions` — and an
+    EMPTY `html`. Emitting it first lets the host promote the App frame's
+    HEADER (icon + server + tool + shimmer) immediately; the full
+    `fetch_ui_resource` payload follows and, last-write-wins on the frontend,
+    fills the iframe (which stays unmounted until `html` is non-empty).
+
+    Returns None on flag-off or a non-UI tool — same inert contract as
+    `fetch_ui_resource`. csp/permissions come only from the tool's `tools/list`
+    `_meta.ui` here (the resource-level overrides arrive with the full fetch);
+    they're advisory until the iframe mounts on the full event anyway.
+    """
+    if not is_mcp_apps_host_enabled():
+        return None
+    catalog = get_ui_tool_catalog()
+    ui_metadata = catalog.get(tool_name)
+    if ui_metadata is None or not ui_metadata.resource_uri:
+        return None
+
+    raw = ui_metadata.raw or {}
+    csp = raw["csp"] if isinstance(raw.get("csp"), dict) else {}
+    permissions = (
+        raw["permissions"] if isinstance(raw.get("permissions"), dict) else {}
+    )
+    server_name, icon = _resolve_server_identity(
+        catalog.get_client(tool_name), ui_metadata.resource_uri
+    )
+    return {
+        "type": "ui_resource",
+        "toolUseId": tool_use_id,
+        "resourceUri": ui_metadata.resource_uri,
+        # Empty until the full fetch lands; the frontend gates the iframe mount
+        # on a non-empty html, so this shell only drives the header.
+        "html": "",
+        "mimeType": MCP_APPS_UI_MIME_TYPE,
+        "csp": csp,
+        "permissions": permissions,
+        "serverName": server_name,
+        "icon": icon,
+        "toolName": tool_name,
         "sandboxOrigin": mcp_apps_sandbox_origin(),
     }
 
@@ -385,24 +509,35 @@ class _UIExtensionClientSession(ClientSession):
     (sampling/elicitation/roots/tasks) and stay robust to SDK changes.
     """
 
+    #: `serverInfo` (`Implementation`) captured off this session's
+    #: `initialize` result — the App header's source of truth for the server's
+    #: display name + icon (SEP-1865 header parity with Claude). Neither the
+    #: MCP SDK `ClientSession` nor Strands' `MCPClient` retains it (Strands
+    #: keeps only `instructions`), so we stash it here and `fetch_ui_resource`
+    #: reads it back via the client's `_background_thread_session`. None until
+    #: `initialize` returns.
+    _mcp_apps_server_info: Optional[Any] = None
+
     async def send_request(self, request: Any, *args: Any, **kwargs: Any) -> Any:
-        if is_mcp_apps_host_enabled():
+        is_initialize = isinstance(
+            getattr(request, "root", None), mcp_types.InitializeRequest
+        )
+        if is_mcp_apps_host_enabled() and is_initialize:
             try:
-                root = getattr(request, "root", None)
-                if isinstance(root, mcp_types.InitializeRequest):
-                    caps = root.params.capabilities
-                    caps_data = caps.model_dump(by_alias=True, exclude_none=True)
-                    extensions = dict(caps_data.get("extensions") or {})
-                    extensions.setdefault(
-                        MCP_APPS_UI_EXTENSION_KEY, dict(MCP_APPS_UI_CAPABILITY)
-                    )
-                    caps_data["extensions"] = extensions
-                    # `ClientCapabilities` is `extra="allow"`, so the extra
-                    # `extensions` key round-trips through model_dump and onto
-                    # the JSON-RPC wire in BaseSession.send_request.
-                    root.params.capabilities = mcp_types.ClientCapabilities(
-                        **caps_data
-                    )
+                root = request.root
+                caps = root.params.capabilities
+                caps_data = caps.model_dump(by_alias=True, exclude_none=True)
+                extensions = dict(caps_data.get("extensions") or {})
+                extensions.setdefault(
+                    MCP_APPS_UI_EXTENSION_KEY, dict(MCP_APPS_UI_CAPABILITY)
+                )
+                caps_data["extensions"] = extensions
+                # `ClientCapabilities` is `extra="allow"`, so the extra
+                # `extensions` key round-trips through model_dump and onto
+                # the JSON-RPC wire in BaseSession.send_request.
+                root.params.capabilities = mcp_types.ClientCapabilities(
+                    **caps_data
+                )
             except Exception:
                 # Advertising the extension must never break a connection;
                 # a server that never sees it simply won't return MCP Apps.
@@ -412,7 +547,16 @@ class _UIExtensionClientSession(ClientSession):
                     exc_info=True,
                 )
 
-        return await super().send_request(request, *args, **kwargs)
+        result = await super().send_request(request, *args, **kwargs)
+
+        # Capture the server's `Implementation` (name/title/icons) off the
+        # `initialize` response so the App header can show the server's
+        # identity. Best-effort: a missing/odd `serverInfo` just leaves the
+        # header to fall back to the `ui://` authority + a generic glyph.
+        if is_initialize:
+            self._mcp_apps_server_info = getattr(result, "serverInfo", None)
+
+        return result
 
 
 def ensure_ui_extension_session_patch() -> None:

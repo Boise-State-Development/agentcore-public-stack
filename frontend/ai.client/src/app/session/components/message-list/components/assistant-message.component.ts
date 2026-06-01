@@ -133,6 +133,9 @@ interface DisplayBlock {
   // those are empty, so the frame falls back to this (the input that came back
   // from `GET /messages`) to render the final state instead of a blank canvas.
   toolInput?: Record<string, unknown>;
+  // For MCP App frames: the agent-facing tool name, shown in the frame's
+  // connected header (the server name + icon come from the `ui_resource`).
+  toolName?: string;
   // For inline OAuth consent prompts
   oauthRequest?: OAuthConsentRequest;
 }
@@ -224,6 +227,7 @@ interface DisplayBlock {
                 [toolUseId]="block.toolUseId!"
                 [inputComplete]="block.inputComplete ?? false"
                 [toolInput]="block.toolInput ?? {}"
+                [toolName]="block.toolName ?? ''"
               />
             </div>
           }
@@ -384,13 +388,16 @@ export class AssistantMessageComponent {
           // UI surface); break the tool group here.
           flushToolGroup();
 
-          result.push({
-            type: 'tool_use_minimized',
-            data: block,
-            toolUseId: toolUse.toolUseId
-          });
-
           if (promotedVisual) {
+            // Legacy promoted visuals still pair a minimized tool card (for
+            // provenance) with the visual. MCP Apps don't — the frame renders
+            // its own connected header (icon + server + tool + the `</>`
+            // request/response toggle), so a separate card would be redundant.
+            result.push({
+              type: 'tool_use_minimized',
+              data: block,
+              toolUseId: toolUse.toolUseId
+            });
             result.push({
               type: 'promoted_visual',
               uiType: promotedVisual.uiType,
@@ -410,6 +417,8 @@ export class AssistantMessageComponent {
               // The persisted arguments — the frame's reload fallback when the
               // live stream parser / captured partial are gone.
               toolInput: toolUse.input,
+              // Shown in the frame's connected header.
+              toolName: toolUse.name,
             });
           }
         } else {

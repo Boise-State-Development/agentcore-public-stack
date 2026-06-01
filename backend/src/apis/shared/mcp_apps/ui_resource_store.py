@@ -138,6 +138,9 @@ class UiResourceStore:
         csp: Dict[str, Any],
         permissions: Dict[str, Any],
         sandbox_origin: str = "",
+        server_name: str = "",
+        icon: str = "",
+        tool_name: str = "",
         produced_by_message_index: Optional[int] = None,
     ) -> None:
         """Persist one MCP App UI resource. Best-effort.
@@ -199,6 +202,12 @@ class UiResourceStore:
             # cannot recompute it — it's the inference-side env config and
             # app-api may not have it wired. Served back verbatim on reload.
             "sandboxOrigin": sandbox_origin or "",
+            # Server identity for the App header — round-tripped verbatim on
+            # reload (the read side copies all non-key attrs back onto the
+            # resource), so a refreshed conversation re-shows the same header.
+            "serverName": server_name or "",
+            "icon": icon or "",
+            "toolName": tool_name or "",
             "createdAt": created_at,
             "producedByMessageIndex": produced_by_message_index,
             "ttl": ttl,

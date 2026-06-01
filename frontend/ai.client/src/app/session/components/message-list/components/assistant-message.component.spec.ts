@@ -248,7 +248,7 @@ describe('AssistantMessageComponent', () => {
       expect(blocks[0].group!.calls.length).toBe(1);
     });
 
-    it('promotes the same tool to tool_use_minimized when its toolUseId is in McpAppStateService', () => {
+    it('promotes the same tool to a single mcp_app_frame when its toolUseId is in McpAppStateService', () => {
       const mcpAppState = TestBed.inject(McpAppStateService);
       const tool = makeToolBlock('create_view', {
         toolUseId: 'tooluse_mcp_app_1',
@@ -260,13 +260,15 @@ describe('AssistantMessageComponent', () => {
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
-      // Two blocks: the minimized tool card (provenance) plus a sibling
-      // mcp_app_frame block that hosts the iframe at the same level as
-      // text/visuals. No `promoted_visual` — MCP Apps have their own type.
-      expect(blocks.length).toBe(2);
-      expect(blocks[0].type).toBe('tool_use_minimized');
-      expect(blocks[1].type).toBe('mcp_app_frame');
-      expect(blocks[1].toolUseId).toBe('tooluse_mcp_app_1');
+      // A single mcp_app_frame block: the frame renders its own connected
+      // header (icon + server + tool + the `</>` request/response toggle), so
+      // no separate minimized card is emitted. No `promoted_visual` either —
+      // MCP Apps have their own type. The tool name rides on the frame block.
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('mcp_app_frame');
+      expect(blocks[0].toolUseId).toBe('tooluse_mcp_app_1');
+      expect(blocks[0].toolName).toBe('create_view');
+      expect(blocks.some((b) => b.type === 'tool_use_minimized')).toBe(false);
       expect(blocks.some((b) => b.type === 'promoted_visual')).toBe(false);
 
       mcpAppState.reset();
@@ -291,9 +293,9 @@ describe('AssistantMessageComponent', () => {
       fixture.detectChanges();
 
       const blocks = component.displayBlocks();
-      expect(blocks.length).toBe(2);
-      expect(blocks[0].type).toBe('tool_use_minimized');
-      expect(blocks[1].type).toBe('mcp_app_frame');
+      // Promoted to a single self-headed mcp_app_frame (no minimized sibling).
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('mcp_app_frame');
 
       mcpAppState.reset();
     });

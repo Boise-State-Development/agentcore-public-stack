@@ -24,6 +24,7 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
+import { JsonSyntaxHighlightPipe } from '../json-syntax-highlight.pipe';
 import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
 import { SessionService } from '../../../../../services/session/session.service';
@@ -48,15 +49,103 @@ import { SessionService } from '../../../../../services/session/session.service'
 @Component({
   selector: 'app-mcp-app-frame',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [McpAppConsentPromptComponent],
-  styles: ':host { display: block; }',
+  imports: [McpAppConsentPromptComponent, JsonSyntaxHighlightPipe],
+  styles: `
+    :host {
+      display: block;
+    }
+
+    /*
+     * Tool-name shimmer while the App's tool is still running (SEP-1865
+     * Claude parity). A moving highlight masked to the text via
+     * background-clip:text. The gradient uses EXPLICIT gray tones, NOT
+     * currentColor — because this rule also sets the text fill transparent so
+     * the gradient shows through, and a currentColor gradient would resolve to
+     * transparent (= invisible text). Light + dark handled via :host-context.
+     */
+    .tool-name-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        #6b7280 25%,
+        #d1d5db 50%,
+        #6b7280 75%
+      );
+      background-size: 200% 100%;
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+      animation: tool-name-shimmer 1.4s linear infinite;
+    }
+
+    :host-context(.dark) .tool-name-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        #9ca3af 25%,
+        #e5e7eb 50%,
+        #9ca3af 75%
+      );
+    }
+
+    @keyframes tool-name-shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .tool-name-shimmer {
+        animation: none;
+        background-image: none;
+        -webkit-text-fill-color: #6b7280;
+        color: #6b7280;
+      }
+
+      :host-context(.dark) .tool-name-shimmer {
+        -webkit-text-fill-color: #9ca3af;
+        color: #9ca3af;
+      }
+    }
+
+    /* Loading skeleton shown while the App HTML is fetched (header is already
+       up). A slow sweep over a faint surface, theme-derived via currentColor. */
+    .mcp-app-skeleton {
+      background: linear-gradient(
+        100deg,
+        color-mix(in srgb, currentColor 4%, transparent) 30%,
+        color-mix(in srgb, currentColor 9%, transparent) 50%,
+        color-mix(in srgb, currentColor 4%, transparent) 70%
+      );
+      color: rgb(107 114 128); /* gray-500 — only feeds the color-mix above */
+      background-size: 200% 100%;
+      animation: mcp-app-skeleton 1.6s ease-in-out infinite;
+    }
+
+    @keyframes mcp-app-skeleton {
+      0% {
+        background-position: 200% 0;
+      }
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .mcp-app-skeleton {
+        animation: none;
+      }
+    }
+  `,
   template: `
     @if (currentPrompt(); as prompt) {
       <div class="mb-2 flex justify-start">
         <app-mcp-app-consent-prompt [prompt]="prompt" />
       </div>
     }
-    @if (proxyUrl(); as url) {
+    @if (canRenderApp()) {
       <div
         [class]="containerClasses()"
         [attr.role]="displayMode() === 'fullscreen' ? 'dialog' : null"
@@ -73,7 +162,138 @@ import { SessionService } from '../../../../../services/session/session.service'
             Exit fullscreen
           </button>
         }
-        <div #host class="block"></div>
+
+        <!--
+          Connected header — the App's provenance (icon + server + tool +
+          status), styled as the iframe's title bar. Hidden in fullscreen
+          (the iframe is a fixed full-viewport overlay then; the header would
+          be stranded behind it).
+        -->
+        @if (displayMode() !== 'fullscreen') {
+          <div
+            class="flex items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            @if (icon() && !iconFailed()) {
+              <img
+                [src]="icon()"
+                [alt]="serverName() + ' icon'"
+                class="size-4 shrink-0 rounded-sm object-contain"
+                (error)="iconFailed.set(true)"
+              />
+            } @else {
+              <!-- Generic MCP/app glyph fallback -->
+              <svg
+                class="size-4 shrink-0 text-gray-400 dark:text-gray-500"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M4 7l8-4 8 4v10l-8 4-8-4V7zm8-4v18m8-14l-8 4-8-4"
+                />
+              </svg>
+            }
+
+            @if (serverName()) {
+              <span
+                class="shrink-0 text-sm font-medium text-gray-700 dark:text-gray-200"
+                >{{ serverName() }}</span
+              >
+              <span class="shrink-0 text-gray-300 dark:text-gray-600" aria-hidden="true"
+                >·</span
+              >
+            }
+
+            <span
+              class="min-w-0 truncate font-mono text-sm text-gray-500 dark:text-gray-400"
+              [class.tool-name-shimmer]="isRunning()"
+              >{{ displayToolName() }}</span
+            >
+
+            @if (isError()) {
+              <span
+                class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
+                >Failed</span
+              >
+            }
+
+            <button
+              type="button"
+              class="ml-auto shrink-0 rounded-sm p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              [attr.aria-expanded]="detailsExpanded()"
+              [attr.aria-label]="
+                detailsExpanded() ? 'Hide request and response' : 'Show request and response'
+              "
+              (click)="toggleDetails()"
+            >
+              <svg
+                class="size-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M8 9l-4 3 4 3m8-6l4 3-4 3"
+                />
+              </svg>
+            </button>
+          </div>
+
+          @if (detailsExpanded()) {
+            <div
+              class="space-y-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+            >
+              <div>
+                <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                  Request
+                </div>
+                <pre
+                  class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
+                ><code [innerHTML]="requestJson() | jsonSyntaxHighlight"></code></pre>
+              </div>
+              @if (responseText()) {
+                <div>
+                  <div
+                    class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    <span>Response</span>
+                    @if (isError()) {
+                      <span class="text-red-600 dark:text-red-400">(Error)</span>
+                    }
+                  </div>
+                  <pre
+                    class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
+                  ><code [innerHTML]="responseText() | jsonSyntaxHighlight"></code></pre>
+                </div>
+              }
+            </div>
+          }
+        }
+
+        @if (proxyUrl(); as url) {
+          <div #host class="block"></div>
+        } @else {
+          <!-- App HTML still loading (between the header shell and the full
+               ui_resource). A skeleton sized to the frame so the card doesn't
+               jump when the iframe mounts. Hidden in fullscreen. -->
+          @if (displayMode() !== 'fullscreen') {
+            <div
+              class="flex items-center justify-center bg-white dark:bg-gray-900"
+              [style.height.px]="frameHeight()"
+              aria-hidden="true"
+            >
+              <div class="mcp-app-skeleton h-full w-full"></div>
+            </div>
+          }
+        }
       </div>
     }
   `,
@@ -117,6 +337,14 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * complete input, the spec's `tool-input` (final) path.
    */
   readonly toolInput = input<Record<string, unknown>>({});
+
+  /**
+   * The agent-facing tool name (e.g. `create_view`), shown in the App header
+   * next to the server identity. Bound by the host from the tool-use block;
+   * the server name + icon come from the `ui_resource` instead (see
+   * `serverName`/`icon`).
+   */
+  readonly toolName = input<string>('');
 
   private readonly mcpAppState = inject(McpAppStateService);
   private readonly mcpAppProxy = inject(McpAppProxyService);
@@ -171,6 +399,90 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     const id = this.toolUseId();
     return id ? this.mcpAppState.get(id) : undefined;
   });
+
+  /** Whether the header's server icon `<img>` failed to load (→ glyph). */
+  protected readonly iconFailed = signal(false);
+
+  /** Whether the request/response details strip is expanded (the `</>` toggle). */
+  protected readonly detailsExpanded = signal(false);
+
+  /**
+   * Server display name for the header. Prefers the backend-resolved
+   * `serverName` on the resource (serverInfo title/name → `ui://` authority),
+   * with a client-side authority parse as a last resort for resources
+   * persisted before that field shipped.
+   */
+  protected readonly serverName = computed(() => {
+    const res = this.resource();
+    if (res?.serverName) return res.serverName;
+    return this.serverNameFromUri(res?.resourceUri ?? '');
+  });
+
+  /** Server icon `src` from the resource, or "" (→ glyph fallback). */
+  protected readonly icon = computed(() => this.resource()?.icon ?? '');
+
+  /**
+   * Tool name for the header. Prefers the name carried on the `ui_resource`
+   * (recorded atomically with the frame's promotion, so the name + shimmer
+   * appear immediately), falling back to the `toolName` input from the streamed
+   * message content (the reload path, and resources persisted before the event
+   * carried it).
+   */
+  protected readonly displayToolName = computed(
+    () => this.resource()?.toolName || this.toolName(),
+  );
+
+  /** The tool produced an error result (drives the header's "Failed" badge). */
+  protected readonly isError = computed(
+    () => this.result()?.status === 'error',
+  );
+
+  /**
+   * Whether the tool is still running — drives the tool-name shimmer. True
+   * from mount until the real result lands (`inputComplete`), covering both
+   * the argument-streaming and tool-execution windows. Never shimmers a
+   * failed call.
+   */
+  protected readonly isRunning = computed(
+    () => !this.inputComplete() && !this.isError(),
+  );
+
+  /** Pretty-printed request arguments for the expanded details strip. */
+  protected readonly requestJson = computed(() =>
+    JSON.stringify(this.resolvedToolInput(), null, 2),
+  );
+
+  /** Tool response rendered as text/JSON for the expanded details strip. */
+  protected readonly responseText = computed(() => {
+    const content = this.result()?.content ?? [];
+    const parts = content.map((item) => {
+      if (item.json !== undefined) return JSON.stringify(item.json, null, 2);
+      if (item.text) return item.text;
+      if (item.image) return `[image/${item.image.format}]`;
+      return '';
+    });
+    return parts.filter(Boolean).join('\n');
+  });
+
+  protected toggleDetails(): void {
+    this.detailsExpanded.update((v) => !v);
+  }
+
+  /**
+   * Title-case a `ui://<authority>/…` authority as a server-name fallback
+   * (`ui://excalidraw/canvas` → "Excalidraw"), mirroring the backend's
+   * `_server_name_from_uri`. Used only when the resource carries no
+   * `serverName`.
+   */
+  private serverNameFromUri(resourceUri: string): string {
+    const match = /^[a-z][a-z0-9+.-]*:\/\/([^/]+)/i.exec(resourceUri);
+    const authority = match?.[1] ?? '';
+    return authority
+      .split(/[-_.\s]+/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  }
 
   /**
    * Latest server-healed streamed partial tool input for this invocation, or
@@ -277,9 +589,24 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    */
   protected readonly proxyUrl = computed<string | null>(() => {
     const res = this.resource();
-    if (!res || !res.sandboxOrigin) return null;
+    // Gate the iframe mount on a non-empty `html`: the App frame is promoted
+    // (and its header shown) the instant the backend emits the header-only
+    // `ui_resource` shell at the tool's `content_block_start` — but that shell
+    // carries `html: ''` (the real HTML follows after `resources/read`). Wait
+    // for it so the iframe mounts ONCE with the full App, not an empty shell.
+    if (!res || !res.sandboxOrigin || !res.html) return null;
     return buildProxyUrl(res.sandboxOrigin, res.csp);
   });
+
+  /**
+   * Whether to render the App card at all — true once a resource with a
+   * sandbox origin exists (the header-only shell qualifies). An empty
+   * `sandboxOrigin` means the mcp-sandbox stack isn't wired, so the SPA can't
+   * frame the App: render nothing and let the tool fall back to a plain card.
+   */
+  protected readonly canRenderApp = computed(
+    () => !!this.resource()?.sandboxOrigin,
+  );
 
   /** Permissions-Policy `allow` for the outer frame (delegates to inner). */
   protected readonly allowAttr = computed(() => {

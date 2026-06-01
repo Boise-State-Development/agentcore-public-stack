@@ -90,6 +90,11 @@ class StreamCoordinator:
         # empty and unused unless AGENTCORE_MCP_APPS_HOST_ENABLED=true.
         ui_tool_use_names: Dict[str, str] = {}
         ui_resource_emitted: set[str] = set()
+        # Dedupes the instant header-only `ui_resource` shell (empty html, no
+        # `resources/read`) emitted at `content_block_start` so the App frame's
+        # header replaces the tool rail immediately — separate from
+        # `ui_resource_emitted` so it never blocks the full html-bearing emit.
+        ui_header_emitted: set[str] = set()
         # MCP Apps (streaming tool input, SEP-1865): a UI tool's frame is
         # mounted early at its `content_block_start` so the App's bridge is
         # live *while* the model streams the tool's arguments. We map a
@@ -684,8 +689,17 @@ class StreamCoordinator:
                     if bd.get("type") == "tool_use":
                         tu = bd.get("toolUse", {})
                         tuid = tu.get("toolUseId") or tu.get("tool_use_id")
+                        tname = ui_tool_use_names.get(tuid) if tuid else None
+                        # Header-only shell FIRST (instant, no resources/read)
+                        # so the App frame's header + shimmer replace the tool
+                        # rail with no flash; the full html-bearing resource
+                        # follows below and mounts the iframe.
+                        for sse in self._emit_ui_app_header_for_tool(
+                            tname, tuid, ui_header_emitted
+                        ):
+                            yield sse
                         for sse in await self._emit_ui_resource_for_tool(
-                            ui_tool_use_names.get(tuid) if tuid else None,
+                            tname,
                             tuid,
                             ui_resource_emitted,
                             session_id=session_id,
@@ -1231,6 +1245,41 @@ class StreamCoordinator:
             )
         return events
 
+    def _emit_ui_app_header_for_tool(
+        self,
+        tool_name: Optional[str],
+        tool_use_id: Optional[str],
+        emitted: set,
+    ) -> List[str]:
+        """Emit a UI tool's instant header-only `ui_resource` shell (empty html).
+
+        Runs at `content_block_start`, BEFORE the (potentially slow)
+        `resources/read` in `_emit_ui_resource_for_tool`, so the App frame's
+        header (icon + server + tool + shimmer) replaces the plain tool rail
+        with no flash. Synchronous + cheap: it reads only the in-process
+        catalog + captured `serverInfo` (no network). Deduped per toolUseId via
+        its own `emitted` set so it never blocks the full html-bearing emit.
+        Best-effort: any failure logs and returns [].
+        """
+        from agents.main_agent.integrations.mcp_apps import (
+            build_ui_app_header,
+            is_mcp_apps_host_enabled,
+        )
+
+        if not is_mcp_apps_host_enabled():
+            return []
+        if not tool_use_id or not tool_name or tool_use_id in emitted:
+            return []
+        try:
+            payload = build_ui_app_header(tool_name, tool_use_id)
+            if payload is None:
+                return []
+            emitted.add(tool_use_id)
+            return [f"event: ui_resource\ndata: {json.dumps(payload)}\n\n"]
+        except Exception as e:  # noqa: BLE001 - best-effort side channel
+            logger.warning("Failed to emit ui_resource header: %s", e)
+            return []
+
     async def _emit_ui_resource_for_tool(
         self,
         tool_name: Optional[str],
@@ -1308,6 +1357,9 @@ class StreamCoordinator:
                         csp=payload.get("csp", {}),
                         permissions=payload.get("permissions", {}),
                         sandbox_origin=payload.get("sandboxOrigin", ""),
+                        server_name=payload.get("serverName", ""),
+                        icon=payload.get("icon", ""),
+                        tool_name=payload.get("toolName", ""),
                     )
                 except Exception:  # noqa: BLE001 - persistence is best-effort
                     logger.warning(

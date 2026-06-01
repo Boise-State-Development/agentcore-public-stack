@@ -32,6 +32,7 @@ from agents.main_agent.integrations.mcp_apps import (
     MCP_APPS_UI_MIME_TYPE,
     UICapableMCPClient,
     _UIExtensionClientSession,
+    build_ui_app_header,
     ensure_ui_extension_session_patch,
     fetch_ui_resource,
     get_ui_tool_catalog,
@@ -154,6 +155,40 @@ async def test_initialize_omits_ui_extension_when_disabled(
     caps = await _run_initialize(monkeypatch, enabled=False)
 
     assert MCP_APPS_UI_EXTENSION_KEY not in caps.get("extensions", {})
+
+
+@pytest.mark.asyncio
+async def test_initialize_captures_server_info(mcp_apps_clean, monkeypatch):
+    """The session stashes `serverInfo` off the `initialize` result so the
+    App header can show the server's name + icon. Neither the SDK session nor
+    Strands retains it, so this seam fails loudly if that ever changes."""
+    monkeypatch.setenv(_ENV_FLAG, "true")
+
+    async def fake_send_request(request, result_type, *a, **k):
+        return mcp_types.InitializeResult(
+            protocolVersion=mcp_types.LATEST_PROTOCOL_VERSION,
+            capabilities=mcp_types.ServerCapabilities(),
+            serverInfo=mcp_types.Implementation(
+                name="excalidraw-mcp",
+                title="Excalidraw",
+                version="1",
+                icons=[mcp_types.Icon(src="https://cdn.test/x.svg")],
+            ),
+        )
+
+    send_a, recv_a = anyio.create_memory_object_stream(1)
+    send_b, recv_b = anyio.create_memory_object_stream(1)
+    session = _UIExtensionClientSession(recv_a, send_b)
+
+    with patch.object(
+        BaseSession, "send_request", new=AsyncMock(side_effect=fake_send_request)
+    ), patch.object(BaseSession, "send_notification", new=AsyncMock()):
+        await session.initialize()
+
+    info = session._mcp_apps_server_info
+    assert info is not None
+    assert info.title == "Excalidraw"
+    assert info.icons[0].src == "https://cdn.test/x.svg"
 
 
 # ── ClientSession symbol patch ────────────────────────────────────────────────
@@ -316,10 +351,20 @@ class _FakeMCPClient:
     `read_resource_sync`, which we record and stub.
     """
 
-    def __init__(self, result=None, raises: Exception | None = None) -> None:
+    def __init__(
+        self,
+        result=None,
+        raises: Exception | None = None,
+        server_info=None,
+    ) -> None:
         self._result = result
         self._raises = raises
         self.read_calls: list = []
+        # Mirrors how Strands' MCPClient holds the live SDK session, whose
+        # `_UIExtensionClientSession` stashes the captured `serverInfo`.
+        self._background_thread_session = SimpleNamespace(
+            _mcp_apps_server_info=server_info
+        )
 
     def read_resource_sync(self, uri):
         self.read_calls.append(uri)
@@ -382,6 +427,11 @@ class TestFetchUIResource:
             "permissions": {"clipboardWrite": {}},
             # Empty when the mcp-sandbox stack origin isn't wired into env.
             "sandboxOrigin": "",
+            # No serverInfo on this fake client → name falls back to the
+            # title-cased `ui://` authority ("srv" → "Srv"), icon is empty.
+            "serverName": "Srv",
+            "icon": "",
+            "toolName": "widget",
         }
 
     def test_carries_sandbox_origin_from_env(
@@ -498,3 +548,111 @@ class TestFetchUIResource:
         payload = fetch_ui_resource("widget", "tu-2")
         assert payload["html"] == "<main>chosen</main>"
         assert payload["mimeType"] == MCP_APPS_UI_MIME_TYPE
+
+
+class TestServerIdentity:
+    """`serverName` + `icon` resolution for the App header (SEP-1865)."""
+
+    def test_prefers_server_info_title_and_icon(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        info = mcp_types.Implementation(
+            name="excalidraw-mcp",
+            title="Excalidraw",
+            version="1.0.0",
+            icons=[mcp_types.Icon(src="https://cdn.test/excalidraw.svg")],
+        )
+        client = _FakeMCPClient(
+            result=_html_resource(), server_info=info
+        )
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://excalidraw/canvas"}, client=client
+        )
+
+        payload = fetch_ui_resource("widget", "tu-1")
+        # title beats both the `name` and the `ui://` authority.
+        assert payload["serverName"] == "Excalidraw"
+        assert payload["icon"] == "https://cdn.test/excalidraw.svg"
+
+    def test_falls_back_to_server_info_name_without_title(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        info = mcp_types.Implementation(name="my-server", version="1.0.0")
+        client = _FakeMCPClient(result=_html_resource(), server_info=info)
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+
+        payload = fetch_ui_resource("widget", "tu-1")
+        # name beats the authority; no icons advertised → empty.
+        assert payload["serverName"] == "my-server"
+        assert payload["icon"] == ""
+
+    def test_falls_back_to_uri_authority_without_server_info(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        client = _FakeMCPClient(result=_html_resource(), server_info=None)
+        _seed_catalog(
+            monkeypatch,
+            ui={"resourceUri": "ui://my-cool-server/widget"},
+            client=client,
+        )
+
+        payload = fetch_ui_resource("widget", "tu-1")
+        # "my-cool-server" → "My Cool Server"; no icon.
+        assert payload["serverName"] == "My Cool Server"
+        assert payload["icon"] == ""
+
+
+class TestBuildUiAppHeader:
+    """Instant header-only shell (empty html, no `resources/read`)."""
+
+    def test_builds_metadata_without_reading_resource(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        info = mcp_types.Implementation(
+            name="excalidraw", title="Excalidraw", version="1"
+        )
+        client = _FakeMCPClient(result=_html_resource(), server_info=info)
+        _seed_catalog(
+            monkeypatch,
+            ui={
+                "resourceUri": "ui://excalidraw/canvas",
+                "csp": {"connectDomains": ["https://api.test"]},
+                "permissions": {"clipboardWrite": {}},
+            },
+            client=client,
+        )
+        monkeypatch.setenv(_ENV_SANDBOX_ORIGIN, "https://sbx.example.com")
+
+        header = build_ui_app_header("widget", "tu-1")
+
+        # The header carries everything the frame's title bar needs, with an
+        # EMPTY html — and crucially does NOT issue resources/read (that's the
+        # slow path the header is meant to front).
+        assert client.read_calls == []
+        assert header == {
+            "type": "ui_resource",
+            "toolUseId": "tu-1",
+            "resourceUri": "ui://excalidraw/canvas",
+            "html": "",
+            "mimeType": MCP_APPS_UI_MIME_TYPE,
+            "csp": {"connectDomains": ["https://api.test"]},
+            "permissions": {"clipboardWrite": {}},
+            "serverName": "Excalidraw",
+            "icon": "",
+            "toolName": "widget",
+            "sandboxOrigin": "https://sbx.example.com",
+        }
+
+    def test_inert_when_flag_disabled(self, mcp_apps_clean, monkeypatch):
+        client = _FakeMCPClient(result=_html_resource())
+        _seed_catalog(
+            monkeypatch, ui={"resourceUri": "ui://srv/widget"}, client=client
+        )
+        monkeypatch.setenv(_ENV_FLAG, "false")
+        assert build_ui_app_header("widget", "tu-1") is None
+
+    def test_none_for_non_ui_tool(self, mcp_apps_clean, monkeypatch):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        assert build_ui_app_header("never-seen", "tu-1") is None

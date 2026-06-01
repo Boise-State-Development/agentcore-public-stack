@@ -136,6 +136,10 @@ async def test_emits_ui_resource_with_inline_html(
         "csp": {"connectDomains": ["https://api.test"]},
         "permissions": {"clipboardWrite": {}},
         "sandboxOrigin": "",
+        # No serverInfo on the fake client → authority fallback ("srv" → "Srv").
+        "serverName": "Srv",
+        "icon": "",
+        "toolName": "widget",
     }
 
 
@@ -362,6 +366,50 @@ async def test_early_mount_inert_when_flag_disabled(
     monkeypatch.setenv(_ENV_FLAG, "false")
     out = await coord._emit_ui_resource_for_tool("widget", "tu-1", set())
     assert out == []
+
+
+@pytest.mark.asyncio
+async def test_header_shell_emits_instantly_without_read(
+    coord, catalog_clean, monkeypatch
+):
+    """The header-only shell ships an empty-html `ui_resource` with NO
+    resources/read, so the App frame's header replaces the tool rail at once;
+    its own dedupe set is independent of the full-emit set."""
+    client = _FakeMCPClient(_html_result("<main>app</main>"))
+    _seed(monkeypatch, client)
+    header_emitted: set = set()
+
+    header = coord._emit_ui_app_header_for_tool(
+        "widget", "tu-1", header_emitted
+    )
+    assert len(header) == 1
+    payload = _parse(header[0])
+    assert payload["toolUseId"] == "tu-1"
+    assert payload["html"] == ""  # shell — iframe waits for the full emit
+    assert payload["resourceUri"] == "ui://srv/widget"
+    assert client.read_calls == []  # the whole point: no slow read
+    assert header_emitted == {"tu-1"}
+
+    # Deduped on its own set...
+    assert coord._emit_ui_app_header_for_tool("widget", "tu-1", header_emitted) == []
+
+    # ...but the full html-bearing emit (separate set) is NOT blocked by it.
+    full = await coord._emit_ui_resource_for_tool("widget", "tu-1", set())
+    assert len(full) == 1
+    assert _parse(full[0])["html"] == "<main>app</main>"
+
+
+def test_header_shell_inert_when_flag_disabled(
+    coord, catalog_clean, monkeypatch
+):
+    _seed(monkeypatch, _FakeMCPClient(_html_result()))
+    monkeypatch.setenv(_ENV_FLAG, "false")
+    assert coord._emit_ui_app_header_for_tool("widget", "tu-1", set()) == []
+
+
+def test_header_shell_noop_for_non_ui_tool(coord, catalog_clean, monkeypatch):
+    monkeypatch.setenv(_ENV_FLAG, "true")
+    assert coord._emit_ui_app_header_for_tool("plain_tool", "tu-1", set()) == []
 
 
 def test_partial_input_emits_healed_arguments(coord):

@@ -224,6 +224,31 @@ export interface UiResourceEvent {
   csp: McpUiCsp;
   permissions: McpUiPermissions;
   sandboxOrigin: string;
+  /**
+   * Server display name for the App header (SEP-1865 Claude parity), e.g.
+   * "Excalidraw". Resolved backend-side from the MCP `serverInfo.title`/`name`,
+   * falling back to the `ui://` authority. Optional: absent on resources
+   * persisted before this field shipped (the frame then derives it from
+   * `resourceUri`).
+   */
+  serverName?: string;
+  /**
+   * Server icon `src` for the App header — an http(s) or `data:` URL from the
+   * server's advertised `serverInfo.icons`. Empty/absent when the server
+   * declared none; the frame then renders a generic glyph. Rendered in the
+   * SPA header `<img>` (not the sandboxed iframe), with a glyph fallback on
+   * load error.
+   */
+  icon?: string;
+  /**
+   * Agent-facing tool name (e.g. `create_view`) for the App header. Carried on
+   * the event so the frame's header shows the name + running shimmer the
+   * instant the frame promotes — the resource is recorded atomically with the
+   * promotion, whereas the streamed message content (the frame's `toolName`
+   * input) can land on a separate tick. Optional: absent on resources persisted
+   * before this field shipped (the frame falls back to the input).
+   */
+  toolName?: string;
 }
 
 /**
