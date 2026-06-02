@@ -30,6 +30,15 @@ on:
         required: false
         type: boolean
         default: false
+      aws_environment:
+        description: "GitHub Environment (selects AWS_ROLE_ARN secret + approvals)"
+        required: true
+        type: choice
+        default: development
+        options:
+          - development
+          - staging
+          - production
 
 permissions:
   id-token: write
@@ -38,6 +47,12 @@ permissions:
 jobs:
   restore:
     runs-on: ubuntu-24.04
+    # Required so that `vars.*` and `secrets.*` references below resolve
+    # against the chosen GitHub Environment. Without this they silently
+    # resolve to empty strings and configure-aws-credentials fails with
+    # "Could not load credentials from any providers". Matches the
+    # pattern used by backup-data.yml, teardown.yml, platform.yml, etc.
+    environment: ${{ inputs.aws_environment }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

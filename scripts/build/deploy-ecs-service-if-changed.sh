@@ -79,8 +79,33 @@ ssm_get() {
     aws ssm get-parameter --region "$AWS_REGION" --name "$1" \
         --query 'Parameter.Value' --output text
 }
-IMAGE_TAG="$(ssm_get "$IMAGE_URI_SSM")"
-NEW_IMAGE_URI="${ECR_REPO_URI}:${IMAGE_TAG}"
+# The image-uri SSM holds the FULL ECR URI (registry/repo:tag) per
+# the platform-as-bootstrap design — the CDK construct reads the
+# same value directly into the ECS TaskDefinition Image at deploy
+# time, and CFN's regex validation rejects bare tags. build-one.sh
+# is the canonical writer.
+NEW_IMAGE_URI="$(ssm_get "$IMAGE_URI_SSM")"
+
+# Sanity-check that the SSM value is a real ECR URI, not a stale
+# tag-only legacy value left over from a pre-platform-as-bootstrap
+# deploy. The platform deploy's seed script repairs these, but we'd
+# rather fail loud here than register a bogus task definition.
+ECR_URI_REGEX='^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/([a-z0-9]+([._-][a-z0-9]+)*/)*[a-z0-9]+([._-][a-z0-9]+)*[:@][^[:space:]]+$'
+if [[ ! "$NEW_IMAGE_URI" =~ $ECR_URI_REGEX ]]; then
+    log "SSM ${IMAGE_URI_SSM} = '${NEW_IMAGE_URI}' is not a valid ECR URI."
+    log "build-one.sh should have written REGISTRY/REPO:TAG. Re-run the build job, or run the platform deploy to re-seed the parameter."
+    exit 6
+fi
+if [[ "$NEW_IMAGE_URI" != "${ECR_REPO_URI}:"* && "$NEW_IMAGE_URI" != "${ECR_REPO_URI}@"* ]]; then
+    log "WARNING: SSM URI '${NEW_IMAGE_URI}' does not reference --ecr-repo-uri '${ECR_REPO_URI}'. Proceeding anyway."
+fi
+
+# Derive the tag for logging / GITHUB_OUTPUT echoing.
+if [[ "$NEW_IMAGE_URI" == *@* ]]; then
+    IMAGE_TAG="${NEW_IMAGE_URI##*@}"
+else
+    IMAGE_TAG="${NEW_IMAGE_URI##*:}"
+fi
 CLUSTER_NAME="$(ssm_get "$CLUSTER_NAME_SSM")"
 SERVICE_NAME="$(ssm_get "$SERVICE_NAME_SSM")"
 TASK_DEF_FAMILY="$(ssm_get "$TASK_DEF_FAMILY_SSM")"

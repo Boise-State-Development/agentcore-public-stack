@@ -75,18 +75,41 @@ RUN mkdir -p /tmp/models/tiktoken_cache && \
   python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 # 7. Download Docling Models
-# We use 'download_models' to fetch the standard pipeline (Layout, Tables, OCR).
-# We force it to the specific artifacts folder.
+# We pass an explicit list of models rather than relying on download_models()'s
+# defaults — those defaults drift between docling versions (e.g. 2.81 added
+# with_rapidocr=True, which iterates a torch backend AND an onnxruntime backend
+# and crashes here because onnxruntime isn't in our requirements.lock).
+# The pipeline (handler.py) only uses the layout, tableformer, picture
+# classifier, and code-formula models, so we explicitly request just those
+# and disable everything else.
 ENV PYTHONPATH=/tmp/packages
-RUN python -c "from docling.utils.model_downloader import download_models; \
-  from pathlib import Path; \
-  download_models( \
-  output_dir=Path('/tmp/models/docling-artifacts'), \
-  force=True \
-  )"
+RUN python -c "\
+from pathlib import Path; \
+from docling.utils.model_downloader import download_models; \
+download_models( \
+    output_dir=Path('/tmp/models/docling-artifacts'), \
+    force=True, \
+    progress=False, \
+    with_layout=True, \
+    with_tableformer=True, \
+    with_tableformer_v2=False, \
+    with_code_formula=True, \
+    with_picture_classifier=True, \
+    with_smolvlm=False, \
+    with_granitedocling=False, \
+    with_granitedocling_mlx=False, \
+    with_smoldocling=False, \
+    with_smoldocling_mlx=False, \
+    with_granite_vision=False, \
+    with_granite_chart_extraction=False, \
+    with_rapidocr=False, \
+    with_easyocr=False, \
+)"
 
-# 8. Clean up OCR (Optimization)
-# We delete the heavy EasyOCR model (~200MB) and the table structure model to keep the Lambda image slim
+# 8. Clean up unused / oversized model artifacts (Optimization)
+# - easyocr (~200 MB) and table_structure_model are legacy folder names from
+#   older docling versions; left as defensive cleanup so future docling default
+#   changes don't silently bloat the image. `rm -rf` on a missing path is a no-op.
 RUN rm -rf /tmp/models/docling-artifacts/easyocr \
   /tmp/models/docling-artifacts/table_structure_model
 
