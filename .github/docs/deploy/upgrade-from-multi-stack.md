@@ -86,6 +86,21 @@ If your environment had `CDK_RETAIN_DATA_ON_DELETE=true` (the default for produc
 - **Cognito User Pool** — the identity store
 - **Secrets Manager secrets** — auth secret, OAuth secrets, BFF cookie key
 - **KMS keys** — OAuth token encryption, BFF cookie signing
+- **SSM parameters under `/${CDK_PROJECT_PREFIX}/`** — these were written by the
+  pre-multi-stack scripts via direct `aws ssm put-parameter` calls (not
+  CloudFormation), so `delete-stack` doesn't see them. Most importantly,
+  `/${CDK_PROJECT_PREFIX}/{app-api,inference-api}/image-tag` will hold a
+  legacy tag-only value (e.g. a git short SHA) from your last pre-migration
+  deploy. The new architecture treats these parameters as **full ECR URIs**
+  and the first PlatformStack deploy will fail CFN early-validation if the
+  legacy value is still present:
+  ```
+  Property value [<short-sha>] does not match pattern:
+    ^\d{12}\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com/...
+  ```
+  The seed step in `scripts/platform/deploy.sh` repairs this automatically
+  on the next platform deploy (it overwrites any non-URI value with the
+  bootstrap container URI), but you can also clean it up manually below.
 
 **How to identify retained resources:**
 
@@ -101,6 +116,10 @@ aws cognito-idp list-user-pools --max-results 20 --query "UserPools[?starts_with
 
 # List secrets
 aws secretsmanager list-secrets --query "SecretList[?starts_with(Name, '${CDK_PROJECT_PREFIX}')].[Name]"
+
+# List SSM parameters under your project prefix
+aws ssm get-parameters-by-path --path "/${CDK_PROJECT_PREFIX}/" --recursive \
+  --query 'Parameters[].Name' --output text | tr '\t' '\n'
 ```
 
 **Delete them:**
@@ -122,6 +141,20 @@ aws cognito-idp delete-user-pool --user-pool-id {pool-id}
 # Secrets (force delete without recovery window)
 aws secretsmanager delete-secret --secret-id {prefix}-auth-secret --force-delete-without-recovery
 # ... etc
+
+# SSM parameters under your project prefix.
+# Minimum required for an in-place migration is just the image-tag params,
+# which break the first PlatformStack deploy if left at a legacy tag-only
+# value. You can either delete just those two:
+aws ssm delete-parameter --name "/${CDK_PROJECT_PREFIX}/app-api/image-tag"        2>/dev/null || true
+aws ssm delete-parameter --name "/${CDK_PROJECT_PREFIX}/inference-api/image-tag"  2>/dev/null || true
+
+# ...or sweep every SSM parameter under your prefix (safe — they're all
+# re-published on the next platform/backend deploy):
+aws ssm get-parameters-by-path --path "/${CDK_PROJECT_PREFIX}/" --recursive \
+  --query 'Parameters[].Name' --output text \
+  | tr '\t' '\n' \
+  | xargs -r -n10 aws ssm delete-parameters --names
 ```
 
 > 💡 **Tip:** If you set `CDK_RETAIN_DATA_ON_DELETE=false` in your GitHub environment variables BEFORE running teardown, CloudFormation will delete everything automatically and you can skip this step entirely. Only do this if you're confident your backup is good.

@@ -138,16 +138,22 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "image_tag=${TAG}" >> "$GITHUB_OUTPUT"
 fi
 
-# Publish to SSM so the CDK constructs that read the tag at synth
-# time pick up the freshly-built image. `put-parameter --overwrite`
-# is idempotent. Per the devops gotcha, --overwrite cannot be
-# combined with --tags for an existing parameter, so we omit --tags.
+# Publish to SSM so the CDK constructs that read the URI at deploy
+# time pick up the freshly-built image. The constructs use this value
+# directly as the ECS TaskDefinition Image / AgentCore Runtime
+# ContainerUri — so it must be the FULL ECR URI (including registry,
+# repo, and tag), not just the tag. CFN validates this against the
+# ECR URI regex on every deploy and rejects bare tags.
+# `put-parameter --overwrite` is idempotent. Per the devops gotcha,
+# --overwrite cannot be combined with --tags for an existing
+# parameter, so we omit --tags.
+SSM_VALUE="${REPO}:${TAG}"
 aws ssm put-parameter \
     --region "${CDK_AWS_REGION}" \
     --name "${SSM_KEY}" \
-    --value "$TAG" \
+    --value "${SSM_VALUE}" \
     --type String \
     --overwrite \
     --no-cli-pager >/dev/null
 
-log_info "${SERVICE}: SSM ${SSM_KEY} = ${TAG}"
+log_info "${SERVICE}: SSM ${SSM_KEY} = ${SSM_VALUE}"

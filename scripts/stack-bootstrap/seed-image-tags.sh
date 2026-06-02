@@ -81,16 +81,41 @@ read_asset_hash() {
     echo "$val"
 }
 
+# CFN's AgentCore Runtime ContainerUri and ECS TaskDefinition Image
+# both validate against the ECR URI shape:
+#   <12-digit-acct>.dkr.ecr.<region>.amazonaws.com/<repo>(:tag|@digest)
+# Anything else fails CFN early-validation. We use this regex to
+# decide whether an existing SSM value is "good enough to keep" or
+# needs to be overwritten with the bootstrap URI.
+#
+# Two scenarios produce a non-URI value at this point:
+#   1. Migration from the pre-#396 architecture, where scripts wrote
+#      a tag-only string (e.g. a git short SHA) to the same SSM path.
+#      The CFN delete-stack on teardown didn't touch these because
+#      they were never CFN-owned (written by `aws ssm put-parameter`
+#      directly from the old per-stack scripts).
+#   2. A future regression in the build pipeline that writes a
+#      tag-only value instead of a full URI.
+# In both cases overwriting with the bootstrap URI is safe: the build
+# pipeline will overwrite it again on the next real-image push.
+ECR_URI_REGEX='^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/([a-z0-9]+([._-][a-z0-9]+)*/)*[a-z0-9]+([._-][a-z0-9]+)*[:@][^[:space:]]+$'
+
 seed_one() {
     local svc="$1"
     local output_marker="$2"
     local ssm_path="/${CDK_PROJECT_PREFIX}/${svc}/image-tag"
 
-    if aws ssm get-parameter \
+    local existing="" exists=0
+    if existing="$(aws ssm get-parameter \
             --name "$ssm_path" \
             --region "$CDK_AWS_REGION" \
-            >/dev/null 2>&1; then
-        log_info "  ${svc}: SSM ${ssm_path} already exists — skipping seed (build pipeline owns it)"
+            --query 'Parameter.Value' \
+            --output text 2>/dev/null)"; then
+        exists=1
+    fi
+
+    if (( exists == 1 )) && [[ "$existing" =~ $ECR_URI_REGEX ]]; then
+        log_info "  ${svc}: SSM ${ssm_path} already holds a valid ECR URI — skipping seed (build pipeline owns it)"
         return 0
     fi
 
@@ -98,14 +123,29 @@ seed_one() {
     hash="$(read_asset_hash "$output_marker")"
     uri="${REGISTRY}/${ASSETS_REPO}:${hash}"
 
-    log_info "  ${svc}: seeding SSM ${ssm_path} = ${uri}"
-    aws ssm put-parameter \
-        --name "$ssm_path" \
-        --value "$uri" \
-        --type String \
-        --region "$CDK_AWS_REGION" \
-        --description "Container image URI for ${svc}. Seeded on first deploy with bootstrap asset URI; overwritten by build pipeline on every real-image push." \
-        >/dev/null
+    if (( exists == 1 )); then
+        # Non-URI legacy value — log it (truncated) so operators can
+        # see what was there. Tag-only legacy values from the pre-#396
+        # architecture are the typical case.
+        local preview="${existing:0:64}"
+        log_warn "  ${svc}: SSM ${ssm_path} held non-URI value '${preview}' — overwriting with bootstrap URI"
+        aws ssm put-parameter \
+            --name "$ssm_path" \
+            --value "$uri" \
+            --type String \
+            --region "$CDK_AWS_REGION" \
+            --overwrite \
+            >/dev/null
+    else
+        log_info "  ${svc}: seeding SSM ${ssm_path} = ${uri}"
+        aws ssm put-parameter \
+            --name "$ssm_path" \
+            --value "$uri" \
+            --type String \
+            --region "$CDK_AWS_REGION" \
+            --description "Container image URI for ${svc}. Seeded on first deploy with bootstrap asset URI; overwritten by build pipeline on every real-image push." \
+            >/dev/null
+    fi
 }
 
 main() {
