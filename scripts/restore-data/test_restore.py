@@ -560,20 +560,32 @@ def test_cognito_user_creation_captures_new_sub_and_links_identity():
     assert ctx.sub_map_pattern is not None
     assert ctx.sub_map_pattern.search("USER#OLD-SUB-UUID")
 
-    # AdminCreateUser was called with sanitised attrs (no sub, no identities)
+    # AdminCreateUser was called with sanitised attrs AND with the SAFE
+    # `migrated-<old-sub>` username — NOT the federated-pattern username
+    # from the backup. Using the federated pattern would have caused
+    # AdminLinkProviderForUser to fail with "Invalid SourceUser" and the
+    # next IdP login to fail with "User already exists with provider
+    # user id".
     create_kwargs = cognito.admin_create_user.call_args.kwargs
+    assert create_kwargs["Username"] == "migrated-OLD-SUB-UUID"
     submitted_names = {a["Name"] for a in create_kwargs["UserAttributes"]}
     assert "sub" not in submitted_names
     assert "identities" not in submitted_names
     assert "email" in submitted_names
 
-    # AdminLinkProviderForUser was called for the AzureAD identity
+    # AdminLinkProviderForUser was called with the SAFE destination
+    # username and the federated identity as the source.
     cognito.admin_link_provider_for_user.assert_called_once()
     link_kwargs = cognito.admin_link_provider_for_user.call_args.kwargs
     assert link_kwargs["DestinationUser"]["ProviderName"] == "Cognito"
-    assert link_kwargs["DestinationUser"]["ProviderAttributeValue"] == "AzureAD_entra-user-id"
+    assert link_kwargs["DestinationUser"]["ProviderAttributeValue"] == "migrated-OLD-SUB-UUID"
     assert link_kwargs["SourceUser"]["ProviderName"] == "AzureAD"
+    assert link_kwargs["SourceUser"]["ProviderAttributeName"] == "Cognito_Subject"
     assert link_kwargs["SourceUser"]["ProviderAttributeValue"] == "entra-user-id"
+
+    # AdminSetUserPassword (CONFIRMED transition) targets the same name.
+    sp_kwargs = cognito.admin_set_user_password.call_args.kwargs
+    assert sp_kwargs["Username"] == "migrated-OLD-SUB-UUID"
 
     # Result reports the remapping
     user_result = next(r for r in results if r.get("component") == "cognito-users")
@@ -1182,3 +1194,279 @@ def test_boto_config_pool_size_covers_thread_workers():
         f"BOTO_CONFIG.max_pool_connections={pool_size} is below the "
         f"ThreadPoolExecutor max_workers=16 used by S3 / Memory restore."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Cognito IdP → app-client wiring                                              #
+# --------------------------------------------------------------------------- #
+def test_cognito_restore_wires_idps_into_app_client():
+    """After restoring an IdP, the restore must call update_user_pool_client
+    to add the provider to SupportedIdentityProviders on every CDK-managed
+    app client. Without this step, Cognito's hosted UI shows
+    'Login option is not available' immediately after a restore."""
+    import io as _io, json as _json
+
+    # --- Build fake S3 responses ---
+    idp_json = _json.dumps({"providers": [
+        {"ProviderName": "ms-entra-id", "ProviderType": "OIDC",
+         "ProviderDetails": {"client_id": "abc", "oidc_issuer": "https://issuer", "client_secret": "s"},
+         "AttributeMapping": {}, "IdpIdentifiers": []}
+    ]}).encode()
+    client_json = _json.dumps({"clients": [
+        {"ClientId": "old-client-id", "ClientName": "my-prefix-bff-app-client"}
+    ]}).encode()
+    users_gz = gzip.compress(b"")
+
+    def s3_get(Bucket, Key):
+        m = {
+            "root/cognito/identity-providers.json": {"Body": _io.BytesIO(idp_json)},
+            "root/cognito/app-clients.json":        {"Body": _io.BytesIO(client_json)},
+            "root/cognito/users.jsonl.gz":          {"Body": _io.BytesIO(users_gz)},
+        }
+        if Key not in m:
+            from botocore.exceptions import ClientError as _CE
+            raise _CE({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return m[Key]
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = s3_get
+
+    # Cognito mock: create_identity_provider succeeds, list returns
+    # the CDK-managed app client with only COGNITO in SupportedIdPs,
+    # describe returns a minimal but plausible client spec.
+    cognito = MagicMock()
+    cognito.create_identity_provider.return_value = {}
+    cognito.get_paginator.return_value.paginate.return_value = iter([{
+        "UserPoolClients": [{"ClientId": "live-client-id", "ClientName": "my-prefix-bff-app-client"}]
+    }])
+    cognito.describe_user_pool_client.return_value = {"UserPoolClient": {
+        "UserPoolId": "us-west-2_POOL",
+        "ClientId": "live-client-id",
+        "ClientName": "my-prefix-bff-app-client",
+        "SupportedIdentityProviders": ["COGNITO"],
+        "AllowedOAuthFlows": ["code"],
+        "AllowedOAuthScopes": ["openid"],
+        "AllowedOAuthFlowsUserPoolClient": True,
+        "CallbackURLs": ["https://example.com/callback"],
+        "ExplicitAuthFlows": ["ALLOW_REFRESH_TOKEN_AUTH"],
+    }}
+    cognito.update_user_pool_client.return_value = {}
+    # Users path
+    cognito.list_users.return_value = {"Users": []}
+    cognito.list_groups.return_value = {"Groups": []}
+
+    def client_factory(name, **_kw):
+        return s3 if name == "s3" else cognito
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="us-west-2_POOL"):
+        restore.restore_cognito(ctx)
+
+    # The critical assertion: update_user_pool_client must be called
+    # with the restored IdP in SupportedIdentityProviders.
+    cognito.update_user_pool_client.assert_called_once()
+    call_kwargs = cognito.update_user_pool_client.call_args.kwargs
+    assert "ms-entra-id" in call_kwargs["SupportedIdentityProviders"]
+    assert "COGNITO" in call_kwargs["SupportedIdentityProviders"]
+
+
+def test_cognito_restore_skips_idp_wiring_when_already_present():
+    """If the app client already has the IdP in SupportedIdentityProviders
+    (e.g. on a re-run), update_user_pool_client must NOT be called."""
+    import io as _io, json as _json
+
+    idp_json = _json.dumps({"providers": [
+        {"ProviderName": "ms-entra-id", "ProviderType": "OIDC",
+         "ProviderDetails": {"client_id": "abc", "oidc_issuer": "https://issuer", "client_secret": "s"},
+         "AttributeMapping": {}, "IdpIdentifiers": []}
+    ]}).encode()
+    client_json = _json.dumps({"clients": [
+        {"ClientId": "old-id", "ClientName": "my-prefix-bff-app-client"}
+    ]}).encode()
+    users_gz = gzip.compress(b"")
+
+    def s3_get(Bucket, Key):
+        m = {
+            "root/cognito/identity-providers.json": {"Body": _io.BytesIO(idp_json)},
+            "root/cognito/app-clients.json":        {"Body": _io.BytesIO(client_json)},
+            "root/cognito/users.jsonl.gz":          {"Body": _io.BytesIO(users_gz)},
+        }
+        if Key not in m:
+            from botocore.exceptions import ClientError as _CE
+            raise _CE({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return m[Key]
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = s3_get
+    cognito = MagicMock()
+    cognito.create_identity_provider.side_effect = Exception("DuplicateProviderException")
+    cognito.get_paginator.return_value.paginate.return_value = iter([{
+        "UserPoolClients": [{"ClientId": "live-id", "ClientName": "my-prefix-bff-app-client"}]
+    }])
+    cognito.describe_user_pool_client.return_value = {"UserPoolClient": {
+        "UserPoolId": "us-west-2_POOL",
+        "ClientId": "live-id",
+        "SupportedIdentityProviders": ["COGNITO", "ms-entra-id"],  # already wired
+        "AllowedOAuthFlows": ["code"],
+        "AllowedOAuthScopes": ["openid"],
+        "AllowedOAuthFlowsUserPoolClient": True,
+        "ExplicitAuthFlows": ["ALLOW_REFRESH_TOKEN_AUTH"],
+    }}
+    cognito.list_users.return_value = {"Users": []}
+    cognito.list_groups.return_value = {"Groups": []}
+
+    def client_factory(name, **_kw):
+        return s3 if name == "s3" else cognito
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="us-west-2_POOL"):
+        try:
+            restore.restore_cognito(ctx)
+        except Exception:
+            pass  # create_identity_provider intentionally raises above
+
+    cognito.update_user_pool_client.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# _compute_created_username — federated user safe-username minting             #
+# --------------------------------------------------------------------------- #
+def test_compute_created_username_native_user_keeps_original():
+    """Users with no identities (purely native users) must keep their
+    original username — that's a no-behavior-change path for the
+    common case."""
+    assert restore._compute_created_username(
+        original_username="alice",
+        old_sub="abc-uuid",
+        identities=[],
+    ) == "alice"
+
+
+def test_compute_created_username_federated_user_uses_migrated_prefix():
+    """Federated users (non-empty identities) must NOT reuse the
+    original username — that's Cognito's reserved `<provider>_<provider_user_id>`
+    pattern and breaks AdminLinkProviderForUser + the next IdP login.
+    Use a deterministic `migrated-<old-sub>` instead."""
+    assert restore._compute_created_username(
+        original_username="ms-entra-id_someProviderSub",
+        old_sub="OLD-SUB-UUID",
+        identities=[{"providerName": "ms-entra-id", "userId": "someProviderSub"}],
+    ) == "migrated-OLD-SUB-UUID"
+
+
+def test_compute_created_username_falls_back_to_hash_when_old_sub_missing():
+    """If the backup is missing `sub` for a federated user (rare but
+    possible from a partial export), the helper still produces a
+    deterministic, collision-free name by hashing the identity tuple."""
+    name = restore._compute_created_username(
+        original_username="ms-entra-id_someProviderSub",
+        old_sub=None,
+        identities=[{"providerName": "ms-entra-id", "userId": "someProviderSub"}],
+    )
+    assert name.startswith("migrated-")
+    # 'migrated-' + 16 hex chars
+    assert len(name) == len("migrated-") + 16
+    # Determinism: same inputs ⇒ same output
+    name2 = restore._compute_created_username(
+        original_username="ms-entra-id_someProviderSub",
+        old_sub=None,
+        identities=[{"providerName": "ms-entra-id", "userId": "someProviderSub"}],
+    )
+    assert name == name2
+    # Distinct inputs ⇒ distinct outputs
+    other = restore._compute_created_username(
+        original_username="ms-entra-id_anotherSub",
+        old_sub=None,
+        identities=[{"providerName": "ms-entra-id", "userId": "anotherSub"}],
+    )
+    assert name != other
+
+
+def test_compute_created_username_never_matches_federated_pattern():
+    """Cognito reserves usernames matching `<provider>_<provider_user_id>`.
+    The minted name must not look like that pattern — a leading
+    `migrated-` token guarantees it doesn't."""
+    name = restore._compute_created_username(
+        original_username="ms-entra-id_xyz",
+        old_sub="abc-uuid",
+        identities=[{"providerName": "ms-entra-id", "userId": "xyz"}],
+    )
+    # Cognito's reserved pattern is <provider>_<provider_user_id>; a
+    # username starting with `migrated-` and containing a dash before
+    # any underscore won't match how Cognito parses federated names.
+    assert "_" not in name.split("-", 1)[0]
+    assert name.startswith("migrated-")
+
+
+# --------------------------------------------------------------------------- #
+# Federated-user re-run idempotency (post-restore)                            #
+# --------------------------------------------------------------------------- #
+def test_cognito_federated_user_idempotent_rerun_uses_migrated_username():
+    """On re-run of restore against a pool where the federated user was
+    already migrated (under `migrated-<old-sub>`), AdminCreateUser raises
+    UsernameExistsException and the code must fall back to AdminGetUser
+    targeting the SAME `migrated-<old-sub>` name — not the original
+    federated-pattern username from the backup."""
+    user_record = {
+        "Username": "ms-entra-id_someProviderSub",
+        "Attributes": [
+            {"Name": "sub", "Value": "OLD-SUB-UUID"},
+            {"Name": "email", "Value": "u@example.com"},
+            {
+                "Name": "identities",
+                "Value": json.dumps([
+                    {"providerName": "ms-entra-id", "userId": "someProviderSub"}
+                ]),
+            },
+        ],
+    }
+    users_jsonl = json.dumps(user_record) + "\n"
+    users_gz = gzip.compress(users_jsonl.encode("utf-8"))
+
+    s3 = MagicMock()
+    def get_object_side_effect(*, Bucket, Key):
+        if Key.endswith("users.jsonl.gz"):
+            return {"Body": io.BytesIO(users_gz)}
+        from botocore.exceptions import ClientError as _CE
+        raise _CE({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+    s3.get_object.side_effect = get_object_side_effect
+    s3.put_object = MagicMock()
+
+    cognito = MagicMock()
+    from botocore.exceptions import ClientError as _CE
+    cognito.admin_create_user.side_effect = _CE(
+        {"Error": {"Code": "UsernameExistsException", "Message": "User account already exists"}},
+        "AdminCreateUser",
+    )
+    cognito.admin_get_user.return_value = {
+        "UserAttributes": [
+            {"Name": "sub", "Value": "EXISTING-SUB"},
+            {"Name": "email", "Value": "u@example.com"},
+        ]
+    }
+
+    def client_factory(name, *_a, **_kw):
+        return s3 if name == "s3" else cognito
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="us-west-2_test"):
+        restore.restore_cognito(ctx)
+
+    # AdminCreateUser tried with the SAFE migrated-* username.
+    create_kwargs = cognito.admin_create_user.call_args.kwargs
+    assert create_kwargs["Username"] == "migrated-OLD-SUB-UUID"
+
+    # AdminGetUser fallback used the SAME migrated-* username. If we
+    # used the original federated-pattern username here we'd silently
+    # fail to link this user on re-runs.
+    get_kwargs = cognito.admin_get_user.call_args.kwargs
+    assert get_kwargs["Username"] == "migrated-OLD-SUB-UUID"
+
+    # Sub map records old → existing-on-rerun.
+    assert ctx.sub_map == {"OLD-SUB-UUID": "EXISTING-SUB"}
