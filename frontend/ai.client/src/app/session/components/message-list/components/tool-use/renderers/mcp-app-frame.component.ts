@@ -66,9 +66,9 @@ import { SessionService } from '../../../../../services/session/session.service'
     .tool-name-shimmer {
       background-image: linear-gradient(
         90deg,
-        #6b7280 25%,
+        #4b5563 25%,
         #d1d5db 50%,
-        #6b7280 75%
+        #4b5563 75%
       );
       background-size: 200% 100%;
       background-clip: text;
@@ -81,9 +81,9 @@ import { SessionService } from '../../../../../services/session/session.service'
     :host-context(.dark) .tool-name-shimmer {
       background-image: linear-gradient(
         90deg,
-        #9ca3af 25%,
-        #e5e7eb 50%,
-        #9ca3af 75%
+        #d1d5db 25%,
+        #f3f4f6 50%,
+        #d1d5db 75%
       );
     }
 
@@ -100,13 +100,13 @@ import { SessionService } from '../../../../../services/session/session.service'
       .tool-name-shimmer {
         animation: none;
         background-image: none;
-        -webkit-text-fill-color: #6b7280;
-        color: #6b7280;
+        -webkit-text-fill-color: #4b5563;
+        color: #4b5563;
       }
 
       :host-context(.dark) .tool-name-shimmer {
-        -webkit-text-fill-color: #9ca3af;
-        color: #9ca3af;
+        -webkit-text-fill-color: #d1d5db;
+        color: #d1d5db;
       }
     }
 
@@ -140,11 +140,6 @@ import { SessionService } from '../../../../../services/session/session.service'
     }
   `,
   template: `
-    @if (currentPrompt(); as prompt) {
-      <div class="mb-2 flex justify-start">
-        <app-mcp-app-consent-prompt [prompt]="prompt" />
-      </div>
-    }
     @if (canRenderApp()) {
       <div
         [class]="containerClasses()"
@@ -153,37 +148,73 @@ import { SessionService } from '../../../../../services/session/session.service'
         [attr.aria-label]="displayMode() === 'fullscreen' ? 'MCP App, fullscreen' : null"
         (keydown.escape)="exitFullscreen()"
       >
-        @if (displayMode() === 'fullscreen') {
-          <button
-            type="button"
-            class="fixed top-3 right-3 z-[10000] rounded-md bg-gray-900/80 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
-            (click)="exitFullscreen()"
-          >
-            Exit fullscreen
-          </button>
-        }
-
         <!--
           Connected header — the App's provenance (icon + server + tool +
-          status), styled as the iframe's title bar. Hidden in fullscreen
-          (the iframe is a fixed full-viewport overlay then; the header would
-          be stranded behind it).
+          status), styled as the iframe's title bar. Shown in BOTH modes: in
+          fullscreen it doubles as the overlay's title bar and hosts the Exit
+          control, so the exit affordance can't overlap the App's own
+          top-corner chrome (e.g. Excalidraw's toolbar). Inline, the trailing
+          slot instead hosts the request/response details toggle.
         -->
-        @if (displayMode() !== 'fullscreen') {
-          <div
-            class="flex items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
-          >
-            @if (icon() && !iconFailed()) {
-              <img
-                [src]="icon()"
-                [alt]="serverName() + ' icon'"
-                class="size-4 shrink-0 rounded-sm object-contain"
-                (error)="iconFailed.set(true)"
+        <div
+          class="flex shrink-0 items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+        >
+          @if (icon() && !iconFailed()) {
+            <img
+              [src]="icon()"
+              [alt]="serverName() + ' icon'"
+              class="size-4 shrink-0 rounded-sm object-contain"
+              (error)="iconFailed.set(true)"
+            />
+          } @else {
+            <!-- Generic MCP/app glyph fallback -->
+            <svg
+              class="size-4 shrink-0 text-gray-400 dark:text-gray-500"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden="true"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M4 7l8-4 8 4v10l-8 4-8-4V7zm8-4v18m8-14l-8 4-8-4"
               />
-            } @else {
-              <!-- Generic MCP/app glyph fallback -->
+            </svg>
+          }
+
+          @if (serverName()) {
+            <span
+              class="shrink-0 text-sm font-medium text-gray-700 dark:text-gray-200"
+              >{{ serverName() }}</span
+            >
+            <span class="shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true"
+              >·</span
+            >
+          }
+
+          <span
+            class="min-w-0 truncate font-mono text-sm text-gray-600 dark:text-gray-300"
+            [class.tool-name-shimmer]="isRunning()"
+            >{{ displayToolName() }}</span
+          >
+
+          @if (isError()) {
+            <span
+              class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
+              >Failed</span
+            >
+          }
+
+          @if (displayMode() === 'fullscreen') {
+            <button
+              type="button"
+              class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+              (click)="exitFullscreen()"
+            >
               <svg
-                class="size-4 shrink-0 text-gray-400 dark:text-gray-500"
+                class="size-4"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -193,37 +224,15 @@ import { SessionService } from '../../../../../services/session/session.service'
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  d="M4 7l8-4 8 4v10l-8 4-8-4V7zm8-4v18m8-14l-8 4-8-4"
+                  d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25"
                 />
               </svg>
-            }
-
-            @if (serverName()) {
-              <span
-                class="shrink-0 text-sm font-medium text-gray-700 dark:text-gray-200"
-                >{{ serverName() }}</span
-              >
-              <span class="shrink-0 text-gray-300 dark:text-gray-600" aria-hidden="true"
-                >·</span
-              >
-            }
-
-            <span
-              class="min-w-0 truncate font-mono text-sm text-gray-500 dark:text-gray-400"
-              [class.tool-name-shimmer]="isRunning()"
-              >{{ displayToolName() }}</span
-            >
-
-            @if (isError()) {
-              <span
-                class="shrink-0 text-xs font-medium text-red-600 dark:text-red-400"
-                >Failed</span
-              >
-            }
-
+              Exit fullscreen
+            </button>
+          } @else {
             <button
               type="button"
-              class="ml-auto shrink-0 rounded-sm p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              class="ml-auto shrink-0 rounded-sm p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               [attr.aria-expanded]="detailsExpanded()"
               [attr.aria-label]="
                 detailsExpanded() ? 'Hide request and response' : 'Show request and response'
@@ -245,41 +254,56 @@ import { SessionService } from '../../../../../services/session/session.service'
                 />
               </svg>
             </button>
-          </div>
+          }
+        </div>
 
-          @if (detailsExpanded()) {
-            <div
-              class="space-y-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
-            >
+        @if (displayMode() !== 'fullscreen' && detailsExpanded()) {
+          <div
+            class="space-y-2 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <div>
+              <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                Request
+              </div>
+              <pre
+                class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
+              ><code [innerHTML]="requestJson() | jsonSyntaxHighlight"></code></pre>
+            </div>
+            @if (responseText()) {
               <div>
-                <div class="mb-1 text-xs font-medium text-gray-700 dark:text-gray-300">
-                  Request
+                <div
+                  class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
+                >
+                  <span>Response</span>
+                  @if (isError()) {
+                    <span class="text-red-600 dark:text-red-400">(Error)</span>
+                  }
                 </div>
                 <pre
                   class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
-                ><code [innerHTML]="requestJson() | jsonSyntaxHighlight"></code></pre>
+                ><code [innerHTML]="responseText() | jsonSyntaxHighlight"></code></pre>
               </div>
-              @if (responseText()) {
-                <div>
-                  <div
-                    class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    <span>Response</span>
-                    @if (isError()) {
-                      <span class="text-red-600 dark:text-red-400">(Error)</span>
-                    }
-                  </div>
-                  <pre
-                    class="overflow-x-auto rounded-sm border border-gray-300 bg-gray-100 p-2 font-mono text-xs dark:border-gray-600 dark:bg-gray-900"
-                  ><code [innerHTML]="responseText() | jsonSyntaxHighlight"></code></pre>
-                </div>
-              }
-            </div>
-          }
+            }
+          </div>
+        }
+
+        <!--
+          App-initiated consent (e.g. ui/open-link from "Open in
+          Excalidraw"). Rendered INSIDE the frame, below the title bar and
+          above the iframe, so it lives within the fullscreen overlay — a
+          prompt left outside the overlay is painted over by it (z-[9999]),
+          so the user can never grant it and the App's request hangs (the
+          export button stuck on "exporting…"). shrink-0 keeps it from being
+          squeezed in the fullscreen flex column.
+        -->
+        @if (currentPrompt(); as prompt) {
+          <div class="shrink-0 px-3 py-2">
+            <app-mcp-app-consent-prompt [prompt]="prompt" />
+          </div>
         }
 
         @if (proxyUrl(); as url) {
-          <div #host class="block"></div>
+          <div #host [class]="hostClasses()"></div>
         } @else {
           <!-- App HTML still loading (between the header shell and the full
                ui_resource). A skeleton sized to the frame so the card doesn't
@@ -372,22 +396,39 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * Current display mode. The App requests changes via
    * `ui/request-display-mode` (routed through the bridge); the user can
    * leave fullscreen via the Exit button or Escape. In `fullscreen` the
-   * iframe ITSELF is promoted to a fixed full-viewport overlay (see the
-   * style effect) — sizing it via its own insets avoids a percentage-height
-   * chain, and a CSS change (unlike a DOM move) never reloads the iframe, so
-   * the running App keeps its state.
+   * CONTAINER becomes a fixed full-viewport flex column (title bar + iframe)
+   * and the iframe absolute-fills its flex-1 host below the header (see the
+   * style effect) — keeping the header visible so the Exit control lives in a
+   * title bar instead of a floating chip that overlaps the App's own
+   * top-corner chrome. Toggling mode only changes CSS (no DOM move), so the
+   * running App never reloads and keeps its state.
    */
   protected readonly displayMode = signal<DisplayMode>('inline');
 
   /**
-   * Outer wrapper classes. In fullscreen the iframe is lifted out of flow
-   * (fixed), so the wrapper collapses behind the overlay — drop its border
-   * and rounding so nothing peeks through.
+   * Outer wrapper classes. In fullscreen the wrapper IS the overlay: a fixed
+   * full-viewport flex column holding the title bar (the connected header)
+   * above the iframe's flex-1 host. Inline it's the bordered, rounded card.
+   * Both carry `dark:bg-gray-900` so the header's translucent dark fill
+   * composites over the same surface in either mode — an inline card left
+   * `bg-white` in dark mode turned the header a muddy mid-grey and dropped
+   * the tool name to ~1.5:1 (grey-on-grey).
    */
   protected readonly containerClasses = computed(() =>
     this.displayMode() === 'fullscreen'
-      ? 'relative'
-      : 'relative overflow-hidden rounded-sm border border-gray-300 bg-white dark:border-gray-600',
+      ? 'fixed inset-0 z-[9999] flex flex-col bg-white dark:bg-gray-900'
+      : 'relative overflow-hidden rounded-sm border border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-900',
+  );
+
+  /**
+   * Classes for the iframe's host div. In fullscreen it's the flex-1 region
+   * below the title bar that the iframe absolute-fills; inline it's a plain
+   * block sized by the iframe's own height.
+   */
+  protected readonly hostClasses = computed(() =>
+    this.displayMode() === 'fullscreen'
+      ? 'relative min-h-0 flex-1 overflow-hidden'
+      : 'block',
   );
 
   private bridge: McpAppBridge | null = null;
@@ -548,8 +589,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   }
 
   /** Id of this frame's currently-open consent prompt (`ui/open-link`),
-   *  rendered inline above the iframe instead of in an unanchored
-   *  message-list strip. */
+   *  rendered inside the frame (below the title bar, above the iframe) so it
+   *  stays anchored to the App and visible in fullscreen — where the frame is
+   *  a fixed overlay and a prompt rendered outside it would be occluded,
+   *  leaving the App's request unanswerable. */
   private readonly openPromptId = signal<string | null>(null);
   protected readonly currentPrompt = computed(() => {
     const id = this.openPromptId();
@@ -672,8 +715,8 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       const allow = this.allowAttr();
       if (allow) iframe.setAttribute('allow', allow);
       // Width/height/position are driven entirely by the style effect below
-      // (so fullscreen can promote the iframe itself to a fixed overlay
-      // without a `w-full` class fighting the inset sizing).
+      // (so fullscreen can absolute-fill the iframe within its host without a
+      // `w-full` class fighting the inset sizing).
       iframe.className = 'block border-0 bg-white';
       iframe.style.width = '100%';
       iframe.style.height = `${this.frameHeight()}px`;
@@ -690,28 +733,28 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     });
     // Size + position the iframe per display mode. Inline: a normal block
     // tracking the App's reported height (`size-changed`). Fullscreen: the
-    // iframe itself becomes a fixed full-viewport overlay at z-[9999] (the
-    // app's top modal layer — matching the image/markdown lightboxes).
+    // iframe absolute-fills its flex-1 host below the title bar (the container
+    // is the fixed full-viewport overlay at z-[9999] — see `containerClasses`).
     //
     // An <iframe> is a REPLACED element: with width/height:auto it falls back
     // to its intrinsic size (~300x150) and ignores right/bottom insets, so
-    // `inset:0` alone leaves a small sliver. It must get explicit dimensions.
-    // `100%` resolves against the viewport (the ICB is the fixed containing
-    // block) and, unlike `100vw/100vh`, excludes the scrollbar gutter.
+    // `inset:0` alone leaves a small sliver. It must get explicit dimensions;
+    // `100%` resolves against the host's used height (definite via flex-1 +
+    // min-h-0) and excludes the page scrollbar gutter.
     effect(() => {
       const h = this.frameHeight();
       const mode = this.displayMode();
       const el = this.iframeEl;
       if (!el) return;
       if (mode === 'fullscreen') {
-        el.style.position = 'fixed';
+        el.style.position = 'absolute';
         el.style.top = '0';
         el.style.left = '0';
         el.style.right = '';
         el.style.bottom = '';
         el.style.width = '100%';
         el.style.height = '100%';
-        el.style.zIndex = '9999';
+        el.style.zIndex = '';
       } else {
         el.style.position = '';
         el.style.top = '';
