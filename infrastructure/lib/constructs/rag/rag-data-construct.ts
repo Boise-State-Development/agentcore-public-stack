@@ -150,11 +150,20 @@ export class RagDataConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // SSM publications
+    // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
+    new ssm.StringParameter(this, 'RagAssistantsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/rag/assistants-table-name`,
+      stringValue: this.assistantsTable.tableName,
+      description: 'RAG assistants table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-
-
-
+    new ssm.StringParameter(this, 'RagDocumentsBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/rag/documents-bucket-name`,
+      stringValue: this.documentsBucket.bucketName,
+      description: 'RAG documents S3 bucket name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

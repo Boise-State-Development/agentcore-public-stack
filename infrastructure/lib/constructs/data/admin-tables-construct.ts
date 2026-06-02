@@ -52,6 +52,20 @@ export class AdminTablesConstruct extends Construct {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
+    // ── SSM publications (consumed by restore tooling, app-api runtime) ──
+    new ssm.StringParameter(this, 'UserSettingsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/settings/user-settings-table-name`,
+      stringValue: this.userSettingsTable.tableName,
+      description: 'User settings table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserMenuLinksTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/admin/user-menu-links-table-name`,
+      stringValue: this.userMenuLinksTable.tableName,
+      description: 'User menu links table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

@@ -129,8 +129,20 @@ export class FileUploadConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // ── SSM publications (consumed by restore tooling, app-api runtime) ──
+    new ssm.StringParameter(this, 'FileUploadTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/user-file-uploads/table-name`,
+      stringValue: this.table.tableName,
+      description: 'User file uploads table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-
+    new ssm.StringParameter(this, 'FileUploadBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/user-file-uploads/bucket-name`,
+      stringValue: this.bucket.bucketName,
+      description: 'User file uploads S3 bucket name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

@@ -157,6 +157,20 @@ export class AuthTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
+    new ssm.StringParameter(this, 'UsersTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/users/users-table-name`,
+      stringValue: this.usersTable.tableName,
+      description: 'Users table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'ApiKeysTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/auth/api-keys-table-name`,
+      stringValue: this.apiKeysTable.tableName,
+      description: 'API keys table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

@@ -124,10 +124,27 @@ export class FineTuningDataConstruct extends Construct {
       ],
     });
 
+    // ── SSM publications (consumed by restore tooling, app-api runtime) ──
+    new ssm.StringParameter(this, 'FineTuningJobsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/fine-tuning/jobs-table-name`,
+      stringValue: this.jobsTable.tableName,
+      description: 'Fine-tuning jobs table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
+    new ssm.StringParameter(this, 'FineTuningAccessTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/fine-tuning/access-table-name`,
+      stringValue: this.accessTable.tableName,
+      description: 'Fine-tuning access table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-
-
+    new ssm.StringParameter(this, 'FineTuningDataBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/fine-tuning/data-bucket-name`,
+      stringValue: this.dataBucket.bucketName,
+      description: 'Fine-tuning data S3 bucket name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

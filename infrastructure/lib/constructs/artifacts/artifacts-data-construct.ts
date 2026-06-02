@@ -99,8 +99,20 @@ export class ArtifactsDataConstruct extends Construct {
       autoDeleteObjects: getAutoDeleteObjects(config),
     });
 
+    // ── SSM publications (consumed by restore tooling, app-api runtime) ──
+    new ssm.StringParameter(this, 'ArtifactsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/artifacts/table-name`,
+      stringValue: this.table.tableName,
+      description: 'Artifacts table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-
+    new ssm.StringParameter(this, 'ArtifactsBucketNameParameter', {
+      parameterName: `/${config.projectPrefix}/artifacts/bucket-name`,
+      stringValue: this.bucket.bucketName,
+      description: 'Artifacts content S3 bucket name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

@@ -90,11 +90,20 @@ export class OAuthTablesConstruct extends Construct {
       },
     );
 
-    // SSM publications
+    // ── SSM publications (consumed by restore tooling, app-api/inference-api runtime) ──
+    new ssm.StringParameter(this, 'OAuthProvidersTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/providers-table-name`,
+      stringValue: this.providersTable.tableName,
+      description: 'OAuth providers table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
-
-
-
+    new ssm.StringParameter(this, 'OAuthUserTokensTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/oauth/user-tokens-table-name`,
+      stringValue: this.userTokensTable.tableName,
+      description: 'OAuth user tokens table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

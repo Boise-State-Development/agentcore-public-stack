@@ -62,6 +62,12 @@ export class SharedConversationsConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    new ssm.StringParameter(this, 'SharedConversationsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/shares/shared-conversations-table-name`,
+      stringValue: this.table.tableName,
+      description: 'Shared conversations table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

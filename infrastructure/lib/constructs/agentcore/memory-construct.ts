@@ -143,6 +143,12 @@ export class AgentCoreMemoryConstruct extends Construct {
     memoryTracesDelivery.node.addDependency(memoryTracesSource);
     memoryTracesDelivery.node.addDependency(memoryTracesDestination);
 
-    // ── SSM publications ──
+    // ── SSM publications (consumed by restore tooling, runtime container env) ──
+    new ssm.StringParameter(this, 'MemoryIdParameter', {
+      parameterName: `/${config.projectPrefix}/inference-api/memory-id`,
+      stringValue: this.memoryId,
+      description: 'AgentCore Memory ID',
+      tier: ssm.ParameterTier.STANDARD,
+    });
   }
 }
