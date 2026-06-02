@@ -173,8 +173,8 @@ With the old stacks gone and retained resources cleaned up, deploy the new singl
 
 This provisions all infrastructure in a single `PlatformStack` — VPC, ALB, DynamoDB tables, S3 buckets, Cognito, CloudFront, AgentCore, ECS, Lambdas, everything.
 
-4. After Platform succeeds, run **Backend Stack** to build and deploy application code:
-   - Go to **Actions** → **Backend Stack** → **Run workflow**
+4. After Platform succeeds, run **Backend Deploy** to build and deploy application code:
+   - Go to **Actions** → **Backend Deploy** → **Run workflow**
    - This builds Docker images, pushes to ECR, and updates ECS/Lambda/Runtime
 
 5. Run **Frontend Deploy** to deploy the Angular SPA:
