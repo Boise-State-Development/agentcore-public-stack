@@ -1166,3 +1166,19 @@ def test_deserialize_dynamodb_json_passes_through_non_binary_unchanged():
     assert result["missing"] is None
     assert result["tags"] == {"a", "b"}
     assert result["scores"] == {Decimal("1"), Decimal("2")}
+
+
+def test_boto_config_pool_size_covers_thread_workers():
+    """The BOTO_CONFIG max_pool_connections must be >= the
+    ThreadPoolExecutor worker count used by the S3 and Memory restore
+    paths; otherwise urllib3 emits "Connection pool is full, discarding
+    connection" warnings under load (no data loss but lots of wasted
+    TLS handshakes). Pinned here so a future BOTO_CONFIG edit doesn't
+    silently regress."""
+    pool_size = restore.BOTO_CONFIG.max_pool_connections
+    assert pool_size is not None
+    # The S3 copy and Memory replay paths both use max_workers=16.
+    assert pool_size >= 16, (
+        f"BOTO_CONFIG.max_pool_connections={pool_size} is below the "
+        f"ThreadPoolExecutor max_workers=16 used by S3 / Memory restore."
+    )

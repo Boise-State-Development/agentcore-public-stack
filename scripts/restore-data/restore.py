@@ -64,6 +64,16 @@ LOG = logging.getLogger("restore")
 BOTO_CONFIG = BotoConfig(
     retries={"max_attempts": 10, "mode": "adaptive"},
     user_agent_extra="agentcore-restore/1.0",
+    # urllib3's default connection pool size is 10. The restore tool runs
+    # S3 copies and AgentCore Memory replays through a ThreadPoolExecutor
+    # with max_workers=16, so the default cap was forcing every request
+    # past the 10th to open a fresh TCP+TLS connection and discard it
+    # afterwards (the urllib3 "Connection pool is full, discarding
+    # connection" warnings). No data was lost — every request still
+    # completed — but the lack of connection reuse hurts throughput.
+    # Bump comfortably above max_workers so multi-call operations
+    # (e.g. CopyObject + tag fetch) and any side clients also fit.
+    max_pool_connections=32,
 )
 
 # Maps backup logical names → SSM parameter paths for the target table names.
