@@ -1,0 +1,101 @@
+name: Frontend Deploy
+
+on:
+  workflow_dispatch:
+  # ----------------------------------------------------------------- #
+  # TEMPORARY: push triggers disabled to give downstream forks a buffer
+  # to absorb the platform-as-bootstrap refactor + cross-pool sub-remap
+  # restore changes. Re-enable by uncommenting the block below.
+  # ----------------------------------------------------------------- #
+  # push:
+  #   branches: [develop, main]
+  #   paths:
+  #     - 'frontend/**'
+  #     - 'scripts/frontend/**'
+
+permissions:
+  contents: read
+
+env:
+  LOAD_ENV_QUIET: true
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-frontend:
+    name: Test frontend (ng test)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/ai.client/package-lock.json
+      - name: Install
+        working-directory: frontend/ai.client
+        run: npm ci --prefer-offline
+      - name: Run tests
+        working-directory: frontend/ai.client
+        run: npm run test:ci
+
+  build:
+    name: Build SPA
+    needs: test-frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Build SPA
+        run: bash scripts/frontend/build.sh
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-dist
+          path: frontend/ai.client/dist/ai.client/
+          retention-days: 1
+
+  deploy:
+    name: Deploy to S3 + CloudFront
+    needs: [build, test-frontend]
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: frontend-dist
+          path: frontend/ai.client/dist/ai.client/
+
+      - name: Sync to S3 and invalidate CloudFront
+        run: bash scripts/frontend/deploy.sh

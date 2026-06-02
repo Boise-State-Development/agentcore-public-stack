@@ -114,6 +114,13 @@ dist/
 build/
 target/
 
+# Re-include scripts/build/ — that directory holds the content-hash-aware
+# Docker build pipeline (compute-content-hash.sh, build-and-push-if-changed.sh,
+# build-all-images.sh), which is source code, not a build artifact. The
+# unqualified `build/` rules above otherwise match it.
+!scripts/build/
+!scripts/build/**
+
 # Misc
 .cache/
 .parcel-cache/
@@ -134,3 +141,5 @@ backend/start_app_api.ps1
 backend/start_inference_api.ps1
 scripts/stack-bootstrap/install.sh
 test-accounts
+manifest.json
+manifest.json:Zone.Identifier

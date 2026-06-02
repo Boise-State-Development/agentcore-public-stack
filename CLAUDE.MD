@@ -24,15 +24,18 @@ npm test         # Tests (Vitest via Analog.js)
 ### Infrastructure
 ```bash
 cd infrastructure
-npm install
-npm run build
+npm ci
+npx tsc --noEmit
+npx jest
 npx cdk synth
-npx cdk deploy --all
+npx cdk deploy {prefix}-PlatformStack
 ```
 
 ## Key Conventions
 
-- **Deploy order:** Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts, MCP Sandbox — parallel-safe) → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API; Inference API + App API + Frontend conditionally consume `/{prefix}/artifacts/*` SSM params when `CDK_ARTIFACTS_ENABLED=true`; Inference API conditionally consumes `/{prefix}/mcp-sandbox/origin` into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` when `CDK_MCP_SANDBOX_ENABLED=true`)
+- **Single CDK stack.** All AWS resources live in `PlatformStack`. There are no cross-stack dependencies to manage and no other CDK stack to deploy in a particular order. Application code is shipped out-of-band by `backend.yml` via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update), not via CDK.
+- **Deploy order:** `platform.yml` (CDK) when infra changes → `backend.yml` (parallel per-image: app-api, inference-api, rag-ingestion, artifact-render) → `frontend-deploy.yml` (S3 + CloudFront). Bootstrap data seeding is a one-time post-deploy step. Day-to-day backend code changes only run `backend.yml`.
+- **Compute image URIs are read from SSM at CFN deploy time** (`/<prefix>/app-api/image-tag`, `/<prefix>/inference-api/image-tag`). The build pipeline owns those parameters; CFN always picks up the latest live image when re-registering the task def or Runtime, so infra-only deploys never revert a live service to the bootstrap stub.
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
@@ -80,8 +83,9 @@ Today A2A is **client-only** — `A2AAgentConfig` (`apis/shared/tools/models.py`
 | New admin endpoint | `backend/src/apis/app_api/admin/<domain>/` |
 | New agent tool | `backend/src/agents/main_agent/tools/` + register in `__init__.py` |
 | New Angular page | `frontend/ai.client/src/app/<feature>/` |
-| New CDK stack | `infrastructure/lib/<stack-name>-stack.ts` (also: register in `test/stack-dependencies.test.ts` with a tier, add scripts in `scripts/stack-<name>/`, add a workflow in `.github/workflows/`, update `step-04-deploy.md`) |
-| New Lambda for an infra stack | `backend/src/lambdas/<lambda-name>/` (one folder per Lambda; not part of the `apis/` import boundary) |
+| New CDK construct | `infrastructure/lib/constructs/<area>/` (compose into `PlatformStack` via `lib/platform-stack.ts`; if it needs to expose values to compute constructs, thread them through `PlatformComputeRefs` rather than via SSM) |
+| Note: there are no separate CDK *stacks* anymore — every resource lives in the single `PlatformStack`. |
+| New Lambda for an infra construct | `backend/src/lambdas/<lambda-name>/` (one folder per Lambda; not part of the `apis/` import boundary) |
 | Shared backend code | `backend/src/apis/shared/<domain>/` |
 
 ### Inference API boundary

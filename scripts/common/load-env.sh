@@ -115,9 +115,6 @@ build_cdk_context_params() {
     fi
     
     # App API optional parameters
-    if [ -n "${CDK_APP_API_ENABLED:-}" ]; then
-        context_params="${context_params} --context appApi.enabled=\"${CDK_APP_API_ENABLED}\""
-    fi
     if [ -n "${CDK_APP_API_CPU:-}" ]; then
         context_params="${context_params} --context appApi.cpu=\"${CDK_APP_API_CPU}\""
     fi
@@ -130,49 +127,12 @@ build_cdk_context_params() {
     if [ -n "${CDK_APP_API_MAX_CAPACITY:-}" ]; then
         context_params="${context_params} --context appApi.maxCapacity=\"${CDK_APP_API_MAX_CAPACITY}\""
     fi
-    
+
     # Inference API optional parameters
-    if [ -n "${CDK_INFERENCE_API_ENABLED:-}" ]; then
-        context_params="${context_params} --context inferenceApi.enabled=\"${CDK_INFERENCE_API_ENABLED}\""
-    fi
-    if [ -n "${CDK_INFERENCE_API_CPU:-}" ]; then
-        context_params="${context_params} --context inferenceApi.cpu=\"${CDK_INFERENCE_API_CPU}\""
-    fi
-    if [ -n "${CDK_INFERENCE_API_MEMORY:-}" ]; then
-        context_params="${context_params} --context inferenceApi.memory=\"${CDK_INFERENCE_API_MEMORY}\""
-    fi
-    if [ -n "${CDK_INFERENCE_API_DESIRED_COUNT:-}" ]; then
-        context_params="${context_params} --context inferenceApi.desiredCount=\"${CDK_INFERENCE_API_DESIRED_COUNT}\""
-    fi
-    if [ -n "${CDK_INFERENCE_API_MAX_CAPACITY:-}" ]; then
-        context_params="${context_params} --context inferenceApi.maxCapacity=\"${CDK_INFERENCE_API_MAX_CAPACITY}\""
-    fi
-    
-    # Inference API environment variables
-    if [ -n "${ENV_INFERENCE_API_LOG_LEVEL:-}" ]; then
-        context_params="${context_params} --context inferenceApi.logLevel=\"${ENV_INFERENCE_API_LOG_LEVEL}\""
+    if [ -n "${CDK_INFERENCE_API_CORS_ORIGINS:-}" ]; then
+        context_params="${context_params} --context inferenceApi.additionalCorsOrigins=\"${CDK_INFERENCE_API_CORS_ORIGINS}\""
     fi
 
-    # Gateway optional parameters
-    if [ -n "${CDK_GATEWAY_ENABLED:-}" ]; then
-        context_params="${context_params} --context gateway.enabled=\"${CDK_GATEWAY_ENABLED}\""
-    fi
-    if [ -n "${CDK_GATEWAY_API_TYPE:-}" ]; then
-        context_params="${context_params} --context gateway.apiType=\"${CDK_GATEWAY_API_TYPE}\""
-    fi
-    if [ -n "${CDK_GATEWAY_THROTTLE_RATE_LIMIT:-}" ]; then
-        context_params="${context_params} --context gateway.throttleRateLimit=\"${CDK_GATEWAY_THROTTLE_RATE_LIMIT}\""
-    fi
-    if [ -n "${CDK_GATEWAY_THROTTLE_BURST_LIMIT:-}" ]; then
-        context_params="${context_params} --context gateway.throttleBurstLimit=\"${CDK_GATEWAY_THROTTLE_BURST_LIMIT}\""
-    fi
-    if [ -n "${CDK_GATEWAY_ENABLE_WAF:-}" ]; then
-        context_params="${context_params} --context gateway.enableWaf=\"${CDK_GATEWAY_ENABLE_WAF}\""
-    fi
-    if [ -n "${CDK_GATEWAY_LOG_LEVEL:-}" ]; then
-        context_params="${context_params} --context gateway.logLevel=\"${CDK_GATEWAY_LOG_LEVEL}\""
-    fi
-    
     # Domain name — top-level context key (used by config.ts as config.domainName)
     if [ -n "${CDK_DOMAIN_NAME:-}" ]; then
         context_params="${context_params} --context domainName=\"${CDK_DOMAIN_NAME}\""
@@ -180,20 +140,14 @@ build_cdk_context_params() {
     if [ -n "${CDK_FRONTEND_CERTIFICATE_ARN:-}" ]; then
         context_params="${context_params} --context frontend.certificateArn=\"${CDK_FRONTEND_CERTIFICATE_ARN}\""
     fi
-    if [ -n "${CDK_FRONTEND_ENABLED:-}" ]; then
-        context_params="${context_params} --context frontend.enabled=\"${CDK_FRONTEND_ENABLED}\""
-    fi
     if [ -n "${CDK_FRONTEND_BUCKET_NAME:-}" ]; then
         context_params="${context_params} --context frontend.bucketName=\"${CDK_FRONTEND_BUCKET_NAME}\""
     fi
     if [ -n "${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS:-}" ]; then
         context_params="${context_params} --context frontend.cloudFrontPriceClass=\"${CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS}\""
     fi
-    
+
     # RAG Ingestion optional parameters
-    if [ -n "${CDK_RAG_ENABLED:-}" ]; then
-        context_params="${context_params} --context ragIngestion.enabled=\"${CDK_RAG_ENABLED}\""
-    fi
     if [ -n "${CDK_RAG_LAMBDA_MEMORY:-}" ]; then
         context_params="${context_params} --context ragIngestion.lambdaMemorySize=\"${CDK_RAG_LAMBDA_MEMORY}\""
     fi
@@ -201,15 +155,7 @@ build_cdk_context_params() {
         context_params="${context_params} --context ragIngestion.lambdaTimeout=\"${CDK_RAG_LAMBDA_TIMEOUT}\""
     fi
 
-    # SageMaker Fine-Tuning optional parameters
-    if [ -n "${CDK_FINE_TUNING_ENABLED:-}" ]; then
-        context_params="${context_params} --context fineTuning.enabled=\"${CDK_FINE_TUNING_ENABLED}\""
-    fi
-
     # Artifacts optional parameters
-    if [ -n "${CDK_ARTIFACTS_ENABLED:-}" ]; then
-        context_params="${context_params} --context artifacts.enabled=\"${CDK_ARTIFACTS_ENABLED}\""
-    fi
     if [ -n "${CDK_ARTIFACTS_CERTIFICATE_ARN:-}" ]; then
         context_params="${context_params} --context artifacts.certificateArn=\"${CDK_ARTIFACTS_CERTIFICATE_ARN}\""
     fi
@@ -276,15 +222,10 @@ export CDK_CORS_ORIGINS="${CDK_CORS_ORIGINS:-$(get_json_value "corsOrigins" "${C
 export CDK_FILE_UPLOAD_MAX_SIZE_MB="${CDK_FILE_UPLOAD_MAX_SIZE_MB:-$(get_json_value "fileUpload.maxFileSizeBytes" "${CONTEXT_FILE}")}"
 
 # RAG Ingestion configuration
-export CDK_RAG_ENABLED="${CDK_RAG_ENABLED:-$(get_json_value "ragIngestion.enabled" "${CONTEXT_FILE}")}"
 export CDK_RAG_LAMBDA_MEMORY="${CDK_RAG_LAMBDA_MEMORY:-$(get_json_value "ragIngestion.lambdaMemorySize" "${CONTEXT_FILE}")}"
 export CDK_RAG_LAMBDA_TIMEOUT="${CDK_RAG_LAMBDA_TIMEOUT:-$(get_json_value "ragIngestion.lambdaTimeout" "${CONTEXT_FILE}")}"
 
-# SageMaker Fine-Tuning configuration
-export CDK_FINE_TUNING_ENABLED="${CDK_FINE_TUNING_ENABLED:-$(get_json_value "fineTuning.enabled" "${CONTEXT_FILE}")}"
-
 # Artifacts configuration
-export CDK_ARTIFACTS_ENABLED="${CDK_ARTIFACTS_ENABLED:-$(get_json_value "artifacts.enabled" "${CONTEXT_FILE}")}"
 export CDK_ARTIFACTS_CERTIFICATE_ARN="${CDK_ARTIFACTS_CERTIFICATE_ARN:-$(get_json_value "artifacts.certificateArn" "${CONTEXT_FILE}")}"
 export CDK_ARTIFACTS_RETENTION_DAYS="${CDK_ARTIFACTS_RETENTION_DAYS:-$(get_json_value "artifacts.retentionDays" "${CONTEXT_FILE}")}"
 
@@ -299,9 +240,14 @@ export CDK_AWS_ACCOUNT="${CDK_AWS_ACCOUNT:-${CDK_CONTEXT_ACCOUNT:-${CDK_DEFAULT_
 export CDK_DEFAULT_ACCOUNT="${CDK_AWS_ACCOUNT}"
 export CDK_DEFAULT_REGION="${CDK_AWS_REGION}"
 
-# Validate required configuration
-if ! validate_required_vars; then
-    return 1 2>/dev/null || exit 1
+# Validate required configuration. Some callers (notably the
+# frontend build, which produces a static Angular bundle and never
+# touches AWS) can opt out by setting LOAD_ENV_SKIP_AWS_VALIDATION=1
+# before sourcing this script.
+if [ "${LOAD_ENV_SKIP_AWS_VALIDATION:-false}" != "true" ] && [ "${LOAD_ENV_SKIP_AWS_VALIDATION:-0}" != "1" ]; then
+    if ! validate_required_vars; then
+        return 1 2>/dev/null || exit 1
+    fi
 fi
 
 # Validate configuration

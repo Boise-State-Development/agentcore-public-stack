@@ -28,17 +28,18 @@ npx eslint src/ && npx prettier --check src/
 
 ### Infrastructure (`cd infrastructure`)
 ```bash
-npm ci && npm run build
-npx cdk synth                          # validates stacks
-npx cdk deploy --all
-npm test -- test/stack-dependencies.test.ts   # verifies new stacks are registered
+npm ci && npx tsc --noEmit
+npx jest                                          # CDK construct + stack tests
+npx cdk synth                                     # validates the stack
+npx cdk deploy {prefix}-PlatformStack             # deploy the single stack
 ```
 
 ## Architecture — the big picture
 
 - **Three independent backend consumers** of `apis.shared`: `app_api`, `inference_api`, and `agents/`. They must **never import from each other** — only from `apis.shared`. Enforced by `backend/tests/architecture/test_import_boundaries.py`.
 - **Inference API runs inside an AgentCore Runtime container.** The runtime data plane only proxies `POST /invocations` and `GET /ping` — any other route returns 404 in cloud (works locally because `localhost:8001` bypasses the gateway). User-facing CRUD endpoints **belong in app-api**, not inference-api. To get workload context on app-api, use the `AGENTCORE_RUNTIME_WORKLOAD_NAME` mint fallback in `apis/shared/oauth/agentcore_identity.py`.
-- **Deploy order** (cross-stack SSM references): Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts, MCP Sandbox in parallel) → Inference API → App API → Frontend. App API reads `runtime-workload-identity-name` from SSM, published by Inference API.
+- **Single CDK stack.** All AWS resources live in one `PlatformStack` (`infrastructure/lib/platform-stack.ts`). No cross-stack SSM references between CDK stacks; values that flow between constructs go through the typed `PlatformComputeRefs` interface.
+- **Deploy order:** `platform.yml` (CDK, only when infra changes) → `backend.yml` (per-image build + AWS-API code deploy: app-api, inference-api, rag-ingestion, artifact-render in parallel) → `frontend-deploy.yml` (S3 sync + CloudFront invalidation). Day-to-day code changes only re-run `backend.yml`. Compute image URIs are read from SSM at CFN deploy time (`/{prefix}/app-api/image-tag`, `/{prefix}/inference-api/image-tag`) so any task-def or Runtime property change picks up whatever image the build pipeline most recently pushed.
 - **Errors stream as assistant messages over SSE**, not HTTP error codes. See SSE event table in `CLAUDE.MD` (`message_start`, `content_block_*`, `tool_use`/`tool_result`, `ui_resource`, `stream_error`, `oauth_required`, `compaction`, `done`).
 - **Multi-protocol tools:** direct/AWS-SDK tools live in `agents/main_agent/tools/`; remote tools come via MCP+SigV4 (Gateway Lambda) or A2A (Runtime). A2A is currently **client-only**; if exposing an A2A server, `capabilities` must include `streaming=True` or clients hang.
 - **Frontend is signal-based** throughout (`signal()`, `computed()`). API shapes are defined by backend routes; matching TS interfaces must be updated in the same PR as breaking backend changes.
@@ -63,7 +64,7 @@ npm test -- test/stack-dependencies.test.ts   # verifies new stacks are register
 | Shared backend code | `backend/src/apis/shared/<domain>/` |
 | Lambda for an infra stack | `backend/src/lambdas/<lambda-name>/` (not part of `apis/` boundary) |
 | Angular page | `frontend/ai.client/src/app/<feature>/` |
-| New CDK stack | `infrastructure/lib/<stack-name>-stack.ts` — also register in `test/stack-dependencies.test.ts` with a tier, add `scripts/stack-<name>/`, add a workflow under `.github/workflows/`, update `.github/docs/deploy/step-04-deploy.md` |
+| New CDK construct | `infrastructure/lib/constructs/<area>/<name>-construct.ts` — compose into `PlatformStack` (`lib/platform-stack.ts`); if it exposes values to compute constructs, thread them through `PlatformComputeRefs` rather than SSM. There are no separate CDK *stacks* anymore. |
 
 ## Debugging cheatsheet
 

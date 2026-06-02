@@ -194,23 +194,40 @@ The admin dashboard gives institutional administrators full control over the pla
 
 ## 🚀 Deployment
 
-The fastest path to production is the **GitHub Actions pipeline**, which automates the entire AWS deployment — infrastructure, backend services, frontend, and MCP gateway — through a series of workflow runs.
+The fastest path to production is the **GitHub Actions pipeline**. The platform uses a **single-stack architecture** — one CDK stack (`PlatformStack`) provisions all AWS infrastructure, and application code is shipped separately via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update).
 
 **[GitHub Actions Quick Start](.github/README-ACTIONS.md)** | **[Step-by-Step Deployment Guide](.github/docs/deploy/step-01-prerequisites.md)**
 
 ### What Gets Deployed
 
+**Infrastructure (via `platform.yml` — CDK deploy):**
+
 | Component | AWS Service | Purpose |
 |-----------|-------------|---------|
 | Networking | VPC, ALB, Security Groups | Isolated network with load balancing |
-| Fine-Tuning *(optional)* | SageMaker, S3, DynamoDB | Model training, batch inference, artifact storage |
-| Artifacts *(optional)* | DynamoDB, S3, CloudFront, Lambda | Iframe-isolated rendering for agent-generated HTML/code artifacts |
-| RAG Ingestion | Lambda, S3 | Document ingestion for retrieval-augmented generation |
-| Inference API | Bedrock Agentcore | Agent orchestration with Bedrock |
-| App API | ECS Fargate | Authentication, admin, session management |
-| Frontend | S3 + CloudFront | Angular SPA with global CDN |
-| MCP Gateway | Lambda + API Gateway | Serverless MCP tool endpoints |
-| Bootstrapper | DynamoDB | Users, sessions, costs, quotas, roles |
+| Compute | ECS Fargate, AgentCore Runtime | App API container + AI agent runtime |
+| Data | DynamoDB (~24 tables), S3 (6 buckets) | All application state and file storage |
+| Identity | Cognito, Secrets Manager, KMS | Authentication, secrets, encryption |
+| Edge | CloudFront (SPA + artifacts + MCP sandbox) | Global CDN for all web surfaces |
+| AI Services | AgentCore Memory, Code Interpreter, Browser, Gateway | Agent tools and context |
+| ML | SageMaker IAM roles | Fine-tuning job execution |
+
+**Application code (via `backend.yml` — AWS API calls):**
+
+| Service | Deploy Method | Trigger |
+|---------|--------------|---------|
+| App API | ECR push → ECS service update | Backend code changes |
+| Inference API | ECR push → AgentCore Runtime update | Backend code changes |
+| RAG Ingestion | ECR push → Lambda update-function-code | Backend code changes |
+| Artifact Render | Zip → Lambda update-function-code | Backend code changes |
+
+**Frontend (via `frontend-deploy.yml`):**
+
+| Component | Deploy Method |
+|-----------|--------------|
+| Angular SPA | S3 sync + CloudFront invalidation |
+
+CDK deploys only run when infrastructure changes (new tables, IAM grants, etc.) — which is rare. Day-to-day code changes deploy in ~2 minutes via the backend workflow.
 
 <!-- IMAGE PLACEHOLDER: Screenshot of the GitHub Actions tab showing all deployment workflows with green checkmarks — Infrastructure, App API, Inference API, Frontend, Gateway, RAG Ingestion, and Bootstrap Data pipelines all passing. Dimensions: ~800x400px. -->
 <!-- Example: ![Deployment Pipelines](docs/images/github-actions.png) -->
@@ -247,12 +264,29 @@ agentcore-public-stack/
 │       ├── admin/                   # Admin dashboard
 │       ├── fine-tuning/             # SageMaker fine-tuning UI
 │       └── services/               # State management
-├── infrastructure/                  # AWS CDK stacks
-│   └── lib/                         # Infra, App API, Inference API, Frontend,
-│                                    # Gateway, RAG Ingestion, SageMaker Fine-Tuning,
-│                                    # Artifacts
+├── infrastructure/                  # AWS CDK (single PlatformStack)
+│   ├── bin/infrastructure.ts        # CDK app entry point
+│   └── lib/
+│       ├── platform-stack.ts        # The one stack — all infrastructure
+│       ├── config.ts                # Configuration loader & validator
+│       └── constructs/              # 39 reusable CDK constructs
+│           ├── network/             # VPC, ALB, ECS cluster
+│           ├── identity/            # Cognito, secrets, KMS, OAuth
+│           ├── data/                # DynamoDB tables, file uploads
+│           ├── rag/                 # RAG documents, vectors
+│           ├── artifacts/           # Artifact rendering pipeline
+│           ├── mcp-sandbox/         # MCP Apps sandbox proxy
+│           ├── agentcore/           # Memory, Code Interpreter, Browser, Gateway
+│           ├── inference-api/       # AgentCore Runtime
+│           ├── app-api/             # Fargate service
+│           ├── fine-tuning/         # SageMaker IAM
+│           ├── spa/                 # SPA CloudFront distribution
+│           └── zones/               # Route53, ALB DNS
 └── .github/
     ├── workflows/                   # CI/CD pipelines
+    │   ├── platform.yml             # Infrastructure deploy (CDK)
+    │   ├── backend.yml              # Code deploy (ECR + AWS APIs)
+    │   └── frontend-deploy.yml      # SPA deploy (S3 + CloudFront)
     └── docs/deploy/                 # Deployment guides
 ```
 
