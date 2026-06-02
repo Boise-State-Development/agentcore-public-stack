@@ -1166,3 +1166,139 @@ def test_deserialize_dynamodb_json_passes_through_non_binary_unchanged():
     assert result["missing"] is None
     assert result["tags"] == {"a", "b"}
     assert result["scores"] == {Decimal("1"), Decimal("2")}
+
+
+# --------------------------------------------------------------------------- #
+# Cognito IdP → app-client wiring                                              #
+# --------------------------------------------------------------------------- #
+def test_cognito_restore_wires_idps_into_app_client():
+    """After restoring an IdP, the restore must call update_user_pool_client
+    to add the provider to SupportedIdentityProviders on every CDK-managed
+    app client. Without this step, Cognito's hosted UI shows
+    'Login option is not available' immediately after a restore."""
+    import io as _io, json as _json
+
+    # --- Build fake S3 responses ---
+    idp_json = _json.dumps({"providers": [
+        {"ProviderName": "ms-entra-id", "ProviderType": "OIDC",
+         "ProviderDetails": {"client_id": "abc", "oidc_issuer": "https://issuer", "client_secret": "s"},
+         "AttributeMapping": {}, "IdpIdentifiers": []}
+    ]}).encode()
+    client_json = _json.dumps({"clients": [
+        {"ClientId": "old-client-id", "ClientName": "my-prefix-bff-app-client"}
+    ]}).encode()
+    users_gz = gzip.compress(b"")
+
+    def s3_get(Bucket, Key):
+        m = {
+            "root/cognito/identity-providers.json": {"Body": _io.BytesIO(idp_json)},
+            "root/cognito/app-clients.json":        {"Body": _io.BytesIO(client_json)},
+            "root/cognito/users.jsonl.gz":          {"Body": _io.BytesIO(users_gz)},
+        }
+        if Key not in m:
+            from botocore.exceptions import ClientError as _CE
+            raise _CE({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return m[Key]
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = s3_get
+
+    # Cognito mock: create_identity_provider succeeds, list returns
+    # the CDK-managed app client with only COGNITO in SupportedIdPs,
+    # describe returns a minimal but plausible client spec.
+    cognito = MagicMock()
+    cognito.create_identity_provider.return_value = {}
+    cognito.get_paginator.return_value.paginate.return_value = iter([{
+        "UserPoolClients": [{"ClientId": "live-client-id", "ClientName": "my-prefix-bff-app-client"}]
+    }])
+    cognito.describe_user_pool_client.return_value = {"UserPoolClient": {
+        "UserPoolId": "us-west-2_POOL",
+        "ClientId": "live-client-id",
+        "ClientName": "my-prefix-bff-app-client",
+        "SupportedIdentityProviders": ["COGNITO"],
+        "AllowedOAuthFlows": ["code"],
+        "AllowedOAuthScopes": ["openid"],
+        "AllowedOAuthFlowsUserPoolClient": True,
+        "CallbackURLs": ["https://example.com/callback"],
+        "ExplicitAuthFlows": ["ALLOW_REFRESH_TOKEN_AUTH"],
+    }}
+    cognito.update_user_pool_client.return_value = {}
+    # Users path
+    cognito.list_users.return_value = {"Users": []}
+    cognito.list_groups.return_value = {"Groups": []}
+
+    def client_factory(name, **_kw):
+        return s3 if name == "s3" else cognito
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="us-west-2_POOL"):
+        restore.restore_cognito(ctx)
+
+    # The critical assertion: update_user_pool_client must be called
+    # with the restored IdP in SupportedIdentityProviders.
+    cognito.update_user_pool_client.assert_called_once()
+    call_kwargs = cognito.update_user_pool_client.call_args.kwargs
+    assert "ms-entra-id" in call_kwargs["SupportedIdentityProviders"]
+    assert "COGNITO" in call_kwargs["SupportedIdentityProviders"]
+
+
+def test_cognito_restore_skips_idp_wiring_when_already_present():
+    """If the app client already has the IdP in SupportedIdentityProviders
+    (e.g. on a re-run), update_user_pool_client must NOT be called."""
+    import io as _io, json as _json
+
+    idp_json = _json.dumps({"providers": [
+        {"ProviderName": "ms-entra-id", "ProviderType": "OIDC",
+         "ProviderDetails": {"client_id": "abc", "oidc_issuer": "https://issuer", "client_secret": "s"},
+         "AttributeMapping": {}, "IdpIdentifiers": []}
+    ]}).encode()
+    client_json = _json.dumps({"clients": [
+        {"ClientId": "old-id", "ClientName": "my-prefix-bff-app-client"}
+    ]}).encode()
+    users_gz = gzip.compress(b"")
+
+    def s3_get(Bucket, Key):
+        m = {
+            "root/cognito/identity-providers.json": {"Body": _io.BytesIO(idp_json)},
+            "root/cognito/app-clients.json":        {"Body": _io.BytesIO(client_json)},
+            "root/cognito/users.jsonl.gz":          {"Body": _io.BytesIO(users_gz)},
+        }
+        if Key not in m:
+            from botocore.exceptions import ClientError as _CE
+            raise _CE({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return m[Key]
+
+    s3 = MagicMock()
+    s3.get_object.side_effect = s3_get
+    cognito = MagicMock()
+    cognito.create_identity_provider.side_effect = Exception("DuplicateProviderException")
+    cognito.get_paginator.return_value.paginate.return_value = iter([{
+        "UserPoolClients": [{"ClientId": "live-id", "ClientName": "my-prefix-bff-app-client"}]
+    }])
+    cognito.describe_user_pool_client.return_value = {"UserPoolClient": {
+        "UserPoolId": "us-west-2_POOL",
+        "ClientId": "live-id",
+        "SupportedIdentityProviders": ["COGNITO", "ms-entra-id"],  # already wired
+        "AllowedOAuthFlows": ["code"],
+        "AllowedOAuthScopes": ["openid"],
+        "AllowedOAuthFlowsUserPoolClient": True,
+        "ExplicitAuthFlows": ["ALLOW_REFRESH_TOKEN_AUTH"],
+    }}
+    cognito.list_users.return_value = {"Users": []}
+    cognito.list_groups.return_value = {"Groups": []}
+
+    def client_factory(name, **_kw):
+        return s3 if name == "s3" else cognito
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="us-west-2_POOL"):
+        try:
+            restore.restore_cognito(ctx)
+        except Exception:
+            pass  # create_identity_provider intentionally raises above
+
+    cognito.update_user_pool_client.assert_not_called()

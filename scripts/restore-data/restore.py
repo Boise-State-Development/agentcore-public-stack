@@ -482,6 +482,7 @@ def restore_cognito(ctx: RestoreContext) -> list[dict]:
     # this restore code iterated the top-level dict directly, which
     # yielded the dict KEYS (strings) and triggered
     # `'str' object has no attribute 'get'`. Read the wrapped list.
+    idps: list[dict] = []  # populated below; referenced by app-client wiring
     try:
         idp_obj = s3.get_object(Bucket=ctx.backup_bucket, Key=f"{root}cognito/identity-providers.json")
         idp_blob = json.loads(idp_obj["Body"].read())
@@ -516,17 +517,85 @@ def restore_cognito(ctx: RestoreContext) -> list[dict]:
     # --- App Clients ---
     # Same wrapper-list shape as identity-providers — backup writes
     # {"clients": [...]}. See scripts/backup-data/backup.py:507.
+    #
+    # The app client is CDK-managed and already exists by the time
+    # restore runs. However, CDK creates it BEFORE IdPs are restored,
+    # so its SupportedIdentityProviders list only contains "COGNITO".
+    # Cognito's hosted UI will not show a login button for any IdP
+    # not in that list, producing the "Login option is not available"
+    # error immediately after a restore.
+    #
+    # Fix: after IdPs are created above, call update_user_pool_client
+    # for every CDK-managed client to add the restored provider names
+    # to SupportedIdentityProviders. We do a describe-first to avoid
+    # overwriting any other settings CDK has on the client.
+    restored_idp_names: list[str] = [
+        idp.get("ProviderName") for idp in idps
+        if idp.get("ProviderName")
+    ]
     try:
         clients_obj = s3.get_object(Bucket=ctx.backup_bucket, Key=f"{root}cognito/app-clients.json")
         clients_blob = json.loads(clients_obj["Body"].read())
         clients = clients_blob.get("clients", []) if isinstance(clients_blob, dict) else clients_blob
+        updated_clients = 0
         for client in clients:
             client_name = client.get("ClientName")
-            LOG.info(f"[Cognito] Noting app client: {client_name} (CDK manages creation; secrets preserved for reference)")
+            LOG.info(f"[Cognito] Noting app client: {client_name} (CDK manages creation; re-wiring IdP providers)")
+            if not restored_idp_names or ctx.dry_run:
+                continue
+            # Find the live CDK-created client by name.
+            live_client_id = None
+            paginator = cognito.get_paginator("list_user_pool_clients")
+            for page in paginator.paginate(UserPoolId=target_pool_id, MaxResults=60):
+                for c in page.get("UserPoolClients", []):
+                    if c["ClientName"] == client_name:
+                        live_client_id = c["ClientId"]
+                        break
+                if live_client_id:
+                    break
+            if not live_client_id:
+                LOG.warning(f"[Cognito] App client '{client_name}' not found in target pool — skipping IdP re-wire")
+                continue
+            # Describe the live client so we can patch SupportedIdentityProviders
+            # without clobbering any other CDK-managed settings.
+            live = cognito.describe_user_pool_client(
+                UserPoolId=target_pool_id, ClientId=live_client_id
+            )["UserPoolClient"]
+            current_idps: list[str] = live.get("SupportedIdentityProviders", [])
+            missing = [n for n in restored_idp_names if n not in current_idps]
+            if not missing:
+                LOG.info(f"[Cognito] App client '{client_name}' already has all restored IdPs — skipping")
+                continue
+            merged = list(current_idps) + missing
+            LOG.info(f"[Cognito] Updating app client '{client_name}': adding IdPs {missing}")
+            # update_user_pool_client requires re-sending the full set of
+            # mutable fields; omitting optional fields that are absent on
+            # the live client to avoid sending empty lists/dicts that
+            # override CDK's configured values.
+            update_kwargs: dict[str, Any] = {
+                "UserPoolId": target_pool_id,
+                "ClientId": live_client_id,
+                "SupportedIdentityProviders": merged,
+            }
+            for field in (
+                "RefreshTokenValidity", "AccessTokenValidity", "IdTokenValidity",
+                "TokenValidityUnits", "ReadAttributes", "WriteAttributes",
+                "ExplicitAuthFlows", "CallbackURLs", "LogoutURLs",
+                "AllowedOAuthFlows", "AllowedOAuthScopes",
+                "AllowedOAuthFlowsUserPoolClient", "AnalyticsConfiguration",
+                "PreventUserExistenceErrors", "EnableTokenRevocation",
+                "EnablePropagateAdditionalUserContextData", "AuthSessionValidity",
+            ):
+                val = live.get(field)
+                if val is not None:
+                    update_kwargs[field] = val
+            cognito.update_user_pool_client(**update_kwargs)
+            updated_clients += 1
         results.append({"component": "cognito-clients", "status": "ok", "count": len(clients),
-                       "note": "App clients are CDK-managed; backup preserves secrets for manual re-registration if needed"})
-    except ClientError:
-        results.append({"component": "cognito-clients", "status": "skipped"})
+                       "updated_idp_wiring": updated_clients})
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchKey":
+            results.append({"component": "cognito-clients", "status": "skipped"})
 
     # --- Users ---
     # This is the load-bearing section for the cross-pool migration.
