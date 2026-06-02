@@ -35,6 +35,7 @@ bucket names from SSM.
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import io
@@ -314,10 +315,43 @@ def restore_dynamodb_table(ctx: RestoreContext, logical_name: str, component: di
     }
 
 
+def _decode_binary_values(value: Any) -> Any:
+    """Recursively convert DynamoDB-JSON binary attribute values from
+    base64-encoded strings to raw bytes, in place.
+
+    AWS's DynamoDB Export-to-S3 feature serializes binary attributes
+    (the ``B`` and ``BS`` types) as base64-encoded strings on disk.
+    boto3's :class:`TypeDeserializer`, however, expects ``B`` to already
+    be ``bytes``/``bytearray`` (because the live DynamoDB API path
+    base64-decodes the wire payload before the deserializer sees it).
+    Feeding it the raw base64 string raises::
+
+        TypeError: Value must be of the following types: <class 'bytearray'>, <class 'bytes'>
+
+    This helper walks an attribute-value tree (DynamoDB-JSON shape:
+    ``{"<type>": <value>}``) and decodes any ``B``/``BS`` strings into
+    bytes before deserialization. It also recurses into ``L`` and ``M``
+    so nested binary values inside lists/maps are handled.
+    """
+    if not isinstance(value, dict) or len(value) != 1:
+        return value
+    type_key = next(iter(value))
+    type_val = value[type_key]
+    if type_key == "B" and isinstance(type_val, str):
+        return {"B": base64.b64decode(type_val)}
+    if type_key == "BS" and isinstance(type_val, list):
+        return {"BS": [base64.b64decode(s) if isinstance(s, str) else s for s in type_val]}
+    if type_key == "L" and isinstance(type_val, list):
+        return {"L": [_decode_binary_values(v) for v in type_val]}
+    if type_key == "M" and isinstance(type_val, dict):
+        return {"M": {k: _decode_binary_values(v) for k, v in type_val.items()}}
+    return value
+
+
 def _deserialize_dynamodb_json(item: dict) -> dict:
     """Convert DynamoDB-JSON (typed attribute values) to plain Python dict."""
     deserializer = TypeDeserializer()
-    return {k: deserializer.deserialize(v) for k, v in item.items()}
+    return {k: deserializer.deserialize(_decode_binary_values(v)) for k, v in item.items()}
 
 
 # --------------------------------------------------------------------------- #

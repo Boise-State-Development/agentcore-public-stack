@@ -1078,3 +1078,91 @@ def test_memory_replay_missing_events_file_skips_cleanly():
         results = restore.restore_agentcore_memory(ctx)
     assert results[0]["status"] == "skipped"
     assert "no events backup file" in results[0]["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# DynamoDB-JSON binary-attribute decoding                                      #
+# --------------------------------------------------------------------------- #
+def test_deserialize_dynamodb_json_decodes_binary_top_level():
+    """B-typed values arrive in the export as base64 strings. The
+    deserializer must decode them to bytes before handing the item to
+    boto3's TypeDeserializer (which raises TypeError on raw strings)."""
+    import base64
+    from boto3.dynamodb.types import Binary
+    payload = b"\x00\x01\x02\x03"
+    item = {
+        "PK": {"S": "SESSION#abc"},
+        "blob": {"B": base64.b64encode(payload).decode("ascii")},
+    }
+    result = restore._deserialize_dynamodb_json(item)
+    assert result["PK"] == "SESSION#abc"
+    assert result["blob"] == Binary(payload)
+
+
+def test_deserialize_dynamodb_json_decodes_binary_set():
+    """BS-typed values are lists of base64 strings; each member must be
+    decoded individually."""
+    import base64
+    parts = [b"\x10\x20", b"\x30\x40"]
+    item = {
+        "PK": {"S": "x"},
+        "blobs": {"BS": [base64.b64encode(p).decode("ascii") for p in parts]},
+    }
+    result = restore._deserialize_dynamodb_json(item)
+    assert {bytes(b) for b in result["blobs"]} == {bytes(p) for p in parts}
+
+
+def test_deserialize_dynamodb_json_decodes_nested_binary_in_map():
+    """Binary attributes nested inside an M (map) must be decoded too —
+    that's how DynamoDB exports represent struct-shaped fields like
+    `payload: {hash: <bytes>, body: <str>}`."""
+    import base64
+    from boto3.dynamodb.types import Binary
+    payload = b"\xde\xad\xbe\xef"
+    item = {
+        "PK": {"S": "x"},
+        "envelope": {"M": {
+            "hash": {"B": base64.b64encode(payload).decode("ascii")},
+            "label": {"S": "test"},
+        }},
+    }
+    result = restore._deserialize_dynamodb_json(item)
+    assert result["envelope"]["hash"] == Binary(payload)
+    assert result["envelope"]["label"] == "test"
+
+
+def test_deserialize_dynamodb_json_decodes_nested_binary_in_list():
+    """Binary attributes nested inside an L (list) must be decoded too."""
+    import base64
+    from boto3.dynamodb.types import Binary
+    payload = b"\xff\xfe"
+    item = {
+        "PK": {"S": "x"},
+        "items": {"L": [
+            {"B": base64.b64encode(payload).decode("ascii")},
+            {"S": "after"},
+        ]},
+    }
+    result = restore._deserialize_dynamodb_json(item)
+    assert result["items"][0] == Binary(payload)
+    assert result["items"][1] == "after"
+
+
+def test_deserialize_dynamodb_json_passes_through_non_binary_unchanged():
+    """The decoder must not alter S/N/BOOL/NULL/SS/NS values."""
+    item = {
+        "name":   {"S": "alice"},
+        "count":  {"N": "42"},
+        "active": {"BOOL": True},
+        "missing": {"NULL": True},
+        "tags":   {"SS": ["a", "b"]},
+        "scores": {"NS": ["1", "2"]},
+    }
+    result = restore._deserialize_dynamodb_json(item)
+    from decimal import Decimal
+    assert result["name"] == "alice"
+    assert result["count"] == Decimal("42")
+    assert result["active"] is True
+    assert result["missing"] is None
+    assert result["tags"] == {"a", "b"}
+    assert result["scores"] == {Decimal("1"), Decimal("2")}
