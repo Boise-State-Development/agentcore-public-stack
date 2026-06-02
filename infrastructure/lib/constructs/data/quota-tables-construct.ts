@@ -99,6 +99,12 @@ export class QuotaTablesConstruct extends Construct {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    new ssm.StringParameter(this, 'QuotaEventsTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/quota/quota-events-table-name`,
+      stringValue: this.quotaEventsTable.tableName,
+      description: 'Quota events table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
 
   }
 }

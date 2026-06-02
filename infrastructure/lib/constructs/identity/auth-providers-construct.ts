@@ -67,5 +67,12 @@ export class AuthProvidersConstruct extends Construct {
       },
     );
 
+    new ssm.StringParameter(this, 'AuthProvidersTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/auth/auth-providers-table-name`,
+      stringValue: this.providersTable.tableName,
+      description: 'Auth providers table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
   }
 }

@@ -131,16 +131,22 @@ describe('PlatformStack', () => {
   });
 
   describe('SSM parameters', () => {
-    it('publishes only the SSM parameters deploy scripts and e2e tests need', () => {
-      // After the SSM cleanup, only ~12 publishes remain — these are the
-      // ones consumed by deploy scripts (build, deploy-ecs-service,
-      // deploy-runtime-image, deploy-image-lambda, frontend deploy) and
-      // e2e tests. Every other SSM publish was dead weight: the value
-      // was either consumed only by sibling CDK constructs (now sourced
-      // via typed PlatformComputeRefs) or never read by anyone.
+    it('publishes only the SSM parameters deploy scripts, restore tooling, and e2e tests need', () => {
+      // SSM publishes fall into a few buckets:
+      //   - Deploy-time discovery (build, deploy-ecs-service,
+      //     deploy-runtime-image, deploy-image-lambda, frontend deploy).
+      //   - e2e test discovery.
+      //   - Restore tooling (scripts/restore-data/restore.py): looks up
+      //     every backed-up DynamoDB table, S3 bucket, Cognito user pool,
+      //     and AgentCore Memory ID via SSM under /{prefix}/. These
+      //     are kept in sync with TABLE_SSM_MAP / BUCKET_SSM_MAP /
+      //     SSM_USER_POOL_ID / SSM_MEMORY_ID in restore.py.
+      // Every other SSM publish was dead weight: the value was either
+      // consumed only by sibling CDK constructs (now sourced via typed
+      // PlatformComputeRefs) or never read by anyone.
       const params = template.findResources('AWS::SSM::Parameter');
-      expect(Object.keys(params).length).toBeGreaterThanOrEqual(8);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(20);
+      expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(45);
     });
   });
 

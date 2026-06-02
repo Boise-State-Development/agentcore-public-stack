@@ -139,5 +139,27 @@ export class CostTrackingTablesConstruct extends Construct {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // Cost-tracking tables (consumed by restore tooling, app-api/inference-api runtime)
+    new ssm.StringParameter(this, 'SessionsMetadataTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/sessions-metadata-table-name`,
+      stringValue: this.sessionsMetadataTable.tableName,
+      description: 'Sessions metadata table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'UserCostSummaryTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/user-cost-summary-table-name`,
+      stringValue: this.userCostSummaryTable.tableName,
+      description: 'User cost summary table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    new ssm.StringParameter(this, 'SystemCostRollupTableNameParameter', {
+      parameterName: `/${config.projectPrefix}/cost-tracking/system-cost-rollup-table-name`,
+      stringValue: this.systemCostRollupTable.tableName,
+      description: 'System cost rollup table name',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
   }
 }
