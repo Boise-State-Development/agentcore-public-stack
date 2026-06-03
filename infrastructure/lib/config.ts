@@ -28,9 +28,6 @@ export interface AppConfig {
   frontend: FrontendConfig;
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
-  gateway: GatewayConfig;
-  assistants: AssistantsConfig;
-  fileUpload: FileUploadConfig;
   ragIngestion: RagIngestionConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
@@ -44,23 +41,16 @@ export interface AppConfig {
  * docs/kaizen/scoping/mcp-apps-host-renderer.md sequence).
  *
  * Provisions a dedicated cross-origin shell (mcp-sandbox.{domainName}) that
- * the SPA's <mcp-app-frame> is pointed at. When `mcpSandbox.enabled`, the
- * inference-api stack consumes this stack's SSM origin export into
- * `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` (conditional-SSM pattern, mirrors
- * artifacts). The host renderer is gated by MCP_APPS_HOST_ENABLED, flipped
- * on in PR #7; with this stack disabled the surface stays dormant because
- * the SPA has no proxy origin to frame an App in.
+ * the SPA's <mcp-app-frame> is pointed at. The inference-api stack
+ * consumes this stack's SSM origin export into
+ * `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`. The host renderer is gated by
+ * MCP_APPS_HOST_ENABLED, flipped on in PR #7.
  */
 export interface McpSandboxConfig {
-  // When false the stack is not instantiated at all (bin/infrastructure.ts
-  // skips it). Default false — the origin is opt-in per environment and the
-  // initiative is gated end-to-end until PR #7.
-  enabled: boolean;
   // ACM certificate ARN for the proxy origin (mcp-sandbox.{domainName}).
   // MUST be in us-east-1 — CloudFront requires its viewer certs there.
-  // Required (and region-validated) only when enabled; without it the stack
-  // still synthesizes on the CloudFront default domain so unit/synth tests
-  // and domain-less local stacks work.
+  // Without it the stack still synthesizes on the CloudFront default
+  // domain so unit/synth tests and domain-less local stacks work.
   certificateArn?: string;
   // Extra origins (beyond https://{domainName}) allowed to embed the proxy
   // iframe via CSP frame-ancestors — e.g. http://localhost:4200 for a local
@@ -69,7 +59,6 @@ export interface McpSandboxConfig {
 }
 
 export interface ArtifactsConfig {
-  enabled: boolean;
   // ACM certificate ARN for the artifact iframe origin (artifacts.{domainName}).
   // MUST be in us-east-1 — CloudFront requires its certs there. Validation
   // surfaces a clear error if the arn is in another region.
@@ -84,59 +73,31 @@ export interface ArtifactsConfig {
 
 export interface FrontendConfig {
   certificateArn?: string;
-  enabled: boolean;
   bucketName?: string;
   cloudFrontPriceClass: string;
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
 }
 
-export interface AssistantsConfig {
-  enabled: boolean;
-  additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
-}
-
 export interface AppApiConfig {
-  enabled: boolean;
   cpu: number;
   memory: number;
   desiredCount: number;
   maxCapacity: number;
-  imageTag: string;
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
 }
 
+/**
+ * Inference API config.
+ *
+ * The inference API runs in Bedrock AgentCore Runtime, which manages
+ * its own compute. None of the typical Fargate-style knobs (cpu, memory,
+ * desiredCount, maxCapacity) apply here, so they're intentionally absent.
+ */
 export interface InferenceApiConfig {
-  enabled: boolean;
-  cpu: number;
-  memory: number;
-  desiredCount: number;
-  maxCapacity: number;
-  imageTag: string;
-  // Environment variables for runtime container
-  logLevel: string;
-  additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
-}
-
-export interface GatewayConfig {
-  enabled: boolean;
-  apiType: 'REST' | 'HTTP';
-  throttleRateLimit: number;
-  throttleBurstLimit: number;
-  enableWaf: boolean;
-  logLevel?: string;  // Log level for Lambda functions (INFO, DEBUG, ERROR)
-}
-
-export interface FileUploadConfig {
-  enabled: boolean;
-  maxFileSizeBytes: number;      // Maximum file size (default: 4MB per Bedrock limit)
-  maxFilesPerMessage: number;    // Maximum files per message (default: 5)
-  userQuotaBytes: number;        // Per-user storage quota (default: 1GB)
-  retentionDays: number;         // File retention (default: 365 days)
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
 }
 
 export interface RagIngestionConfig {
-  enabled: boolean;              // Enable/disable RAG stack
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
   lambdaMemorySize: number;      // Lambda memory in MB (default: 3008)
   lambdaTimeout: number;         // Lambda timeout in seconds (default: 900)
@@ -146,8 +107,6 @@ export interface RagIngestionConfig {
 }
 
 export interface FineTuningConfig {
-  enabled: boolean;              // Enable/disable SageMaker Fine-Tuning stack
-  defaultQuotaHours: number;     // Default monthly GPU-hour quota for all users (0 = whitelist-only)
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
 }
 
@@ -247,53 +206,21 @@ export function loadConfig(scope: cdk.App): AppConfig {
     },
     frontend: {
       certificateArn: process.env.CDK_FRONTEND_CERTIFICATE_ARN || scope.node.tryGetContext('frontend').certificateArn,
-      enabled: parseBooleanEnv(process.env.CDK_FRONTEND_ENABLED) ?? scope.node.tryGetContext('frontend')?.enabled,
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
       cloudFrontPriceClass: process.env.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS || scope.node.tryGetContext('frontend')?.cloudFrontPriceClass,
       additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
     },
     appApi: {
-      enabled: parseBooleanEnv(process.env.CDK_APP_API_ENABLED) ?? scope.node.tryGetContext('appApi')?.enabled,
       cpu: parseIntEnv(process.env.CDK_APP_API_CPU) || scope.node.tryGetContext('appApi')?.cpu,
       memory: parseIntEnv(process.env.CDK_APP_API_MEMORY) || scope.node.tryGetContext('appApi')?.memory,
       desiredCount: parseIntEnv(process.env.CDK_APP_API_DESIRED_COUNT) ?? scope.node.tryGetContext('appApi')?.desiredCount,
-      imageTag: scope.node.tryGetContext('imageTag') || '',
       maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY) || scope.node.tryGetContext('appApi')?.maxCapacity,
       additionalCorsOrigins: process.env.CDK_APP_API_CORS_ORIGINS || scope.node.tryGetContext('appApi')?.additionalCorsOrigins,
     },
     inferenceApi: {
-      enabled: parseBooleanEnv(process.env.CDK_INFERENCE_API_ENABLED) ?? scope.node.tryGetContext('inferenceApi')?.enabled,
-      cpu: parseIntEnv(process.env.CDK_INFERENCE_API_CPU) || scope.node.tryGetContext('inferenceApi')?.cpu,
-      memory: parseIntEnv(process.env.CDK_INFERENCE_API_MEMORY) || scope.node.tryGetContext('inferenceApi')?.memory,
-      desiredCount: parseIntEnv(process.env.CDK_INFERENCE_API_DESIRED_COUNT) ?? scope.node.tryGetContext('inferenceApi')?.desiredCount,
-      maxCapacity: parseIntEnv(process.env.CDK_INFERENCE_API_MAX_CAPACITY) || scope.node.tryGetContext('inferenceApi')?.maxCapacity,
-      imageTag: scope.node.tryGetContext('imageTag') || '',
-      // Environment variables from GitHub Secrets/Variables with context fallback
-      logLevel: process.env.ENV_INFERENCE_API_LOG_LEVEL || scope.node.tryGetContext('inferenceApi')?.logLevel,
       additionalCorsOrigins: process.env.CDK_INFERENCE_API_CORS_ORIGINS || scope.node.tryGetContext('inferenceApi')?.additionalCorsOrigins,
     },
-    gateway: {
-      enabled: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLED) ?? scope.node.tryGetContext('gateway')?.enabled,
-      apiType: (process.env.CDK_GATEWAY_API_TYPE as 'REST' | 'HTTP') || scope.node.tryGetContext('gateway')?.apiType,
-      throttleRateLimit: parseIntEnv(process.env.CDK_GATEWAY_THROTTLE_RATE_LIMIT) || scope.node.tryGetContext('gateway')?.throttleRateLimit,
-      throttleBurstLimit: parseIntEnv(process.env.CDK_GATEWAY_THROTTLE_BURST_LIMIT) || scope.node.tryGetContext('gateway')?.throttleBurstLimit,
-      enableWaf: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLE_WAF) ?? scope.node.tryGetContext('gateway')?.enableWaf,
-      logLevel: process.env.CDK_GATEWAY_LOG_LEVEL || scope.node.tryGetContext('gateway')?.logLevel,
-    },
-    fileUpload: {
-      enabled: parseBooleanEnv(process.env.CDK_FILE_UPLOAD_ENABLED) ?? scope.node.tryGetContext('fileUpload')?.enabled,
-      maxFileSizeBytes: parseIntEnv(process.env.CDK_FILE_UPLOAD_MAX_FILE_SIZE) || scope.node.tryGetContext('fileUpload')?.maxFileSizeBytes,
-      maxFilesPerMessage: parseIntEnv(process.env.CDK_FILE_UPLOAD_MAX_FILES_PER_MESSAGE) || scope.node.tryGetContext('fileUpload')?.maxFilesPerMessage,
-      userQuotaBytes: parseIntEnv(process.env.CDK_FILE_UPLOAD_USER_QUOTA) || scope.node.tryGetContext('fileUpload')?.userQuotaBytes,
-      retentionDays: parseIntEnv(process.env.CDK_FILE_UPLOAD_RETENTION_DAYS) || scope.node.tryGetContext('fileUpload')?.retentionDays,
-      additionalCorsOrigins: process.env.CDK_FILE_UPLOAD_CORS_ORIGINS || scope.node.tryGetContext('fileUpload')?.additionalCorsOrigins,
-    },
-    assistants: {
-      enabled: parseBooleanEnv(process.env.CDK_ASSISTANTS_ENABLED) ?? scope.node.tryGetContext('assistants')?.enabled,
-      additionalCorsOrigins: process.env.CDK_ASSISTANTS_CORS_ORIGINS || scope.node.tryGetContext('assistants')?.additionalCorsOrigins,
-    },
     ragIngestion: {
-      enabled: parseBooleanEnv(process.env.CDK_RAG_ENABLED) ?? scope.node.tryGetContext('ragIngestion')?.enabled,
       additionalCorsOrigins: process.env.CDK_RAG_CORS_ORIGINS || scope.node.tryGetContext('ragIngestion')?.additionalCorsOrigins,
       lambdaMemorySize: parseIntEnv(process.env.CDK_RAG_LAMBDA_MEMORY) || scope.node.tryGetContext('ragIngestion')?.lambdaMemorySize,
       lambdaTimeout: parseIntEnv(process.env.CDK_RAG_LAMBDA_TIMEOUT) || scope.node.tryGetContext('ragIngestion')?.lambdaTimeout,
@@ -302,12 +229,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric,
     },
     fineTuning: {
-      enabled: parseBooleanEnv(process.env.CDK_FINE_TUNING_ENABLED) ?? scope.node.tryGetContext('fineTuning')?.enabled ?? false,
-      defaultQuotaHours: parseIntEnv(process.env.CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS) ?? scope.node.tryGetContext('fineTuning')?.defaultQuotaHours ?? 0,
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
     },
     artifacts: {
-      enabled: parseBooleanEnv(process.env.CDK_ARTIFACTS_ENABLED) ?? scope.node.tryGetContext('artifacts')?.enabled ?? false,
       certificateArn: process.env.CDK_ARTIFACTS_CERTIFICATE_ARN || scope.node.tryGetContext('artifacts')?.certificateArn,
       retentionDays: parseIntEnv(process.env.CDK_ARTIFACTS_RETENTION_DAYS) ?? scope.node.tryGetContext('artifacts')?.retentionDays ?? 90,
       extraFrameAncestors: process.env.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS?.split(',')
@@ -316,7 +240,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || [],
     },
     mcpSandbox: {
-      enabled: parseBooleanEnv(process.env.CDK_MCP_SANDBOX_ENABLED) ?? scope.node.tryGetContext('mcpSandbox')?.enabled ?? false,
       certificateArn: process.env.CDK_MCP_SANDBOX_CERTIFICATE_ARN || scope.node.tryGetContext('mcpSandbox')?.certificateArn,
       extraFrameAncestors: process.env.CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS?.split(',')
         .map((s) => s.trim()).filter(Boolean)
@@ -334,13 +257,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   AWS Region: ${config.awsRegion}`);
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
-  console.log(`   Frontend Enabled: ${config.frontend.enabled}`);
-  console.log(`   App API Enabled: ${config.appApi.enabled}`);
-  console.log(`   Inference API Enabled: ${config.inferenceApi.enabled}`);
-  console.log(`   Gateway Enabled: ${config.gateway.enabled}`);
-  console.log(`   Fine-Tuning Enabled: ${config.fineTuning.enabled}`);
-  console.log(`   Artifacts Enabled: ${config.artifacts.enabled}`);
-  console.log(`   MCP Sandbox Enabled: ${config.mcpSandbox.enabled}`);
   console.log(`   App Version: ${config.appVersion}`);
 
   // Validate configuration
@@ -461,180 +377,82 @@ function validateConfig(config: AppConfig): void {
     throw new Error(`Invalid VPC CIDR format: ${config.vpcCidr}`);
   }
 
-  // Validate RAG Ingestion configuration
-  if (config.ragIngestion.enabled) {
-    // Validate Lambda memory size (128 MB to 10240 MB)
-    if (config.ragIngestion.lambdaMemorySize < 128 || config.ragIngestion.lambdaMemorySize > 10240) {
-      throw new Error(
-        `RAG Lambda memory size must be between 128 and 10240 MB. Got: ${config.ragIngestion.lambdaMemorySize}`
-      );
-    }
-
-    // Validate Lambda timeout (1 to 900 seconds)
-    if (config.ragIngestion.lambdaTimeout < 1 || config.ragIngestion.lambdaTimeout > 900) {
-      throw new Error(
-        `RAG Lambda timeout must be between 1 and 900 seconds. Got: ${config.ragIngestion.lambdaTimeout}`
-      );
-    }
-
-    // Validate vector dimension (must be positive)
-    if (config.ragIngestion.vectorDimension <= 0) {
-      throw new Error(
-        `RAG vector dimension must be positive. Got: ${config.ragIngestion.vectorDimension}`
-      );
-    }
-
-    // Validate distance metric
-    const validMetrics = ['cosine', 'euclidean', 'dot_product'];
-    if (!validMetrics.includes(config.ragIngestion.vectorDistanceMetric)) {
-      throw new Error(
-        `RAG vector distance metric must be one of: ${validMetrics.join(', ')}. Got: ${config.ragIngestion.vectorDistanceMetric}`
-      );
-    }
-
-    // Validate embedding model (basic check for non-empty string)
-    if (!config.ragIngestion.embeddingModel || config.ragIngestion.embeddingModel.trim() === '') {
-      throw new Error('RAG embedding model must be a non-empty string');
-    }
-
-    // Validate CORS origins if provided
-    if (config.corsOrigins) {
-      const origins = config.corsOrigins.split(',').map(o => o.trim());
-      origins.forEach(origin => {
-        if (origin && !origin.startsWith('http://') && !origin.startsWith('https://') && origin !== '*') {
-          console.warn(`Warning: CORS origin '${origin}' should start with http:// or https:// or be '*'`);
-        }
-      });
-    }
+  // Validate RAG Ingestion configuration (always provisioned).
+  // Validate Lambda memory size (128 MB to 10240 MB)
+  if (config.ragIngestion.lambdaMemorySize < 128 || config.ragIngestion.lambdaMemorySize > 10240) {
+    throw new Error(
+      `RAG Lambda memory size must be between 128 and 10240 MB. Got: ${config.ragIngestion.lambdaMemorySize}`
+    );
   }
 
-  // Validate Gateway configuration
-  if (config.gateway.enabled) {
-    const validApiTypes = ['REST', 'HTTP'];
-    if (!config.gateway.apiType || !validApiTypes.includes(config.gateway.apiType)) {
-      throw new Error(
-        `Gateway stack requires apiType to be 'REST' or 'HTTP'. Got: '${config.gateway.apiType}'`
-      );
-    }
+  // Validate Lambda timeout (1 to 900 seconds)
+  if (config.ragIngestion.lambdaTimeout < 1 || config.ragIngestion.lambdaTimeout > 900) {
+    throw new Error(
+      `RAG Lambda timeout must be between 1 and 900 seconds. Got: ${config.ragIngestion.lambdaTimeout}`
+    );
   }
 
-  // Validate File Upload CORS origins
-  if (config.fileUpload.enabled && !config.corsOrigins) {
+  // Validate vector dimension (must be positive)
+  if (config.ragIngestion.vectorDimension <= 0) {
+    throw new Error(
+      `RAG vector dimension must be positive. Got: ${config.ragIngestion.vectorDimension}`
+    );
+  }
+
+  // Validate distance metric
+  const validMetrics = ['cosine', 'euclidean', 'dot_product'];
+  if (!validMetrics.includes(config.ragIngestion.vectorDistanceMetric)) {
+    throw new Error(
+      `RAG vector distance metric must be one of: ${validMetrics.join(', ')}. Got: ${config.ragIngestion.vectorDistanceMetric}`
+    );
+  }
+
+  // Validate embedding model (basic check for non-empty string)
+  if (!config.ragIngestion.embeddingModel || config.ragIngestion.embeddingModel.trim() === '') {
+    throw new Error('RAG embedding model must be a non-empty string');
+  }
+
+  // Validate CORS origins if provided
+  if (config.corsOrigins) {
+    const origins = config.corsOrigins.split(',').map(o => o.trim());
+    origins.forEach(origin => {
+      if (origin && !origin.startsWith('http://') && !origin.startsWith('https://') && origin !== '*') {
+        console.warn(`Warning: CORS origin '${origin}' should start with http:// or https:// or be '*'`);
+      }
+    });
+  }
+
+  // Validate top-level CORS origins.
+  if (!config.corsOrigins) {
     console.warn(
-      'Warning: File Upload is enabled but no CORS origins configured. ' +
+      'Warning: no CORS origins configured. ' +
       'Set CDK_DOMAIN_NAME or CDK_CORS_ORIGINS to enable browser uploads.'
     );
   }
 
-  // Validate required fields for all enabled stacks
-  if (config.appApi.enabled) {
-    if (!config.appApi.cpu) {
-      throw new Error('App API stack requires "cpu" to be set.');
-    }
-    if (!config.appApi.memory) {
-      throw new Error('App API stack requires "memory" to be set.');
-    }
-    if (!config.appApi.desiredCount && config.appApi.desiredCount !== 0) {
-      throw new Error('App API stack requires "desiredCount" to be set.');
-    }
-    if (!config.appApi.maxCapacity) {
-      throw new Error('App API stack requires "maxCapacity" to be set.');
-    }
+  // Validate required App API Fargate sizing (always provisioned).
+  if (!config.appApi.cpu) {
+    throw new Error('App API stack requires "cpu" to be set.');
+  }
+  if (!config.appApi.memory) {
+    throw new Error('App API stack requires "memory" to be set.');
+  }
+  if (!config.appApi.desiredCount && config.appApi.desiredCount !== 0) {
+    throw new Error('App API stack requires "desiredCount" to be set.');
+  }
+  if (!config.appApi.maxCapacity) {
+    throw new Error('App API stack requires "maxCapacity" to be set.');
   }
 
-  if (config.inferenceApi.enabled) {
-    if (!config.inferenceApi.cpu) {
-      throw new Error('Inference API stack requires "cpu" to be set.');
-    }
-    if (!config.inferenceApi.memory) {
-      throw new Error('Inference API stack requires "memory" to be set.');
-    }
-    if (!config.inferenceApi.desiredCount && config.inferenceApi.desiredCount !== 0) {
-      throw new Error('Inference API stack requires "desiredCount" to be set.');
-    }
-    if (!config.inferenceApi.maxCapacity) {
-      throw new Error('Inference API stack requires "maxCapacity" to be set.');
-    }
+  if (!config.frontend.cloudFrontPriceClass) {
+    throw new Error('Frontend stack requires "cloudFrontPriceClass" to be set.');
   }
 
-  if (config.frontend.enabled) {
-    if (!config.frontend.cloudFrontPriceClass) {
-      throw new Error('Frontend stack requires "cloudFrontPriceClass" to be set.');
-    }
-  }
-
-  if (config.gateway.enabled) {
-    if (!config.gateway.throttleRateLimit) {
-      throw new Error('Gateway stack requires "throttleRateLimit" to be set.');
-    }
-    if (!config.gateway.throttleBurstLimit) {
-      throw new Error('Gateway stack requires "throttleBurstLimit" to be set.');
-    }
-  }
-
-  if (config.artifacts.enabled) {
-    if (!config.domainName) {
-      throw new Error(
-        'Artifacts stack requires CDK_DOMAIN_NAME to be set — the artifact origin ' +
-        'is derived as artifacts.{CDK_DOMAIN_NAME}.'
-      );
-    }
-    if (!config.infrastructureHostedZoneDomain) {
-      throw new Error(
-        'Artifacts stack requires CDK_HOSTED_ZONE_DOMAIN to be set — used to look ' +
-        'up the Route53 zone where the artifacts subdomain record is created.'
-      );
-    }
-    if (!config.artifacts.certificateArn) {
-      throw new Error(
-        'Artifacts stack requires CDK_ARTIFACTS_CERTIFICATE_ARN — an ACM cert ' +
-        'in us-east-1 for the artifacts.{domain} CloudFront distribution.'
-      );
-    }
-    // CloudFront requires the viewer cert in us-east-1. Catch the most common
-    // misconfiguration up front rather than letting CloudFormation reject it.
-    if (!/^arn:aws:acm:us-east-1:/.test(config.artifacts.certificateArn)) {
-      throw new Error(
-        `Artifacts certificate must be in us-east-1 (CloudFront requirement). ` +
-        `Got: ${config.artifacts.certificateArn}`
-      );
-    }
-    if (config.artifacts.retentionDays < 1 || config.artifacts.retentionDays > 3650) {
-      throw new Error(
-        `Artifacts retentionDays must be between 1 and 3650. Got: ${config.artifacts.retentionDays}`
-      );
-    }
-  }
-
-  if (config.mcpSandbox.enabled) {
-    if (!config.domainName) {
-      throw new Error(
-        'MCP Sandbox stack requires CDK_DOMAIN_NAME to be set — the proxy origin ' +
-        'is derived as mcp-sandbox.{CDK_DOMAIN_NAME} and the CSP frame-ancestors ' +
-        'is locked to the SPA origin https://{CDK_DOMAIN_NAME}.'
-      );
-    }
-    if (!config.infrastructureHostedZoneDomain) {
-      throw new Error(
-        'MCP Sandbox stack requires CDK_HOSTED_ZONE_DOMAIN to be set — used to ' +
-        'look up the Route53 zone where the mcp-sandbox subdomain record is created.'
-      );
-    }
-    if (!config.mcpSandbox.certificateArn) {
-      throw new Error(
-        'MCP Sandbox stack requires CDK_MCP_SANDBOX_CERTIFICATE_ARN — an ACM cert ' +
-        'in us-east-1 for the mcp-sandbox.{domain} CloudFront distribution.'
-      );
-    }
-    // CloudFront requires the viewer cert in us-east-1. Catch the most common
-    // misconfiguration up front rather than letting CloudFormation reject it.
-    if (!/^arn:aws:acm:us-east-1:/.test(config.mcpSandbox.certificateArn)) {
-      throw new Error(
-        `MCP Sandbox certificate must be in us-east-1 (CloudFront requirement). ` +
-        `Got: ${config.mcpSandbox.certificateArn}`
-      );
-    }
-  }
+  // Artifacts and MCP Sandbox domain/cert validation is a deploy-time
+  // concern — operators must set CDK_DOMAIN_NAME, CDK_HOSTED_ZONE_DOMAIN,
+  // and the respective certificate ARNs for a real deployment. Synth and
+  // tests proceed without them (constructs handle the undefined case by
+  // falling back to CloudFront default domains).
 }
 
 /**

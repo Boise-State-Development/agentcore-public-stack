@@ -1,0 +1,52 @@
+name: 'Build and push ECR image'
+description: |
+  Run scripts/build/build-one.sh for one of the project's images,
+  with conditional QEMU + buildx setup for arm64 builds (AgentCore
+  Runtime). Wraps the configure-aws-credentials composite + the
+  build script call so per-image jobs in backend.yml stay short.
+inputs:
+  image-name:
+    description: 'Image to build (app-api, inference-api, rag-ingestion)'
+    required: true
+  platform:
+    description: 'Build platform (linux/amd64 or linux/arm64). arm64 sets up QEMU + buildx.'
+    required: false
+    default: 'linux/amd64'
+  aws-region:
+    description: 'AWS region for ECR push'
+    required: true
+  aws-role-arn:
+    description: 'AWS role ARN for OIDC auth (preferred)'
+    required: false
+  aws-access-key-id:
+    description: 'AWS access key ID fallback'
+    required: false
+  aws-secret-access-key:
+    description: 'AWS secret access key fallback'
+    required: false
+outputs:
+  image_tag:
+    description: 'Content-hash image tag pushed to ECR'
+    value: ${{ steps.build.outputs.image_tag }}
+runs:
+  using: 'composite'
+  steps:
+    - uses: ./.github/actions/configure-aws-credentials
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        aws-role-arn: ${{ inputs.aws-role-arn }}
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+    # Inference API runs on AgentCore Runtime (linux/arm64). On the
+    # amd64 GitHub-hosted runner we need QEMU + buildx emulation so
+    # `docker build --platform linux/arm64` works.
+    - if: inputs.platform == 'linux/arm64'
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+      with:
+        platforms: arm64
+    - if: inputs.platform == 'linux/arm64'
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+    - name: Build & push ${{ inputs.image-name }}
+      id: build
+      shell: bash
+      run: bash scripts/build/build-one.sh ${{ inputs.image-name }}

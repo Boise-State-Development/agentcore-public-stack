@@ -142,16 +142,26 @@ infrastructure/
 ├── cdk.json                    # CDK configuration
 ├── cdk.context.json            # CDK context values
 ├── bin/
-│   └── infrastructure.ts       # CDK app entry point
+│   └── infrastructure.ts       # CDK app entry point (single PlatformStack)
 ├── lib/
 │   ├── config.ts               # Configuration loader & validator
-│   ├── infrastructure-stack.ts # VPC, networking, DynamoDB tables
-│   ├── app-api-stack.ts        # App API Fargate service
-│   ├── inference-api-stack.ts  # Inference API Fargate service
-│   ├── frontend-stack.ts       # CloudFront + S3 distribution
-│   └── gateway-stack.ts        # API Gateway + Lambda functions
+│   ├── platform-stack.ts       # The one stack — all infrastructure
+│   └── constructs/             # 39 reusable CDK constructs
+│       ├── network/            # VPC, ALB, ECS cluster
+│       ├── identity/           # Cognito, secrets, KMS, OAuth
+│       ├── data/               # DynamoDB tables, file uploads
+│       ├── rag/                # RAG documents, vectors
+│       ├── rag-ingestion/      # RAG ingestion Lambda
+│       ├── artifacts/          # Artifact rendering pipeline
+│       ├── mcp-sandbox/        # MCP Apps sandbox proxy
+│       ├── agentcore/          # Memory, Code Interpreter, Browser, Gateway
+│       ├── inference-api/      # AgentCore Runtime
+│       ├── app-api/            # Fargate service
+│       ├── fine-tuning/        # SageMaker IAM
+│       ├── spa/                # SPA CloudFront distribution
+│       └── zones/              # Route53, ALB DNS
 └── test/
-    └── infrastructure.test.ts  # CDK stack tests
+    └── *.test.ts               # CDK construct + stack tests
 ```
 
 ## Documentation Structure
@@ -181,27 +191,22 @@ scripts/
 ├── common/                     # Shared utilities
 │   ├── install-deps.sh
 │   └── load-env.sh
-├── stack-app-api/              # App API deployment scripts
-│   ├── build.sh
-│   ├── deploy.sh
-│   ├── push-to-ecr.sh
-│   └── test.sh
-├── stack-inference-api/        # Inference API deployment scripts
-│   ├── build.sh
-│   ├── deploy.sh
-│   ├── push-to-ecr.sh
-│   └── test.sh
-├── stack-frontend/             # Frontend deployment scripts
-│   ├── build.sh
-│   ├── deploy-assets.sh
-│   └── deploy-cdk.sh
-├── stack-gateway/              # Gateway deployment scripts
-│   ├── build-cdk.sh
+├── build/                      # Content-hash Docker build pipeline
+│   ├── compute-content-hash.sh
+│   ├── build-and-push-if-changed.sh
+│   ├── build-one.sh
+│   └── build-all-images.sh
+├── platform/                   # Infrastructure (CDK) deploy scripts
+│   ├── synth.sh
 │   └── deploy.sh
-└── stack-infrastructure/       # Infrastructure deployment scripts
-    ├── build.sh
-    ├── deploy.sh
-    └── synth.sh
+├── frontend/                   # SPA build + S3 deploy scripts
+│   ├── build.sh
+│   └── deploy.sh
+├── teardown/                   # Stack destruction
+│   └── destroy.sh
+├── nightly/                    # E2E test + smoke test scripts
+└── stack-bootstrap/            # First-deploy data seeding
+    └── seed.sh
 ```
 
 ## Key File Locations
@@ -254,7 +259,7 @@ scripts/
 ### Infrastructure
 
 - **Files**: kebab-case (e.g., `app-api-stack.ts`)
-- **Classes**: PascalCase (e.g., `AppApiStack`)
+- **Classes**: PascalCase (e.g., `PlatformStack`)
 - **Functions**: camelCase (e.g., `getResourceName`)
 - **Constants**: UPPER_SNAKE_CASE (e.g., `DEFAULT_REGION`)
 

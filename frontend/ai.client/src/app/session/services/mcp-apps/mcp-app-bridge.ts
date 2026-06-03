@@ -38,6 +38,7 @@ import type {
 } from '../../../shared/utils/stream-parser';
 import {
   ConsentRequest,
+  DisplayMode,
   HostContext,
   JsonRpcId,
   JsonRpcMessage,
@@ -49,6 +50,7 @@ import {
   M_OPEN_LINK,
   M_PING,
   M_REQUEST_DISPLAY_MODE,
+  RequestDisplayModeParams,
   M_RESOURCE_TEARDOWN,
   M_SANDBOX_PROXY_READY,
   M_SANDBOX_RESOURCE_READY,
@@ -56,6 +58,7 @@ import {
   M_TOOLS_CALL,
   M_TOOL_CANCELLED,
   M_TOOL_INPUT,
+  M_TOOL_INPUT_PARTIAL,
   M_TOOL_RESULT,
   M_UI_INITIALIZE,
   M_UI_INITIALIZED,
@@ -93,6 +96,21 @@ export interface McpAppBridgeDeps {
   nonce: string;
   /** Complete tool-call arguments for `ui/notifications/tool-input`. */
   getToolInput: () => Record<string, unknown>;
+  /**
+   * Latest server-healed streamed PARTIAL tool input, or null if none yet
+   * (SEP-1865 `tool-input-partial`). Optional: absent ⇒ no progressive
+   * streaming, the bridge sends only the complete `tool-input` (PR #4
+   * behavior). The component drives subsequent partials via
+   * `sendToolInputPartial`; this getter only seeds the value at init time.
+   */
+  getPartialToolInput?: () => Record<string, unknown> | null;
+  /**
+   * Whether the tool's input has finished streaming. Optional: absent ⇒
+   * treated as final (PR #4 behavior — send the complete `tool-input` at
+   * init). When present and false at init, the bridge sends the latest
+   * partial instead and waits for the component to call `sendToolInputFinal`.
+   */
+  isToolInputFinal?: () => boolean;
   /** Tool result as an MCP `CallToolResult`, or null if not yet available. */
   getToolResult: () => unknown | null;
   /** Current host UI context (theme, displayMode, …). */
@@ -132,6 +150,15 @@ export interface McpAppBridgeDeps {
    * the frame renders, so the bridge only ever asks for `open-link`.
    */
   requestConsent?: (req: ConsentRequest) => Promise<boolean>;
+  /**
+   * Apply an App-initiated `ui/request-display-mode` change (e.g. expand to
+   * fullscreen). The component owns the DOM, so it decides what it can
+   * honor and returns the mode it actually applied — the spec requires the
+   * host respond with the *resulting* mode, not the requested one. Absent
+   * (older hosts / tests) ⇒ the host stays inline-only and every request
+   * resolves to `inline`, advertising only `['inline']` at initialize.
+   */
+  requestDisplayMode?: (mode: DisplayMode) => DisplayMode;
   /** Non-fatal diagnostics (validation drops, protocol slips). */
   onWarn?: (message: string) => void;
 }
@@ -149,8 +176,12 @@ export class McpAppBridge {
   /** Notifications deferred until the View reports `initialized`. */
   private readonly preInitQueue: Array<{ method: string; params: unknown }> = [];
 
-  /** Whether tool-input was already pushed (spec: at most once). */
+  /** Whether the COMPLETE tool-input was sent (spec: at most once). Partials
+   *  (`tool-input-partial`) may stream freely before this flips true. */
   private toolInputSent = false;
+
+  /** Current display mode (host-owned; mirrored to the View on change). */
+  private displayMode: DisplayMode = 'inline';
 
   /** Pending host→View requests awaiting a JSON-RPC response, by id. */
   private readonly pending = new Map<
@@ -168,6 +199,15 @@ export class McpAppBridge {
     if (this.listener) return;
     this.listener = (ev: MessageEvent) => this.onMessage(ev);
     this.d.hostWindow.addEventListener('message', this.listener);
+  }
+
+  /**
+   * Whether the View has reported `initialized`. A paced partial-input relay
+   * reads this so it doesn't push sends into `preInitQueue` (which flushes all
+   * at once on initialize) — which would collapse the pacing back into a burst.
+   */
+  get viewIsInitialized(): boolean {
+    return this.viewInitialized;
   }
 
   /**
@@ -342,9 +382,18 @@ export class McpAppBridge {
 
       case M_REQUEST_DISPLAY_MODE: {
         if (!isRequest(msg)) return;
-        // PR #4 host only renders inline; spec: MUST return the resulting
-        // mode (the current one when the request can't be honored).
-        this.respond(msg.id, { mode: 'inline' });
+        const requested = (msg.params as RequestDisplayModeParams | undefined)
+          ?.mode;
+        // Spec: MUST return the *resulting* mode (the current one when the
+        // request can't be honored). The component owns the DOM and decides;
+        // this host supports inline + fullscreen (pip falls back to inline).
+        const resulting: DisplayMode =
+          this.d.requestDisplayMode &&
+          (requested === 'fullscreen' || requested === 'inline')
+            ? this.d.requestDisplayMode(requested)
+            : 'inline';
+        this.setDisplayMode(resulting);
+        this.respond(msg.id, { mode: resulting });
         return;
       }
 
@@ -467,10 +516,32 @@ export class McpAppBridge {
       },
       hostContext: {
         ...this.d.getHostContext(),
-        displayMode: 'inline',
-        availableDisplayModes: ['inline'],
+        displayMode: this.displayMode,
+        availableDisplayModes: this.availableDisplayModes(),
       },
     });
+  }
+
+  /** Modes this host can switch to — fullscreen only when the dep is wired. */
+  private availableDisplayModes(): DisplayMode[] {
+    return this.d.requestDisplayMode ? ['inline', 'fullscreen'] : ['inline'];
+  }
+
+  /**
+   * Record the resulting display mode and, on an actual change, tell the
+   * View via `host-context-changed`. Covers both App-initiated requests
+   * (via `ui/request-display-mode`) and host-initiated exits (the user
+   * dismissing fullscreen — see `notifyDisplayMode`).
+   */
+  private setDisplayMode(mode: DisplayMode): void {
+    if (mode === this.displayMode) return;
+    this.displayMode = mode;
+    this.notifyHostContextChanged({ displayMode: mode });
+  }
+
+  /** Host-initiated display-mode change (e.g. the user exits fullscreen). */
+  notifyDisplayMode(mode: DisplayMode): void {
+    this.setDisplayMode(mode);
   }
 
   // --- outbound -----------------------------------------------------------
@@ -507,16 +578,42 @@ export class McpAppBridge {
     this.nonceArmed = true;
   }
 
-  /** Push `tool-input` (once) then `tool-result` if it's available. */
+  /**
+   * Push tool input + result on `initialized`. If the input is still
+   * streaming (`isToolInputFinal` present and false), send the latest healed
+   * PARTIAL — the App renders progressively — and defer the complete
+   * `tool-input` until the component calls `sendToolInputFinal`. Otherwise
+   * (final, or no streaming wired) send the complete `tool-input` once. The
+   * `tool-result` follows when available.
+   */
   private pushToolData(): void {
-    if (!this.toolInputSent) {
-      this.toolInputSent = true;
-      this.sendNotification(M_TOOL_INPUT, { arguments: this.d.getToolInput() });
+    const final = this.d.isToolInputFinal?.() ?? true;
+    if (final) {
+      this.sendToolInputFinal();
+    } else {
+      const partial = this.d.getPartialToolInput?.();
+      if (partial) this.sendToolInputPartial(partial);
     }
     const result = this.d.getToolResult();
     if (result != null) {
       this.sendNotification(M_TOOL_RESULT, result);
     }
+  }
+
+  /**
+   * Relay a streamed partial tool-input (SEP-1865). No-op once the complete
+   * `tool-input` has been sent — late partials must never clobber the final.
+   */
+  sendToolInputPartial(args: Record<string, unknown>): void {
+    if (this.toolInputSent) return;
+    this.sendNotification(M_TOOL_INPUT_PARTIAL, { arguments: args });
+  }
+
+  /** Send the complete `tool-input` exactly once (spec: at most one). */
+  sendToolInputFinal(): void {
+    if (this.toolInputSent) return;
+    this.toolInputSent = true;
+    this.sendNotification(M_TOOL_INPUT, { arguments: this.d.getToolInput() });
   }
 
   /** Re-push the tool result if it arrives/changes after init. */

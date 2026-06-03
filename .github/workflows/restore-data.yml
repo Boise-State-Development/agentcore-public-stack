@@ -1,0 +1,90 @@
+name: Restore Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_bucket:
+        description: 'Backup S3 bucket name (e.g. myprefix-backup-20260520T173042Z)'
+        required: true
+        type: string
+      manifest_key:
+        description: 'Manifest key in backup bucket (e.g. myprefix/20260520T173042Z/manifest.json)'
+        required: true
+        type: string
+      target_prefix:
+        description: 'Target CDK project prefix'
+        required: true
+        type: string
+      region:
+        description: 'AWS region'
+        required: true
+        type: string
+        default: 'us-west-2'
+      dry_run:
+        description: 'Dry run (print what would be restored without writing)'
+        required: false
+        type: boolean
+        default: true
+      skip_cognito_users:
+        description: 'Skip Cognito user import'
+        required: false
+        type: boolean
+        default: false
+      aws_environment:
+        description: "GitHub Environment (selects AWS_ROLE_ARN secret + approvals)"
+        required: true
+        type: choice
+        default: development
+        options:
+          - development
+          - staging
+          - production
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    # Required so that `vars.*` and `secrets.*` references below resolve
+    # against the chosen GitHub Environment. Without this they silently
+    # resolve to empty strings and configure-aws-credentials fails with
+    # "Could not load credentials from any providers". Matches the
+    # pattern used by backup-data.yml, teardown.yml, platform.yml, etc.
+    environment: ${{ inputs.aws_environment }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ inputs.region }}
+          aws-role-arn: ${{ vars.AWS_ROLE_ARN || secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+
+      - name: Install dependencies
+        working-directory: scripts/restore-data
+        run: uv sync
+
+      - name: Run restore
+        working-directory: scripts/restore-data
+        env:
+          BACKUP_BUCKET: ${{ inputs.backup_bucket }}
+          MANIFEST_KEY: ${{ inputs.manifest_key }}
+          TARGET_PREFIX: ${{ inputs.target_prefix }}
+          REGION: ${{ inputs.region }}
+        run: |
+          ARGS="--backup-bucket $BACKUP_BUCKET --manifest-key $MANIFEST_KEY --target-prefix $TARGET_PREFIX --region $REGION"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ inputs.skip_cognito_users }}" = "true" ]; then
+            ARGS="$ARGS --skip-cognito-users"
+          fi
+          uv run python restore.py $ARGS

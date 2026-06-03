@@ -13,59 +13,27 @@
   "infrastructureHostedZoneDomain": "",
   "albSubdomain": "",
   "certificateArn": "",
-  "imageTag": "",
   "frontend": {
     "certificateArn": "",
-    "enabled": true,
     "bucketName": "",
     "cloudFrontPriceClass": "PriceClass_100"
   },
   "appApi": {
-    "enabled": true,
     "cpu": 512,
     "memory": 1024,
     "desiredCount": 2,
     "maxCapacity": 10
   },
-  "inferenceApi": {
-    "enabled": true,
-    "cpu": 1024,
-    "memory": 2048,
-    "desiredCount": 1,
-    "maxCapacity": 5,
-    "logLevel": "INFO"
-  },
-  "gateway": {
-    "enabled": true,
-    "apiType": "HTTP",
-    "throttleRateLimit": 10000,
-    "throttleBurstLimit": 5000,
-    "enableWaf": false,
-    "logLevel": "INFO"
-  },
-  "fileUpload": {
-    "enabled": true,
-    "maxFileSizeBytes": 4194304,
-    "maxFilesPerMessage": 5,
-    "userQuotaBytes": 1073741824,
-    "retentionDays": 365
-  },
-  "assistants": {
-    "enabled": true
-  },
+  "inferenceApi": {},
   "ragIngestion": {
-    "enabled": true,
     "lambdaMemorySize": 3008,
     "lambdaTimeout": 900,
     "embeddingModel": "amazon.titan-embed-text-v2",
     "vectorDimension": 1024,
     "vectorDistanceMetric": "cosine"
   },
-  "fineTuning": {
-    "enabled": false
-  },
+  "fineTuning": {},
   "artifacts": {
-    "enabled": false,
     "certificateArn": "",
     "retentionDays": 90
   },

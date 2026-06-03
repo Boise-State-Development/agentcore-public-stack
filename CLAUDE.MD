@@ -24,15 +24,18 @@ npm test         # Tests (Vitest via Analog.js)
 ### Infrastructure
 ```bash
 cd infrastructure
-npm install
-npm run build
+npm ci
+npx tsc --noEmit
+npx jest
 npx cdk synth
-npx cdk deploy --all
+npx cdk deploy {prefix}-PlatformStack
 ```
 
 ## Key Conventions
 
-- **Deploy order:** Infrastructure → (Gateway, RAG Ingestion, SageMaker Fine-Tuning, Artifacts, MCP Sandbox — parallel-safe) → Inference API → App API → Frontend (App API reads `runtime-workload-identity-name` from SSM, published by Inference API; Inference API + App API + Frontend conditionally consume `/{prefix}/artifacts/*` SSM params when `CDK_ARTIFACTS_ENABLED=true`; Inference API conditionally consumes `/{prefix}/mcp-sandbox/origin` into `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` when `CDK_MCP_SANDBOX_ENABLED=true`)
+- **Single CDK stack.** All AWS resources live in `PlatformStack`. There are no cross-stack dependencies to manage and no other CDK stack to deploy in a particular order. Application code is shipped out-of-band by `backend.yml` via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update), not via CDK.
+- **Deploy order:** `platform.yml` (CDK) when infra changes → `backend.yml` (parallel per-image: app-api, inference-api, rag-ingestion, artifact-render) → `frontend-deploy.yml` (S3 + CloudFront). Bootstrap data seeding is a one-time post-deploy step. Day-to-day backend code changes only run `backend.yml`.
+- **Compute image URIs are read from SSM at CFN deploy time** (`/<prefix>/app-api/image-tag`, `/<prefix>/inference-api/image-tag`). The build pipeline owns those parameters; CFN always picks up the latest live image when re-registering the task def or Runtime, so infra-only deploys never revert a live service to the bootstrap stub.
 - **Admin endpoints** go under `/admin/<domain>/`, user-facing under `/<domain>/`
 - **Errors stream as assistant messages** via SSE (not HTTP error codes)
 - **Signal-based state** throughout frontend (`signal()`, `computed()`)
@@ -47,7 +50,8 @@ npx cdk deploy --all
 | `content_block_start/delta/stop` | Streaming content |
 | `message_stop` | End of message |
 | `tool_use` / `tool_result` | Tool invocation and result |
-| `ui_resource` | MCP App UI for a tool result (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}`, emitted right after the correlated `tool_result` when the tool declared a `ui://` resource. HTML fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty unless the mcp-sandbox stack is deployed — inference-api consumes its SSM origin only when `CDK_MCP_SANDBOX_ENABLED=true`; an empty origin means the SPA cannot frame the App). Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7; set `=false` to opt an environment out) |
+| `ui_resource` | MCP App UI for a tool (SEP-1865) — payload `{type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin, serverName, icon, toolName}`. Emitted at the tool's `content_block_start` (early frame mount, so the App's bridge is live *while* the model streams the tool's arguments — see `ui_tool_input_partial`); falls back to right after the correlated `tool_result` if the name wasn't known at block start. At `content_block_start` a **header-only shell** (`html: ""`, full `serverName`/`icon`/`resourceUri` but no `resources/read`) is emitted *first* so the App frame's header (icon + server + tool + shimmer) replaces the plain tool rail with no flash; the full html-bearing event follows after the read and, last-write-wins, mounts the iframe (the SPA gates the iframe on a non-empty `html`). Deduped per `toolUseId` (the header shell on its own set, so it never blocks the full emit). HTML fetched server-side via `resources/read` and inlined; `sandboxOrigin` is the proxy.html origin the SPA frames it in (empty unless the mcp-sandbox stack is deployed — inference-api consumes its SSM origin only when `CDK_MCP_SANDBOX_ENABLED=true`; an empty origin means the SPA cannot frame the App). `serverName`/`icon`/`toolName` drive the App frame's connected header (Claude parity): `serverName`/`icon` resolve from the MCP `initialize` `serverInfo` (`title`→`name`, plus its `icons`); `serverName` falls back to the title-cased `ui://` authority, and `icon` falls back to the server's served MCPB `manifest.json` icon — fetched server-side from `<server-origin>/manifest.json` (same-origin only, cached per origin, base64-inlined as a `data:` URI; the runtime MCP protocol carries no icon, so this mirrors what Claude inlines from the installed bundle), else empty (→ generic glyph). A large auto-fetched icon is NOT persisted (size-gated against the 400KB DynamoDB item limit), so it shows live but reloads to the glyph; `toolName` is the agent-facing tool name, carried on the event so the header's name + running shimmer appear atomically with the frame's promotion (not gated on the separately-streamed message content). All three persist with the resource so the header survives reload. Gated by `AGENTCORE_MCP_APPS_HOST_ENABLED` (default true since PR #7; set `=false` to opt an environment out) |
+| `ui_tool_input_partial` | Streamed partial tool input for a UI tool (SEP-1865 `ui/notifications/tool-input-partial`) — payload `{type, toolUseId, arguments}`. Emitted repeatedly while the model is still streaming a UI tool's arguments (after the early `ui_resource` mount); `arguments` is the streamed prefix server-side "healed" into a valid object (`apis/shared/mcp_apps/partial_json.py`). The SPA relays each to the App via `ui/notifications/tool-input-partial` so a progressively-rendering App (e.g. Excalidraw's guided camera tour) animates as args arrive; the complete `tool-input` follows once the input is final. Same gating as `ui_resource` |
 | `stream_error` | Conversational error |
 | `oauth_required` | External MCP tool needs user consent — payload `{providerId, authorizationUrl}`, one event per provider emitted after `message_stop` |
 | `compaction` | Backend rolled older turns into a summary on this turn — payload `{previousCheckpoint, newCheckpoint, summarizedTurns, inputTokens}`, emitted after the final `metadata` event so the badge updates first, before `done` |
@@ -79,8 +83,9 @@ Today A2A is **client-only** — `A2AAgentConfig` (`apis/shared/tools/models.py`
 | New admin endpoint | `backend/src/apis/app_api/admin/<domain>/` |
 | New agent tool | `backend/src/agents/main_agent/tools/` + register in `__init__.py` |
 | New Angular page | `frontend/ai.client/src/app/<feature>/` |
-| New CDK stack | `infrastructure/lib/<stack-name>-stack.ts` (also: register in `test/stack-dependencies.test.ts` with a tier, add scripts in `scripts/stack-<name>/`, add a workflow in `.github/workflows/`, update `step-04-deploy.md`) |
-| New Lambda for an infra stack | `backend/src/lambdas/<lambda-name>/` (one folder per Lambda; not part of the `apis/` import boundary) |
+| New CDK construct | `infrastructure/lib/constructs/<area>/` (compose into `PlatformStack` via `lib/platform-stack.ts`; if it needs to expose values to compute constructs, thread them through `PlatformComputeRefs` rather than via SSM) |
+| Note: there are no separate CDK *stacks* anymore — every resource lives in the single `PlatformStack`. |
+| New Lambda for an infra construct | `backend/src/lambdas/<lambda-name>/` (one folder per Lambda; not part of the `apis/` import boundary) |
 | Shared backend code | `backend/src/apis/shared/<domain>/` |
 
 ### Inference API boundary

@@ -1,0 +1,344 @@
+name: Backend Deploy
+
+on:
+  workflow_dispatch:
+  # ----------------------------------------------------------------- #
+  # TEMPORARY: push triggers disabled to give downstream forks a buffer
+  # to absorb the platform-as-bootstrap refactor + cross-pool sub-remap
+  # restore changes. Re-enable by uncommenting the block below.
+  # ----------------------------------------------------------------- #
+  # push:
+  #   branches: [develop, main]
+  #   paths:
+  #     - 'backend/**'
+  #     - 'scripts/build/**'
+  #     - '.github/workflows/backend.yml'
+
+permissions:
+  contents: read
+
+env:
+  CDK_REQUIRE_APPROVAL: never
+  LOAD_ENV_QUIET: true
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: false
+
+# ------------------------------------------------------------
+# This workflow has one job per Docker image so the dashboard
+# shows three independent build statuses (Build app-api,
+# Build inference-api, Build rag-ingestion). Each build job
+# computes a content hash of its image's input surface and
+# skips the actual `docker build` + `docker push` when ECR
+# already has an image with that tag — so a check-in that
+# only touches one service rebuilds only that one image.
+#
+# All three build jobs are independent and run in parallel.
+# The deploy job waits on all three so we can be sure every
+# image's content-hash tag is in SSM before CDK reads it at
+# synth time.
+# ------------------------------------------------------------
+
+jobs:
+  test-infra:
+    name: Test infrastructure (jest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+      - name: Install
+        working-directory: infrastructure
+        run: npm ci --prefer-offline
+      - name: Run tests
+        working-directory: infrastructure
+        run: npx jest --maxWorkers=2
+
+  test-backend:
+    name: Test backend (pytest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --extra agentcore --extra dev
+      - name: Run pytest
+        working-directory: backend
+        run: uv run pytest tests/ -v
+
+  build-app-api:
+    name: Build app-api image
+    needs: test-backend
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/build-and-push-image
+        id: build
+        with:
+          image-name: app-api
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+  build-inference-api:
+    name: Build inference-api image
+    needs: test-backend
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/build-and-push-image
+        id: build
+        with:
+          image-name: inference-api
+          platform: linux/arm64
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+  build-rag-ingestion:
+    name: Build rag-ingestion image
+    needs: test-backend
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/build-and-push-image
+        id: build
+        with:
+          image-name: rag-ingestion
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+  deploy-artifact-render-code:
+    name: Deploy artifact-render Lambda code
+    # Lambda zip code deploy. Mirrors the build-* jobs but for a
+    # zip-based Lambda whose configuration lives in PlatformStack
+    # with a stable bootstrap zip; this step ships the real handler
+    # code via `aws lambda update-function-code` if its content hash
+    # has changed since last deploy.
+    needs: test-backend
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      code_hash: ${{ steps.deploy.outputs.code_hash }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy artifact-render code
+        id: deploy
+        run: bash scripts/build/deploy-zip-lambda-one.sh artifact-render
+
+  deploy-rag-ingestion-code:
+    name: Deploy rag-ingestion Lambda image
+    # Image-Lambda code deploy. The image was already built and
+    # pushed by the build-rag-ingestion job; this step points the
+    # Lambda at the new tag via `aws lambda update-function-code
+    # --image-uri`. Mirrors deploy-artifact-render-code, but for
+    # a DockerImage Lambda whose code lives in ECR.
+    needs: [build-rag-ingestion, test-backend]
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.deploy.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy rag-ingestion image
+        id: deploy
+        run: bash scripts/build/deploy-image-lambda-one.sh rag-ingestion
+
+  deploy-inference-api-code:
+    name: Deploy inference-api image to AgentCore Runtime
+    # Phase 5 of the platform-as-bootstrap refactor: the AgentCore
+    # Runtime is configured in CDK with a stable bootstrap container
+    # image; this step ships the real image via
+    # `aws bedrock-agentcore-control update-agent-runtime`. Mirrors
+    # deploy-rag-ingestion-code but for a Runtime instead of a Lambda.
+    needs: [build-inference-api, test-backend]
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.deploy.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy inference-api image
+        id: deploy
+        run: bash scripts/build/deploy-runtime-image-one.sh inference-api
+
+  deploy-app-api-code:
+    name: Deploy app-api image to ECS Fargate service
+    # Phase 6 of the platform-as-bootstrap refactor: the App API
+    # task definition is built in CDK with a stable bootstrap
+    # container image; this step ships the real image via
+    # `aws ecs register-task-definition` (registers a new revision
+    # of the same family) followed by `aws ecs update-service` and
+    # `aws ecs wait services-stable`.
+    needs: [build-app-api, test-backend]
+    runs-on: ubuntu-24.04
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    outputs:
+      image_tag: ${{ steps.deploy.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy app-api image
+        id: deploy
+        run: bash scripts/build/deploy-ecs-service-one.sh app-api

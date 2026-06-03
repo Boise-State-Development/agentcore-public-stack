@@ -1,6 +1,6 @@
 ---
 name: cdk-infrastructure
-description: AWS CDK infrastructure development with TypeScript. Use when creating or modifying CDK stacks, constructs, DynamoDB tables, ECS/Fargate services, Lambda functions, S3 buckets, networking, IAM roles, or any CloudFormation resources. Covers configuration patterns, cross-stack references via SSM, naming conventions, and Bedrock AgentCore integration.
+description: AWS CDK infrastructure development with TypeScript. Use when creating or modifying CDK constructs, DynamoDB tables, ECS/Fargate services, Lambda functions, S3 buckets, networking, IAM roles, or any CloudFormation resources. Covers configuration patterns, single-stack architecture, naming conventions, and Bedrock AgentCore integration.
 ---
 
 # AWS CDK Infrastructure Best Practices
@@ -11,22 +11,34 @@ description: AWS CDK infrastructure development with TypeScript. Use when creati
 - Import from `aws-cdk-lib` and `constructs`
 - Use L2 constructs when available, L1 (Cfn*) when necessary
 
-## Stack Organization
+## Architecture — Single Stack
+
+The entire application is provisioned by **one CDK stack** (`PlatformStack`). Application code is shipped out-of-band via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update).
 
 ```
 infrastructure/
-├── bin/infrastructure.ts          # App entrypoint
+├── bin/infrastructure.ts          # App entrypoint (instantiates PlatformStack)
 ├── lib/
-│   ├── config.ts                  # Configuration loader
-│   ├── infrastructure-stack.ts    # Network resources (deploy first)
-│   ├── app-api-stack.ts           # Backend services
-│   └── my-new-stack.ts            # New stacks go here
-└── cdk.context.json               # Configuration
+│   ├── platform-stack.ts          # The one stack — all infrastructure
+│   ├── config.ts                  # Configuration loader & validator
+│   └── constructs/                # 39 reusable CDK constructs
+│       ├── network/               # VPC, ALB, ECS cluster
+│       ├── identity/              # Cognito, secrets, KMS, OAuth
+│       ├── data/                  # DynamoDB tables, file uploads
+│       ├── rag/                   # RAG documents, vectors
+│       ├── rag-ingestion/         # RAG ingestion Lambda
+│       ├── artifacts/             # Artifact rendering pipeline
+│       ├── mcp-sandbox/           # MCP Apps sandbox proxy
+│       ├── agentcore/             # Memory, Code Interpreter, Browser, Gateway
+│       ├── inference-api/         # AgentCore Runtime
+│       ├── app-api/               # Fargate service
+│       ├── fine-tuning/           # SageMaker IAM
+│       ├── spa/                   # SPA CloudFront distribution
+│       └── zones/                 # Route53, ALB DNS
+└── cdk.context.json               # Configuration defaults
 ```
 
-**Deployment Order:**
-1. `InfrastructureStack` - VPC, ALB, ECS Cluster (always first)
-2. Other stacks import network resources via SSM
+**Key principle:** CDK deploys are rare (infrastructure changes only). Day-to-day code changes deploy via `backend.yml` (AWS API calls, no CDK).
 
 ## Configuration
 
@@ -34,18 +46,12 @@ Use the centralized config system:
 
 ```typescript
 import { loadConfig, getResourceName, getStackEnv, applyStandardTags } from './config';
+```
 
-export class MyStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    const config = loadConfig(scope);
-    super(scope, id, {
-      ...props,
-      env: getStackEnv(config),
-      stackName: getResourceName(config, 'my-stack'),
-    });
-    applyStandardTags(this, config);
-  }
-}
+PlatformStack receives config via props:
+```typescript
+const config = loadConfig(app);
+new PlatformStack(app, `${config.projectPrefix}-PlatformStack`, { config, env });
 ```
 
 For configuration patterns, see [references/configuration.md](references/configuration.md).
@@ -57,30 +63,24 @@ For configuration patterns, see [references/configuration.md](references/configu
 getResourceName(config, 'user-quotas')  // "bsu-agentcore-user-quotas"
 ```
 
-**SSM Parameters:** Hierarchical naming:
+**SSM Parameters:** Hierarchical naming for runtime consumption:
 ```
 /{projectPrefix}/{category}/{resource-type}
 ```
 
-Categories: `/network/`, `/quota/`, `/cost-tracking/`, `/auth/`, `/frontend/`, `/gateway/`
+Categories: `/network/`, `/quota/`, `/cost-tracking/`, `/auth/`, `/frontend/`, `/gateway/`, `/rag/`, `/artifacts/`
 
-## Cross-Stack References
+## Cross-Construct References
 
-**Export:**
+Since everything is in one stack, use **typed props** — not SSM:
+
 ```typescript
-new ssm.StringParameter(this, 'VpcIdParam', {
-  parameterName: `/${config.projectPrefix}/network/vpc-id`,
-  stringValue: vpc.vpcId,
-});
+// In PlatformStack:
+const network = new NetworkConstruct(this, 'Network', { config });
+new AlbConstruct(this, 'Alb', { config, vpc: network.vpc });
 ```
 
-**Import:**
-```typescript
-const vpcId = ssm.StringParameter.valueForStringParameter(
-  this,
-  `/${config.projectPrefix}/network/vpc-id`
-);
-```
+SSM parameters are published **only for runtime consumption** by ECS tasks and Lambdas — never for CDK-to-CDK references within the same stack.
 
 ## DynamoDB Tables
 
@@ -93,10 +93,11 @@ For table patterns, see [references/dynamodb.md](references/dynamodb.md).
 
 ## ECS/Fargate
 
-- Import cluster from SSM
+- Cluster created by NetworkConstruct, referenced via typed prop
 - Health checks mandatory
 - Auto-scaling with CPU/memory targets
 - Circuit breaker for rollback
+- Bootstrap container pattern: CDK creates the service with a placeholder image; the backend workflow pushes the real image via `update-service`
 
 For service patterns, see [references/ecs-fargate.md](references/ecs-fargate.md).
 
@@ -105,6 +106,7 @@ For service patterns, see [references/ecs-fargate.md](references/ecs-fargate.md)
 - Use ARM64 architecture (cost optimization)
 - Role with least privilege
 - Secrets Manager access requires wildcard suffix
+- Bootstrap pattern: CDK creates the function with placeholder code; the backend workflow pushes real code via `update-function-code`
 
 For Lambda patterns, see [references/lambda.md](references/lambda.md).
 
@@ -138,19 +140,17 @@ name: getResourceName(config, 'memory').replace(/-/g, '_')
 resources: [`${secret.secretArn}*`]
 ```
 
-**Environment Removal Policy:**
+**Removal Policy:**
 ```typescript
-removalPolicy: config.environment === 'prod'
-  ? cdk.RemovalPolicy.RETAIN
-  : cdk.RemovalPolicy.DESTROY
+removalPolicy: getRemovalPolicy(config)  // RETAIN in prod, DESTROY in dev
 ```
 
 ## CDK Commands
 
 ```bash
 cd infrastructure
-npm install           # Install dependencies
+npm ci                # Install dependencies
 npx cdk synth         # Synthesize CloudFormation
-npx cdk deploy --all  # Deploy all stacks
+npx cdk deploy {prefix}-PlatformStack  # Deploy
 npx cdk diff          # Preview changes
 ```

@@ -82,11 +82,12 @@ DYNAMODB_TABLES: list[dict[str, Any]] = [
     {"logical": "fine-tuning-access",   "ssm": "/fine-tuning/access-table-name",        "optional": True},
 ]
 
-# The app `assistants` table is NOT published to SSM; falls back to the
-# deterministic CDK naming convention `{prefix}-assistants`.
-DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = [
-    {"logical": "assistants", "suffix": "assistants"},
-]
+# DYNAMODB_TABLES_BY_CONVENTION used to include the standalone `assistants`
+# table from the pre-refactor architecture. That table was decommissioned in
+# commit c977e04e — the python app uses the rag-assistants table for both
+# assistant config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME.
+# Empty for now; convention-named tables that show up later go here.
+DYNAMODB_TABLES_BY_CONVENTION: list[dict[str, str]] = []
 
 # Ephemeral / TTL-driven tables. Excluded by default; include with --include-ephemeral.
 DYNAMODB_TABLES_EPHEMERAL: list[dict[str, str]] = [

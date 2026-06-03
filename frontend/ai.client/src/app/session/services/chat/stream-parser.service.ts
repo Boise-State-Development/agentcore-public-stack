@@ -26,6 +26,7 @@ import type {
   CompactionEvent,
   ArtifactEvent,
   UiResourceEvent,
+  ToolInputPartialEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -370,6 +371,15 @@ export class StreamParserService {
         // it keyed by toolUseId. The tool-use renderer picks it up
         // reactively and swaps in the MCP App frame.
         this.mcpAppState.recordLive(data);
+      },
+
+      onToolInputPartial: (data: ToolInputPartialEvent) => {
+        // Streamed partial tool input (SEP-1865). Arrives repeatedly while a
+        // UI tool's args are still streaming (after early frame mount). Record
+        // the latest healed prefix keyed by toolUseId; the frame relays it to
+        // the App as `ui/notifications/tool-input-partial` for progressive
+        // rendering (e.g. Excalidraw's guided camera tour).
+        this.mcpAppState.recordPartialInput(data.toolUseId, data.arguments);
       },
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
@@ -881,13 +891,17 @@ export class StreamParserService {
       cacheWriteInputTokens?: number;
     } | undefined;
 
+    const existingBreakdown = existingMetadata['contextBreakdown'];
+    const newBreakdown = newMetadata['contextBreakdown'];
+
     const needsUpdate =
       (!existingTTFT && newTTFT) ||
       (existingCost === undefined && newCost !== undefined) ||
       (existingTokenUsage?.cacheReadInputTokens === undefined &&
         newTokenUsage?.cacheReadInputTokens !== undefined) ||
       (existingTokenUsage?.cacheWriteInputTokens === undefined &&
-        newTokenUsage?.cacheWriteInputTokens !== undefined);
+        newTokenUsage?.cacheWriteInputTokens !== undefined) ||
+      (existingBreakdown === undefined && newBreakdown !== undefined);
 
     if (needsUpdate) {
       this.completedMessages.update((messages) => {
@@ -972,6 +986,10 @@ export class StreamParserService {
 
     if (metadataEvent.cost !== undefined) {
       result['cost'] = metadataEvent.cost;
+    }
+
+    if (metadataEvent.contextBreakdown !== undefined) {
+      result['contextBreakdown'] = metadataEvent.contextBreakdown;
     }
 
     if (metadataEvent.trace !== undefined) {

@@ -6,6 +6,7 @@ import {
     input,
 } from '@angular/core';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
+import { ContextBreakdown } from '../../../services/models/content-types';
 
 interface CostBreakdown {
     total: number;
@@ -16,6 +17,7 @@ interface CostBreakdown {
 }
 
 interface MessageMetadata {
+    contextBreakdown?: ContextBreakdown;
     latency?: {
         // null = not measured (provider didn't emit timeToFirstByteMs and
         // we couldn't compute it locally). Distinct from 0, which is
@@ -45,6 +47,23 @@ interface MessageMetadata {
     imports: [],
     template: `
         @if (localSettings.showTokenCount() && hasMetadata()) {
+                <!-- Context Breakdown Badge (system / tools / messages) -->
+                @if (contextBreakdown(); as cb) {
+                    <div
+                        class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800/60 dark:text-slate-300"
+                        [title]="contextBreakdownTitle()"
+                    >
+                        <!-- squares-2x2 (context partitions) icon -->
+                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6Zm0 9.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25Zm9.75-9.75A2.25 2.25 0 0 1 15.75 3.75H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6Zm0 9.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
+                        </svg>
+                        <span>Context: {{ formatNumber(cb.total) }}</span>
+                        @for (p of cb.partitions; track p.key) {
+                            <span class="text-slate-500 dark:text-slate-400">· {{ p.label }} {{ formatNumber(p.tokens) }}</span>
+                        }
+                    </div>
+                }
+
             <!-- TTFT Badge -->
                 @if (ttft()) {
                     <div class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
@@ -173,8 +192,30 @@ export class MessageMetadataBadgesComponent {
             !!meta.latency?.timeToFirstToken ||
             !!meta.latency?.endToEndLatency ||
             !!meta.tokenUsage ||
+            !!meta.contextBreakdown ||
             meta.cost !== undefined && meta.cost !== null
         );
+    });
+
+    /** Per-turn context attribution (system / tools / messages). Null unless
+     *  the backend emitted a breakdown with at least one partition. */
+    contextBreakdown = computed<ContextBreakdown | null>(() => {
+        const meta = this.typedMetadata();
+        const cb = meta?.contextBreakdown;
+        if (!cb || !Array.isArray(cb.partitions) || cb.partitions.length === 0) {
+            return null;
+        }
+        return cb;
+    });
+
+    /** Accessible, hover-text summary of the breakdown, e.g.
+     *  "System prompt: 16 · Tools: 655 · Messages: 34". */
+    contextBreakdownTitle = computed(() => {
+        const cb = this.contextBreakdown();
+        if (!cb) return '';
+        return cb.partitions
+            .map((p) => `${p.label}: ${this.formatNumber(p.tokens)}`)
+            .join(' · ');
     });
 
     ttft = computed(() => {

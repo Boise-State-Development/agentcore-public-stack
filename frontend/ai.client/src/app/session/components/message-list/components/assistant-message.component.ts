@@ -123,6 +123,19 @@ interface DisplayBlock {
   toolUseId?: string;
   // For MCP App frames (SEP-1865): the tool result re-shaped for the renderer.
   mcpResult?: ToolResultData;
+  // For MCP App frames: whether the REAL tool result has landed. `mcpResult`
+  // is a non-null success stub until then, so it can't convey this — the frame
+  // needs it as its authoritative "input is final" signal (gates the
+  // partial-tool-input relay vs. the complete `tool-input` send).
+  inputComplete?: boolean;
+  // For MCP App frames: the tool's persisted arguments. On the live path the
+  // frame gets the input from the stream parser / captured partial; on reload
+  // those are empty, so the frame falls back to this (the input that came back
+  // from `GET /messages`) to render the final state instead of a blank canvas.
+  toolInput?: Record<string, unknown>;
+  // For MCP App frames: the agent-facing tool name, shown in the frame's
+  // connected header (the server name + icon come from the `ui_resource`).
+  toolName?: string;
   // For inline OAuth consent prompts
   oauthRequest?: OAuthConsentRequest;
 }
@@ -212,6 +225,9 @@ interface DisplayBlock {
                 class="block w-full"
                 [result]="block.mcpResult!"
                 [toolUseId]="block.toolUseId!"
+                [inputComplete]="block.inputComplete ?? false"
+                [toolInput]="block.toolInput ?? {}"
+                [toolName]="block.toolName ?? ''"
               />
             </div>
           }
@@ -242,23 +258,35 @@ interface DisplayBlock {
       min-width: 0;
     }
 
+    /*
+     * Entry animation. Uses animation-fill-mode: BACKWARDS (not forwards),
+     * and the blocks' resting style is left transform-free.
+     *
+     * Why not forwards: forwards retains the 100% keyframe after the
+     * animation ends, and transform interpolation settles to an identity
+     * MATRIX (not the keyword none). Any retained transform — even identity
+     * — makes the element a containing block for fixed/absolute descendants.
+     * That silently re-anchored the MCP-app fullscreen overlay's
+     * position:fixed to the collapsed 0-height message block instead of the
+     * viewport (measured: 656x0 vs the expected full 1620x933). backwards
+     * applies the 0% frame only during the start delay and then reverts to
+     * the resting style, so no transform lingers.
+     */
     .message-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      opacity: 0;
-      transform: translateY(12px);
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
       min-width: 0;
     }
 
     .text-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     .tool-use-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     .reasoning-block {
-      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: slideInFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
     }
 
     @keyframes slideInFade {
@@ -360,13 +388,16 @@ export class AssistantMessageComponent {
           // UI surface); break the tool group here.
           flushToolGroup();
 
-          result.push({
-            type: 'tool_use_minimized',
-            data: block,
-            toolUseId: toolUse.toolUseId
-          });
-
           if (promotedVisual) {
+            // Legacy promoted visuals still pair a minimized tool card (for
+            // provenance) with the visual. MCP Apps don't — the frame renders
+            // its own connected header (icon + server + tool + the `</>`
+            // request/response toggle), so a separate card would be redundant.
+            result.push({
+              type: 'tool_use_minimized',
+              data: block,
+              toolUseId: toolUse.toolUseId
+            });
             result.push({
               type: 'promoted_visual',
               uiType: promotedVisual.uiType,
@@ -380,6 +411,14 @@ export class AssistantMessageComponent {
               type: 'mcp_app_frame',
               toolUseId: toolUse.toolUseId,
               mcpResult: this.toResultData(toolUse),
+              // The REAL result presence — distinct from `mcpResult`'s stub —
+              // tells the frame the tool's arguments are done streaming.
+              inputComplete: !!toolUse.result,
+              // The persisted arguments — the frame's reload fallback when the
+              // live stream parser / captured partial are gone.
+              toolInput: toolUse.input,
+              // Shown in the frame's connected header.
+              toolName: toolUse.name,
             });
           }
         } else {

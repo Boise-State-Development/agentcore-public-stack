@@ -23,9 +23,10 @@ import {
  *
  * Frontend-only: the request came from a postMessage on the embedded App,
  * not a backend turn, so this is purely a client gate (see
- * {@link McpAppConsentService}). Visually mirrors the OAuth consent prompt
- * so the two read as one family; renders in the message-list strip with
- * the unanchored OAuth prompts.
+ * {@link McpAppConsentService}). Visually mirrors the OAuth consent prompt so
+ * the two read as one family; the App frame renders it inside the frame
+ * (below the title bar, above the iframe) so it stays anchored to the App and
+ * remains visible — and answerable — when the frame is fullscreen.
  */
 @Component({
   selector: 'app-mcp-app-consent-prompt',

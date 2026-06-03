@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { McpAppBridge } from './mcp-app-bridge';
+import type { DisplayMode } from './mcp-app-protocol';
 import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
 
 const SANDBOX_ORIGIN = 'https://mcp-sandbox.example.com';
@@ -64,12 +65,13 @@ interface Harness {
   sendMessage: ReturnType<typeof vi.fn>;
   updateModelContext: ReturnType<typeof vi.fn>;
   requestConsent: ReturnType<typeof vi.fn>;
+  requestDisplayMode: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
   toolResult: { value: unknown | null };
 }
 
 function makeBridge(
-  opts: { withProxy?: boolean; pr6?: boolean } = {},
+  opts: { withProxy?: boolean; pr6?: boolean; displayMode?: boolean } = {},
 ): Harness {
   const host = new FakeHostWindow();
   const proxy = new FakeProxyWindow();
@@ -84,6 +86,9 @@ function makeBridge(
   const sendMessage = vi.fn(async () => undefined);
   const updateModelContext = vi.fn(async () => undefined);
   const requestConsent = vi.fn(async () => true);
+  // Echoes the requested mode (the real component clamps pip→inline; the
+  // bridge already only forwards inline/fullscreen here).
+  const requestDisplayMode = vi.fn((mode: DisplayMode): DisplayMode => mode);
   const warn = vi.fn();
   const toolResult: { value: unknown | null } = {
     value: { content: [{ type: 'text', text: 'ok' }], isError: false },
@@ -101,6 +106,7 @@ function makeBridge(
     // Default harness can proxy; opt out to assert the no-capability path.
     ...(opts.withProxy === false ? {} : { proxyToolCall }),
     ...(opts.pr6 ? { sendMessage, updateModelContext, requestConsent } : {}),
+    ...(opts.displayMode ? { requestDisplayMode } : {}),
     onWarn: warn,
   });
   bridge.start();
@@ -113,6 +119,7 @@ function makeBridge(
     sendMessage,
     updateModelContext,
     requestConsent,
+    requestDisplayMode,
     warn,
     toolResult,
   };
@@ -258,7 +265,7 @@ describe('McpAppBridge', () => {
     expect(h.proxy.byId('l2').error.code).toBe(-32000);
   });
 
-  it('answers ui/request-display-mode with the resulting mode', () => {
+  it('answers ui/request-display-mode with inline when the host lacks the dep', () => {
     handshake(h);
     h.host.deliver(
       {
@@ -270,8 +277,73 @@ describe('McpAppBridge', () => {
       },
       h.proxy,
     );
-    expect(h.proxy.byId('d1').result).toEqual({
-      mode: 'inline',
+    expect(h.proxy.byId('d1').result).toEqual({ mode: 'inline' });
+    // Mode never changed → no host-context-changed churn toward the View.
+    expect(h.proxy.byMethod('ui/notifications/host-context-changed')).toHaveLength(0);
+  });
+
+  describe('with the requestDisplayMode dep wired', () => {
+    beforeEach(() => {
+      h = makeBridge({ displayMode: true });
+    });
+
+    it('advertises inline + fullscreen at initialize', () => {
+      handshake(h);
+      h.host.deliver(
+        { jsonrpc: '2.0', id: 'i1', method: 'ui/initialize', nonce: NONCE, params: {} },
+        h.proxy,
+      );
+      const resp = h.proxy.byId('i1');
+      expect(resp.result.hostContext.displayMode).toBe('inline');
+      expect(resp.result.hostContext.availableDisplayModes).toEqual([
+        'inline',
+        'fullscreen',
+      ]);
+    });
+
+    it('honors a fullscreen request and mirrors it via host-context-changed', () => {
+      handshake(h);
+      // initialized so the host-context-changed notification flushes.
+      h.host.deliver(
+        { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+        h.proxy,
+      );
+      h.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'd1',
+          method: 'ui/request-display-mode',
+          nonce: NONCE,
+          params: { mode: 'fullscreen' },
+        },
+        h.proxy,
+      );
+      expect(h.requestDisplayMode).toHaveBeenCalledWith('fullscreen');
+      expect(h.proxy.byId('d1').result).toEqual({ mode: 'fullscreen' });
+      const changes = h.proxy.byMethod('ui/notifications/host-context-changed');
+      expect(changes.at(-1).params).toEqual({ displayMode: 'fullscreen' });
+    });
+
+    it('exposes host-initiated exit via notifyDisplayMode', () => {
+      handshake(h);
+      h.host.deliver(
+        { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+        h.proxy,
+      );
+      // Enter fullscreen, then the user dismisses it host-side.
+      h.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'd1',
+          method: 'ui/request-display-mode',
+          nonce: NONCE,
+          params: { mode: 'fullscreen' },
+        },
+        h.proxy,
+      );
+      h.bridge.notifyDisplayMode('inline');
+      const changes = h.proxy.byMethod('ui/notifications/host-context-changed');
+      expect(changes.at(-1).params).toEqual({ displayMode: 'inline' });
     });
   });
 
@@ -545,5 +617,97 @@ describe('McpAppBridge', () => {
       np.proxy,
     );
     expect(np.proxy.byId('c4').error.code).toBe(-32601);
+  });
+});
+
+describe('McpAppBridge — streamed partial tool input (SEP-1865)', () => {
+  // Controllable streaming state: `final` flips when the input is complete.
+  function makeStreamingBridge(initial: {
+    partial: Record<string, unknown> | null;
+    final: boolean;
+  }) {
+    const host = new FakeHostWindow();
+    const proxy = new FakeProxyWindow();
+    const state = { ...initial };
+    const bridge = new McpAppBridge({
+      hostWindow: host,
+      getProxyWindow: () => proxy as unknown as Window,
+      sandboxOrigin: SANDBOX_ORIGIN,
+      resource: resource(),
+      nonce: NONCE,
+      getToolInput: () => ({ elements: [{ type: 'rect' }, { type: 'cam' }] }),
+      getPartialToolInput: () => state.partial,
+      isToolInputFinal: () => state.final,
+      getToolResult: () => null,
+      getHostContext: () => ({ theme: 'dark' }),
+      openLink: vi.fn(),
+    });
+    bridge.start();
+    return { bridge, host, proxy, state };
+  }
+
+  function toInitialized(h: { host: FakeHostWindow; proxy: FakeProxyWindow }) {
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready', params: {} },
+      h.proxy,
+    );
+    h.host.deliver(
+      { jsonrpc: '2.0', id: 'i1', method: 'ui/initialize', nonce: NONCE, params: {} },
+      h.proxy,
+    );
+    h.host.deliver(
+      { jsonrpc: '2.0', method: 'ui/notifications/initialized', nonce: NONCE },
+      h.proxy,
+    );
+  }
+
+  const PARTIAL = 'ui/notifications/tool-input-partial';
+  const FINAL = 'ui/notifications/tool-input';
+
+  it('on initialized while streaming, sends the partial and NOT the final', () => {
+    const h = makeStreamingBridge({ partial: { elements: [{ type: 'rect' }] }, final: false });
+    toInitialized(h);
+    const partials = h.proxy.byMethod(PARTIAL);
+    expect(partials).toHaveLength(1);
+    expect(partials[0].params).toEqual({ arguments: { elements: [{ type: 'rect' }] } });
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(0);
+  });
+
+  it('on initialized when already final, sends the complete tool-input', () => {
+    const h = makeStreamingBridge({ partial: null, final: true });
+    toInitialized(h);
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(0);
+    const finals = h.proxy.byMethod(FINAL);
+    expect(finals).toHaveLength(1);
+    expect(finals[0].params).toEqual({
+      arguments: { elements: [{ type: 'rect' }, { type: 'cam' }] },
+    });
+  });
+
+  it('streams further partials, then the final exactly once; late partials are ignored', () => {
+    const h = makeStreamingBridge({ partial: { elements: [{ type: 'rect' }] }, final: false });
+    toInitialized(h);
+
+    h.bridge.sendToolInputPartial({ elements: [{ type: 'rect' }, { type: 'cam' }] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(2);
+
+    // Input completes → final goes out once.
+    h.bridge.sendToolInputFinal();
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(1);
+    h.bridge.sendToolInputFinal();
+    expect(h.proxy.byMethod(FINAL)).toHaveLength(1);
+
+    // A late partial after the final must not clobber it.
+    h.bridge.sendToolInputPartial({ elements: [] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(2);
+  });
+
+  it('queues a pre-initialized partial and flushes it on initialized', () => {
+    const h = makeStreamingBridge({ partial: null, final: false });
+    // Before initialized: a partial should queue, not post.
+    h.bridge.sendToolInputPartial({ elements: [{ type: 'rect' }] });
+    expect(h.proxy.byMethod(PARTIAL)).toHaveLength(0);
+    toInitialized(h);
+    expect(h.proxy.byMethod(PARTIAL).length).toBeGreaterThanOrEqual(1);
   });
 });

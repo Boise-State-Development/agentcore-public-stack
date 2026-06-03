@@ -1,3 +1,34 @@
+# Release Notes — Unreleased
+
+**Status:** in flight on `main`. Will be cut as v1.0.0-beta.28 once the platform-as-bootstrap refactor + the cross-pool sub-remap restore changes settle.
+
+## ⚠️ Migration notes for existing deployers
+
+- **Unconditional provisioning of Artifacts, MCP Sandbox, and SageMaker fine-tuning.** The `CDK_ARTIFACTS_ENABLED`, `CDK_MCP_SANDBOX_ENABLED`, and `CDK_FINE_TUNING_ENABLED` config flags were removed. These three feature surfaces are now always provisioned by `PlatformStack`. On your next `cdk deploy`, the following resources will be created if they don't already exist: the `artifacts.{domain}` and `mcp-sandbox.{domain}` CloudFront distributions and S3 origins, the artifact-content / artifact-metadata DDB + S3 stack, the artifact-render Lambda, and the SageMaker fine-tuning IAM role + security group + DDB tables. Cost impact when idle is negligible (CloudFront: zero requests, S3: ~empty, DDB: PAY_PER_REQUEST), but the resources will appear in your account.
+- **Compute image URIs now read from SSM at deploy time.** The app-api ECS task definition's `Image` and the AgentCore Runtime's `containerUri` are now read from `/<prefix>/app-api/image-tag` and `/<prefix>/inference-api/image-tag` at CFN deploy time rather than being baked into the synthesized template. Closes a trap where any task-def or Runtime property change in CDK (env var, CPU, role) would CFN-revert the live service to the bootstrap stub. The build pipeline owns those SSM parameters; subsequent CFN re-registrations always pick up the latest live image.
+- **First-deploy seed step.** `scripts/platform/deploy.sh` now runs `cdk synth → cdk-assets publish → seed-image-tags.sh → cdk deploy`. The seed step writes the bootstrap image URI to `/<prefix>/<svc>/image-tag` only if the parameter doesn't already exist (idempotent — no-op after the build pipeline has run). Required because `AWS::SSM::Parameter::Value<String>` template parameters need the SSM path to exist before CFN starts resolving template parameters.
+
+## 🔒 Security regressions fixed
+
+- **BFF cookie-signing KMS key:** the app-api task role was being granted `kms:Encrypt` and `kms:GenerateDataKey` on the BFF cookie key in addition to `kms:Decrypt`. The cookie codec never calls KMS directly — Secrets Manager handles transparent decryption of the data-key secret on the role's behalf — so the only action the role actually needs is `kms:Decrypt`. Split the OAuth-token-encryption KMS grant from the BFF cookie KMS grant; BFF cookie now Decrypt-only. Now exercised by `test/security-policy.test.ts`.
+- **`enforceSSL` missing on `RagDocumentsBucket` and the SPA `FrontendBucket`.** Both buckets now have an explicit Deny on `aws:SecureTransport=false` via `enforceSSL: true`. Asserted by the same security test suite, plus a third assertion that no policy has the dangerous `Action:* + Resource:*` combination.
+- **OAuth / connector IAM grants** that were dropped during the app-api / inference-api decomposition restored. App-api gains `bedrock-agentcore:GetResourceOauth2Token`, `CompleteResourceTokenAuth`, `Create/Update/Delete/Get/ListOauth2CredentialProvider`, plus full SecretsManager lifecycle on `bedrock-agentcore-identity!default/oauth2/*`. Inference-api gains `GetResourceOauth2Token`. Without these `/connectors/*` and external-MCP OAuth would 503 at runtime.
+
+## 🧪 Test coverage restored
+
+- 7 new policy-level assertions in `infrastructure/test/security-policy.test.ts` covering the new `app-api-iam-grants.ts` and `inference-api-iam-roles.ts` files: Action:* + Resource:* prohibition, BFF cookie key Decrypt-only, every bucket has SSE + public-access-block + enforceSSL, every DDB table has SSE.
+- 5 new assertions in `infrastructure/test/compute-image-resolution.test.ts` locking in the SSM-resolved image shape.
+- 2 new assertions in `infrastructure/test/ssm-safety.test.ts` catching the same-stack `valueForStringParameter` deadlock at synth time.
+- 1 new reflection test in `tests/supply_chain/test_env_var_contract.py` that walks the CDK env-block and the Python `os.environ.get(...)` call sites and fails on any orphan CDK env var.
+
+## 🏗️ Other notable changes
+
+- Single CDK stack (`PlatformStack`) absorbed the prior nine-stack architecture. Compute construct refs flow through a typed `PlatformComputeRefs` interface, not SSM (which would deadlock on first deploy).
+- Workflow trigger gating: `backend.yml`, `platform.yml`, and `frontend-deploy.yml` are workflow_dispatch-only while downstream forks absorb the platform-as-bootstrap refactor + the cross-pool Cognito sub-remap restore changes. Re-enable by uncommenting the `push:` blocks.
+- Restore tool: full Cognito sub remapping for cross-pool migrations + AgentCore Memory event replay with deterministic `clientToken` for idempotency.
+
+---
+
 # Release Notes — v1.0.0-beta.27
 
 **Release Date:** May 20, 2026

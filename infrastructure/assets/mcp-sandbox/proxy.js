@@ -55,6 +55,23 @@
   var innerReady = false;
   var pendingToInner = []; // host->View messages queued until inner loads
 
+  // Establish a 100%-height chain on this shell so the inner View iframe
+  // (height:100%, set in mountView) fills the OUTER iframe the host sized
+  // instead of collapsing to the CSS default replaced-element height
+  // (150px) — a percentage height resolves to `auto` when no ancestor has a
+  // resolved height. proxy.html ships zero inline styles to keep its served
+  // CSP posture tight; the CSSOM `.style` path here isn't governed by the
+  // `style-src` directive, so this is the CSP-safe place to do it.
+  var docEl = document.documentElement;
+  if (docEl && docEl.style) {
+    docEl.style.height = '100%';
+  }
+  if (document.body && document.body.style) {
+    document.body.style.height = '100%';
+    document.body.style.margin = '0';
+    document.body.style.overflow = 'hidden';
+  }
+
   // --- CSP composition (spec §"Sandbox proxy" point 5 + Host Behavior) ----
 
   function list(domains) {
@@ -70,12 +87,18 @@
   function defaultCsp() {
     return [
       "default-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
-      "media-src 'self' data:",
-      "font-src 'self'",
+      // Keyword sources ('unsafe-eval' blob: data:) MUST match the
+      // CloudFront-header CSP (assets/mcp-sandbox/csp-function.js). The
+      // browser enforces the INTERSECTION of this injected <meta> and that
+      // header, so any source the meta omits is silently re-denied even
+      // though the header allows it — that drift is what blocked App `eval`.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+      "style-src 'self' 'unsafe-inline' blob: data:",
+      "img-src 'self' data: blob:",
+      "media-src 'self' data: blob:",
+      "font-src 'self' data: blob:",
       "connect-src 'none'",
+      "worker-src 'self' blob:",
       "frame-src 'none'",
       "base-uri 'self'",
       "object-src 'none'",
@@ -97,12 +120,18 @@
     var base = list(csp.baseUriDomains).join(' ');
     return [
       "default-src 'none'",
-      ("script-src 'self' 'unsafe-inline'" + (res ? ' ' + res : '')),
-      ("style-src 'self' 'unsafe-inline'" + (res ? ' ' + res : '')),
-      ("img-src 'self' data:" + (res ? ' ' + res : '')),
-      ("font-src 'self'" + (res ? ' ' + res : '')),
-      ("media-src 'self' data:" + (res ? ' ' + res : '')),
+      // Keyword sources ('unsafe-eval' blob: data:) MUST match the
+      // CloudFront-header CSP (assets/mcp-sandbox/csp-function.js). The
+      // browser enforces the INTERSECTION of this <meta> and that header, so
+      // a source omitted here is silently re-denied regardless of the header
+      // — declared resourceDomains are appended on top, as before.
+      ("script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:" + (res ? ' ' + res : '')),
+      ("style-src 'self' 'unsafe-inline' blob: data:" + (res ? ' ' + res : '')),
+      ("img-src 'self' data: blob:" + (res ? ' ' + res : '')),
+      ("font-src 'self' data: blob:" + (res ? ' ' + res : '')),
+      ("media-src 'self' data: blob:" + (res ? ' ' + res : '')),
       ('connect-src ' + (conn || "'none'")),
+      ("worker-src 'self' blob:" + (res ? ' ' + res : '')),
       ('frame-src ' + (frame || "'none'")),
       ('base-uri ' + (base || "'self'")),
       "object-src 'none'",

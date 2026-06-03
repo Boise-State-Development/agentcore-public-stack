@@ -133,8 +133,8 @@ npx cdk synth
 # Deploy all stacks
 npx cdk deploy --all
 
-# Deploy specific stack
-npx cdk deploy InfrastructureStack
+# Deploy the stack
+npx cdk deploy {prefix}-PlatformStack
 
 # Show differences
 npx cdk diff

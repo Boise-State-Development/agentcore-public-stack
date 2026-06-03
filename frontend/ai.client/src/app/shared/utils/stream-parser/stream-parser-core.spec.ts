@@ -13,6 +13,7 @@ import {
   validateCitation,
   validateArtifactEvent,
   validateUiResourceEvent,
+  validateToolInputPartialEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -466,6 +467,37 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateToolInputPartialEvent', () => {
+    const valid = {
+      type: 'ui_tool_input_partial',
+      toolUseId: 'tu-1',
+      arguments: { elements: [{ type: 'rect' }] },
+    };
+
+    it('should return true for a valid event', () => {
+      expect(validateToolInputPartialEvent(valid)).toBe(true);
+    });
+
+    it('should accept empty arguments object', () => {
+      expect(validateToolInputPartialEvent({ ...valid, arguments: {} })).toBe(true);
+    });
+
+    it('should return false for null/undefined or wrong type', () => {
+      expect(validateToolInputPartialEvent(null)).toBe(false);
+      expect(validateToolInputPartialEvent({ ...valid, type: 'ui_resource' })).toBe(false);
+    });
+
+    it('should return false for empty toolUseId', () => {
+      expect(validateToolInputPartialEvent({ ...valid, toolUseId: '' })).toBe(false);
+    });
+
+    it('should return false when arguments is not a plain object', () => {
+      expect(validateToolInputPartialEvent({ ...valid, arguments: [] })).toBe(false);
+      expect(validateToolInputPartialEvent({ ...valid, arguments: null })).toBe(false);
+      expect(validateToolInputPartialEvent({ ...valid, arguments: 'x' })).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -484,6 +516,7 @@ describe('stream-parser-core', () => {
         onCitation: vi.fn(),
         onArtifact: vi.fn(),
         onUiResource: vi.fn(),
+        onToolInputPartial: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -575,6 +608,27 @@ describe('stream-parser-core', () => {
     it('should call onParseError for an invalid ui_resource event', () => {
       processStreamEvent('ui_resource', { type: 'ui_resource', toolUseId: '' }, callbacks);
       expect(callbacks.onParseError).toHaveBeenCalledWith('ui_resource: invalid data structure');
+    });
+
+    it('should call onToolInputPartial for a valid ui_tool_input_partial event', () => {
+      const data = {
+        type: 'ui_tool_input_partial',
+        toolUseId: 'tu-1',
+        arguments: { elements: [{ type: 'rect' }] },
+      };
+      processStreamEvent('ui_tool_input_partial', data, callbacks);
+      expect(callbacks.onToolInputPartial).toHaveBeenCalledWith(data);
+    });
+
+    it('should call onParseError for an invalid ui_tool_input_partial event', () => {
+      processStreamEvent(
+        'ui_tool_input_partial',
+        { type: 'ui_tool_input_partial', toolUseId: 'tu-1', arguments: [] },
+        callbacks,
+      );
+      expect(callbacks.onParseError).toHaveBeenCalledWith(
+        'ui_tool_input_partial: invalid data structure',
+      );
     });
   });
 

@@ -45,7 +45,7 @@ class TestCreateAgentBedrock:
     """Validates: Requirement 4.1"""
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.BedrockModel")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
     def test_bedrock_provider_creates_bedrock_model(self, mock_bedrock_cls, mock_agent_cls):
         from agents.main_agent.core.agent_factory import AgentFactory
 
@@ -145,7 +145,7 @@ class TestRetryStrategy:
     """Validates: Requirements 4.6, 4.7"""
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.BedrockModel")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
     def test_bedrock_with_retry_config_passes_retry_strategy(
         self, mock_bedrock_cls, mock_agent_cls
     ):
@@ -166,7 +166,7 @@ class TestRetryStrategy:
         assert agent_kwargs["retry_strategy"] is not None
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.BedrockModel")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
     def test_bedrock_without_retry_config_passes_none(self, mock_bedrock_cls, mock_agent_cls):
         """Req 4.7 — no retry_config → retry_strategy is None."""
         from agents.main_agent.core.agent_factory import AgentFactory
@@ -229,7 +229,7 @@ class TestSequentialToolExecutor:
     """Validates: Requirement 4.8"""
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.BedrockModel")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
     def test_sequential_tool_executor_passed(self, mock_bedrock_cls, mock_agent_cls):
         from agents.main_agent.core.agent_factory import AgentFactory
         from strands.tools.executors import SequentialToolExecutor

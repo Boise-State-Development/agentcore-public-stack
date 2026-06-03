@@ -480,3 +480,8 @@ class MessagesListResponse(BaseModel):
         alias="pendingInterrupts",
         description="OAuth consent interrupts that paused agent turns in this session and are awaiting user action",
     )
+    ui_resources: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="uiResources",
+        description="Persisted MCP App UI resources (SEP-1865) for this session, each shaped like the inline `ui_resource` SSE event ({type, toolUseId, resourceUri, html, mimeType, csp, permissions, sandboxOrigin}). Replayed on load to re-seed McpAppStateService and re-instantiate the mcp-app-frame iframe. Returned only on the first page.",
+    )
