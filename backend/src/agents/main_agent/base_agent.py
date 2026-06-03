@@ -16,6 +16,7 @@ from agents.main_agent.session.hooks import (
     StopHook,
     OAuthConsentHook,
     MCPExternalApprovalHook,
+    ContextAttributionHook,
 )
 from agents.main_agent.tools import (
     create_default_registry,
@@ -272,6 +273,12 @@ class BaseAgent(ABC):
         # (`MCPServerConfig.tools[*].needs_approval`); a no-op for any tool
         # without a flag.
         hooks.append(self._build_mcp_external_approval_hook())
+
+        # Per-turn context-token attribution (system / tools / messages).
+        # Best-effort; computes the breakdown on BeforeModelCallEvent and
+        # stashes it on the agent for the stream coordinator to surface on the
+        # final metadata SSE event.
+        hooks.append(ContextAttributionHook())
 
         return hooks
 
