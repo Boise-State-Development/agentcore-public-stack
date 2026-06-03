@@ -736,6 +736,11 @@ from .user_menu_links.routes import router as user_menu_links_admin_router
 
 router.include_router(user_menu_links_admin_router)
 
+# ========== Include System Prompts Admin Subrouter ==========
+from .system_prompts.routes import router as system_prompts_admin_router
+
+router.include_router(system_prompts_admin_router)
+
 # ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
     from .fine_tuning.routes import router as fine_tuning_admin_router

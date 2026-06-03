@@ -3,7 +3,7 @@
 Provides endpoints for managing session metadata.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Response, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Query, Response, BackgroundTasks, status
 from typing import Optional
 import logging
 from datetime import datetime, timezone
@@ -29,6 +29,7 @@ from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.system_prompts.service import get_system_prompts_service
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,25 @@ async def update_session_metadata_endpoint(
     """
     user_id = current_user.user_id
 
+    # Detect whether the client explicitly included `selectedPromptId` in the
+    # payload (vs. omitting it). Pydantic's `model_fields_set` records every
+    # alias that was present in the input, regardless of value. This lets us
+    # distinguish a real "clear to null" from "leave unchanged".
+    fields_set = request.model_fields_set
+    selected_prompt_provided = "selected_prompt_id" in fields_set
+    clearing_prompt = selected_prompt_provided and request.selected_prompt_id is None
+
+    # Validate selected_prompt_id references an enabled prompt — reject early
+    # so we never persist a stale/invalid prompt reference.
+    if request.selected_prompt_id:
+        service = get_system_prompts_service()
+        prompt = await service.get_enabled_prompt(request.selected_prompt_id)
+        if not prompt:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"System prompt '{request.selected_prompt_id}' not found or not enabled",
+            )
+
     logger.info("PUT /sessions/metadata - updating session metadata")
 
     try:
@@ -232,6 +252,7 @@ async def update_session_metadata_endpoint(
                 request.last_model,
                 request.enabled_tools,
                 request.selected_prompt_id,
+                clearing_prompt,
                 request.custom_prompt_text,
                 request.assistant_id
             ]):
@@ -242,7 +263,9 @@ async def update_session_metadata_endpoint(
                     new_prefs['last_model'] = request.last_model
                 if request.enabled_tools:
                     new_prefs['enabled_tools'] = request.enabled_tools
-                if request.selected_prompt_id:
+                if clearing_prompt:
+                    new_prefs['selected_prompt_id'] = None
+                elif request.selected_prompt_id:
                     new_prefs['selected_prompt_id'] = request.selected_prompt_id
                 if request.custom_prompt_text:
                     new_prefs['custom_prompt_text'] = request.custom_prompt_text

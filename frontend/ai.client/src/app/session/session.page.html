@@ -24,4 +24,5 @@
 <!-- Model Settings Panel -->
 <app-model-settings
   [isOpen]="isSettingsOpen()"
+  [sessionId]="effectiveSessionId()"
   (closed)="closeSettings()" />

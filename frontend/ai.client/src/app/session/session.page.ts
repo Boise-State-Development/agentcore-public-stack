@@ -30,6 +30,7 @@ import {
   ShareAssistantDialogData,
 } from '../assistants/components/share-assistant-dialog.component';
 import { VoiceChatService } from './services/voice';
+import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 
 @Component({
   selector: 'app-session-page',
@@ -60,6 +61,7 @@ export class ConversationPage implements OnDestroy {
   private router = inject(Router);
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
+  private systemPromptsService = inject(SystemPromptsService);
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
@@ -183,6 +185,29 @@ export class ConversationPage implements OnDestroy {
       if (session?.preferences?.lastModel) {
         this.modelService.setSelectedModelById(session.preferences.lastModel);
       }
+    });
+
+    // Hydrate active system prompt from session preferences. We treat the
+    // sessionId itself as the trigger so that switching from Session A to a
+    // brand-new Session B (whose metadata hasn't loaded yet) resets the
+    // chip rather than leaking A's selection into B.
+    //
+    // The service tracks which session a local selection is bound to, so
+    // a freshly-claimed home-page selection isn't wiped when the new
+    // session's metadata arrives without preferences yet.
+    effect(() => {
+      const id = this.sessionId();
+      const session = this.sessionConversation();
+
+      if (!id || session?.sessionId !== id) {
+        this.systemPromptsService.hydrateFromSession(id, null);
+        return;
+      }
+
+      this.systemPromptsService.hydrateFromSession(
+        id,
+        session?.preferences?.selectedPromptId ?? null
+      );
     });
 
     // Seed the session cost + context aggregates from session metadata so

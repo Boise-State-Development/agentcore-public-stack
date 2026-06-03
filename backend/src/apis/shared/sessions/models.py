@@ -231,7 +231,7 @@ class UpdateSessionMetadataRequest(BaseModel):
     tags: Optional[List[str]] = Field(None, description="Custom tags")
     last_model: Optional[str] = Field(None, alias="lastModel", description="Last model used")
     enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools", description="Enabled tools list")
-    selected_prompt_id: Optional[str] = Field(None, alias="selectedPromptId", description="Selected prompt ID")
+    selected_prompt_id: Optional[str] = Field(None, alias="selectedPromptId", description="ID of selected prompt — send null to explicitly clear, omit to leave unchanged")
     custom_prompt_text: Optional[str] = Field(None, alias="customPromptText", description="Custom prompt text")
     system_prompt_hash: Optional[str] = Field(None, alias="systemPromptHash", description="MD5 hash of final rendered system prompt")
     assistant_id: Optional[str] = Field(None, alias="assistantId", description="Assistant ID attached to this session")

@@ -546,7 +546,6 @@ export class SessionService {
     sessionId: string,
     updates: UpdateSessionMetadataRequest
   ): Promise<SessionMetadata> {
-    // Ensure user is authenticated before making the request
     try {
       const response = await firstValueFrom(
         this.http.put<SessionMetadata>(
@@ -555,7 +554,10 @@ export class SessionService {
         )
       );
 
-      // If this is the current session, update the currentSession signal
+      // Mirror the persisted state into the in-memory currentSession so
+      // downstream signal consumers (active prompt hydration, assistant_id
+      // checks, model preference) see the just-saved values immediately
+      // without waiting for the next session fetch.
       if (this.currentSession().sessionId === sessionId) {
         this.currentSession.update(current => ({ ...current, ...response }));
       }
@@ -630,7 +632,9 @@ export class SessionService {
     preferences: {
       lastModel?: string;
       enabledTools?: string[];
-      selectedPromptId?: string;
+      // Explicit `null` clears the selection; `undefined` (omitted) leaves it
+      // unchanged. The BFF mirrors this convention.
+      selectedPromptId?: string | null;
       customPromptText?: string;
     }
   ): Promise<SessionMetadata> {
@@ -931,7 +935,9 @@ export class SessionService {
       if (currentSessionId && this.newSessionIds.has(currentSessionId)) {
         const cachedSession = cache.find(s => s.sessionId === currentSessionId);
         if (cachedSession && cachedSession.title !== this.currentSession().title) {
-          this.currentSession.set(cachedSession);
+          // Only sync the title — replacing the whole object would drop preferences
+          // (the list cache doesn't carry the full preferences sub-object)
+          this.currentSession.update(current => ({ ...current, title: cachedSession.title }));
         }
       }
     });

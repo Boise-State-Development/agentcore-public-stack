@@ -244,6 +244,89 @@ class TestUpdateSessionMetadata:
         body = resp.json()
         assert body["title"] == "Brand New Session"
 
+    def test_rejects_disabled_prompt(self, app, make_user, authenticated_client):
+        """A disabled prompt cannot be selected — 400."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        # Service returns None (None for missing OR disabled).
+        mock_service = MagicMock()
+        mock_service.get_enabled_prompt = AsyncMock(return_value=None)
+
+        with patch(
+            "apis.app_api.sessions.routes.get_system_prompts_service",
+            return_value=mock_service,
+        ):
+            resp = client.put(
+                "/sessions/sess-001/metadata",
+                json={"selectedPromptId": "disabled-prompt"},
+            )
+
+        assert resp.status_code == 400
+        assert "not found or not enabled" in resp.json()["detail"]
+
+    def test_null_selected_prompt_clears_selection(self, app, make_user, authenticated_client):
+        """Sending selectedPromptId: null clears the persisted selection."""
+        from apis.shared.sessions.models import SessionPreferences
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        existing = _make_session_metadata("sess-001", user.user_id)
+        existing.preferences = SessionPreferences(selected_prompt_id="some-old-id")
+
+        captured = {}
+
+        async def capture_store(*, session_id, user_id, session_metadata):
+            captured["metadata"] = session_metadata
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            side_effect=capture_store,
+        ):
+            resp = client.put(
+                "/sessions/sess-001/metadata",
+                json={"selectedPromptId": None},
+            )
+
+        assert resp.status_code == 200
+        # The persisted preferences should have selected_prompt_id cleared.
+        assert captured["metadata"].preferences.selected_prompt_id is None
+
+    def test_omitted_selected_prompt_leaves_selection_unchanged(self, app, make_user, authenticated_client):
+        """Omitting selectedPromptId entirely must not clear the existing value."""
+        from apis.shared.sessions.models import SessionPreferences
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        existing = _make_session_metadata("sess-001", user.user_id)
+        existing.preferences = SessionPreferences(selected_prompt_id="keep-me")
+
+        captured = {}
+
+        async def capture_store(*, session_id, user_id, session_metadata):
+            captured["metadata"] = session_metadata
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            side_effect=capture_store,
+        ):
+            # Update title only — no selectedPromptId field at all.
+            resp = client.put(
+                "/sessions/sess-001/metadata",
+                json={"title": "New title"},
+            )
+
+        assert resp.status_code == 200
+        assert captured["metadata"].preferences.selected_prompt_id == "keep-me"
+
 
 # ---------------------------------------------------------------------------
 # Requirement 3.6: DELETE /sessions/{session_id} returns 204

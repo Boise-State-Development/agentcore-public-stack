@@ -3,6 +3,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroCheck, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService } from '../../services/tool/tool.service';
+import { SystemPromptsService } from '../../services/system-prompts/system-prompts.service';
 import {
   KNOWN_PARAMS,
   KnownParamMeta,
@@ -50,9 +51,13 @@ export class ModelSettings {
   private elementRef = inject(ElementRef);
   protected modelService = inject(ModelService);
   protected toolService = inject(ToolService);
+  protected systemPromptsService = inject(SystemPromptsService);
 
   // Input to control visibility
   isOpen = input<boolean>(false);
+
+  // Session ID needed to persist prompt selection
+  sessionId = input<string | null>(null);
 
   // Track if panel has ever been opened to avoid initial animation
   protected hasBeenOpened = signal(false);
@@ -64,6 +69,7 @@ export class ModelSettings {
   // Advanced section collapse state. Default closed so the panel doesn't
   // grow taller for users who never touch inference params.
   protected isAdvancedOpen = signal(false);
+  protected isToolsOpen = signal(false);
 
   // Per-param transient "clamped to N" notice keyed by param key. Cleared
   // ~3s after it's set or the moment the user edits the row again.
@@ -264,8 +270,18 @@ export class ModelSettings {
     this.toolService.toggleTool(toolId);
   }
 
+  selectPrompt(promptId: string | null): void {
+    const sid = this.sessionId();
+    this.systemPromptsService.setActivePrompt(sid, promptId)
+      .catch(err => console.error('Failed to persist prompt selection:', err));
+  }
+
   toggleAdvanced(): void {
     this.isAdvancedOpen.update((open) => !open);
+  }
+
+  toggleTools(): void {
+    this.isToolsOpen.update((open) => !open);
   }
 
   /**

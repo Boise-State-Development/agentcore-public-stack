@@ -110,6 +110,13 @@ class InvocationRequest(BaseModel):
     # (MainAgent / ChatAgent) when omitted, so existing clients are unaffected.
     # Pass "skill" to route through SkillAgent's progressive skill disclosure.
     agent_type: Optional[str] = None
+    # User-selected custom system prompt ("conversation mode") for this
+    # turn. The frontend forwards the active selection on every submit so
+    # the inference path doesn't have to round-trip session metadata to
+    # discover the choice — important on first-turn-of-a-new-session where
+    # no metadata row exists yet. The resolver also persists this id back
+    # to session preferences so the choice survives a refresh / new device.
+    selected_prompt_id: Optional[str] = None
     # When set, this invocation is an app-initiated tools/call proxied from
     # an embedded MCP App (PR #5). `message` is ignored; no model turn runs.
     app_tool_call: Optional[AppToolCallEntry] = None

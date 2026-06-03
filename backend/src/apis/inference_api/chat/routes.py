@@ -49,6 +49,11 @@ from .app_context_dispatch import (
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .models import FileContent, InvocationRequest
 from .service import generate_conversation_title, get_agent
+from .system_prompt_resolver import (
+    append_active_prompt,
+    resolve_active_prompt_text,
+    should_resolve_custom_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1193,6 +1198,30 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # Continue - not critical if metadata save fails
         else:
             logger.info("Preview session - skipping assistant_id persistence")
+
+    # Append active custom system prompt (if any). Gating rules + lookup live
+    # in `system_prompt_resolver.py` so they can be unit-tested independently
+    # of the route.
+    if should_resolve_custom_prompt(
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+        has_assistant=bool(input_data.rag_assistant_id),
+    ):
+        resolved = await resolve_active_prompt_text(
+            session_id=input_data.session_id,
+            user_id=user_id,
+            request_prompt_id=input_data.selected_prompt_id,
+        )
+        if resolved:
+            prompt_name, prompt_text = resolved
+            # Build the base system prompt if not already built (no-assistant
+            # path can leave system_prompt unset).
+            if not system_prompt:
+                from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+                system_prompt = SystemPromptBuilder().build(include_date=True)
+            system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
+            logger.info(f"Appended custom system prompt: {prompt_name!r}")
 
     try:
         # Resume requests rebuild the agent from the persisted PausedTurnSnapshot

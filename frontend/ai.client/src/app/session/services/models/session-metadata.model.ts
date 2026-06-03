@@ -58,7 +58,9 @@ export interface UpdateSessionMetadataRequest {
   tags?: string[];
   lastModel?: string;
   enabledTools?: string[];
-  selectedPromptId?: string;
+  /** Send `null` to explicitly clear the selection. Omit the field to leave
+   *  the persisted value unchanged. */
+  selectedPromptId?: string | null;
   customPromptText?: string;
   assistantId?: string;
 }

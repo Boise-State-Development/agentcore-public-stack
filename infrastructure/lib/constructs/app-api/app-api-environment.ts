@@ -56,6 +56,8 @@ export interface AppApiSsmParams {
   userSettingsTableArn: string;
   userMenuLinksTableName: string;
   userMenuLinksTableArn: string;
+  systemPromptsTableName: string;
+  systemPromptsTableArn: string;
   authProvidersTableName: string;
   authProvidersTableArn: string;
   authProviderSecretsArn: string;
@@ -166,6 +168,8 @@ export function resolveAppApiParams(
     userSettingsTableArn: refs.userSettingsTable.tableArn,
     userMenuLinksTableName: refs.userMenuLinksTable.tableName,
     userMenuLinksTableArn: refs.userMenuLinksTable.tableArn,
+    systemPromptsTableName: refs.systemPromptsTable.tableName,
+    systemPromptsTableArn: refs.systemPromptsTable.tableArn,
     authProvidersTableName: refs.authProvidersTable.tableName,
     authProvidersTableArn: refs.authProvidersTable.tableArn,
     authProviderSecretsArn: refs.authProviderSecretsSecret.secretArn,
@@ -251,6 +255,7 @@ export function buildAppApiEnvironment(
     AUTH_PROVIDER_SECRETS_ARN: params.authProviderSecretsArn,
     DYNAMODB_USER_SETTINGS_TABLE_NAME: params.userSettingsTableName,
     DYNAMODB_USER_MENU_LINKS_TABLE_NAME: params.userMenuLinksTableName,
+    DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: params.systemPromptsTableName,
     COGNITO_USER_POOL_ID: params.cognitoUserPoolId,
     COGNITO_APP_CLIENT_ID: params.cognitoAppClientId,
     COGNITO_ISSUER_URL: params.cognitoIssuerUrl,
