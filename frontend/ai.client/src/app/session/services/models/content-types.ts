@@ -244,6 +244,24 @@ export interface CostBreakdown {
   cacheWriteCost?: number;
 }
 
+/** One partition of the per-turn context-token attribution. The list is
+ *  open-ended (system / tools / messages today; skills, per-server detail, and
+ *  cache splits are future additive partitions), so consumers render whatever
+ *  partitions arrive rather than reading fixed fields. */
+export interface ContextPartition {
+  key: string;
+  label: string;
+  tokens: number;
+}
+
+/** Per-turn breakdown of what is filling the context window. `partitions` sum
+ *  to `total` (the authoritative projected input-token count). Emitted by the
+ *  backend ContextAttributionHook on the final metadata event. */
+export interface ContextBreakdown {
+  total: number;
+  partitions: ContextPartition[];
+}
+
 export interface MetadataEvent {
   metrics?: Metrics;
   trace?: any;
@@ -254,6 +272,8 @@ export interface MetadataEvent {
    *  the streaming coordinator alongside cost so the cost badge can compute
    *  "% of context used" without an extra round-trip. */
   contextWindow?: number;
+  /** Per-turn system / tools / messages token breakdown. */
+  contextBreakdown?: ContextBreakdown;
 }
 
 export interface ExceptionEvent {

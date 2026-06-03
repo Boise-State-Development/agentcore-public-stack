@@ -891,13 +891,17 @@ export class StreamParserService {
       cacheWriteInputTokens?: number;
     } | undefined;
 
+    const existingBreakdown = existingMetadata['contextBreakdown'];
+    const newBreakdown = newMetadata['contextBreakdown'];
+
     const needsUpdate =
       (!existingTTFT && newTTFT) ||
       (existingCost === undefined && newCost !== undefined) ||
       (existingTokenUsage?.cacheReadInputTokens === undefined &&
         newTokenUsage?.cacheReadInputTokens !== undefined) ||
       (existingTokenUsage?.cacheWriteInputTokens === undefined &&
-        newTokenUsage?.cacheWriteInputTokens !== undefined);
+        newTokenUsage?.cacheWriteInputTokens !== undefined) ||
+      (existingBreakdown === undefined && newBreakdown !== undefined);
 
     if (needsUpdate) {
       this.completedMessages.update((messages) => {
@@ -982,6 +986,10 @@ export class StreamParserService {
 
     if (metadataEvent.cost !== undefined) {
       result['cost'] = metadataEvent.cost;
+    }
+
+    if (metadataEvent.contextBreakdown !== undefined) {
+      result['contextBreakdown'] = metadataEvent.contextBreakdown;
     }
 
     if (metadataEvent.trace !== undefined) {
