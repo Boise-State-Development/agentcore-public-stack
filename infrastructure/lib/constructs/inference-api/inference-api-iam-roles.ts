@@ -68,10 +68,17 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── Bedrock model invocation ──
+  // CountTokens powers per-turn context attribution: Strands' native token
+  // counting (use_native_token_count) calls Bedrock's CountTokens API, which
+  // is the only way to decompose the otherwise-aggregate inputTokens into
+  // system / tools / messages partitions. It acts on the foundation-model
+  // resource, already covered below. Without this action a flipped native
+  // flag AccessDenies and caches the model into the no-count skip list for
+  // the process lifetime.
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'BedrockModelInvocation',
     effect: iam.Effect.ALLOW,
-    actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+    actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:CountTokens'],
     resources: [`arn:aws:bedrock:*::foundation-model/*`, `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`],
   }));
 
