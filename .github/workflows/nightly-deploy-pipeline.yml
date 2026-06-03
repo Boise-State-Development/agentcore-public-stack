@@ -91,6 +91,12 @@ jobs:
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
+      # MCP Apps sandbox-proxy origin (mcp-sandbox.{domain}). Without the
+      # cert ARN the construct silently falls back to the CloudFront default
+      # domain and creates no Route53 ALIAS — the SPA then frames a
+      # nonexistent host and MCP Apps fail to load. Cert MUST be in us-east-1.
+      CDK_MCP_SANDBOX_CERTIFICATE_ARN: ${{ vars.CDK_MCP_SANDBOX_CERTIFICATE_ARN }}
+      CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

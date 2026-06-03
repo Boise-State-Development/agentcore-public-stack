@@ -130,10 +130,30 @@ export class McpSandboxDistributionConstruct extends Construct {
 
     const domainName = config.domainName;
     const certificateArn = config.mcpSandbox.certificateArn;
-    const useCustomDomain = Boolean(domainName && certificateArn);
     const proxySubdomain = domainName
       ? `${MCP_SANDBOX_SUBDOMAIN_LABEL}.${domainName}`
       : undefined;
+
+    // Fail loudly on the dangerous middle case: a real domain is configured
+    // but no cert. Without this the construct would silently fall back to the
+    // CloudFront default domain and create NO Route53 ALIAS — so the SPA
+    // frames `https://${proxySubdomain}`, which doesn't resolve (NXDOMAIN),
+    // and every MCP App fails to load. That is exactly the regression caused
+    // when the `CDK_MCP_SANDBOX_CERTIFICATE_ARN` deploy var was dropped from
+    // platform.yml. Mirrors the artifacts construct, which requires its cert
+    // whenever a domain is deployed. A domain-less stack (synth/unit tests,
+    // domain-less local) still falls back cleanly to the CloudFront default.
+    if (domainName && !certificateArn) {
+      throw new Error(
+        `MCP sandbox proxy requires an ACM certificate when a domain is configured. ` +
+          `domainName="${domainName}" is set but config.mcpSandbox.certificateArn is empty. ` +
+          `Set CDK_MCP_SANDBOX_CERTIFICATE_ARN to a us-east-1 cert covering ${proxySubdomain}. ` +
+          `Without it the proxy deploys on the CloudFront default domain with no Route53 ` +
+          `record, and the SPA cannot frame MCP Apps.`,
+      );
+    }
+
+    const useCustomDomain = Boolean(domainName && certificateArn);
 
     const frameAncestors = buildMcpSandboxFrameAncestors(
       domainName,
