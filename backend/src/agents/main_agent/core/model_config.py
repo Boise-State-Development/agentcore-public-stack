@@ -287,6 +287,18 @@ class ModelConfig:
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
 
+        # Native Bedrock CountTokens. With this on, Strands' per-turn estimate
+        # (BeforeModelCallEvent.projected_input_tokens) and agent.model.count_tokens()
+        # return authoritative Bedrock counts instead of the chars/4 heuristic —
+        # the foundation for per-turn context attribution (decomposing the
+        # otherwise-aggregate inputTokens into system / tools / messages via the
+        # CountTokens differential). Every catalog model is Claude family and
+        # supports the API; the runtime-role IAM grant landed in #428. Strands
+        # falls back to the heuristic and caches the skip if a model ever
+        # AccessDenies or doesn't support counting, so this is safe to set
+        # unconditionally on the Bedrock path.
+        config["use_native_token_count"] = True
+
         # Bedrock prompt caching is intentionally deferred. The previous SDK
         # blocker — strands PR #1438, which fixed `cachePoint` blocks landing
         # alongside non-PDF document attachments — is resolved in

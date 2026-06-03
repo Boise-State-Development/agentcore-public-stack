@@ -117,6 +117,24 @@ class TestToBedrockConfig:
         assert result["model_id"] == cfg.model_id
         assert "cache_config" not in result
 
+    def test_bedrock_config_enables_native_token_count(self):
+        """Native Bedrock CountTokens is enabled on the Bedrock path so
+        projected_input_tokens / count_tokens() return authoritative counts
+        instead of the chars/4 heuristic — the foundation for per-turn context
+        attribution. The runtime-role IAM grant landed in #428. Set
+        unconditionally (Strands falls back + caches the skip if a model can't
+        count), so it holds regardless of caching or inference params."""
+        assert ModelConfig().to_bedrock_config()["use_native_token_count"] is True
+        assert (
+            ModelConfig(caching_enabled=True).to_bedrock_config()["use_native_token_count"]
+            is True
+        )
+        assert (
+            ModelConfig(inference_params={"temperature": 0.4})
+            .to_bedrock_config()["use_native_token_count"]
+            is True
+        )
+
     def test_bedrock_config_emits_temperature_only_when_set(self):
         """Inference params only ride along when explicitly configured."""
         cfg = ModelConfig(inference_params={"temperature": 0.4, "top_p": 0.9})
