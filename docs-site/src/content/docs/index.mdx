@@ -1,0 +1,33 @@
+---
+title: AgentCore Public Stack
+description: Documentation for the multi-agent conversational AI platform built on AWS Bedrock AgentCore and Strands Agents.
+template: splash
+hero:
+  tagline: Production-ready multi-agent conversational AI on AWS Bedrock AgentCore and Strands Agents.
+  actions:
+    - text: Get started
+      link: /agentcore-public-stack/getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/Boise-State-Development/agentcore-public-stack
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+	<Card title="Getting Started" icon="rocket">
+		What the platform is, how it is put together, and how to run it locally.
+	</Card>
+	<Card title="Installation" icon="setting">
+		Stand up the backend, the Angular SPA, and the CDK infrastructure.
+	</Card>
+	<Card title="Deployment" icon="cloud-download">
+		Ship to AWS: platform, backend images, and the frontend.
+	</Card>
+	<Card title="Features" icon="puzzle">
+		Agents, tools, MCP Apps, RAG, artifacts, voice, and SSE streaming.
+	</Card>
+</CardGrid>
