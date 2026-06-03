@@ -38,6 +38,7 @@ case "$SERVICE" in
         SOURCE_DIR="backend/src/lambdas/artifact_render"
         FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/artifacts/render-function-name"
         CODE_HASH_SSM="/${CDK_PROJECT_PREFIX}/artifacts/render-code-hash"
+        CODE_SHA256_SSM="/${CDK_PROJECT_PREFIX}/artifacts/render-code-sha256"
         ;;
     *)
         echo "Unknown service: $SERVICE" >&2
@@ -53,7 +54,8 @@ HASH="$(bash "$DEPLOY" \
     --service "$SERVICE" \
     --source-dir "$SOURCE_DIR" \
     --function-name-ssm "$FUNCTION_NAME_SSM" \
-    --code-hash-ssm "$CODE_HASH_SSM")"
+    --code-hash-ssm "$CODE_HASH_SSM" \
+    --code-sha256-ssm "$CODE_SHA256_SSM")"
 
 log_info "${SERVICE}: ${HASH}"
 

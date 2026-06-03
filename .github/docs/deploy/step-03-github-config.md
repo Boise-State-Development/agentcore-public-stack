@@ -95,14 +95,17 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 > [!TIP]
 > These are the minimum required variables. For optional settings like ECS sizing, CloudFront price class, CORS origins, and more, see the [Full Configuration Reference](../../ACTIONS-REFERENCE.md).
 
-### Optional Features
+### Feature & Edge Configuration
+
+Artifacts, the MCP Apps sandbox, and SageMaker fine-tuning are **always provisioned** as part of `PlatformStack` — there are no `CDK_*_ENABLED` flags. When `CDK_DOMAIN_NAME` is set, the artifacts and MCP-sandbox CloudFront origins each need their own `us-east-1` certificate ARN below. **A domained deploy that omits either cert ARN fails at `cdk synth`** — it aborts before shipping an origin with no Route 53 record, rather than silently degrading to the CloudFront default domain.
 
 | Variable Name | Default | Description |
 |---------------|---------|-------------|
-| `CDK_FINE_TUNING_ENABLED` | `false` | Set to `true` to enable the SageMaker Fine-Tuning stack. Must be set before running the fine-tuning deployment workflow in Step 4. |
-| `CDK_ARTIFACTS_ENABLED` | `false` | Set to `true` to enable iframe-isolated artifact rendering. Provisions the artifacts CloudFront origin, DDB table, S3 bucket, and Lambda. Requires `CDK_ARTIFACTS_CERTIFICATE_ARN`. |
 | `CDK_ARTIFACTS_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `artifacts.{CDK_DOMAIN_NAME}`. **Must be in `us-east-1`** (CloudFront requirement). Reuse `CDK_FRONTEND_CERTIFICATE_ARN` **only if `CDK_DOMAIN_NAME` is your apex** (a `*.example.com` cert covers `artifacts.example.com`). If `CDK_DOMAIN_NAME` is itself a subdomain (e.g. `alpha.example.com`), wildcards are one label deep so `*.example.com` does **not** cover `artifacts.alpha.example.com` — issue a dedicated `us-east-1` cert for `*.alpha.example.com`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
-| `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed artifact iframes via CSP `frame-ancestors` — applied to both the CloudFront response-headers policy and the render Lambda. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production**: every listed origin can frame your users' artifacts (still render-token gated, but a real loosening on a shared environment). Prefer a one-off `cdk deploy '*ArtifactsStack*'` with this exported over committing it as a CI variable. |
+| `CDK_MCP_SANDBOX_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `mcp-sandbox.{CDK_DOMAIN_NAME}` — the cross-origin shell the SPA frames MCP Apps in. **Must be in `us-east-1`.** Same wildcard-depth rule as artifacts; because a single `*.{CDK_DOMAIN_NAME}` wildcard covers both `artifacts.` and `mcp-sandbox.`, you can **reuse the same cert ARN** as `CDK_ARTIFACTS_CERTIFICATE_ARN`. Without it the sandbox would deploy on the CloudFront default domain with no Route 53 ALIAS and every MCP App would fail to load with a `chrome-error` postMessage error — so a domained deploy now fails at synth instead. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
+| `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed artifact iframes via CSP `frame-ancestors` — applied to both the CloudFront response-headers policy and the render Lambda. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production**: every listed origin can frame your users' artifacts (still render-token gated, but a real loosening on a shared environment). |
+| `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed the MCP Apps sandbox proxy via CSP `frame-ancestors`. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production.** |
+| `CDK_FINE_TUNING_CORS_ORIGINS` | — | Comma-separated extra CORS origins for the SageMaker fine-tuning data bucket, beyond `https://{CDK_DOMAIN_NAME}`. Optional — fine-tuning itself is always provisioned. |
 
 ---
 
