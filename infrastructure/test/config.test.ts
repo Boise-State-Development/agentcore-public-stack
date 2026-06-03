@@ -10,13 +10,45 @@ import { loadConfig, AppConfig } from '../lib/config';
  * **Validates: Requirements 4.1-4.10**
  */
 
+/**
+ * The `CDK_RAG_*` environment variables these tests manipulate. They are
+ * deleted before AND after every test so a value set in one test can never
+ * leak into the next and silently change loadConfig()'s outcome.
+ *
+ * This explicit per-key deletion — not whole-object `process.env = snapshot`
+ * reassignment — is the load-bearing teardown: assigning a plain object to
+ * `process.env` does NOT reliably *delete* keys on every Node version (some
+ * merge the object in rather than replacing the backing store). Relying on
+ * that alone let leaked `CDK_RAG_*` values mask the variable under test, so the
+ * validation cases (e.g. an empty embedding model) saw a stale valid value and
+ * loadConfig() never threw.
+ */
+const RAG_ENV_KEYS = [
+  'CDK_RAG_CORS_ORIGINS',
+  'CDK_RAG_LAMBDA_MEMORY',
+  'CDK_RAG_LAMBDA_TIMEOUT',
+  'CDK_RAG_EMBEDDING_MODEL',
+  'CDK_RAG_VECTOR_DIMENSION',
+  'CDK_RAG_DISTANCE_METRIC',
+] as const;
+
+function clearRagEnv(): void {
+  for (const key of RAG_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
 describe('RAG Ingestion Configuration', () => {
   let app: cdk.App;
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
-    // Save original environment
+    // Save the original environment, then start each test from a fresh copy so
+    // mutations never touch the snapshot we restore from.
     originalEnv = { ...process.env };
+    process.env = { ...originalEnv };
+    // Hermetic start: drop any RAG keys a prior test may have leaked.
+    clearRagEnv();
 
     // Create a fresh CDK app for each test
     app = new cdk.App();
@@ -76,7 +108,9 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   afterEach(() => {
-    // Restore original environment
+    // Drop any RAG keys this test set so they can't leak forward, then restore
+    // the original environment object.
+    clearRagEnv();
     process.env = originalEnv;
   });
 
