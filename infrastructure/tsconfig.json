@@ -7,6 +7,11 @@
       "es2022"
     ],
     "declaration": true,
+    // The CDK app runs via ts-node (see cdk.json) and tests via ts-jest, so no
+    // emitted .js/.d.ts is ever consumed. noEmit makes `tsc` (npm run build /
+    // watch) a pure type-check and stops it from littering compiled artifacts
+    // next to the .ts sources (CI already type-checks with `tsc --noEmit`).
+    "noEmit": true,
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
