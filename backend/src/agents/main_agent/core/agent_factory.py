@@ -9,6 +9,7 @@ from strands.models import BedrockModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
+from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars
 
@@ -27,10 +28,11 @@ class AgentFactory:
             model_config: Model configuration
 
         Returns:
-            BedrockModel: Configured Bedrock model
+            BedrockModel: Configured Bedrock model (a ``CountTokensBedrockModel``
+            so native CountTokens works for inference-profile model ids).
         """
         bedrock_config = model_config.to_bedrock_config()
-        return BedrockModel(**bedrock_config)
+        return CountTokensBedrockModel(**bedrock_config)
 
     @staticmethod
     def _create_openai_model(model_config: ModelConfig) -> OpenAIModel:
