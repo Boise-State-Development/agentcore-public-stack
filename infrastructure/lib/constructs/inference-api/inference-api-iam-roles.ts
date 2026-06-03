@@ -161,6 +161,19 @@ export function createRuntimeExecutionRole(
     resources: tableResources,
   }));
 
+  // ── System prompts table (read-only) ──
+  // The inference path resolves the active prompt via system_prompt_resolver
+  // and only ever needs GetItem. The table has no GSIs and the inference
+  // path never lists or writes prompts — keeping this scope tight prevents
+  // a compromised runtime from corrupting the admin-managed catalog.
+  // Intentionally NOT folded into the DynamoDBTableAccess bulk grant above.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SystemPromptsTableReadAccess',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [refs.systemPromptsTable.tableArn],
+  }));
+
   // ── KMS (OAuth token encryption) ──
   const oauthTokenEncryptionKeyArn = refs.oauthTokenEncryptionKey.keyArn;
   role.addToPolicy(new iam.PolicyStatement({

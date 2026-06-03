@@ -96,6 +96,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── System prompts (Conversation Modes catalog) ──
+  // Admin-managed CRUD; per-user reads (name + description) go through
+  // the user-facing `/system-prompts` endpoint, which uses the same
+  // table.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'SystemPromptsTableAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+        'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:Scan',
+      ],
+      resources: [props.refs.systemPromptsTable.tableArn, `${props.refs.systemPromptsTable.tableArn}/index/*`],
+    }),
+  );
+
   // ── RAG assistants table ──
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({

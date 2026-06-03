@@ -251,6 +251,7 @@ export class InferenceAgentCoreConstruct extends Construct {
     const userSettingsTableName = props.refs.userSettingsTable.tableName;
     const authProvidersTableName = props.refs.authProvidersTable.tableName;
     const userFilesTableName = props.refs.fileUploadTable.tableName;
+    const systemPromptsTableName = props.refs.systemPromptsTable.tableName;
 
     // S3 / RAG
     const vectorBucketName = props.refs.ragVectorBucketName;
@@ -309,6 +310,7 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
         DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
         DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
+        DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
 
         // Auth providers
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,

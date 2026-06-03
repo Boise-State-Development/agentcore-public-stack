@@ -101,10 +101,13 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 23 tables. Was 24 — the standalone "assistants" table was
-      // decommissioned (the python app uses rag-assistants for both
-      // assistant config and document metadata via DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 23);
+      // 24 tables. Was 23 — the system-prompts table was added for
+      // admin-managed Conversation Modes (custom system prompt catalog).
+      // Previously was 24 before the standalone "assistants" table
+      // was decommissioned (the python app uses rag-assistants for
+      // both assistant config and document metadata via
+      // DYNAMODB_ASSISTANTS_TABLE_NAME).
+      template.resourceCountIs('AWS::DynamoDB::Table', 24);
     });
   });
 

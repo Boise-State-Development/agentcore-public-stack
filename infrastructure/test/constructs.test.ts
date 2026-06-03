@@ -209,11 +209,11 @@ describe('CostTrackingTablesConstruct', () => {
 });
 
 describe('AdminTablesConstruct', () => {
-  it('creates 2 DDB tables', () => {
+  it('creates 3 DDB tables', () => {
     const stack = testStack();
     new AdminTablesConstruct(stack, 'Admin', { config: createMockConfig() });
     const t = Template.fromStack(stack);
-    t.resourceCountIs('AWS::DynamoDB::Table', 2);
+    t.resourceCountIs('AWS::DynamoDB::Table', 3);
   });
 });
 
