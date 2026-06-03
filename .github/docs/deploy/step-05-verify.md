@@ -74,7 +74,7 @@ The user who completed the first-boot setup is automatically the system admin.
 
 ### 5. (Optional) MCP Apps dogfood — end-to-end
 
-Run this only if you've enabled the MCP Apps host renderer (MCP Sandbox stack deployed and an MCP-Apps server registered — see [Register an MCP-Apps-capable MCP server](./step-04-deploy.md#register-an-mcp-apps-capable-mcp-server)). It is the manual e2e scenario for the host-renderer initiative and walks every host↔App interaction. Using the `budget-allocator-server` example from the runbook:
+Run this once you've registered an MCP-Apps-capable server (see [Register an MCP-Apps-capable MCP server](./step-04-deploy.md#register-an-mcp-apps-capable-mcp-server)). The sandbox proxy is **always provisioned** as part of `PlatformStack` and the host renderer is on by default (`AGENTCORE_MCP_APPS_HOST_ENABLED=true`) — provided `CDK_MCP_SANDBOX_CERTIFICATE_ARN` was set at deploy (see [Step 3b](./step-03-github-config.md#3b-deployment-variables)). It is the manual e2e scenario for the host-renderer initiative and walks every host↔App interaction. Using the `budget-allocator-server` example from the runbook:
 
 **Setup**
 - [ ] `budget-allocator-server` running over Streamable HTTP and registered as an `mcp_external` tool, granted to your role
@@ -94,8 +94,8 @@ Run this only if you've enabled the MCP Apps host renderer (MCP Sandbox stack de
 <summary>The App card appears but the iframe is blank</summary>
 
 In order of likelihood:
-1. `sandboxOrigin` is empty on the `ui_resource` event → the MCP Sandbox stack isn't deployed, or `CDK_MCP_SANDBOX_ENABLED` wasn't `true` when the Inference API deployed (it consumes `/{prefix}/mcp-sandbox/origin` conditionally).
-2. The SPA origin isn't in the sandbox CSP `frame-ancestors` → the browser blocks the frame (console shows a `frame-ancestors` violation). Redeploy McpSandbox with the right origin (`CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` for localhost).
+1. **The iframe shows a `chrome-error://chromewebdata/` page / `mcp-sandbox.{domain}` doesn't resolve (DNS `NXDOMAIN`).** `CDK_MCP_SANDBOX_CERTIFICATE_ARN` was unset when `PlatformStack` deployed, so the proxy fell back to the CloudFront default domain with no Route 53 ALIAS — and the SPA frames a host that doesn't exist. Set the cert var (see [Step 3b](./step-03-github-config.md#3b-deployment-variables)) and redeploy `PlatformStack`. A domained deploy missing this cert now fails at `cdk synth`, so a *fresh* deploy can't reach this state silently — it's mainly a concern for environments deployed before that guard landed. Confirm with `nslookup mcp-sandbox.{CDK_DOMAIN_NAME}`.
+2. The SPA origin isn't in the sandbox CSP `frame-ancestors` → the browser blocks the frame (console shows a `frame-ancestors` violation). Add it via `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` (e.g. `http://localhost:4200` for a local SPA) and redeploy `PlatformStack`.
 3. The server didn't return `_meta.ui` on `tools/list`, or its `ui://` resource isn't `text/html;profile=mcp-app` → it isn't actually MCP-Apps-capable; re-check with the discover endpoint and the server's own logs.
 
 </details>
