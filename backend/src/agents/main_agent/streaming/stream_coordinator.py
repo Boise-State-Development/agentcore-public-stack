@@ -426,6 +426,21 @@ class StreamCoordinator:
                             except Exception as ctx_err:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
+                            # Per-turn context attribution (system / tools /
+                            # messages), computed by ContextAttributionHook at
+                            # BeforeModelCallEvent and stashed on the agent.
+                            # Partitions sum to `total`; the frontend pairs it
+                            # with `contextWindow` above for free-space.
+                            try:
+                                from agents.main_agent.session.hooks.context_attribution import (
+                                    get_context_breakdown,
+                                )
+                                breakdown = get_context_breakdown(agent)
+                                if breakdown is not None:
+                                    final_metadata["contextBreakdown"] = breakdown
+                            except Exception as br_err:
+                                logger.debug(f"Skipping contextBreakdown: {br_err}")
+
                         # Log cache metrics for performance monitoring
                         self._log_cache_metrics(usage=final_metadata.get("usage", {}), session_id=session_id)
 
