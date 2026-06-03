@@ -5,7 +5,7 @@
  * in exactly one stack.
  */
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
@@ -63,6 +63,28 @@ describe('Single-stack integration', () => {
 
     it('creates the AgentCore Runtime', () => {
       template.resourceCountIs('AWS::BedrockAgentCore::Runtime', 1);
+    });
+
+    it('grants the AgentCore runtime role bedrock:CountTokens for context attribution', () => {
+      // CountTokens is the foundation of per-turn context attribution —
+      // Strands' native token counting decomposes the otherwise-aggregate
+      // inputTokens into system / tools / messages partitions via this API.
+      // The action lives in the BedrockModelInvocation statement alongside
+      // the invoke actions and reuses its foundation-model resource scope.
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'BedrockModelInvocation',
+              Action: [
+                'bedrock:InvokeModel',
+                'bedrock:InvokeModelWithResponseStream',
+                'bedrock:CountTokens',
+              ],
+            }),
+          ]),
+        },
+      });
     });
 
     it('creates the AgentCore Memory + CI + Browser + Gateway', () => {
