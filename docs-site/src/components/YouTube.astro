@@ -1,0 +1,65 @@
+---
+/**
+ * Responsive, frosted-glass-framed YouTube embed.
+ *
+ * Matches the docs theme (brand-tinted border, blur, soft brand shadow — the
+ * same treatment as the splash CardGrid tiles in custom.css). Uses the
+ * privacy-enhanced `youtube-nocookie.com` host and lazy-loads the iframe so it
+ * doesn't block first paint.
+ *
+ * Usage (in an .mdx page):
+ *   import YouTube from '../../../components/YouTube.astro';
+ *   <YouTube id="hoYHY1JpCbg" title="Intro to the AgentCore Public Stack" />
+ */
+interface Props {
+	/** The YouTube video id (the part after `youtu.be/` or `watch?v=`). */
+	id: string;
+	/** Accessible title for the embedded player. */
+	title?: string;
+}
+
+const { id, title = 'YouTube video player' } = Astro.props;
+const src = `https://www.youtube-nocookie.com/embed/${id}`;
+---
+
+<div class="yt-embed">
+	<iframe
+		src={src}
+		title={title}
+		loading="lazy"
+		referrerpolicy="strict-origin-when-cross-origin"
+		allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+		allowfullscreen
+	></iframe>
+</div>
+
+<style>
+	.yt-embed {
+		position: relative;
+		aspect-ratio: 16 / 9;
+		margin-block: 1.5rem;
+		overflow: hidden;
+		border-radius: 1rem;
+		border: 1px solid color-mix(in oklab, var(--brand) 22%, transparent);
+		background: color-mix(in oklab, var(--sl-color-bg) 55%, transparent);
+		box-shadow:
+			0 1px 0 0 color-mix(in oklab, white 8%, transparent) inset,
+			0 18px 40px -24px color-mix(in oklab, var(--brand-800) 80%, transparent);
+	}
+
+	.yt-embed iframe {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		border: 0;
+		display: block;
+	}
+
+	:root[data-theme='light'] .yt-embed {
+		background: color-mix(in oklab, white 62%, transparent);
+		box-shadow:
+			0 1px 0 0 color-mix(in oklab, white 70%, transparent) inset,
+			0 18px 40px -24px color-mix(in oklab, var(--brand) 35%, transparent);
+	}
+</style>
