@@ -636,3 +636,20 @@ site-search button[data-open-modal] kbd {
 :root[data-has-hero] .sl-markdown-content {
 	margin-inline: auto;
 }
+
+/* Header GitHub (social) icon — neutral high-contrast instead of Starlight's
+   accent blue, and a touch larger. `--sl-color-white` is the maximally
+   contrasting neutral: near-black in light mode (the requested "black"),
+   white in dark mode so it stays legible against the dark surface. Brand blue
+   returns on hover for a hint of life. */
+.social-icons a {
+	color: var(--sl-color-white);
+}
+
+.social-icons a:hover {
+	color: var(--sl-color-text-accent);
+}
+
+.social-icons a svg {
+	font-size: 1.5rem; /* ~24px, up from the default 1em (~16px) */
+}
