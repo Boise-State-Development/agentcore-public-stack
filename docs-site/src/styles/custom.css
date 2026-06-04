@@ -1,0 +1,638 @@
+/* =============================================================================
+   AgentCore Public Stack — docs theme
+   -----------------------------------------------------------------------------
+   Brings the product's own login / first-boot aesthetic into the Starlight
+   docs: Boise State brand blue (#0033a0), frosted-glass chrome, a graph-paper
+   grid, and a field of morphing "lava-lamp" blobs drifting behind everything.
+
+   Layering notes
+   --------------
+   - These rules are intentionally UNLAYERED. Cascade layers rank below
+     unlayered styles, so everything here wins over Starlight's
+     `@layer starlight.*` defaults regardless of selector specificity.
+   - The decorative backdrop markup is injected once, site-wide, by the
+     PageFrame override (src/components/PageFrame.astro).
+   - Starlight defaults to the dark theme (`html[data-theme='dark']`); the
+     light theme is opt-in via the theme toggle. Both are tuned below.
+   ========================================================================== */
+
+/* ---------- Brand palette (derived from #0033a0, à la the SPA) ------------ */
+:root {
+	--brand: #0033a0;
+	--brand-300: oklch(from #0033a0 calc(l + 0.2) c h);
+	--brand-400: oklch(from #0033a0 calc(l + 0.1) c h);
+	--brand-500: #0033a0;
+	--brand-600: oklch(from #0033a0 calc(l - 0.08) c h);
+	--brand-700: oklch(from #0033a0 calc(l - 0.14) c h);
+	--brand-800: oklch(from #0033a0 calc(l - 0.2) c h);
+
+	/* Boise State secondary — Bronco Orange */
+	--brand-orange: #d64309;
+	--brand-orange-300: oklch(from #d64309 calc(l + 0.14) c h);
+
+	/* Distinctive type system — display grotesque + Inter body + JetBrains mono.
+	   Loaded via the `head` links in astro.config.mjs. */
+	--sl-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--font-display: 'Bricolage Grotesque', var(--sl-font);
+}
+
+/* ---------- Dark theme (default) ------------------------------------------ */
+/* Scoped to `[data-theme='dark']` (never bare `:root`) so these dark values
+   can't leak into the light theme. Starlight's SSR sets data-theme="dark" up
+   front, so this matches on first paint too. */
+:root[data-theme='dark'] {
+	/* Brand-tinted near-black so the whole surface reads as one cohesive system */
+	--sl-color-bg: hsl(222 44% 5.5%);
+	--sl-color-black: hsl(222 44% 5.5%);
+
+	/* Accent → vivid Boise blue (links, focus, primary actions) */
+	--sl-color-accent-low: oklch(from var(--brand) 0.28 0.13 h);
+	--sl-color-accent: oklch(from var(--brand) 0.62 0.18 h);
+	--sl-color-accent-high: oklch(from var(--brand) 0.86 0.09 h);
+	--sl-color-text-accent: var(--sl-color-accent-high);
+
+	/* Frosted chrome: translucent fills, blur added on the elements below.
+	   Kept low-opacity so the grid + glow read *through* the glass. */
+	--sl-color-bg-nav: color-mix(in oklab, var(--sl-color-bg) 45%, transparent);
+	--sl-color-bg-sidebar: color-mix(in oklab, var(--sl-color-bg) 38%, transparent);
+	--sl-color-hairline-shade: color-mix(in oklab, var(--brand) 22%, transparent);
+	--sl-color-hairline: color-mix(in oklab, white 8%, transparent);
+}
+
+/* ---------- Light theme --------------------------------------------------- */
+:root[data-theme='light'] {
+	--sl-color-bg: hsl(220 60% 98.5%);
+	--sl-color-accent-high: oklch(from var(--brand) 0.34 0.18 h);
+	--sl-color-accent: oklch(from var(--brand) 0.46 0.2 h);
+	--sl-color-accent-low: oklch(from var(--brand) 0.9 0.05 h);
+	--sl-color-text-accent: var(--sl-color-accent);
+
+	--sl-color-bg-nav: color-mix(in oklab, white 42%, transparent);
+	--sl-color-bg-sidebar: color-mix(in oklab, white 40%, transparent);
+	--sl-color-hairline-shade: color-mix(in oklab, var(--brand) 12%, transparent);
+}
+
+/* =============================================================================
+   Decorative backdrop — fixed behind every page (see PageFrame override)
+   ========================================================================== */
+.lava-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 0;
+	overflow: hidden;
+	pointer-events: none;
+	/* Soft corner glows give depth on every page, behind the frosted chrome. */
+	background:
+		radial-gradient(125% 90% at 100% 0%, color-mix(in oklab, var(--brand-400) 22%, transparent), transparent 55%),
+		radial-gradient(115% 85% at 0% 100%, color-mix(in oklab, var(--brand-700) 20%, transparent), transparent 55%);
+}
+
+:root[data-theme='light'] .lava-backdrop {
+	background:
+		radial-gradient(125% 90% at 100% 0%, color-mix(in oklab, var(--brand-400) 12%, transparent), transparent 55%),
+		radial-gradient(115% 85% at 0% 100%, color-mix(in oklab, var(--brand-300) 16%, transparent), transparent 55%);
+}
+
+.lava-field {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	/* Calm ambient strength on content pages... */
+	opacity: 0.4;
+	transition: opacity 0.6s ease;
+}
+
+/* ...full strength on the splash / home page. */
+:root[data-has-hero] .lava-field {
+	opacity: 1;
+}
+
+.lava-blob {
+	position: absolute;
+	display: block;
+	will-change: transform, border-radius;
+	/* Asymmetric radius → organic, non-circular silhouette; keyframes morph it. */
+	border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%;
+}
+
+/* ----- Far tier: huge, slow, heavy blur, low opacity ----- */
+.lava-blob--a {
+	width: 70vw;
+	height: 86vw;
+	max-width: 880px;
+	max-height: 1080px;
+	bottom: -38vw;
+	left: -18vw;
+	filter: blur(110px);
+	opacity: 0.4;
+	background: radial-gradient(circle at 35% 35%, var(--brand-400), var(--brand-700) 60%, transparent 78%);
+	animation:
+		lava-rise-a 52s ease-in-out infinite alternate,
+		lava-morph-a 28s ease-in-out infinite alternate;
+}
+
+.lava-blob--b {
+	width: 62vw;
+	height: 76vw;
+	max-width: 800px;
+	max-height: 960px;
+	top: -34vw;
+	right: -20vw;
+	filter: blur(100px);
+	opacity: 0.36;
+	background: radial-gradient(circle at 65% 65%, var(--brand-500), var(--brand-800) 65%, transparent 82%);
+	animation:
+		lava-rise-b 60s ease-in-out infinite alternate,
+		lava-morph-b 32s ease-in-out infinite alternate;
+}
+
+/* ----- Mid tier: medium, moderate speed/blur ----- */
+.lava-blob--c {
+	width: 32vw;
+	height: 40vw;
+	max-width: 420px;
+	max-height: 520px;
+	top: 24%;
+	left: 44%;
+	filter: blur(60px);
+	opacity: 0.5;
+	background: radial-gradient(circle, color-mix(in oklab, var(--brand-300) 78%, white), transparent 72%);
+	animation:
+		lava-rise-c 30s ease-in-out infinite alternate,
+		lava-morph-c 18s ease-in-out infinite alternate;
+}
+
+.lava-blob--d {
+	width: 28vw;
+	height: 36vw;
+	max-width: 360px;
+	max-height: 460px;
+	bottom: -12vw;
+	right: 16vw;
+	filter: blur(55px);
+	opacity: 0.55;
+	background: radial-gradient(circle at 50% 50%, var(--brand-300), var(--brand-500) 60%, transparent 80%);
+	animation:
+		lava-rise-d 26s ease-in-out infinite alternate,
+		lava-morph-a 16s ease-in-out infinite alternate -3s;
+}
+
+/* ----- Near tier: small, fast, sharper, more opaque ----- */
+.lava-blob--e {
+	width: 16vw;
+	height: 22vw;
+	max-width: 220px;
+	max-height: 300px;
+	top: -6vw;
+	left: 30vw;
+	filter: blur(32px);
+	opacity: 0.6;
+	background: radial-gradient(circle at 50% 50%, var(--brand-400), var(--brand-700) 65%, transparent 82%);
+	animation:
+		lava-rise-e 14s ease-in-out infinite alternate,
+		lava-morph-b 11s ease-in-out infinite alternate -5s;
+}
+
+.lava-blob--f {
+	width: 12vw;
+	height: 16vw;
+	max-width: 160px;
+	max-height: 220px;
+	bottom: -4vw;
+	left: 12vw;
+	filter: blur(26px);
+	opacity: 0.65;
+	background: radial-gradient(circle at 45% 45%, var(--brand-300), var(--brand-600) 65%, transparent 84%);
+	animation:
+		lava-rise-f 11s ease-in-out infinite alternate,
+		lava-morph-c 9s ease-in-out infinite alternate -2s;
+}
+
+:root[data-theme='light'] .lava-blob--a { opacity: 0.22; }
+:root[data-theme='light'] .lava-blob--b { opacity: 0.2; }
+:root[data-theme='light'] .lava-blob--c { opacity: 0.3; }
+:root[data-theme='light'] .lava-blob--d { opacity: 0.32; }
+:root[data-theme='light'] .lava-blob--e { opacity: 0.34; }
+:root[data-theme='light'] .lava-blob--f { opacity: 0.36; }
+
+/* ---------- Graph-paper grid ---------------------------------------------- */
+.lava-grid {
+	position: absolute;
+	inset: 0;
+	background-image:
+		linear-gradient(to right, color-mix(in oklab, var(--brand-300) 9%, transparent) 1px, transparent 1px),
+		linear-gradient(to bottom, color-mix(in oklab, var(--brand-300) 9%, transparent) 1px, transparent 1px);
+	background-size: 56px 56px;
+	/* Fade the grid downward so it's crisp under the nav and dissolves behind
+	   long-form content. */
+	mask-image: linear-gradient(to bottom, black, transparent 70%);
+	-webkit-mask-image: linear-gradient(to bottom, black, transparent 70%);
+	opacity: 0.55;
+}
+
+/* On the splash page, anchor the grid to the centre as a graph-paper vignette. */
+:root[data-has-hero] .lava-grid {
+	background-size: 60px 60px;
+	mask-image: radial-gradient(ellipse 78% 70% at 50% 32%, black 22%, transparent 78%);
+	-webkit-mask-image: radial-gradient(ellipse 78% 70% at 50% 32%, black 22%, transparent 78%);
+	opacity: 0.7;
+}
+
+:root[data-theme='light'] .lava-grid {
+	background-image:
+		linear-gradient(to right, color-mix(in oklab, var(--brand) 11%, transparent) 1px, transparent 1px),
+		linear-gradient(to bottom, color-mix(in oklab, var(--brand) 11%, transparent) 1px, transparent 1px);
+}
+
+/* ----- Trajectories: vertical drift + gentle sway; travel scales with depth.
+   Far tier barely budges, near tier traverses the viewport — that contrast is
+   what sells the parallax. (Lifted from the SPA's login screen.) ----- */
+@keyframes lava-rise-a {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(2vw, -12vh, 0) scale(1.04, 0.96) rotate(4deg); }
+	100% { transform: translate3d(-1vw, -22vh, 0) scale(0.97, 1.05) rotate(-3deg); }
+}
+@keyframes lava-rise-b {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(-2vw, 10vh, 0) scale(0.96, 1.05) rotate(-4deg); }
+	100% { transform: translate3d(1vw, 20vh, 0) scale(1.05, 0.96) rotate(3deg); }
+}
+@keyframes lava-rise-c {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(-5vw, -25vh, 0) scale(1.1, 0.94) rotate(-10deg); }
+	100% { transform: translate3d(4vw, -50vh, 0) scale(0.92, 1.1) rotate(8deg); }
+}
+@keyframes lava-rise-d {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(6vw, -35vh, 0) scale(1.05, 0.95) rotate(12deg); }
+	100% { transform: translate3d(-3vw, -68vh, 0) scale(0.92, 1.08) rotate(-7deg); }
+}
+@keyframes lava-rise-e {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(8vw, 55vh, 0) scale(0.88, 1.14) rotate(-18deg); }
+	100% { transform: translate3d(-6vw, 100vh, 0) scale(1.16, 0.86) rotate(14deg); }
+}
+@keyframes lava-rise-f {
+	0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+	50%  { transform: translate3d(-9vw, -55vh, 0) scale(1.18, 0.84) rotate(20deg); }
+	100% { transform: translate3d(7vw, -105vh, 0) scale(0.85, 1.18) rotate(-16deg); }
+}
+
+/* Independent surface morph — the signature lava-lamp "skin" wobble. */
+@keyframes lava-morph-a {
+	0%   { border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%; }
+	50%  { border-radius: 42% 58% 38% 62% / 60% 40% 60% 40%; }
+	100% { border-radius: 50% 50% 65% 35% / 45% 55% 50% 50%; }
+}
+@keyframes lava-morph-b {
+	0%   { border-radius: 50% 50% 40% 60% / 55% 45% 55% 45%; }
+	50%  { border-radius: 65% 35% 55% 45% / 40% 60% 40% 60%; }
+	100% { border-radius: 38% 62% 50% 50% / 60% 50% 50% 40%; }
+}
+@keyframes lava-morph-c {
+	0%   { border-radius: 60% 40% 50% 50% / 45% 60% 40% 55%; }
+	50%  { border-radius: 40% 60% 65% 35% / 55% 40% 60% 45%; }
+	100% { border-radius: 55% 45% 38% 62% / 50% 55% 45% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.lava-blob {
+		animation: none !important;
+	}
+}
+
+/* =============================================================================
+   Frosted-glass chrome
+   ========================================================================== */
+.header {
+	/* Pure glass: NO background fill and NO bottom border — only the blur and a
+	   soft shadow. This lets the graph-paper grid + blob glow read straight
+	   through the nav instead of being capped by a solid bar. Set explicitly
+	   (overriding Starlight's `--sl-color-bg-nav` fill + hairline divider). */
+	background: transparent;
+	border-bottom: 0;
+	-webkit-backdrop-filter: blur(20px) saturate(160%);
+	backdrop-filter: blur(20px) saturate(160%);
+	box-shadow: 0 8px 28px -22px color-mix(in oklab, var(--brand-800) 70%, transparent);
+}
+
+/* Starlight fills the search button solid (white in light, black in dark),
+   which reads as a hard block inside the frosted header. Make it a translucent
+   glass pill that blends into the nav instead. */
+site-search button[data-open-modal] {
+	background: color-mix(in oklab, var(--sl-color-bg) 30%, transparent);
+	border: 1px solid color-mix(in oklab, var(--brand) 26%, transparent);
+	-webkit-backdrop-filter: blur(8px) saturate(140%);
+	backdrop-filter: blur(8px) saturate(140%);
+	transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+site-search button[data-open-modal]:hover {
+	border-color: color-mix(in oklab, var(--brand) 48%, transparent);
+	background: color-mix(in oklab, var(--brand) 12%, transparent);
+}
+
+/* The ⌘K hint chip inside the search button — keep it translucent too. */
+site-search button[data-open-modal] kbd {
+	background: color-mix(in oklab, var(--sl-color-bg) 45%, transparent);
+}
+
+/* Mobile sidebar drops over content — keep it readable (mostly opaque). */
+.sidebar-pane {
+	background: color-mix(in oklab, var(--sl-color-bg) 90%, transparent);
+	-webkit-backdrop-filter: blur(20px) saturate(150%);
+	backdrop-filter: blur(20px) saturate(150%);
+}
+
+@media (min-width: 50rem) {
+	.sidebar-pane {
+		/* Desktop sidebar is a frosted rail over the drifting backdrop. */
+		background: var(--sl-color-bg-sidebar);
+		border-inline-end: 1px solid var(--sl-color-hairline-shade);
+	}
+}
+
+/* Right-hand table of contents pill on wide screens */
+@media (min-width: 72rem) {
+	.right-sidebar {
+		background: transparent;
+	}
+}
+
+/* =============================================================================
+   Cards (splash page CardGrid) → frosted glass tiles
+   ========================================================================== */
+.card {
+	border: 1px solid color-mix(in oklab, var(--brand) 22%, transparent);
+	border-radius: 1rem;
+	background: color-mix(in oklab, var(--sl-color-bg) 55%, transparent);
+	-webkit-backdrop-filter: blur(14px) saturate(150%);
+	backdrop-filter: blur(14px) saturate(150%);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 8%, transparent) inset,
+		0 18px 40px -24px color-mix(in oklab, var(--brand-800) 80%, transparent);
+	transition:
+		transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+		border-color 0.25s ease,
+		box-shadow 0.25s ease;
+}
+
+.card:hover {
+	transform: translateY(-4px);
+	border-color: color-mix(in oklab, var(--brand) 42%, transparent);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 12%, transparent) inset,
+		0 26px 60px -28px color-mix(in oklab, var(--brand-600) 90%, transparent);
+}
+
+:root[data-theme='light'] .card {
+	background: color-mix(in oklab, white 62%, transparent);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 70%, transparent) inset,
+		0 18px 40px -24px color-mix(in oklab, var(--brand) 35%, transparent);
+}
+
+/* Keep the icon chip on-brand (override Starlight's rotating hue) */
+.card .icon {
+	color: var(--sl-color-accent-high);
+	border-color: color-mix(in oklab, var(--brand) 45%, transparent) !important;
+	background-color: color-mix(in oklab, var(--brand) 22%, transparent) !important;
+	border-radius: 0.5rem;
+}
+
+.card .title {
+	font-family: var(--font-display);
+	letter-spacing: -0.01em;
+}
+
+/* Navigable splash tiles (LinkCard) get the same frosted treatment. */
+.sl-link-card {
+	border: 1px solid color-mix(in oklab, var(--brand) 22%, transparent);
+	border-radius: 1rem;
+	padding: 1.25rem 1.5rem;
+	background: color-mix(in oklab, var(--sl-color-bg) 55%, transparent);
+	-webkit-backdrop-filter: blur(14px) saturate(150%);
+	backdrop-filter: blur(14px) saturate(150%);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 8%, transparent) inset,
+		0 18px 40px -24px color-mix(in oklab, var(--brand-800) 80%, transparent);
+	transition:
+		transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+		border-color 0.25s ease,
+		box-shadow 0.25s ease;
+}
+
+.sl-link-card .title {
+	font-family: var(--font-display);
+	letter-spacing: -0.01em;
+}
+
+.sl-link-card .icon {
+	color: var(--sl-color-accent-high);
+	transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sl-link-card:hover {
+	transform: translateY(-4px);
+	/* override Starlight's flat gray hover */
+	background: color-mix(in oklab, var(--brand) 12%, var(--sl-color-bg) 50%);
+	border-color: color-mix(in oklab, var(--brand) 45%, transparent);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 12%, transparent) inset,
+		0 26px 60px -28px color-mix(in oklab, var(--brand-600) 90%, transparent);
+}
+
+.sl-link-card:hover .icon {
+	color: var(--sl-color-accent-high);
+	transform: translateX(4px);
+}
+
+:root[data-theme='light'] .sl-link-card {
+	background: color-mix(in oklab, white 62%, transparent);
+	box-shadow:
+		0 1px 0 0 color-mix(in oklab, white 70%, transparent) inset,
+		0 18px 40px -24px color-mix(in oklab, var(--brand) 35%, transparent);
+}
+
+:root[data-theme='light'] .sl-link-card:hover {
+	background: color-mix(in oklab, var(--brand) 8%, white 70%);
+}
+
+/* =============================================================================
+   Typography — display grotesque for headings & hero
+   ========================================================================== */
+.sl-markdown-content :is(h1, h2, h3),
+.content-panel h1,
+.hero h1,
+.site-title {
+	font-family: var(--font-display);
+	letter-spacing: -0.018em;
+}
+
+/* Light mode: near-black header wordmark (overrides the brand-blue
+   `--sl-color-text-accent` the site title uses by default). */
+:root[data-theme='light'] .site-title {
+	color: var(--sl-color-white);
+}
+
+/* =============================================================================
+   Hero / splash
+   ========================================================================== */
+.hero {
+	position: relative;
+}
+
+/* Two-column hero: copy on the left, logo on the right (Starlight's default
+   7fr/4fr at ≥50rem; stacked + centred below that). The logo drifts gently. */
+.hero > img,
+.hero > .hero-html {
+	filter: drop-shadow(0 24px 60px color-mix(in oklab, var(--brand-800) 55%, transparent));
+	animation: hero-logo-float 9s ease-in-out infinite alternate;
+}
+
+@keyframes hero-logo-float {
+	0%   { transform: translateY(0) rotate(-0.5deg); }
+	100% { transform: translateY(-14px) rotate(0.5deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hero > img,
+	.hero > .hero-html {
+		animation: none;
+	}
+}
+
+/* Eyebrow kicker — set via `set:html` in the hero title (index.mdx). */
+.hero .hero-kicker {
+	/* Block-level + fit-content so it sits on its own line above the title
+	   (centred on mobile, left-aligned on desktop via the parent's alignment). */
+	display: flex;
+	width: fit-content;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0 auto 1.1rem;
+	padding: 0.35rem 0.85rem;
+	font-family: var(--sl-font);
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--sl-color-accent-high);
+	background: color-mix(in oklab, var(--brand) 16%, transparent);
+	border: 1px solid color-mix(in oklab, var(--brand) 34%, transparent);
+	border-radius: 999px;
+	-webkit-backdrop-filter: blur(10px);
+	backdrop-filter: blur(10px);
+}
+
+/* Left-align the kicker with the copy on desktop (it centres on mobile, where
+   Starlight centres the whole hero stack). */
+@media (min-width: 50rem) {
+	.hero .hero-kicker {
+		margin-inline: 0;
+	}
+}
+
+/* Live-status orb — pulses in Boise State's Bronco Orange. */
+.hero .hero-kicker::before {
+	content: '';
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 999px;
+	background: var(--brand-orange);
+	box-shadow: 0 0 8px 0 color-mix(in oklab, var(--brand-orange) 80%, transparent);
+	animation: kicker-orb-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes kicker-orb-pulse {
+	0% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand-orange) 70%, transparent);
+	}
+	70% {
+		box-shadow: 0 0 0 7px color-mix(in oklab, var(--brand-orange) 0%, transparent);
+	}
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand-orange) 0%, transparent);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.hero .hero-kicker::before {
+		animation: none;
+	}
+}
+
+.hero h1 {
+	font-weight: 800;
+	font-size: clamp(2.6rem, calc(1.2rem + 6vw), 5rem);
+	line-height: 1.02;
+	/* Gradient ink — brand blue rising into near-white */
+	background: linear-gradient(
+		165deg,
+		var(--sl-color-white) 0%,
+		var(--sl-color-accent-high) 58%,
+		var(--sl-color-accent) 100%
+	);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* Light mode: solid near-black title (no gradient ink). `--sl-color-white` is
+   the theme's foreground "ink" — near-black under the light theme — so this
+   matches the rest of the page's headings. */
+:root[data-theme='light'] .hero h1 {
+	background: none;
+	-webkit-background-clip: border-box;
+	background-clip: border-box;
+	-webkit-text-fill-color: var(--sl-color-white);
+	color: var(--sl-color-white);
+}
+
+.hero .tagline {
+	font-size: clamp(var(--sl-text-lg), calc(0.5rem + 1.6vw), var(--sl-text-2xl));
+	font-weight: 450;
+	color: var(--sl-color-white);
+	max-width: 36ch;
+}
+
+/* Hero action buttons */
+.hero .actions .sl-link-button.primary {
+	background: linear-gradient(180deg, var(--sl-color-accent) 0%, var(--brand) 100%);
+	border: 1px solid color-mix(in oklab, var(--sl-color-accent-high) 45%, transparent);
+	color: white;
+	box-shadow: 0 10px 30px -10px color-mix(in oklab, var(--brand) 75%, transparent);
+	transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hero .actions .sl-link-button.primary:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 16px 40px -12px color-mix(in oklab, var(--brand) 85%, transparent);
+}
+
+.hero .actions .sl-link-button.minimal {
+	/* Starlight's `.minimal` variant has padding-inline: 0 (text-only link); our
+	   frosted pill needs breathing room around the label + icon. */
+	padding: 0.75rem 1.4rem;
+	gap: 0.6rem;
+	border: 1px solid color-mix(in oklab, var(--brand) 32%, transparent);
+	background: color-mix(in oklab, var(--sl-color-bg) 40%, transparent);
+	-webkit-backdrop-filter: blur(10px);
+	backdrop-filter: blur(10px);
+	transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.hero .actions .sl-link-button.minimal:hover {
+	border-color: color-mix(in oklab, var(--brand) 55%, transparent);
+	background: color-mix(in oklab, var(--brand) 14%, transparent);
+}
+
+/* =============================================================================
+   Misc polish
+   ========================================================================== */
+/* Inline code & links pick up the brand via the accent variables above.
+   Centre the splash intro copy so the blob field reads around it. */
+:root[data-has-hero] .sl-markdown-content {
+	margin-inline: auto;
+}

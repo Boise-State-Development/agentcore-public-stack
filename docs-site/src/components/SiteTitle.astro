@@ -1,0 +1,88 @@
+---
+// Override of Starlight's default SiteTitle.
+//
+// Renders the site title as a compact, two-line wordmark beside the logo
+// (e.g. "AgentCore" / "Public Stack") rather than one long nowrap line —
+// echoing the stacked Strands Agents mark. The text is split on the first
+// space, so line 1 is the first word and line 2 is the remainder; the full
+// title is preserved for assistive tech via aria-label. Logo logic is kept
+// identical to upstream.
+import { logos } from 'virtual:starlight/user-images';
+import config from 'virtual:starlight/user-config';
+
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+const [firstLine, ...restWords] = siteTitle.split(' ');
+const secondLine = restWords.join(' ');
+---
+
+<a href={siteTitleHref} class="site-title sl-flex">
+	{
+		config.logo && logos.dark && (
+			<>
+				<img
+					class:list={{ 'light:sl-hidden print:hidden': !('src' in config.logo) }}
+					alt={config.logo.alt}
+					src={logos.dark.src}
+					width={logos.dark.width}
+					height={logos.dark.height}
+				/>
+				{/* Show light alternate if a user configure both light and dark logos. */}
+				{!('src' in config.logo) && (
+					<img
+						class="dark:sl-hidden print:block"
+						alt={config.logo.alt}
+						src={logos.light?.src}
+						width={logos.light?.width}
+						height={logos.light?.height}
+					/>
+				)}
+			</>
+		)
+	}
+	{
+		config.logo?.replacesTitle ? (
+			<span class="sr-only" translate="no">
+				{siteTitle}
+			</span>
+		) : (
+			<span class="site-title-text" translate="no" aria-label={siteTitle}>
+				<span aria-hidden="true">{firstLine}</span>
+				{secondLine && <span aria-hidden="true">{secondLine}</span>}
+			</span>
+		)
+	}
+</a>
+
+<style>
+	@layer starlight.core {
+		.site-title {
+			align-items: center;
+			gap: var(--sl-nav-gap);
+			color: var(--sl-color-text-accent);
+			text-decoration: none;
+			min-width: 0;
+		}
+
+		/* Compact two-line wordmark */
+		.site-title-text {
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			font-family: var(--font-display, inherit);
+			font-size: 0.95rem;
+			font-weight: 700;
+			line-height: 1.05;
+			letter-spacing: -0.01em;
+			white-space: nowrap;
+			overflow: hidden;
+		}
+
+		img {
+			height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
+			width: auto;
+			max-width: 100%;
+			object-fit: contain;
+			object-position: 0 50%;
+		}
+	}
+</style>

@@ -18,6 +18,33 @@ export default defineConfig({
 				dark: './src/assets/globe-dark.svg',
 				alt: 'AgentCore Public Stack',
 			},
+			// Brand-aligned look & feel: frosted glass, graph-paper grid, and the
+			// lava-lamp blob field from the product's login / first-boot screens.
+			customCss: ['./src/styles/custom.css'],
+			// Inject the distinctive type system (display grotesque + Inter + mono).
+			head: [
+				{
+					tag: 'link',
+					attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+				},
+				{
+					tag: 'link',
+					attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true },
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'stylesheet',
+						href: 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap',
+					},
+				},
+			],
+			// Inject the decorative lava-lamp + grid backdrop behind every page,
+			// and render the site title as a compact two-line wordmark.
+			components: {
+				PageFrame: './src/components/PageFrame.astro',
+				SiteTitle: './src/components/SiteTitle.astro',
+			},
 			social: [
 				{
 					icon: 'github',

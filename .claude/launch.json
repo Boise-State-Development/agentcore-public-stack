@@ -21,6 +21,13 @@
       "runtimeArgs": ["main.py"],
       "port": 8001,
       "cwd": "backend/src/apis/inference_api"
+    },
+    {
+      "name": "docs-site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 4321,
+      "cwd": "docs-site"
     }
   ]
 }

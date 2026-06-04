@@ -1,0 +1,131 @@
+---
+// Override of Starlight's default PageFrame.
+//
+// Identical to the upstream component (kept in sync with
+// node_modules/@astrojs/starlight/components/PageFrame.astro) except that it
+// injects a single fixed, decorative backdrop behind every page: a graph-paper
+// grid and a field of morphing "lava-lamp" blobs in the Boise State brand blue.
+//
+// This mirrors the look of the product's own login / first-boot screens so the
+// docs feel like part of the same system. The blobs run at full strength only
+// on the splash/home page (`html[data-has-hero]`); on content pages they are
+// dialed down to a calm ambient glow so reading stays comfortable. All of the
+// decorative styling lives in `src/styles/custom.css`. The markup is purely
+// presentational and hidden from assistive tech.
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<div class="lava-backdrop" aria-hidden="true">
+	<div class="lava-field">
+		{/* Far tier: huge, slow, heavily blurred */}
+		<span class="lava-blob lava-blob--a"></span>
+		<span class="lava-blob lava-blob--b"></span>
+		{/* Mid tier */}
+		<span class="lava-blob lava-blob--c"></span>
+		<span class="lava-blob lava-blob--d"></span>
+		{/* Near tier: small, fast, sharper */}
+		<span class="lava-blob lava-blob--e"></span>
+		<span class="lava-blob lava-blob--f"></span>
+	</div>
+	<div class="lava-grid"></div>
+</div>
+
+<div class="page sl-flex">
+	<header class="header"><slot name="header" /></header>
+	{
+		hasSidebar && (
+			<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+				<MobileMenuToggle />
+				<div id="starlight__sidebar" class="sidebar-pane">
+					<div class="sidebar-content sl-flex">
+						<slot name="sidebar" />
+					</div>
+				</div>
+			</nav>
+		)
+	}
+	<div class="main-frame"><slot /></div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.page {
+			flex-direction: column;
+			min-height: 100vh;
+			/* Sit above the fixed `.lava-backdrop` (z-index: 0) so content and the
+			   frosted nav/sidebar render on top of the decorative layer. */
+			position: relative;
+			z-index: 1;
+		}
+
+		.header {
+			z-index: var(--sl-z-index-navbar);
+			position: fixed;
+			inset-inline-start: 0;
+			inset-block-start: 0;
+			width: 100%;
+			height: var(--sl-nav-height);
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			padding-inline-end: var(--sl-nav-pad-x);
+			/* No solid fill or divider here — the header is pure glass. The blur +
+			   soft shadow are applied in custom.css so the grid/blobs read through
+			   it instead of hitting a solid nav bar. */
+		}
+
+		:global([data-has-sidebar]) .header {
+			padding-inline-end: calc(
+				var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+			);
+		}
+
+		.sidebar-pane {
+			visibility: var(--sl-sidebar-visibility, hidden);
+			position: fixed;
+			z-index: var(--sl-z-index-menu);
+			inset-block: var(--sl-nav-height) 0;
+			inset-inline-start: 0;
+			width: 100%;
+			background-color: var(--sl-color-black);
+			overflow-y: auto;
+			scrollbar-gutter: stable;
+		}
+
+		:global([aria-expanded='true']) ~ .sidebar-pane {
+			--sl-sidebar-visibility: visible;
+		}
+
+		.sidebar-content {
+			height: 100%;
+			min-height: max-content;
+			padding: 1rem var(--sl-sidebar-pad-x) 0;
+			flex-direction: column;
+			gap: 1rem;
+		}
+
+		@media (min-width: 50rem) {
+			.sidebar-content::after {
+				content: '';
+				padding-bottom: 1px;
+			}
+		}
+
+		.main-frame {
+			padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+			padding-inline-start: var(--sl-content-inline-start);
+		}
+
+		@media (min-width: 50rem) {
+			:global([data-has-sidebar]) .header {
+				padding-inline-end: var(--sl-nav-pad-x);
+			}
+			.sidebar-pane {
+				--sl-sidebar-visibility: visible;
+				width: var(--sl-sidebar-width);
+				background-color: var(--sl-color-bg-sidebar);
+				border-inline-end: 1px solid var(--sl-color-hairline-shade);
+			}
+		}
+	}
+</style>
