@@ -143,3 +143,17 @@ scripts/stack-bootstrap/install.sh
 test-accounts
 manifest.json
 manifest.json:Zone.Identifier
+
+# Internal documents and reports (kept out of public repo by policy)
+*-internal.pdf
+*-internal.md
+*-internal.txt
+*-confidential.*
+internal-notes/
+internal-docs/
+*.private.pdf
+*.private.md
+*-report-*.pdf
+audit-*.pdf
+audit-*.md
+review-*.pdf

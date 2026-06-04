@@ -110,6 +110,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Centralized exception handlers: AWS ClientError responses are mapped to
+# generic 400/502 bodies (logged server-side) so AWS error messages, internal
+# parameter names, and reflected user input never leak into HTTP responses.
+from apis.shared.security import register_aws_client_error_handler
+register_aws_client_error_handler(app)
+logger.info("Registered AWS ClientError handler")
+
 # Add GZip compression middleware for SSE streams
 # Compresses responses over 1KB, reducing bandwidth by 50-70%
 app.add_middleware(
