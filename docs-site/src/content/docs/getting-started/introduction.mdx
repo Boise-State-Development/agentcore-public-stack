@@ -1,0 +1,90 @@
+---
+title: Introduction
+description: What the AgentCore Public Stack is and who it is for.
+sidebar:
+  order: 1
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import YouTube from '../../../components/YouTube.astro';
+
+A production-ready, multi-agent conversational AI platform built on **AWS Bedrock
+AgentCore** and **Strands Agents** — for teams who want to run their own AI
+assistant on infrastructure they control, instead of renting per-seat access to
+someone else's.
+
+<YouTube id="hoYHY1JpCbg" title="AgentCore Public Stack — Introduction" />
+
+## What you get
+
+The platform ships the pieces of a modern conversational AI product, wired
+together and ready to deploy:
+
+- **Streaming chat** — token-by-token responses over SSE, with conversation
+  history and automatic context management.
+- **Multi-agent tools** — agents call tools across several protocols: direct
+  functions, the AWS SDK, MCP servers, and remote A2A agents.
+- **RAG** — ground answers in your own documents and knowledge bases.
+- **MCP Apps** — rich, interactive tool UIs rendered inline in the conversation.
+- **Artifacts** — generated documents and code rendered in a dedicated side panel.
+- **Voice** — speak to the assistant and hear responses back.
+
+## Why an Internal AI Platform?
+
+Commercial AI subscriptions are convenient, but at scale they lock you into
+someone else's roadmap, pricing, and data practices. Running your own platform on
+infrastructure you control changes that calculus.
+
+<CardGrid>
+	<Card title="No Vendor Lock-in">
+		Stay free to choose — and swap — the best-fit model for each task. No
+		multi-year contracts and no large up-front CapEx; pay for what you use and
+		change course as the field moves.
+	</Card>
+	<Card title="Data Sovereignty">
+		Your data stays inside your own AWS account. Nothing leaves the security
+		boundary you control.
+	</Card>
+	<Card title="No Training on Your Data">
+		Models are used for inference only. Your prompts and data are never used to
+		train third-party models.
+	</Card>
+	<Card title="No Per Seat Licensing">
+		Per-seat pricing doesn't scale — costs balloon with every user you add. A
+		consumption-based, self-hosted platform means you pay for actual usage, not
+		headcount.
+	</Card>
+	<Card title="Equitable Access">
+		Everyone gets the same capable models — no tiered "haves and have-nots"
+		based on who can afford a premium subscription.
+	</Card>
+	<Card title="Systems Integration">
+		Teams can bring their own MCP servers to connect the systems they rely on, so
+		the assistant can safely act on real data — all within your own controls.
+	</Card>
+</CardGrid>
+
+## Next steps
+
+<CardGrid>
+	<LinkCard
+		title="Quick Start"
+		href="/agentcore-public-stack/getting-started/quick-start/"
+		description="Get the platform running locally in a few commands."
+	/>
+	<LinkCard
+		title="Architecture Overview"
+		href="/agentcore-public-stack/getting-started/architecture-overview/"
+		description="How the agents, APIs, and infrastructure fit together."
+	/>
+	<LinkCard
+		title="Installation"
+		href="/agentcore-public-stack/installation/backend/"
+		description="Stand up the backend, the Angular SPA, and the CDK infrastructure."
+	/>
+	<LinkCard
+		title="Deployment"
+		href="/agentcore-public-stack/deployment/overview/"
+		description="Ship to AWS: platform stack, backend images, and the frontend."
+	/>
+</CardGrid>
