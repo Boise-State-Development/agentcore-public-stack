@@ -51,14 +51,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: fewer-step tool turns (lower per-turn cost), best-in-class computer-use, ~4× fewer code-flaw pass-throughs, the `effort` compute-depth knob
 - **Status**: open — verify Bedrock region availability (us-east-1 ✓) and the 4.8 context window on the model card before flipping the pin; confirm the beta.27 Opus-4.7 thinking/`temperature` handling still applies
 
-### [2026-05-29] Adopt Strands `Limits` for per-invocation cost/turn caps (supersedes hand-rolled runaway guardrail)
-- **Source**: research/2026-05-29.md ▸ Top 5 #2 — Strands PR #2360 (merged May 28, ships 1.42). **Supersedes** the 2026-05-22 ▸ Top 5 #5 "Runaway-session cost guardrail" item below.
-- **Surface**: backend (agent invocation in `inference_api`, SSE stop-reason handling for `limit_*`) + infrastructure (CloudWatch Bedrock-spend alarm)
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: yes — adopts library-native `limits=` instead of hand-rolling a hook; the queued "build our own guardrail" collapses to "adopt + alarm"
-- **Unlocks**: native per-turn cost ceiling + `limit_*` stop_reason (real protection against the $72-in-58-min / $30K-invoice failure mode; `stop_runtime_session` does not stop the microVM)
-- **Status**: open — gated on Strands 1.42 release (currently latest is 1.41.0). Pairs with the existing CloudWatch-alarm half of the 2026-05-22 item.
-
 ### [2026-05-29] Align MCP Apps capability advertisement to spec-canonical `io.modelcontextprotocol/ui`
 - **Source**: research/2026-05-29.md ▸ Top 5 #3 — SEP-1865 folded into the 2026-07-28 draft spec, PR #2791 (May 27)
 - **Surface**: backend (inference-api `initialize` capability advertisement — currently `experimental.ui`; the `ui_resource` SSE path)
@@ -81,14 +73,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — defensive; protects the shared event loop from being wedged by one user's request
 - **Status**: open — #399 already filed; kaizen value is the broader class-of-bug sweep (pairs with the queued SDK #482 guard)
 
-### [2026-05-22] Strands 1.40 → 1.41 bump + enable Bedrock prompt caching (closes issue #269)
-- **Source**: research/2026-05-22.md ▸ Top 5 #1 — Strands v1.41.0 (PR #2232 `cache_tools_ttl`) + open issue #269
-- **Surface**: backend (`pyproject.toml`, `uv.lock`, `BedrockModel` construction, `CacheConfig` wiring)
-- **Effort × Impact**: M × H
-- **Subtracts**: partial — adopts library-native `cache_tools_ttl` instead of a hand-rolled TTL workaround
-- **Unlocks**: end-to-end 1h prompt caching → lower input-token cost on multi-turn sessions, surfaced in the admin "Cache Savings" card
-- **Status**: open — gated on a `starlette` 1.x transitive-conflict audit (Strands 1.41 bumps starlette to the 1.x major line)
-
 ### [2026-05-22] Defensive guard against SDK #482 SSE-disconnect runtime deadlock
 - **Source**: research/2026-05-22.md ▸ Top 5 #2 — AgentCore SDK issue #482
 - **Surface**: backend (`inference-api` streaming worker — the `/invocations` SSE handler)
@@ -108,13 +92,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Surface**: backend (provider-translation chokepoint — same site as `_shape_thinking_value` / #329 / #331)
 - **Effort × Impact**: L × M
 - **Subtracts**: no — defensive; Opus 4.7 rejects `temperature` on extended-thinking turns
-- **Status**: open
-
-### [2026-05-22] Runaway-session cost guardrail — `max_turns` + CloudWatch Bedrock-spend alarm
-- **Source**: research/2026-05-22.md ▸ Top 5 #5 — starter-toolkit issue #498 + in-window HN $30K-bill story
-- **Surface**: cross-cutting — agent loop (`backend/src/agents/main_agent/`) + infrastructure (CloudWatch alarm)
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: no — defensive/operational; `stop_runtime_session` does not stop the microVM
 - **Status**: open
 
 ### [2026-05-15] Wire per-tool `duration_ms` into `tool_result` SSE
@@ -184,6 +161,21 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #6 (Ship scoped, or Defer 2 weeks); no decision logged yet.
 
 ## Resolved
+
+### [2026-05-29] Adopt Strands `Limits` for per-invocation cost/turn caps → RESOLVED — superseded (folded into the 2026-06-05 Strands 1.42 keystone)
+- **Decision**: Superseded — consolidated into the [2026-06-05] "Strands 1.40 → 1.42 keystone bump" Open item.
+- **Reasoning**: This item was gated on Strands 1.42, which released June 1. The 2026-06-05 research declared the consolidation: the keystone bump adopts `Limits` (cost cap) and `cache_tools_ttl` (#269) together. Tracking it as a separate item duplicates the keystone. The CloudWatch Bedrock-spend alarm half is carried in the keystone's surface area.
+- **Reviewed-in**: reviews/2026-06-05.md ▸ Proposal #1 + Retirement Candidates (queue consolidation).
+
+### [2026-05-22] Strands 1.40 → 1.41 bump + enable Bedrock prompt caching (#269) → RESOLVED — superseded (folded into the 2026-06-05 Strands 1.42 keystone)
+- **Decision**: Superseded — consolidated into the [2026-06-05] "Strands 1.40 → 1.42 keystone bump" Open item.
+- **Reasoning**: `cache_tools_ttl` (the #269 unblock this item targeted at 1.41) now ships in 1.42 alongside `Limits`. A single 1.40 → 1.42 bump covers both; the `starlette` 1.x transitive-conflict audit this item owed is folded into the keystone's blast-radius audit (`strands-agents-tools` 0.5→0.8 + `starlette` 1.2.1). #269 stays open as the work-tracking issue.
+- **Reviewed-in**: reviews/2026-06-05.md ▸ Proposal #1 + Retirement Candidates (queue consolidation).
+
+### [2026-05-22] Runaway-session cost guardrail — `max_turns` + CloudWatch Bedrock-spend alarm → RESOLVED — superseded (folded into the 2026-06-05 Strands 1.42 keystone)
+- **Decision**: Superseded — consolidated into the [2026-06-05] "Strands 1.40 → 1.42 keystone bump" Open item.
+- **Reasoning**: Strands `Limits` (1.42) is the library-native replacement for the hand-rolled `max_turns` guardrail this item proposed; the keystone adopts it and retires the hand-rolled equivalent. The CloudWatch Bedrock-spend alarm half is carried in the keystone's infrastructure surface area (the half the SDK can't provide).
+- **Reviewed-in**: reviews/2026-06-05.md ▸ Proposal #1 + Retirement Candidates (queue consolidation).
 
 ### [2026-05-22] Pin `backup-data.yml` runner + actions to restore the CI gate → RESOLVED — pinned, CI green
 - **Decision**: Resolved (not a logged kaizen decision — landed incidentally via the beta.27 release merge #365, May 21).
