@@ -42,8 +42,15 @@ security = HTTPBearer(auto_error=False)
 # Cognito access tokens don't contain identity claims (email, name, picture).
 # We cache the user profile from DynamoDB so we only hit the table once per
 # user, not on every request.  TTL keeps it fresh if the profile changes.
+#
+# Each entry is also tagged with the roles-version watermark current at the
+# time it was stored. When an admin mutates a role definition (or invokes
+# the global cache-invalidate route), the watermark advances and every
+# subsequent profile read re-queries DynamoDB until a fresh entry is
+# stored — eliminating the "old roles persist for ~5 minutes" window that
+# the TTL alone would otherwise create.
 
-_user_profile_cache: dict[str, tuple[float, dict]] = {}
+_user_profile_cache: dict[str, tuple[float, int, dict]] = {}
 _USER_PROFILE_CACHE_TTL = 300  # 5 minutes
 
 
@@ -90,12 +97,16 @@ async def _enrich_user_from_store(user: User) -> None:
     """
     import time
 
+    from apis.shared.rbac.version import get_roles_version
+
+    current_version = get_roles_version()
+
     # Check cache first
     now = time.monotonic()
     cached = _user_profile_cache.get(user.user_id)
     if cached:
-        ts, profile = cached
-        if now - ts < _USER_PROFILE_CACHE_TTL:
+        ts, cached_version, profile = cached
+        if now - ts < _USER_PROFILE_CACHE_TTL and cached_version == current_version:
             user.email = profile.get("email") or user.email
             user.name = profile.get("name") or user.name
             stored_roles = profile.get("roles")
@@ -116,7 +127,7 @@ async def _enrich_user_from_store(user: User) -> None:
                 "name": stored.name,
                 "roles": stored.roles,
             }
-            _user_profile_cache[user.user_id] = (now, profile)
+            _user_profile_cache[user.user_id] = (now, current_version, profile)
             user.email = stored.email or user.email
             user.name = stored.name or user.name
             if stored.roles:

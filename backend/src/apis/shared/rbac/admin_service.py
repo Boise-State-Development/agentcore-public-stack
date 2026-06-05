@@ -8,6 +8,8 @@ from apis.shared.auth.models import User
 from .models import AppRole, EffectivePermissions, AppRoleCreate, AppRoleUpdate
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache
+from .role_constraints import validate_jwt_role_mappings
+from .version import bump_roles_version
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,10 @@ class AppRoleAdminService:
         Raises:
             ValueError: If role already exists or validation fails
         """
+        # Reject ubiquitous JWT mappings on protected roles and any
+        # malformed entries, regardless of role.
+        validate_jwt_role_mappings(role_data.role_id, role_data.jwt_role_mappings)
+
         # Build the AppRole object
         role = AppRole(
             role_id=role_data.role_id,
@@ -138,6 +144,11 @@ class AppRoleAdminService:
                 filtered = {k: v for k, v in update_dict.items() if k in allowed_fields}
                 updates = AppRoleUpdate(**filtered)
 
+        # Validate any incoming jwt_role_mappings against format and
+        # protected-role rules before applying.
+        if updates.jwt_role_mappings is not None:
+            validate_jwt_role_mappings(role_id, updates.jwt_role_mappings)
+
         # Apply updates
         update_dict = updates.model_dump(exclude_unset=True, by_alias=False)
         for field, value in update_dict.items():
@@ -201,6 +212,7 @@ class AppRoleAdminService:
             await self.cache.invalidate_role(role_id)
             for jwt_role in existing.jwt_role_mappings:
                 await self.cache.invalidate_jwt_mapping(jwt_role)
+            bump_roles_version()
 
             logger.info(
                 f"Admin {admin.email} deleted role: {role_id}",
@@ -298,6 +310,10 @@ class AppRoleAdminService:
         await self.cache.invalidate_role(role.role_id)
         for jwt_role in role.jwt_role_mappings:
             await self.cache.invalidate_jwt_mapping(jwt_role)
+        # Bump the cross-cache watermark so any process holding a cached
+        # user profile for an affected user re-reads from the store on the
+        # next request rather than waiting for the TTL to expire.
+        bump_roles_version()
 
     # =========================================================================
     # Tool Management Extensions

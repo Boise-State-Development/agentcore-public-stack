@@ -174,6 +174,11 @@ class AppRoleCache:
             self._role_cache.clear()
             self._jwt_mapping_cache.clear()
             logger.info("Invalidated all AppRole caches")
+        # Bump the cross-cache watermark so any process holding cached
+        # user profiles re-reads on the next request, not after the TTL.
+        # Imported here to avoid a circular import at module load time.
+        from .version import bump_roles_version
+        bump_roles_version()
 
     # =========================================================================
     # Statistics
