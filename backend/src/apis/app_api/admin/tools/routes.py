@@ -4,10 +4,15 @@ import asyncio
 import logging
 from typing import Optional
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
 from apis.app_api.tools.service import get_tool_catalog_service
+from apis.shared.tools.gateway_target_service import (
+    GatewayTargetConflictError,
+    GatewayTargetNotFoundError,
+)
 from apis.shared.tools.models import (
     ToolCreateRequest,
     ToolUpdateRequest,
@@ -26,6 +31,28 @@ from apis.shared.tools.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tools", tags=["admin-tools"])
+
+
+def _raise_gateway_http(err: Exception) -> "HTTPException":
+    """Map a Gateway target lifecycle failure to an HTTPException.
+
+    Distinguishes a name conflict / state divergence (409) from an AWS or
+    SSM-resolution failure (502). Validation errors (ValueError → 400) and the
+    catalog not-found path (404) are handled by the caller. Note
+    GatewayTargetConflictError subclasses RuntimeError, so it is matched first.
+    """
+    if isinstance(err, GatewayTargetConflictError):
+        return HTTPException(status_code=409, detail=str(err))
+    if isinstance(err, GatewayTargetNotFoundError):
+        return HTTPException(
+            status_code=409,
+            detail=f"Gateway target state diverged: {err}",
+        )
+    # ClientError (AWS) or RuntimeError (e.g. gateway-id SSM param missing).
+    logger.error("Gateway target operation failed", exc_info=True)
+    return HTTPException(
+        status_code=502, detail=f"Gateway target operation failed: {err}"
+    )
 
 
 @router.get("/", response_model=AdminToolListResponse)
@@ -113,29 +140,39 @@ async def admin_create_tool(
 
     service = get_tool_catalog_service()
 
-    # Convert MCP and A2A config requests to models if provided
-    mcp_config = request.mcp_config.to_model() if request.mcp_config else None
-    a2a_config = request.a2a_config.to_model() if request.a2a_config else None
-
-    tool = ToolDefinition(
-        tool_id=request.tool_id,
-        display_name=request.display_name,
-        description=request.description,
-        category=request.category,
-        protocol=request.protocol,
-        status=request.status,
-        requires_oauth_provider=request.requires_oauth_provider,
-        forward_auth_token=request.forward_auth_token,
-        is_public=request.is_public,
-        enabled_by_default=request.enabled_by_default,
-        mcp_config=mcp_config,
-        a2a_config=a2a_config,
-    )
-
     try:
+        # Convert MCP, A2A, and Gateway config requests to models. The Gateway
+        # to_model() runs the co-gating validator, so an invalid combination
+        # surfaces here as a ValueError (→ 400).
+        mcp_config = request.mcp_config.to_model() if request.mcp_config else None
+        a2a_config = request.a2a_config.to_model() if request.a2a_config else None
+        mcp_gateway_config = (
+            request.mcp_gateway_config.to_model()
+            if request.mcp_gateway_config
+            else None
+        )
+
+        tool = ToolDefinition(
+            tool_id=request.tool_id,
+            display_name=request.display_name,
+            description=request.description,
+            category=request.category,
+            protocol=request.protocol,
+            status=request.status,
+            requires_oauth_provider=request.requires_oauth_provider,
+            forward_auth_token=request.forward_auth_token,
+            is_public=request.is_public,
+            enabled_by_default=request.enabled_by_default,
+            mcp_config=mcp_config,
+            a2a_config=a2a_config,
+            mcp_gateway_config=mcp_gateway_config,
+        )
+
         created = await service.create_tool(tool, admin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except (GatewayTargetConflictError, GatewayTargetNotFoundError, ClientError, RuntimeError) as e:
+        raise _raise_gateway_http(e)
 
     # Drop the all-tool-ids snapshot so the new tool is recognized by
     # ToolAccessService on the very next chat turn in this process.
@@ -173,16 +210,24 @@ async def admin_update_tool(
 
     updates = request.model_dump(exclude_unset=True, by_alias=False)
 
-    # Convert MCP and A2A config requests to models if provided
-    if "mcp_config" in updates and updates["mcp_config"] is not None:
-        updates["mcp_config"] = request.mcp_config.to_model()
-    if "a2a_config" in updates and updates["a2a_config"] is not None:
-        updates["a2a_config"] = request.a2a_config.to_model()
-
     try:
+        # Convert MCP, A2A, and Gateway config requests to models if provided.
+        # The Gateway to_model() runs the co-gating validator (→ 400 on failure).
+        if "mcp_config" in updates and updates["mcp_config"] is not None:
+            updates["mcp_config"] = request.mcp_config.to_model()
+        if "a2a_config" in updates and updates["a2a_config"] is not None:
+            updates["a2a_config"] = request.a2a_config.to_model()
+        if (
+            "mcp_gateway_config" in updates
+            and updates["mcp_gateway_config"] is not None
+        ):
+            updates["mcp_gateway_config"] = request.mcp_gateway_config.to_model()
+
         updated = await service.update_tool(tool_id, updates, admin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except (GatewayTargetConflictError, GatewayTargetNotFoundError, ClientError, RuntimeError) as e:
+        raise _raise_gateway_http(e)
 
     if not updated:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
@@ -222,7 +267,10 @@ async def admin_delete_tool(
     logger.info("Admin deleting tool")
 
     service = get_tool_catalog_service()
-    deleted = await service.delete_tool(tool_id, admin, soft=not hard)
+    try:
+        deleted = await service.delete_tool(tool_id, admin, soft=not hard)
+    except (GatewayTargetConflictError, GatewayTargetNotFoundError, ClientError, RuntimeError) as e:
+        raise _raise_gateway_http(e)
 
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
