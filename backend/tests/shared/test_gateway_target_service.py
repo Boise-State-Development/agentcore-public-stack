@@ -301,3 +301,15 @@ class TestGatewayIdResolution:
         svc = GatewayTargetService(client=boto_client, ssm_client=ssm_client)
         with pytest.raises(RuntimeError):
             svc.create_target(_iam_config())
+
+    def test_env_override_skips_ssm(self, boto_client, ssm_client, monkeypatch):
+        # AGENTCORE_GATEWAY_ID lets local/CI bypass the SSM lookup entirely.
+        monkeypatch.setenv("AGENTCORE_GATEWAY_ID", "gw-from-env")
+        svc = GatewayTargetService(client=boto_client, ssm_client=ssm_client)
+        boto_client.create_gateway_target.return_value = _create_response()
+        svc.create_target(_iam_config())
+        ssm_client.get_parameter.assert_not_called()
+        assert (
+            boto_client.create_gateway_target.call_args.kwargs["gatewayIdentifier"]
+            == "gw-from-env"
+        )

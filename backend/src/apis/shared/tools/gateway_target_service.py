@@ -107,13 +107,24 @@ class GatewayTargetService:
 
     # ----------------------------------------------------- gateway id (SSM)
     def _resolve_gateway_id(self) -> str:
-        """Return the gateway identifier, reading `/{prefix}/gateway/id` from
-        SSM on first use and caching it. The gateway construct publishes this
-        parameter; app-api reads it at runtime (boto3), which sidesteps the
-        same-stack deploy-time ordering deadlock.
+        """Return the gateway identifier.
+
+        Resolution order: an explicit `gateway_id` (constructor) → the
+        `AGENTCORE_GATEWAY_ID` env override → the SSM parameter
+        `/{prefix}/gateway/id` (read once and cached). The construct publishes
+        the SSM parameter and app-api reads it at runtime, which sidesteps the
+        same-stack deploy-time ordering deadlock; the env override exists for
+        local dev / CI, where the SSM parameter may not be present (or the
+        `PROJECT_PREFIX` may differ) — set it to the gateway identifier from
+        the deployed stack's `GatewayId` output or `list-gateways`.
         """
         if self._gateway_id:
             return self._gateway_id
+
+        env_override = os.environ.get("AGENTCORE_GATEWAY_ID")
+        if env_override:
+            self._gateway_id = env_override
+            return env_override
 
         if self._ssm_client is None:
             self._ssm_client = boto3.client("ssm", region_name=self._region)
@@ -124,7 +135,8 @@ class GatewayTargetService:
         except ClientError as err:
             raise RuntimeError(
                 f"Gateway id SSM parameter '{param_name}' is unavailable; is the "
-                f"gateway construct deployed? ({err})"
+                f"gateway construct deployed (and PROJECT_PREFIX correct)? Set "
+                f"AGENTCORE_GATEWAY_ID to override for local/CI. ({err})"
             ) from err
 
         self._gateway_id = response["Parameter"]["Value"]
