@@ -15,6 +15,7 @@ from apis.shared.rbac.admin_service import AppRoleAdminService, get_app_role_adm
 
 from apis.shared.tools.models import (
     ToolDefinition,
+    ToolProtocol,
     UserToolAccess,
     UserToolPreference,
     ToolCategory,
@@ -41,11 +42,25 @@ class ToolCatalogService:
         repository: Optional[ToolCatalogRepository] = None,
         app_role_service: Optional[AppRoleService] = None,
         app_role_admin_service: Optional[AppRoleAdminService] = None,
+        gateway_target_service: Optional[object] = None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_tool_catalog_repository()
         self.app_role_service = app_role_service or get_app_role_service()
         self.app_role_admin_service = app_role_admin_service or get_app_role_admin_service()
+        # Lazily defaulted — only protocol='mcp' tools touch the Gateway, and we
+        # don't want to construct a bedrock-agentcore-control client for every
+        # ToolCatalogService. Injectable for tests.
+        self._gateway_target_service = gateway_target_service
+
+    def _get_gateway_target_service(self):
+        """Return the Gateway target service, defaulting to the singleton."""
+        if self._gateway_target_service is None:
+            from apis.shared.tools.gateway_target_service import (
+                get_gateway_target_service,
+            )
+            self._gateway_target_service = get_gateway_target_service()
+        return self._gateway_target_service
 
     # =========================================================================
     # User-Facing Methods
@@ -217,11 +232,39 @@ class ToolCatalogService:
                     "The OIDC token will use the Authorization header."
                 )
 
+    def _validate_protocol_config(self, tool: ToolDefinition) -> None:
+        """Validate that the protocol-specific config matches the protocol.
+
+        v1 only gates the Gateway protocol (mcp ⟺ mcp_gateway_config); the
+        mcp_external/a2a pairings are left untouched to avoid changing existing
+        create flows.
+
+        Raises:
+            ValueError: If protocol is 'mcp' without a gateway config, or a
+                gateway config is set on a non-'mcp' protocol.
+        """
+        is_gateway = tool.protocol == ToolProtocol.MCP_GATEWAY
+        if is_gateway and tool.mcp_gateway_config is None:
+            raise ValueError(
+                "protocol 'mcp' (MCP Gateway) requires mcp_gateway_config"
+            )
+        if not is_gateway and tool.mcp_gateway_config is not None:
+            raise ValueError(
+                "mcp_gateway_config is only valid for protocol 'mcp' (MCP Gateway)"
+            )
+
     async def create_tool(
         self, tool: ToolDefinition, admin: User
     ) -> ToolDefinition:
         """
         Create a new tool catalog entry.
+
+        For protocol='mcp' (MCP Gateway), the live Gateway target is created in
+        AWS *first*; the catalog row is persisted only on success, and the
+        AWS-assigned target_id/gateway_arn are stamped onto the stored config so
+        update/delete can reconcile the target later. If the AWS target is
+        created but persisting the row fails, the orphaned target id is logged
+        loudly (v1 repair is manual).
 
         Args:
             tool: Tool definition to create
@@ -231,14 +274,46 @@ class ToolCatalogService:
             Created ToolDefinition
 
         Raises:
-            ValueError: If auth configuration is invalid
+            ValueError: If auth or protocol configuration is invalid
+            GatewayTargetConflictError: If the Gateway target name already exists
+            botocore.exceptions.ClientError / RuntimeError: On AWS failure
         """
         self._validate_auth_config(tool)
+        self._validate_protocol_config(tool)
+
+        # Create the live Gateway target before persisting the row, so the
+        # catalog never references a target that doesn't exist.
+        if tool.protocol == ToolProtocol.MCP_GATEWAY:
+            info = self._get_gateway_target_service().create_target(
+                tool.mcp_gateway_config
+            )
+            tool.mcp_gateway_config.target_id = info.target_id
+            tool.mcp_gateway_config.gateway_arn = info.gateway_arn
 
         tool.created_by = admin.user_id
         tool.updated_by = admin.user_id
 
-        created = await self.repository.create_tool(tool)
+        try:
+            created = await self.repository.create_tool(tool)
+        except Exception:
+            if (
+                tool.protocol == ToolProtocol.MCP_GATEWAY
+                and tool.mcp_gateway_config
+                and tool.mcp_gateway_config.target_id
+            ):
+                logger.error(
+                    "ORPHANED GATEWAY TARGET: created Gateway target '%s' but "
+                    "failed to persist catalog row for tool '%s'. Manual cleanup "
+                    "required (delete-gateway-target).",
+                    tool.mcp_gateway_config.target_id,
+                    tool.tool_id,
+                    extra={
+                        "event": "gateway_target_orphaned",
+                        "orphaned_target_id": tool.mcp_gateway_config.target_id,
+                        "tool_id": tool.tool_id,
+                    },
+                )
+            raise
 
         logger.info(
             f"Admin {admin.email} created tool: {tool.tool_id}",
@@ -269,25 +344,61 @@ class ToolCatalogService:
         Raises:
             ValueError: If the resulting auth configuration is invalid
         """
-        # Pre-validate auth config if relevant fields are being updated
-        if "forward_auth_token" in updates or "requires_oauth_provider" in updates or "mcp_config" in updates:
-            existing = await self.repository.get_tool(tool_id)
-            if existing:
-                # Build a preview of the updated tool for validation
-                preview = ToolDefinition(
-                    tool_id=existing.tool_id,
-                    display_name=existing.display_name,
-                    description=existing.description,
-                    protocol=existing.protocol,
-                    forward_auth_token=updates.get("forward_auth_token", existing.forward_auth_token),
-                    requires_oauth_provider=updates.get("requires_oauth_provider", existing.requires_oauth_provider),
-                    mcp_config=updates.get("mcp_config", existing.mcp_config),
-                )
-                self._validate_auth_config(preview)
-
-        updated = await self.repository.update_tool(
-            tool_id, updates, admin_user_id=admin.user_id
+        # Fetch the existing row once if any field that needs it is changing.
+        needs_existing = any(
+            k in updates
+            for k in (
+                "forward_auth_token",
+                "requires_oauth_provider",
+                "mcp_config",
+                "protocol",
+                "mcp_gateway_config",
+            )
         )
+        existing = (
+            await self.repository.get_tool(tool_id) if needs_existing else None
+        )
+
+        # Pre-validate auth config if relevant fields are being updated
+        if existing and (
+            "forward_auth_token" in updates
+            or "requires_oauth_provider" in updates
+            or "mcp_config" in updates
+        ):
+            # Build a preview of the updated tool for validation
+            preview = ToolDefinition(
+                tool_id=existing.tool_id,
+                display_name=existing.display_name,
+                description=existing.description,
+                protocol=existing.protocol,
+                forward_auth_token=updates.get("forward_auth_token", existing.forward_auth_token),
+                requires_oauth_provider=updates.get("requires_oauth_provider", existing.requires_oauth_provider),
+                mcp_config=updates.get("mcp_config", existing.mcp_config),
+            )
+            self._validate_auth_config(preview)
+
+        # Reconcile the live Gateway target before persisting the row.
+        gateway_reconciled = False
+        if existing is not None and (
+            "protocol" in updates or "mcp_gateway_config" in updates
+        ):
+            gateway_reconciled = self._reconcile_gateway_target_for_update(
+                existing, updates
+            )
+
+        try:
+            updated = await self.repository.update_tool(
+                tool_id, updates, admin_user_id=admin.user_id
+            )
+        except Exception:
+            if gateway_reconciled:
+                logger.error(
+                    "Gateway target for tool '%s' was updated in AWS but the "
+                    "catalog row update failed; state diverged.",
+                    tool_id,
+                    extra={"event": "gateway_target_diverged", "tool_id": tool_id},
+                )
+            raise
 
         if updated:
             logger.info(
@@ -303,9 +414,59 @@ class ToolCatalogService:
 
         return updated
 
+    def _reconcile_gateway_target_for_update(
+        self, existing: ToolDefinition, updates: Dict
+    ) -> bool:
+        """Reconcile the live Gateway target for an update, mutating `updates`.
+
+        Returns True if an AWS target call was made. Raises ValueError on an
+        unsupported protocol transition; the AWS-assigned target_id is preserved
+        across the update.
+        """
+        new_protocol = updates.get("protocol", existing.protocol)
+        was_gateway = existing.protocol == ToolProtocol.MCP_GATEWAY
+        now_gateway = new_protocol == ToolProtocol.MCP_GATEWAY
+
+        if was_gateway != now_gateway:
+            raise ValueError(
+                "Cannot change a tool's protocol to or from 'mcp' (MCP Gateway) "
+                "via update; delete and recreate the tool instead."
+            )
+
+        if not now_gateway:
+            return False
+
+        new_config = updates.get("mcp_gateway_config")
+        if new_config is None:
+            # Gateway tool, but the target config isn't changing — leave the
+            # live target (and its stored target_id) untouched.
+            return False
+
+        existing_cfg = existing.mcp_gateway_config
+        target_id = existing_cfg.target_id if existing_cfg else None
+        gateway = self._get_gateway_target_service()
+        if target_id:
+            info = gateway.update_target(target_id=target_id, config=new_config)
+            new_config.target_id = target_id
+            new_config.gateway_arn = info.gateway_arn or (
+                existing_cfg.gateway_arn if existing_cfg else None
+            )
+        else:
+            # No stored target (shouldn't happen for a gateway row) — create one.
+            info = gateway.create_target(new_config)
+            new_config.target_id = info.target_id
+            new_config.gateway_arn = info.gateway_arn
+        updates["mcp_gateway_config"] = new_config
+        return True
+
     async def delete_tool(self, tool_id: str, admin: User, soft: bool = True) -> bool:
         """
         Delete a tool from the catalog.
+
+        For protocol='mcp' (MCP Gateway), a *hard* delete removes the live
+        Gateway target first (a 404 is tolerated as already-gone), then the
+        catalog row. A *soft* delete only disables the catalog row and leaves
+        the Gateway target in place so the tool can be re-enabled.
 
         Args:
             tool_id: Tool identifier
@@ -314,12 +475,46 @@ class ToolCatalogService:
 
         Returns:
             True if deleted/disabled, False if not found
+
+        Raises:
+            botocore.exceptions.ClientError: On a non-404 AWS failure deleting
+                the Gateway target (the catalog row is left intact).
         """
-        if soft:
-            result = await self.repository.soft_delete_tool(tool_id, admin.user_id)
-            deleted = result is not None
-        else:
-            deleted = await self.repository.delete_tool(tool_id)
+        existing = await self.repository.get_tool(tool_id)
+        if existing is None:
+            return False
+
+        # Remove the live Gateway target before the row, so we never delete the
+        # catalog row while a target still points at it.
+        target_deleted = False
+        if (
+            not soft
+            and existing.protocol == ToolProtocol.MCP_GATEWAY
+            and existing.mcp_gateway_config
+            and existing.mcp_gateway_config.target_id
+        ):
+            self._get_gateway_target_service().delete_target(
+                target_id=existing.mcp_gateway_config.target_id
+            )
+            target_deleted = True
+
+        try:
+            if soft:
+                result = await self.repository.soft_delete_tool(tool_id, admin.user_id)
+                deleted = result is not None
+            else:
+                deleted = await self.repository.delete_tool(tool_id)
+        except Exception:
+            if target_deleted:
+                logger.error(
+                    "Deleted Gateway target '%s' but failed to remove catalog "
+                    "row for tool '%s'; state diverged (manual cleanup of the "
+                    "row required).",
+                    existing.mcp_gateway_config.target_id,
+                    tool_id,
+                    extra={"event": "gateway_target_diverged", "tool_id": tool_id},
+                )
+            raise
 
         if deleted:
             logger.info(
