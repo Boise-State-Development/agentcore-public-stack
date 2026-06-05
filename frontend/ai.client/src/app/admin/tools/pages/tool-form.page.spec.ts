@@ -13,13 +13,19 @@ import { ConnectorsService } from '../../connectors/services/connectors.service'
  * distinctly from a 400 (validation).
  */
 describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
-  let adminToolService: { createTool: ReturnType<typeof vi.fn>; updateTool: ReturnType<typeof vi.fn>; fetchTool: ReturnType<typeof vi.fn> };
+  let adminToolService: {
+    createTool: ReturnType<typeof vi.fn>;
+    updateTool: ReturnType<typeof vi.fn>;
+    fetchTool: ReturnType<typeof vi.fn>;
+    discoverMCPTools: ReturnType<typeof vi.fn>;
+  };
 
   function makeComponent(): ToolFormPage {
     adminToolService = {
       createTool: vi.fn().mockResolvedValue({}),
       updateTool: vi.fn().mockResolvedValue({}),
       fetchTool: vi.fn(),
+      discoverMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
     };
 
     TestBed.resetTestingModule();
@@ -95,6 +101,49 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     expect(cfg.credentialProviderArn).toContain('oauth2credentialprovider/gh');
     expect(cfg.oauthScopes).toEqual(['repo', 'read:user']);
     expect(cfg.grantType).toBe('client_credentials');
+  });
+
+  it('discovers tools from the gateway endpoint and merges them into the rows', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    // Pre-existing manual row whose approval flag must be preserved on merge.
+    cmp.addGwTool();
+    cmp.gwToolsArray.at(0).patchValue({ name: 'get_forecast', needsApproval: true });
+
+    adminToolService.discoverMCPTools.mockResolvedValueOnce({
+      tools: [
+        { name: 'get_forecast', description: 'forecast' },
+        { name: 'set_alert', description: 'writes' },
+      ],
+    });
+
+    await cmp.discoverGatewayTools();
+
+    // IAM target → discovery signs with aws-iam against the endpoint URL.
+    expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
+      expect.objectContaining({ serverUrl: 'https://example.com/mcp', authType: 'aws-iam' }),
+    );
+    const names = cmp.gwToolsArray.controls.map((c) => c.get('name')?.value);
+    expect(names).toEqual(['get_forecast', 'set_alert']);
+    // Existing approval flag preserved; not duplicated.
+    expect(cmp.gwToolsArray.at(0).get('needsApproval')?.value).toBe(true);
+  });
+
+  it('maps non-IAM credential types to an unauthenticated discovery attempt', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    cmp.form.patchValue({
+      gwCredentialType: 'oauth',
+      gwCredentialProviderArn: 'arn:...:oauth2credentialprovider/x',
+    });
+
+    await cmp.discoverGatewayTools();
+
+    expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
+      expect.objectContaining({ authType: 'none' }),
+    );
   });
 
   it('surfaces a 502 (Gateway target failed) distinctly from a 400 (validation)', async () => {

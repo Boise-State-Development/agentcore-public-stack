@@ -592,19 +592,34 @@ import {
                     <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                       Tools
                     </span>
-                    <button
-                      type="button"
-                      (click)="addGwTool()"
-                      class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                    >
-                      <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
-                      Add Tool
-                    </button>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        (click)="discoverGatewayTools()"
+                        [disabled]="discovering() || !form.get('gwEndpointUrl')?.value"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                      >
+                        {{ discovering() ? 'Discovering…' : 'Discover from server' }}
+                      </button>
+                      <button
+                        type="button"
+                        (click)="addGwTool()"
+                        class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                      >
+                        <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                        Add Tool
+                      </button>
+                    </div>
                   </div>
+                  @if (discoverError()) {
+                    <p class="mb-2 text-sm/6 text-red-600 dark:text-red-400">
+                      {{ discoverError() }}
+                    </p>
+                  }
 
                   @if (gwToolsArray.length === 0) {
                     <p class="text-xs/5 italic text-gray-500 dark:text-gray-400">
-                      Optional. List the target's tool names to attach per-tool approval flags.
+                      Optional. Discover from the server or add tool names manually to attach per-tool approval flags.
                     </p>
                   } @else {
                     <div class="space-y-2">
@@ -1031,6 +1046,71 @@ export class ToolFormPage implements OnInit {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Discovery failed.';
       this.discoverError.set(message);
+    } finally {
+      this.discovering.set(false);
+    }
+  }
+
+  /**
+   * Discover the tools exposed by a Gateway target's MCP endpoint, by
+   * connecting to it directly (admin-side) via the same /discover endpoint
+   * used for mcp_external. The Gateway's outbound credential type maps to the
+   * direct-connection auth: a gateway-IAM-role target is SigV4-protected, so
+   * we sign with aws-iam; otherwise we attempt an unauthenticated list (OAuth /
+   * API-key endpoints can't be discovered admin-side — the server's error is
+   * surfaced, and the admin can add tool names by hand).
+   */
+  async discoverGatewayTools(): Promise<void> {
+    const formValue = this.form.getRawValue();
+    if (!formValue.gwEndpointUrl) {
+      return;
+    }
+
+    this.discovering.set(true);
+    this.discoverError.set(null);
+    try {
+      const authType = formValue.gwCredentialType === 'gateway_iam_role' ? 'aws-iam' : 'none';
+      const response = await this.adminToolService.discoverMCPTools({
+        serverUrl: formValue.gwEndpointUrl,
+        transport: 'streamable-http',
+        authType,
+        awsRegion: null,
+        apiKeyHeader: null,
+        secretArn: null,
+      });
+
+      // Merge: keep existing rows (and their needsApproval flag), append any
+      // newly-discovered names. Mirrors discoverMcpTools.
+      const existingByName = new Map<string, FormGroup>();
+      for (const ctrl of this.gwToolsArray.controls) {
+        const name = (ctrl.get('name')?.value ?? '').trim();
+        if (name) {
+          existingByName.set(name, ctrl);
+        }
+      }
+
+      for (const tool of response.tools) {
+        const existing = existingByName.get(tool.name);
+        if (existing) {
+          if (tool.description && !existing.get('description')?.value) {
+            existing.get('description')?.setValue(tool.description);
+          }
+        } else {
+          this.gwToolsArray.push(this.buildMcpToolRow({
+            name: tool.name,
+            needsApproval: false,
+            description: tool.description ?? null,
+          }));
+        }
+      }
+    } catch (err: unknown) {
+      const detail =
+        err instanceof HttpErrorResponse && err.error && typeof err.error === 'object' && 'detail' in err.error
+          ? String((err.error as { detail: unknown }).detail)
+          : err instanceof Error
+            ? err.message
+            : 'Discovery failed.';
+      this.discoverError.set(detail);
     } finally {
       this.discovering.set(false);
     }
