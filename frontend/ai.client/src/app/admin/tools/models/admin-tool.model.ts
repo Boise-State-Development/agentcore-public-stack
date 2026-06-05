@@ -42,7 +42,7 @@ export type GatewayListingMode = 'default' | 'dynamic';
 /**
  * How the Gateway authenticates outbound to a target's MCP endpoint.
  */
-export type GatewayCredentialType = 'gateway_iam_role' | 'oauth' | 'api_key';
+export type GatewayCredentialType = 'none' | 'gateway_iam_role' | 'oauth' | 'api_key';
 
 /**
  * OAuth grant the Gateway uses for an OAUTH-credentialed target.
@@ -106,6 +106,8 @@ export interface MCPGatewayConfig {
   listingMode: GatewayListingMode;
   credentialType: GatewayCredentialType;
   credentialProviderArn?: string | null;
+  awsService?: string | null;
+  awsRegion?: string | null;
   oauthScopes: string[];
   grantType: GatewayOAuthGrantType;
   customParameters?: Record<string, string> | null;
@@ -341,7 +343,8 @@ export const GATEWAY_LISTING_MODES: { value: GatewayListingMode; label: string; 
  * Available Gateway outbound credential types for dropdowns.
  */
 export const GATEWAY_CREDENTIAL_TYPES: { value: GatewayCredentialType; label: string; description?: string }[] = [
-  { value: 'gateway_iam_role', label: 'Gateway IAM Role (SigV4)', description: 'The gateway signs with its own execution role — no provider ARN' },
+  { value: 'none', label: 'None (public endpoint)', description: 'No outbound credentials — the endpoint is publicly reachable' },
+  { value: 'gateway_iam_role', label: 'Gateway IAM Role (SigV4)', description: 'The gateway signs with its execution role — requires the AWS service to sign for' },
   { value: 'oauth', label: 'OAuth (3LO / 2LO)', description: 'Reference an existing OAuth credential provider by ARN' },
   { value: 'api_key', label: 'API Key', description: 'Reference an existing API-key credential provider by ARN' },
 ];

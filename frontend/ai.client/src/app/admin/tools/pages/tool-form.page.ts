@@ -528,6 +528,39 @@ import {
                   </div>
                 </div>
 
+                <!-- AWS service + region (for gateway IAM role) -->
+                @if (form.get('gwCredentialType')?.value === 'gateway_iam_role') {
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label for="gwAwsService" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        AWS service <span class="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="gwAwsService"
+                        type="text"
+                        formControlName="gwAwsService"
+                        placeholder="lambda, execute-api, bedrock-agentcore"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        The AWS service the endpoint belongs to, for SigV4 signing.
+                      </p>
+                    </div>
+                    <div>
+                      <label for="gwAwsRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        AWS region
+                      </label>
+                      <input
+                        id="gwAwsRegion"
+                        type="text"
+                        formControlName="gwAwsRegion"
+                        placeholder="defaults to the gateway's region"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                    </div>
+                  </div>
+                }
+
                 <!-- Credential provider ARN (for oauth / api_key) -->
                 @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
                   <div>
@@ -945,8 +978,10 @@ export class ToolFormPage implements OnInit {
     gwTargetName: [''],
     gwEndpointUrl: [''],
     gwListingMode: ['default'],
-    gwCredentialType: ['gateway_iam_role'],
+    gwCredentialType: ['none'],
     gwCredentialProviderArn: [''],
+    gwAwsService: [''],
+    gwAwsRegion: [''],
     gwOauthScopes: [''],
     gwGrantType: ['authorization_code'],
     gwTools: this.fb.array([] as FormGroup[]),
@@ -1210,6 +1245,8 @@ export class ToolFormPage implements OnInit {
           gwListingMode: tool.mcpGatewayConfig.listingMode,
           gwCredentialType: tool.mcpGatewayConfig.credentialType,
           gwCredentialProviderArn: tool.mcpGatewayConfig.credentialProviderArn || '',
+          gwAwsService: tool.mcpGatewayConfig.awsService || '',
+          gwAwsRegion: tool.mcpGatewayConfig.awsRegion || '',
           gwOauthScopes: (tool.mcpGatewayConfig.oauthScopes || []).join(' '),
           gwGrantType: tool.mcpGatewayConfig.grantType,
         });
@@ -1290,14 +1327,18 @@ export class ToolFormPage implements OnInit {
 
         const credentialType = formValue.gwCredentialType;
         const isOauth = credentialType === 'oauth';
+        const isIam = credentialType === 'gateway_iam_role';
         mcpGatewayConfig = {
           targetName: formValue.gwTargetName,
           endpointUrl: formValue.gwEndpointUrl,
           listingMode: formValue.gwListingMode,
           credentialType,
-          // IAM role uses the gateway's execution role — no ARN.
+          // ARN only applies to oauth / api_key.
           credentialProviderArn:
-            credentialType === 'gateway_iam_role' ? null : (formValue.gwCredentialProviderArn || null),
+            isOauth || credentialType === 'api_key' ? (formValue.gwCredentialProviderArn || null) : null,
+          // IAM role signs SigV4 against an AWS service.
+          awsService: isIam ? (formValue.gwAwsService || null) : null,
+          awsRegion: isIam ? (formValue.gwAwsRegion || null) : null,
           oauthScopes:
             isOauth && formValue.gwOauthScopes
               ? formValue.gwOauthScopes.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => s)

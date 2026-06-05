@@ -33,6 +33,8 @@ class TestMCPGatewayConfigSerialization:
             endpoint_url="https://example.com/mcp",
             listing_mode=GatewayListingMode.DEFAULT,
             credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+            aws_service="lambda",
+            aws_region="us-west-2",
             tools=[
                 MCPToolEntry(name="get_forecast", needs_approval=False),
                 MCPToolEntry(name="set_alert", needs_approval=True, description="writes"),
@@ -47,6 +49,8 @@ class TestMCPGatewayConfigSerialization:
         assert data["listingMode"] == "default"
         assert data["credentialType"] == "gateway_iam_role"
         assert data["credentialProviderArn"] is None
+        assert data["awsService"] == "lambda"
+        assert data["awsRegion"] == "us-west-2"
         assert data["targetId"] == "TGT123"
         assert data["gatewayArn"].endswith("gateway/gw-abc")
         assert [t["name"] for t in data["tools"]] == ["get_forecast", "set_alert"]
@@ -55,6 +59,7 @@ class TestMCPGatewayConfigSerialization:
         assert restored.target_name == "weather-target"
         assert restored.listing_mode == GatewayListingMode.DEFAULT
         assert restored.credential_type == GatewayCredentialType.GATEWAY_IAM_ROLE
+        assert restored.aws_service == "lambda"
         assert restored.target_id == "TGT123"
         assert restored.gateway_arn == config.gateway_arn
         assert restored.approval_required_names() == {"set_alert"}
@@ -106,7 +111,8 @@ class TestMCPGatewayConfigSerialization:
             }
         )
         assert restored.listing_mode == GatewayListingMode.DEFAULT
-        assert restored.credential_type == GatewayCredentialType.GATEWAY_IAM_ROLE
+        # Default credential type is NONE (public) — the least-config path.
+        assert restored.credential_type == GatewayCredentialType.NONE
         assert [t.name for t in restored.tools] == ["alpha", "beta"]
 
 
@@ -169,15 +175,15 @@ class TestRequestResponseWiring:
                 "endpointUrl": "https://example.com/mcp",
                 "listingMode": "default",
                 "credentialType": "gateway_iam_role",
+                "awsService": "lambda",
                 "tools": [{"name": "get_forecast", "needsApproval": True}],
             }
         )
         model = req.to_model()
         assert isinstance(model, MCPGatewayConfig)
         assert model.target_name == "weather-target"
+        assert model.aws_service == "lambda"
         assert model.approval_required_names() == {"get_forecast"}
-        # IAM target defaults to the authorization_code grant (inert for IAM).
-        assert model.grant_type == GatewayOAuthGrantType.AUTHORIZATION_CODE
         # Request never carries AWS-assigned identifiers.
         assert model.target_id is None
         assert model.gateway_arn is None
@@ -210,7 +216,8 @@ class TestRequestResponseWiring:
         resp = MCPGatewayConfigResponse.from_model(config)
         assert resp.target_id == "TGT123"
         assert resp.listing_mode == "default"
-        assert resp.credential_type == "gateway_iam_role"
+        # Default credential type is the public (none) path.
+        assert resp.credential_type == "none"
 
     def test_admin_tool_response_includes_gateway_config(self):
         tool = ToolDefinition(
@@ -267,15 +274,29 @@ class TestCoGatingValidator:
                 target_name="t",
                 endpoint_url="https://e/mcp",
                 credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+                aws_service="lambda",
                 credential_provider_arn="arn:...:oauth2credentialprovider/x",
             )
 
+    def test_iam_requires_aws_service(self):
+        # mcpServer IAM targets need an explicit service for the
+        # iamCredentialProvider — without it AWS rejects CreateGatewayTarget.
+        with pytest.raises(ValidationError):
+            MCPGatewayConfig(
+                target_name="t",
+                endpoint_url="https://e/mcp",
+                credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+            )
+
     def test_valid_configs_accepted(self):
-        # IAM with no ARN
+        # None (public) — the default; minimal config.
+        MCPGatewayConfig(target_name="t", endpoint_url="https://e/mcp")
+        # IAM with aws_service, no ARN
         MCPGatewayConfig(
             target_name="t",
             endpoint_url="https://e/mcp",
             credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+            aws_service="lambda",
         )
         # OAuth, DEFAULT listing, with ARN
         MCPGatewayConfig(

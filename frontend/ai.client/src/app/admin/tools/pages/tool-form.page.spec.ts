@@ -55,7 +55,7 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     });
   }
 
-  it('builds an IAM gateway config and submits it', async () => {
+  it('builds a public (none) gateway config by default', async () => {
     const cmp = makeComponent();
     await cmp.ngOnInit();
     fillBaseGatewayForm(cmp);
@@ -65,19 +65,26 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     await cmp.onSubmit();
 
     expect(adminToolService.createTool).toHaveBeenCalledTimes(1);
-    const payload = adminToolService.createTool.mock.calls[0][0];
-    expect(payload.protocol).toBe('mcp');
-    expect(payload.mcpGatewayConfig).toEqual({
-      targetName: 'weather-target',
-      endpointUrl: 'https://example.com/mcp',
-      listingMode: 'default',
-      credentialType: 'gateway_iam_role',
-      credentialProviderArn: null,
-      oauthScopes: [],
-      grantType: 'authorization_code',
-      customParameters: null,
-      tools: [{ name: 'get_forecast', needsApproval: true, description: null }],
-    });
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.credentialType).toBe('none');
+    expect(cfg.credentialProviderArn).toBeNull();
+    expect(cfg.awsService).toBeNull();
+    expect(cfg.tools).toEqual([{ name: 'get_forecast', needsApproval: true, description: null }]);
+  });
+
+  it('builds an IAM gateway config with aws service', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role', gwAwsService: 'lambda', gwAwsRegion: 'us-west-2' });
+
+    await cmp.onSubmit();
+
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.credentialType).toBe('gateway_iam_role');
+    expect(cfg.awsService).toBe('lambda');
+    expect(cfg.awsRegion).toBe('us-west-2');
+    expect(cfg.credentialProviderArn).toBeNull();
   });
 
   it('builds an OAuth gateway config (ARN + parsed scopes) and forces DEFAULT listing', async () => {
@@ -107,6 +114,7 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     const cmp = makeComponent();
     await cmp.ngOnInit();
     fillBaseGatewayForm(cmp);
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role', gwAwsService: 'lambda' });
     // Pre-existing manual row whose approval flag must be preserved on merge.
     cmp.addGwTool();
     cmp.gwToolsArray.at(0).patchValue({ name: 'get_forecast', needsApproval: true });

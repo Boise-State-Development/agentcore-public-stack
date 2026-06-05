@@ -155,14 +155,17 @@ class GatewayTargetService:
                 the route can surface a 502 and log the failure.
         """
         gateway_id = self._resolve_gateway_id()
+        kwargs: Dict[str, Any] = {
+            "gatewayIdentifier": gateway_id,
+            "name": config.target_name,
+            "description": description or f"MCP gateway target {config.target_name}",
+            "targetConfiguration": self._build_target_configuration(config),
+        }
+        creds = self._build_credential_configs(config)
+        if creds is not None:
+            kwargs["credentialProviderConfigurations"] = creds
         try:
-            response = self._client.create_gateway_target(
-                gatewayIdentifier=gateway_id,
-                name=config.target_name,
-                description=description or f"MCP gateway target {config.target_name}",
-                targetConfiguration=self._build_target_configuration(config),
-                credentialProviderConfigurations=self._build_credential_configs(config),
-            )
+            response = self._client.create_gateway_target(**kwargs)
         except ClientError as err:
             code = err.response.get("Error", {}).get("Code")
             if code in ("ConflictException", "ResourceAlreadyExistsException"):
@@ -186,15 +189,18 @@ class GatewayTargetService:
             GatewayTargetNotFoundError: No such target.
         """
         gateway_id = self._resolve_gateway_id()
+        kwargs: Dict[str, Any] = {
+            "gatewayIdentifier": gateway_id,
+            "targetId": target_id,
+            "name": config.target_name,
+            "description": description or f"MCP gateway target {config.target_name}",
+            "targetConfiguration": self._build_target_configuration(config),
+        }
+        creds = self._build_credential_configs(config)
+        if creds is not None:
+            kwargs["credentialProviderConfigurations"] = creds
         try:
-            response = self._client.update_gateway_target(
-                gatewayIdentifier=gateway_id,
-                targetId=target_id,
-                name=config.target_name,
-                description=description or f"MCP gateway target {config.target_name}",
-                targetConfiguration=self._build_target_configuration(config),
-                credentialProviderConfigurations=self._build_credential_configs(config),
-            )
+            response = self._client.update_gateway_target(**kwargs)
         except ClientError as err:
             if self._is_not_found(err):
                 raise GatewayTargetNotFoundError(target_id) from err
@@ -284,17 +290,25 @@ class GatewayTargetService:
         }
 
     @staticmethod
-    def _build_credential_configs(config: MCPGatewayConfig) -> List[Dict[str, Any]]:
+    def _build_credential_configs(
+        config: MCPGatewayConfig,
+    ) -> Optional[List[Dict[str, Any]]]:
         """Build `credentialProviderConfigurations` from the credential type.
 
-        The `MCPGatewayConfig` validator already guarantees the ARN/listing
-        invariants per credential type, so this only shapes the payload.
+        Returns None for a public (NONE) endpoint so the caller omits the
+        parameter entirely. The `MCPGatewayConfig` validator already guarantees
+        the ARN / aws_service / listing invariants per credential type, so this
+        only shapes the payload.
         """
         cred_value = (
             config.credential_type
             if isinstance(config.credential_type, str)
             else config.credential_type.value
         )
+
+        if cred_value == GatewayCredentialType.NONE.value:
+            return None
+
         aws_type = _CREDENTIAL_TYPE_TO_AWS[cred_value]
 
         if cred_value == GatewayCredentialType.OAUTH.value:
@@ -330,9 +344,20 @@ class GatewayTargetService:
                     },
                 }
             ]
-        # GATEWAY_IAM_ROLE — the gateway signs with its own execution role; no
-        # nested credentialProvider is sent.
-        return [{"credentialProviderType": aws_type}]
+        # GATEWAY_IAM_ROLE — the gateway signs with its own execution role.
+        # mcpServer targets require an explicit iamCredentialProvider naming the
+        # AWS service to sign for (unlike OpenAPI/Lambda targets, which accept a
+        # bare GATEWAY_IAM_ROLE). region is optional — AWS defaults it to the
+        # gateway's region.
+        iam_provider: Dict[str, Any] = {"service": config.aws_service}
+        if config.aws_region:
+            iam_provider["region"] = config.aws_region
+        return [
+            {
+                "credentialProviderType": aws_type,
+                "credentialProvider": {"iamCredentialProvider": iam_provider},
+            }
+        ]
 
     # ----------------------------------------------------------- parse helpers
     @staticmethod

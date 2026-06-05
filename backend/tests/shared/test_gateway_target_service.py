@@ -49,6 +49,7 @@ def _iam_config(**overrides) -> MCPGatewayConfig:
         endpoint_url="https://example.com/mcp",
         listing_mode=GatewayListingMode.DEFAULT,
         credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+        aws_service="lambda",
         tools=[MCPToolEntry(name="get_forecast")],
     )
     base.update(overrides)
@@ -95,7 +96,10 @@ class TestCreateTarget:
             }
         }
         assert kwargs["credentialProviderConfigurations"] == [
-            {"credentialProviderType": "GATEWAY_IAM_ROLE"}
+            {
+                "credentialProviderType": "GATEWAY_IAM_ROLE",
+                "credentialProvider": {"iamCredentialProvider": {"service": "lambda"}},
+            }
         ]
         # gateway id was read from /{prefix}/gateway/id
         ssm_client.get_parameter.assert_called_once_with(Name="/myproj/gateway/id")
@@ -177,6 +181,28 @@ class TestCreateTarget:
                 },
             }
         ]
+
+    def test_iam_includes_region_when_set(self, service, boto_client):
+        boto_client.create_gateway_target.return_value = _create_response()
+        service.create_target(_iam_config(aws_service="execute-api", aws_region="us-east-1"))
+        iam = boto_client.create_gateway_target.call_args.kwargs[
+            "credentialProviderConfigurations"
+        ][0]["credentialProvider"]["iamCredentialProvider"]
+        assert iam == {"service": "execute-api", "region": "us-east-1"}
+
+    def test_none_credential_omits_configs(self, service, boto_client):
+        boto_client.create_gateway_target.return_value = _create_response()
+        config = MCPGatewayConfig(
+            target_name="public-target",
+            endpoint_url="https://public.example.com/mcp",
+            credential_type=GatewayCredentialType.NONE,
+        )
+        service.create_target(config)
+        # A public endpoint omits credentialProviderConfigurations entirely.
+        assert (
+            "credentialProviderConfigurations"
+            not in boto_client.create_gateway_target.call_args.kwargs
+        )
 
     def test_dynamic_listing_maps_to_uppercase(self, service, boto_client):
         boto_client.create_gateway_target.return_value = _create_response()
