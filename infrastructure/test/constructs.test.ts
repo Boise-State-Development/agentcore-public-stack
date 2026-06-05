@@ -289,9 +289,12 @@ describe('AgentCoreGatewayConstruct', () => {
     t.resourceCountIs('AWS::IAM::Role', 1);
   });
 
-  it('publishes gateway SSM parameters', () => {
+  it('publishes the gateway id SSM parameter for app-api (issue #419)', () => {
     const stack = testStack();
     new AgentCoreGatewayConstruct(stack, 'GW', { config: createMockConfig() });
     const t = Template.fromStack(stack);
+    t.hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/test-project/gateway/id',
+    });
   });
 });

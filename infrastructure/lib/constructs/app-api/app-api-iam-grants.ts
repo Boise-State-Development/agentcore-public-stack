@@ -404,6 +404,53 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── SSM read for the AgentCore Gateway id (issue #419) ──
+  // GatewayTargetService (shared/tools/gateway_target_service.py) resolves the
+  // gateway identifier from this parameter at runtime to manage MCP targets.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'SsmReadGatewayId',
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [
+        `arn:aws:ssm:${cdk.Stack.of(scope).region}:${cdk.Stack.of(scope).account}:parameter/${config.projectPrefix}/gateway/id`,
+      ],
+    }),
+  );
+
+  // ── AgentCore Gateway target management (issue #419) ──
+  // The admin tools route registers an externally deployed MCP server as a
+  // target on the centralized AgentCore Gateway (protocol=mcp), then reconciles
+  // it on update/delete. These actions are scoped to the `gateway` resource type
+  // — there is no separate `gateway-target` resource; target operations are
+  // authorized through the parent gateway ARN.
+  //
+  // Action names verified against the control-plane API model and
+  //   https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrockagentcore.html
+  // (checked 2026-06-05). Create/Get/Delete/ListGatewayTargets are listed there;
+  // UpdateGatewayTarget exists as a control-plane operation and follows the
+  // Update* IAM precedent above (UpdateOauth2CredentialProvider) but was not yet
+  // in the service-authorization reference at time of writing — included so the
+  // route's update path works once published; IAM tolerates the forward-looking
+  // name for a known service. If a deploy ever rejects it, drop Update and
+  // implement target updates as delete + recreate.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'AgentCoreGatewayTargetAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:CreateGatewayTarget',
+        'bedrock-agentcore:GetGatewayTarget',
+        'bedrock-agentcore:UpdateGatewayTarget',
+        'bedrock-agentcore:DeleteGatewayTarget',
+        'bedrock-agentcore:ListGatewayTargets',
+      ],
+      resources: [
+        `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:gateway/*`,
+      ],
+    }),
+  );
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = props.refs.ragVectorBucketName;
   const vectorIndexName = props.refs.ragVectorIndexName;

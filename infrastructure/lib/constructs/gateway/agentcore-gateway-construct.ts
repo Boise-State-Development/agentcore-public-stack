@@ -25,8 +25,12 @@ export interface AgentCoreGatewayConstructProps {
  *     authorizer and SEMANTIC search type
  *
  * SSM publications:
- *   /{prefix}/gateway/url   — for SigV4-authenticated remote invocation
- *   /{prefix}/gateway/id    — gateway identifier
+ *   /{prefix}/gateway/id    — gateway identifier, read at runtime by app-api's
+ *                             GatewayTargetService (issue #419) to manage MCP
+ *                             targets. Reading from SSM at runtime (not at CFN
+ *                             deploy time) sidesteps the same-stack ordering
+ *                             deadlock that forces sibling refs (e.g. Memory id)
+ *                             to be threaded as explicit props.
  *
  * Also emits CloudFormation outputs for deploy-time visibility:
  *   GatewayArn, GatewayUrl, GatewayId, GatewayStatus, UsageInstructions
@@ -96,7 +100,16 @@ export class AgentCoreGatewayConstruct extends Construct {
     const gatewayUrl = this.gateway.attrGatewayUrl;
     const gatewayId = this.gateway.attrGatewayIdentifier;
 
-
+    // Publish the gateway id so app-api (a sibling in this stack) can resolve
+    // it at runtime via SSM to manage MCP targets (issue #419). app-api reads
+    // this with `ssm:GetParameter` from the running container — never at CFN
+    // synth/deploy time — so there is no same-stack publish/consume ordering
+    // problem.
+    new ssm.StringParameter(this, 'GatewayIdParam', {
+      parameterName: `/${config.projectPrefix}/gateway/id`,
+      stringValue: gatewayId,
+      description: 'AgentCore Gateway identifier (consumed by app-api GatewayTargetService)',
+    });
 
     new cdk.CfnOutput(this, 'GatewayArn', {
       value: gatewayArn,
