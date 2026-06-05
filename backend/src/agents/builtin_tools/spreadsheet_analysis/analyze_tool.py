@@ -574,6 +574,19 @@ def make_analyze_tool(
         if not ci_id:
             return {"content": [{"text": "❌ Code Interpreter is not configured. Contact your administrator."}], "status": "error"}
 
+        # Validate the supplied source against the diagram-tool policy
+        # before any sandbox call. Runs server-side after the LLM emits the
+        # tool call, so a user-controlled system_prompt cannot disable it.
+        from apis.shared.security import PolicyError, validate_diagram_code
+
+        try:
+            validate_diagram_code(python_code)
+        except PolicyError:
+            return {
+                "content": [{"text": "❌ Analysis code rejected by policy."}],
+                "status": "error",
+            }
+
         # 2. Find the file in accessible sources
         file_info = await _find_file(filename, assistant_id, session_id)
         if not file_info:

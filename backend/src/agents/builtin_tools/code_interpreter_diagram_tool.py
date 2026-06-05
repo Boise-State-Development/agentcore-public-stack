@@ -102,6 +102,21 @@ def generate_diagram_and_validate(
             "status": "error"
         }
 
+    # Validate the supplied source against the diagram-tool policy before
+    # any sandbox call. Runs server-side after the LLM emits the tool call,
+    # so a user-controlled system_prompt cannot disable it.
+    from apis.shared.security import PolicyError, validate_diagram_code
+
+    try:
+        validate_diagram_code(python_code)
+    except PolicyError:
+        return {
+            "content": [{
+                "text": "❌ Diagram code rejected by policy."
+            }],
+            "status": "error"
+        }
+
     try:
         logger.info(f"Generating diagram via Code Interpreter: {diagram_filename}")
 
