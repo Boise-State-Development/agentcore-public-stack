@@ -8,6 +8,7 @@ import {
   effect,
 } from '@angular/core';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormArray, FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -28,9 +29,13 @@ import {
   MCP_TRANSPORTS,
   MCP_AUTH_TYPES,
   A2A_AUTH_TYPES,
+  GATEWAY_LISTING_MODES,
+  GATEWAY_CREDENTIAL_TYPES,
+  GATEWAY_OAUTH_GRANT_TYPES,
   MCPServerConfig,
   MCPToolEntry,
   A2AAgentConfig,
+  MCPGatewayConfig,
   ToolProtocol,
 } from '../models/admin-tool.model';
 
@@ -434,6 +439,215 @@ import {
               </section>
             }
 
+            <!-- MCP Gateway Target Configuration -->
+            @if (selectedProtocol() === 'mcp') {
+              <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
+                <div class="flex items-center gap-2">
+                  <ng-icon name="heroServer" class="size-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Gateway target configuration</h2>
+                </div>
+                <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+                  Registers an externally deployed MCP server as a target on the centralized AgentCore Gateway.
+                  Saving creates the live Gateway target in AWS; if that fails the catalog entry is not saved.
+                </p>
+
+                <!-- Target name and endpoint -->
+                <div>
+                  <label for="gwTargetName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Target name <span class="text-red-600">*</span>
+                  </label>
+                  <input
+                    id="gwTargetName"
+                    type="text"
+                    formControlName="gwTargetName"
+                    placeholder="weather-search"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  />
+                  <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Unique name for the target on the gateway.
+                  </p>
+                </div>
+
+                <div>
+                  <label for="gwEndpointUrl" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Endpoint URL <span class="text-red-600">*</span>
+                  </label>
+                  <input
+                    id="gwEndpointUrl"
+                    type="url"
+                    formControlName="gwEndpointUrl"
+                    placeholder="https://your-mcp-server.example.com/mcp"
+                    class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  />
+                  <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                    The external MCP server endpoint the Gateway will call.
+                  </p>
+                </div>
+
+                <!-- Listing mode and credential type -->
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label for="gwListingMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Listing mode
+                    </label>
+                    <select
+                      id="gwListingMode"
+                      formControlName="gwListingMode"
+                      [attr.disabled]="form.get('gwCredentialType')?.value === 'oauth' ? '' : null"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    >
+                      @for (mode of gatewayListingModes; track mode.value) {
+                        <option [value]="mode.value">{{ mode.label }}</option>
+                      }
+                    </select>
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      @if (form.get('gwCredentialType')?.value === 'oauth') {
+                        OAuth requires Default listing (Dynamic disables 3LO + semantic search).
+                      } @else {
+                        Dynamic resolves tools at call time but disables semantic search.
+                      }
+                    </p>
+                  </div>
+
+                  <div>
+                    <label for="gwCredentialType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Outbound credential
+                    </label>
+                    <select
+                      id="gwCredentialType"
+                      formControlName="gwCredentialType"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    >
+                      @for (cred of gatewayCredentialTypes; track cred.value) {
+                        <option [value]="cred.value">{{ cred.label }}</option>
+                      }
+                    </select>
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      How the Gateway authenticates to the target endpoint.
+                    </p>
+                  </div>
+                </div>
+
+                <!-- Credential provider ARN (for oauth / api_key) -->
+                @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
+                  <div>
+                    <label for="gwCredentialProviderArn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Credential provider ARN <span class="text-red-600">*</span>
+                    </label>
+                    <input
+                      id="gwCredentialProviderArn"
+                      type="text"
+                      formControlName="gwCredentialProviderArn"
+                      placeholder="arn:aws:bedrock-agentcore:...:token-vault/default/oauth2credentialprovider/..."
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    />
+                    <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                      An existing AgentCore credential provider. Provisioning providers is out of scope here — manage them in
+                      <a routerLink="/admin/connectors" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Connectors</a>.
+                    </p>
+                  </div>
+                }
+
+                <!-- OAuth scopes + grant type (for oauth) -->
+                @if (form.get('gwCredentialType')?.value === 'oauth') {
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label for="gwOauthScopes" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        OAuth scopes
+                      </label>
+                      <input
+                        id="gwOauthScopes"
+                        type="text"
+                        formControlName="gwOauthScopes"
+                        placeholder="openid profile email"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Space- or comma-separated.
+                      </p>
+                    </div>
+                    <div>
+                      <label for="gwGrantType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Grant type
+                      </label>
+                      <select
+                        id="gwGrantType"
+                        formControlName="gwGrantType"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      >
+                        @for (grant of gatewayOauthGrantTypes; track grant.value) {
+                          <option [value]="grant.value">{{ grant.label }}</option>
+                        }
+                      </select>
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Authorization Code (3LO) requires the user to connect the provider first.
+                      </p>
+                    </div>
+                  </div>
+                }
+
+                <!-- Gateway tools (per-tool approval flags) -->
+                <div formArrayName="gwTools">
+                  <div class="mb-2 flex items-center justify-between">
+                    <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Tools
+                    </span>
+                    <button
+                      type="button"
+                      (click)="addGwTool()"
+                      class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                    >
+                      <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                      Add Tool
+                    </button>
+                  </div>
+
+                  @if (gwToolsArray.length === 0) {
+                    <p class="text-xs/5 italic text-gray-500 dark:text-gray-400">
+                      Optional. List the target's tool names to attach per-tool approval flags.
+                    </p>
+                  } @else {
+                    <div class="space-y-2">
+                      @for (row of gwToolsArray.controls; track $index) {
+                        <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
+                          <div class="flex-1">
+                            <input
+                              type="text"
+                              formControlName="name"
+                              placeholder="tool_name"
+                              [attr.aria-label]="'Gateway tool name ' + ($index + 1)"
+                              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <label class="flex items-center gap-1.5 whitespace-nowrap pt-1.5 text-xs/5 text-gray-700 dark:text-gray-300">
+                            <input
+                              type="checkbox"
+                              formControlName="needsApproval"
+                              class="size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 dark:border-gray-600 dark:bg-gray-800"
+                            />
+                            <span>Needs approval</span>
+                          </label>
+                          <button
+                            type="button"
+                            (click)="removeGwTool($index)"
+                            [attr.aria-label]="'Remove gateway tool ' + ($index + 1)"
+                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                          >
+                            <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                      }
+                    </div>
+                  }
+                  <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Note: per-tool approval flags are stored but not yet enforced for Gateway tools (tracked separately).
+                    For OAuth targets, users connect the provider via
+                    <a routerLink="/admin/connectors" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">Connectors</a>.
+                  </p>
+                </div>
+              </section>
+            }
+
             <!-- A2A Agent Configuration -->
             @if (selectedProtocol() === 'a2a') {
               <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700">
@@ -666,6 +880,9 @@ export class ToolFormPage implements OnInit {
   readonly mcpTransports = MCP_TRANSPORTS;
   readonly mcpAuthTypes = MCP_AUTH_TYPES;
   readonly a2aAuthTypes = A2A_AUTH_TYPES;
+  readonly gatewayListingModes = GATEWAY_LISTING_MODES;
+  readonly gatewayCredentialTypes = GATEWAY_CREDENTIAL_TYPES;
+  readonly gatewayOauthGrantTypes = GATEWAY_OAUTH_GRANT_TYPES;
 
   loading = signal(false);
   saving = signal(false);
@@ -709,6 +926,15 @@ export class ToolFormPage implements OnInit {
     a2aCapabilities: [''],
     a2aTimeoutSeconds: [120],
     a2aMaxRetries: [3],
+    // MCP Gateway target configuration (protocol 'mcp')
+    gwTargetName: [''],
+    gwEndpointUrl: [''],
+    gwListingMode: ['default'],
+    gwCredentialType: ['gateway_iam_role'],
+    gwCredentialProviderArn: [''],
+    gwOauthScopes: [''],
+    gwGrantType: ['authorization_code'],
+    gwTools: this.fb.array([] as FormGroup[]),
   });
 
   constructor() {
@@ -745,6 +971,18 @@ export class ToolFormPage implements OnInit {
 
   removeMcpTool(index: number): void {
     this.mcpToolsArray.removeAt(index);
+  }
+
+  get gwToolsArray(): FormArray<FormGroup> {
+    return this.form.get('gwTools') as FormArray<FormGroup>;
+  }
+
+  addGwTool(): void {
+    this.gwToolsArray.push(this.buildMcpToolRow());
+  }
+
+  removeGwTool(index: number): void {
+    this.gwToolsArray.removeAt(index);
   }
 
   async discoverMcpTools(): Promise<void> {
@@ -816,6 +1054,14 @@ export class ToolFormPage implements OnInit {
       }
     });
 
+    // Co-gating: OAuth (3LO) targets require DEFAULT listing — DYNAMIC disables
+    // 3LO and semantic search. Force it so the backend doesn't 400.
+    this.form.get('gwCredentialType')?.valueChanges.subscribe(value => {
+      if (value === 'oauth' && this.form.get('gwListingMode')?.value !== 'default') {
+        this.form.get('gwListingMode')?.setValue('default');
+      }
+    });
+
     const id = this.route.snapshot.paramMap.get('toolId');
     if (id) {
       this.toolId.set(id);
@@ -876,6 +1122,23 @@ export class ToolFormPage implements OnInit {
         });
       }
 
+      // MCP Gateway target configuration
+      if (tool.mcpGatewayConfig) {
+        this.form.patchValue({
+          gwTargetName: tool.mcpGatewayConfig.targetName,
+          gwEndpointUrl: tool.mcpGatewayConfig.endpointUrl,
+          gwListingMode: tool.mcpGatewayConfig.listingMode,
+          gwCredentialType: tool.mcpGatewayConfig.credentialType,
+          gwCredentialProviderArn: tool.mcpGatewayConfig.credentialProviderArn || '',
+          gwOauthScopes: (tool.mcpGatewayConfig.oauthScopes || []).join(' '),
+          gwGrantType: tool.mcpGatewayConfig.grantType,
+        });
+        this.gwToolsArray.clear();
+        for (const entry of tool.mcpGatewayConfig.tools) {
+          this.gwToolsArray.push(this.buildMcpToolRow(entry));
+        }
+      }
+
       // Disable toolId in edit mode
       this.form.get('toolId')?.disable();
     } catch (err: unknown) {
@@ -934,6 +1197,37 @@ export class ToolFormPage implements OnInit {
         };
       }
 
+      // Build Gateway target config if protocol is mcp
+      let mcpGatewayConfig: MCPGatewayConfig | undefined;
+      if (formValue.protocol === 'mcp' && formValue.gwTargetName && formValue.gwEndpointUrl) {
+        const gwTools: MCPToolEntry[] = (formValue.gwTools ?? [])
+          .map((row: { name?: string; needsApproval?: boolean; description?: string | null }) => ({
+            name: (row.name ?? '').trim(),
+            needsApproval: !!row.needsApproval,
+            description: row.description?.trim() || null,
+          }))
+          .filter((row: MCPToolEntry) => row.name.length > 0);
+
+        const credentialType = formValue.gwCredentialType;
+        const isOauth = credentialType === 'oauth';
+        mcpGatewayConfig = {
+          targetName: formValue.gwTargetName,
+          endpointUrl: formValue.gwEndpointUrl,
+          listingMode: formValue.gwListingMode,
+          credentialType,
+          // IAM role uses the gateway's execution role — no ARN.
+          credentialProviderArn:
+            credentialType === 'gateway_iam_role' ? null : (formValue.gwCredentialProviderArn || null),
+          oauthScopes:
+            isOauth && formValue.gwOauthScopes
+              ? formValue.gwOauthScopes.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => s)
+              : [],
+          grantType: formValue.gwGrantType,
+          customParameters: null,
+          tools: gwTools,
+        };
+      }
+
       // Get OAuth provider value (empty string becomes null)
       const requiresOauthProvider = formValue.requiresOauthProvider || null;
 
@@ -951,6 +1245,7 @@ export class ToolFormPage implements OnInit {
           forwardAuthToken: formValue.forwardAuthToken || false,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
+          mcpGatewayConfig: mcpGatewayConfig,
         });
       } else {
         // Create new tool
@@ -967,16 +1262,43 @@ export class ToolFormPage implements OnInit {
           forwardAuthToken: formValue.forwardAuthToken || false,
           mcpConfig: mcpConfig,
           a2aConfig: a2aConfig,
+          mcpGatewayConfig: mcpGatewayConfig,
         });
       }
 
       await this.router.navigate(['/admin/tools']);
     } catch (err: unknown) {
       console.error('Error saving tool:', err);
-      const message = err instanceof Error ? err.message : 'Failed to save tool.';
-      this.error.set(message);
+      this.error.set(this.describeSaveError(err));
     } finally {
       this.saving.set(false);
     }
+  }
+
+  /**
+   * Build a friendly error message, distinguishing a Gateway target failure
+   * (502, the live AWS target couldn't be created/updated/deleted) from a
+   * validation error (400) and a conflict / state divergence (409). The
+   * service re-throws the HttpErrorResponse, whose `error.detail` carries the
+   * backend message.
+   */
+  private describeSaveError(err: unknown): string {
+    if (err instanceof HttpErrorResponse) {
+      const detail =
+        (err.error && typeof err.error === 'object' && 'detail' in err.error
+          ? String((err.error as { detail: unknown }).detail)
+          : '') || err.message;
+      switch (err.status) {
+        case 400:
+          return `Validation error: ${detail}`;
+        case 409:
+          return `Conflict: ${detail}`;
+        case 502:
+          return `Gateway target operation failed (the catalog entry was not saved): ${detail}`;
+        default:
+          return detail || 'Failed to save tool.';
+      }
+    }
+    return err instanceof Error ? err.message : 'Failed to save tool.';
   }
 }

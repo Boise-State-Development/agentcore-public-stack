@@ -35,6 +35,24 @@ export type MCPAuthType = 'none' | 'aws-iam' | 'api-key' | 'bearer-token' | 'oau
 export type A2AAuthType = 'none' | 'aws-iam' | 'agentcore' | 'api-key';
 
 /**
+ * AgentCore Gateway target listing mode. DYNAMIC disables 3LO + semantic search.
+ */
+export type GatewayListingMode = 'default' | 'dynamic';
+
+/**
+ * How the Gateway authenticates outbound to a target's MCP endpoint.
+ */
+export type GatewayCredentialType = 'gateway_iam_role' | 'oauth' | 'api_key';
+
+/**
+ * OAuth grant the Gateway uses for an OAUTH-credentialed target.
+ */
+export type GatewayOAuthGrantType =
+  | 'authorization_code'
+  | 'client_credentials'
+  | 'token_exchange';
+
+/**
  * Tool status enum
  */
 export type ToolStatus = 'active' | 'deprecated' | 'disabled' | 'coming_soon';
@@ -78,6 +96,25 @@ export interface A2AAgentConfig {
 }
 
 /**
+ * Gateway target configuration for protocol='mcp' tools. Mirrors the Python
+ * MCPGatewayConfig. `targetId`/`gatewayArn` are AWS-assigned (present on
+ * responses, omitted on create/update requests).
+ */
+export interface MCPGatewayConfig {
+  targetName: string;
+  endpointUrl: string;
+  listingMode: GatewayListingMode;
+  credentialType: GatewayCredentialType;
+  credentialProviderArn?: string | null;
+  oauthScopes: string[];
+  grantType: GatewayOAuthGrantType;
+  customParameters?: Record<string, string> | null;
+  tools: MCPToolEntry[];
+  targetId?: string | null;
+  gatewayArn?: string | null;
+}
+
+/**
  * Admin tool definition with role assignments.
  */
 export interface AdminTool {
@@ -99,6 +136,7 @@ export interface AdminTool {
   // External tool configurations
   mcpConfig?: MCPServerConfig | null;
   a2aConfig?: A2AAgentConfig | null;
+  mcpGatewayConfig?: MCPGatewayConfig | null;
 }
 
 /**
@@ -144,6 +182,7 @@ export interface ToolCreateRequest {
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig;
   a2aConfig?: A2AAgentConfig;
+  mcpGatewayConfig?: MCPGatewayConfig;
 }
 
 /**
@@ -161,6 +200,7 @@ export interface ToolUpdateRequest {
   enabledByDefault?: boolean;
   mcpConfig?: MCPServerConfig | null;
   a2aConfig?: A2AAgentConfig | null;
+  mcpGatewayConfig?: MCPGatewayConfig | null;
 }
 
 /**
@@ -287,6 +327,32 @@ export const A2A_AUTH_TYPES: { value: A2AAuthType; label: string; description?: 
   { value: 'aws-iam', label: 'AWS IAM (SigV4)', description: 'AWS IAM authentication with SigV4 signing' },
   { value: 'agentcore', label: 'AgentCore Runtime', description: 'AgentCore Runtime authentication' },
   { value: 'api-key', label: 'API Key', description: 'API key in request header' },
+];
+
+/**
+ * Available Gateway target listing modes for dropdowns.
+ */
+export const GATEWAY_LISTING_MODES: { value: GatewayListingMode; label: string; description?: string }[] = [
+  { value: 'default', label: 'Default', description: 'Static tool listing — required for OAuth (3LO) and semantic search' },
+  { value: 'dynamic', label: 'Dynamic', description: 'Resolve tools at call time — disables 3LO and semantic search' },
+];
+
+/**
+ * Available Gateway outbound credential types for dropdowns.
+ */
+export const GATEWAY_CREDENTIAL_TYPES: { value: GatewayCredentialType; label: string; description?: string }[] = [
+  { value: 'gateway_iam_role', label: 'Gateway IAM Role (SigV4)', description: 'The gateway signs with its own execution role — no provider ARN' },
+  { value: 'oauth', label: 'OAuth (3LO / 2LO)', description: 'Reference an existing OAuth credential provider by ARN' },
+  { value: 'api_key', label: 'API Key', description: 'Reference an existing API-key credential provider by ARN' },
+];
+
+/**
+ * Available Gateway OAuth grant types for dropdowns.
+ */
+export const GATEWAY_OAUTH_GRANT_TYPES: { value: GatewayOAuthGrantType; label: string; description?: string }[] = [
+  { value: 'authorization_code', label: 'Authorization Code (3LO)', description: 'On-behalf-of-user — requires the user to connect the provider' },
+  { value: 'client_credentials', label: 'Client Credentials (2LO)', description: 'Machine-to-machine — no user consent' },
+  { value: 'token_exchange', label: 'Token Exchange', description: 'Exchange an existing token' },
 ];
 
 /**
