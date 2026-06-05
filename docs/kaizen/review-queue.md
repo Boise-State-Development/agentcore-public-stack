@@ -5,6 +5,44 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-06-05] Strands 1.40 → 1.42 bump — unblocks `Limits` (cost caps) + `cache_tools_ttl` (#269 caching)
+- **Source**: research/2026-06-05.md ▸ Top 5 #1 — Strands v1.42.0 (June 1). **Consolidates** the queued 2026-05-22 "Strands 1.40→1.41 + caching #269" item AND the 2026-05-29 #2 "Adopt Strands `Limits`" item — both were gated on 1.42, which is now out. Treat as one keystone bump, not two.
+- **Surface**: backend (`pyproject.toml`/`uv.lock`, agent invocation in `inference_api`, `BedrockModel`/`CacheConfig`, SSE `limit_*` stop-reason) + infrastructure (CloudWatch Bedrock-spend alarm)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — adopts library-native `Limits` (retires the hand-rolled runaway guardrail) + `cache_tools_ttl` (retires the hand-rolled TTL); two queued items collapse into one bump
+- **Unlocks**: native per-turn cost ceiling (`limit_*` stop_reason) + end-to-end 1h prompt caching → lower input-token cost, surfaced in the admin "Cache Savings" card
+- **Status**: open — 1.42 is released (no longer gated). Blast radius to audit first: `strands-agents-tools` 0.5→0.8 (possible breaking tool-interface changes) + `starlette` 1.2.1 (FastAPI 0.136.x transitive compat)
+
+### [2026-06-05] Guard the context-attribution path against Strands `count_tokens` toolResult=0 bug (#2635)
+- **Source**: research/2026-06-05.md ▸ Top 5 #2 — Strands issue #2635 (open) + internal PR #428–433 (context-attribution feature, shipped this window)
+- **Surface**: backend (`CountTokensBedrockModel`, the `contextBreakdown` hook/coordinator channel, the compaction trigger)
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: no — defensive; protects the freshly-shipped context-breakdown badge
+- **Status**: open — time-sensitive; confirm native Bedrock CountTokens is used for all turns (incl. JSON toolResults) and the heuristic path #2635 affects is never hit; add a regression test asserting a non-zero count for a turn with a JSON toolResult
+
+### [2026-06-05] Make the context-breakdown badge interactive (Cursor Context Usage Report pattern)
+- **Source**: research/2026-06-05.md ▸ Top 5 #3 — Cursor "Context Usage Report" (https://cursor.com/changelog/canvas-improvements) + internal PR #433
+- **Surface**: frontend (context-breakdown badge component + Artifacts docked panel)
+- **Effort × Impact**: M × M
+- **Subtracts**: no — addition; justified because it lands on a surface we shipped last week and reuses `contextBreakdown` data already on the final metadata event
+- **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
+- **Status**: open — presentation-layer work; no new backend (data already on the wire)
+
+### [2026-06-05] Bump `docling` past the 2.81.0 content-sniffing defect → close #405 (`.txt` uploads fail)
+- **Source**: research/2026-06-05.md ▸ Top 5 #4 — docling 2.97.0 (June 3) + internal issue #405
+- **Surface**: backend (document-ingestion docling dep pin)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — library-native bump closes an open user-facing bug; no custom workaround needed
+- **Status**: open — cleanest subtraction of the week; bump off 2.81.x, verify `.txt` upload, close #405
+
+### [2026-06-05] De-risk #419 (admin-managed Gateway target registration) against the new AWS auth-code-flow + BYO-secrets references
+- **Source**: research/2026-06-05.md ▸ Top 5 #5 — AWS "secure OAuth auth-code flow with Gateway + MCP clients" + AgentCore Identity BYO Secrets Manager (both June 1) + internal issue #419
+- **Surface**: infrastructure (Gateway target CRUD / `gateway_target_*`) + backend (`apis/shared/oauth/agentcore_identity.py` OAuth provider wiring + token-vault customParameters) + frontend (admin registration UI)
+- **Effort × Impact**: H × H
+- **Subtracts**: partial — BYO Secrets Manager lets us own/govern OAuth client secrets (CMK, tagging) instead of service-managed storage
+- **Unlocks**: admins register external MCP servers (protocol=mcp) without code changes — net-new admin surface, now blueprinted by AWS
+- **Status**: open — strategic; the AWS references materially de-risk an already-filed feature
+
 ### [2026-05-29] Migrate inference-api model config Opus 4.7 → 4.8
 - **Source**: research/2026-05-29.md ▸ Top 5 #1 — Claude Opus 4.8 on Bedrock (May 28)
 - **Surface**: backend (model config in `inference_api`) + admin model catalog + the `_shape_thinking_value` / `temperature` provider-translation path
