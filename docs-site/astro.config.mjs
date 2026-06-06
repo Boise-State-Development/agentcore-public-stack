@@ -58,6 +58,7 @@ export default defineConfig({
 				{ label: 'Deployment', items: [{ autogenerate: { directory: 'deployment' } }] },
 				{ label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
 				{ label: 'Features', items: [{ autogenerate: { directory: 'features' } }] },
+				{ label: 'Admin', items: [{ autogenerate: { directory: 'admin' } }] },
 				{ label: 'MCP & Integrations', items: [{ autogenerate: { directory: 'integrations' } }] },
 				{ label: 'Development', items: [{ autogenerate: { directory: 'development' } }] },
 				{ label: 'Reference', items: [{ autogenerate: { directory: 'reference' } }] },
