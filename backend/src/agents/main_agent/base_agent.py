@@ -365,6 +365,36 @@ class BaseAgent(ABC):
             disconnected_lookup=disconnected_lookup,
         )
 
+    def _expand_gateway_tool_ids(self, gateway_tool_ids: List[str]) -> List[str]:
+        """Expand #419 catalog gateway tools into the gateway's runtime per-tool
+        ids (see `expand_gateway_tool_ids`), bridging the async catalog lookup
+        into this sync build path the same way `_register_external_mcp_tools`
+        does.
+        """
+        from apis.shared.tools.repository import get_tool_catalog_repository
+        from agents.main_agent.tools.gateway_integration import (
+            expand_gateway_tool_ids,
+        )
+
+        repo = get_tool_catalog_repository()
+
+        import asyncio
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    return executor.submit(
+                        asyncio.run, expand_gateway_tool_ids(gateway_tool_ids, repo)
+                    ).result()
+            return loop.run_until_complete(
+                expand_gateway_tool_ids(gateway_tool_ids, repo)
+            )
+        except RuntimeError:
+            return asyncio.run(expand_gateway_tool_ids(gateway_tool_ids, repo))
+
     def _build_filtered_tools(self) -> List:
         """
         Filter tools and load gateway/external MCP clients.
@@ -379,6 +409,10 @@ class BaseAgent(ABC):
 
         # Get gateway client and add to tools if available
         if gateway_tool_ids:
+            # #419 catalog tools (`gateway_<id>`) must be expanded to the
+            # gateway's runtime per-tool ids (`gateway_<target>___<tool>`)
+            # before the FilteredMCPClient can match them.
+            gateway_tool_ids = self._expand_gateway_tool_ids(gateway_tool_ids)
             gateway_client = self.gateway_integration.get_client(gateway_tool_ids)
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)
