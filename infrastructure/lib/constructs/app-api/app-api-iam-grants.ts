@@ -444,9 +444,36 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         'bedrock-agentcore:UpdateGatewayTarget',
         'bedrock-agentcore:DeleteGatewayTarget',
         'bedrock-agentcore:ListGatewayTargets',
+        // GetGateway resolves the gateway execution-role ARN, which the per-
+        // target Lambda grant names as the invoke principal.
+        'bedrock-agentcore:GetGateway',
       ],
       resources: [
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:gateway/*`,
+      ],
+    }),
+  );
+
+  // Per-target gateway-role invoke grant (issue #419): when an admin registers
+  // an IAM-protected Lambda-URL MCP target, app-api authorizes the gateway role
+  // to invoke exactly that function by adding a statement to its resource policy
+  // (and removes it on delete). This replaces a standing wildcard on the gateway
+  // role, so admins add same-account MCP servers through the form with no infra
+  // change. GetFunctionUrlConfig validates the function is same-account and its
+  // URL matches before granting (the cross-account guard). Scoped to the MCP
+  // server naming conventions. See apis/shared/tools/gateway_lambda_grant.py.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'McpTargetLambdaGrant',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'lambda:AddPermission',
+        'lambda:RemovePermission',
+        'lambda:GetFunctionUrlConfig',
+      ],
+      resources: [
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:mcp-*`,
+        `arn:aws:lambda:${config.awsRegion}:${config.awsAccount}:function:${config.projectPrefix}-mcp-*`,
       ],
     }),
   );

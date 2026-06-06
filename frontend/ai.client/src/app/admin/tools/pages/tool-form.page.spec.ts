@@ -5,6 +5,10 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { ToolFormPage } from './tool-form.page';
 import { AdminToolService } from '../services/admin-tool.service';
 import { ConnectorsService } from '../../connectors/services/connectors.service';
+import {
+  detectAwsServiceFromUrl,
+  extractAwsRegionFromUrl,
+} from '../models/admin-tool.model';
 
 /**
  * Phase 5 (#419): the protocol='mcp' Gateway target section of the admin tool
@@ -171,5 +175,138 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     );
     await cmp.onSubmit();
     expect(cmp.error()).toContain('Validation error');
+  });
+
+  it('auto-derives aws service + region from a Lambda URL when IAM is selected', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    // Pick IAM, then enter an AWS-hosted endpoint — fields should self-populate.
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role' });
+    cmp.form.patchValue({
+      gwEndpointUrl: 'https://abc123.lambda-url.us-east-1.on.aws/mcp',
+    });
+
+    expect(cmp.form.get('gwAwsService')?.value).toBe('lambda');
+    expect(cmp.form.get('gwAwsRegion')?.value).toBe('us-east-1');
+
+    await cmp.onSubmit();
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.awsService).toBe('lambda');
+    expect(cfg.awsRegion).toBe('us-east-1');
+  });
+
+  it('does not clobber a hand-edited aws service when the URL changes', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role' });
+    cmp.form.patchValue({ gwEndpointUrl: 'https://abc.lambda-url.us-west-2.on.aws/mcp' });
+    expect(cmp.form.get('gwAwsService')?.value).toBe('lambda');
+
+    // Admin overrides the service, then edits the URL — override must survive.
+    cmp.form.get('gwAwsService')?.setValue('my-private-service');
+    cmp.form.patchValue({ gwEndpointUrl: 'https://def.execute-api.eu-west-1.amazonaws.com/mcp' });
+
+    expect(cmp.form.get('gwAwsService')?.value).toBe('my-private-service');
+    // Region wasn't overridden, so it still tracks the URL.
+    expect(cmp.form.get('gwAwsRegion')?.value).toBe('eu-west-1');
+  });
+
+  it('falls back to deriving aws service at save when the field is blank', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    // Simulate legacy/edit state: IAM with a known URL but a blank service.
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role' });
+    cmp.form.patchValue({ gwEndpointUrl: 'https://gw.bedrock-agentcore.us-west-2.amazonaws.com/mcp' });
+    cmp.form.get('gwAwsService')?.setValue('', { emitEvent: false });
+    cmp.form.get('gwAwsRegion')?.setValue('', { emitEvent: false });
+
+    await cmp.onSubmit();
+    const cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.awsService).toBe('bedrock-agentcore');
+    expect(cfg.awsRegion).toBe('us-west-2');
+  });
+
+  it('leaves the aws service blank for an unrecognised (custom-domain) host', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+    cmp.form.patchValue({ gwCredentialType: 'gateway_iam_role' });
+    cmp.form.patchValue({ gwEndpointUrl: 'https://mcp.mycorp.example.com/mcp' });
+
+    expect(cmp.form.get('gwAwsService')?.value).toBe('');
+    expect(cmp.form.get('gwAwsRegion')?.value).toBe('');
+  });
+
+  it('sends lambdaFunctionName for an IAM Lambda-URL target, null otherwise', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+
+    // IAM + Lambda URL → the function name is sent so the backend can grant invoke.
+    cmp.form.patchValue({
+      gwCredentialType: 'gateway_iam_role',
+      gwEndpointUrl: 'https://abc.lambda-url.us-west-2.on.aws/mcp',
+      gwLambdaFunctionName: 'mcp-class-search-dev',
+    });
+    expect(cmp.isLambdaUrlEndpoint()).toBe(true);
+    await cmp.onSubmit();
+    let cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.lambdaFunctionName).toBe('mcp-class-search-dev');
+
+    // Non-Lambda endpoint → not applicable, sent as null even if a stale value lingers.
+    adminToolService.createTool.mockClear();
+    cmp.form.patchValue({ gwEndpointUrl: 'https://mcp.example.com/mcp' });
+    expect(cmp.isLambdaUrlEndpoint()).toBe(false);
+    await cmp.onSubmit();
+    cfg = adminToolService.createTool.mock.calls[0][0].mcpGatewayConfig;
+    expect(cfg.lambdaFunctionName).toBeNull();
+  });
+
+  it('recommends IAM only when an AWS-hosted endpoint is left on None', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    fillBaseGatewayForm(cmp);
+
+    // None + AWS host → recommend IAM.
+    cmp.form.patchValue({
+      gwCredentialType: 'none',
+      gwEndpointUrl: 'https://abc.lambda-url.us-west-2.on.aws/mcp',
+    });
+    expect(cmp.showIamRecommendation()).toBe(true);
+
+    // None + custom domain → no recommendation (we can't tell it needs IAM).
+    cmp.form.patchValue({ gwEndpointUrl: 'https://mcp.example.com/mcp' });
+    expect(cmp.showIamRecommendation()).toBe(false);
+
+    // Already on IAM → nothing to recommend.
+    cmp.form.patchValue({
+      gwCredentialType: 'gateway_iam_role',
+      gwEndpointUrl: 'https://abc.lambda-url.us-west-2.on.aws/mcp',
+    });
+    expect(cmp.showIamRecommendation()).toBe(false);
+  });
+});
+
+describe('AWS endpoint derivation helpers', () => {
+  it('detects the AWS service from known endpoint hosts', () => {
+    expect(detectAwsServiceFromUrl('https://x.lambda-url.us-west-2.on.aws/mcp')).toBe('lambda');
+    expect(detectAwsServiceFromUrl('https://x.execute-api.us-east-1.amazonaws.com/p')).toBe('execute-api');
+    expect(detectAwsServiceFromUrl('https://g.bedrock-agentcore.eu-west-1.amazonaws.com/')).toBe(
+      'bedrock-agentcore',
+    );
+  });
+
+  it('returns empty string for an unrecognised host (no lambda default)', () => {
+    expect(detectAwsServiceFromUrl('https://mcp.example.com/mcp')).toBe('');
+    expect(detectAwsServiceFromUrl('')).toBe('');
+  });
+
+  it('extracts the region from known endpoint hosts', () => {
+    expect(extractAwsRegionFromUrl('https://x.lambda-url.ap-south-1.on.aws/mcp')).toBe('ap-south-1');
+    expect(extractAwsRegionFromUrl('https://x.execute-api.us-east-2.amazonaws.com/p')).toBe('us-east-2');
+    expect(extractAwsRegionFromUrl('https://mcp.example.com/mcp')).toBe('');
   });
 });

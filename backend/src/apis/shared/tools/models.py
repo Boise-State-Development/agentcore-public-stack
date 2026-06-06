@@ -307,6 +307,15 @@ class MCPGatewayConfig(BaseModel):
         description="AWS region for SigV4 signing (GATEWAY_IAM_ROLE only); "
         "defaults to the gateway's region when omitted",
     )
+    lambda_function_name: Optional[str] = Field(
+        None,
+        description="Name (or ARN) of the Lambda backing the endpoint, for a "
+        "GATEWAY_IAM_ROLE target on a Lambda Function URL. Lets the platform "
+        "grant the gateway role InvokeFunctionUrl on exactly this function at "
+        "registration (lambda:AddPermission) instead of a standing wildcard. "
+        "Same-account only; cross-account targets must be public or use a "
+        "credential provider.",
+    )
     oauth_scopes: List[str] = Field(
         default_factory=list,
         description="OAuth scopes requested for OAUTH credential type",
@@ -393,6 +402,7 @@ class MCPGatewayConfig(BaseModel):
             "credentialProviderArn": self.credential_provider_arn,
             "awsService": self.aws_service,
             "awsRegion": self.aws_region,
+            "lambdaFunctionName": self.lambda_function_name,
             "oauthScopes": list(self.oauth_scopes),
             "grantType": self.grant_type
             if isinstance(self.grant_type, str)
@@ -416,6 +426,7 @@ class MCPGatewayConfig(BaseModel):
             credential_provider_arn=data.get("credentialProviderArn"),
             aws_service=data.get("awsService"),
             aws_region=data.get("awsRegion"),
+            lambda_function_name=data.get("lambdaFunctionName"),
             oauth_scopes=data.get("oauthScopes") or [],
             grant_type=data.get(
                 "grantType", GatewayOAuthGrantType.AUTHORIZATION_CODE
@@ -947,6 +958,7 @@ class MCPGatewayConfigRequest(BaseModel):
     )
     aws_service: Optional[str] = Field(None, alias="awsService")
     aws_region: Optional[str] = Field(None, alias="awsRegion")
+    lambda_function_name: Optional[str] = Field(None, alias="lambdaFunctionName")
     oauth_scopes: List[str] = Field(default_factory=list, alias="oauthScopes")
     grant_type: GatewayOAuthGrantType = Field(
         default=GatewayOAuthGrantType.AUTHORIZATION_CODE, alias="grantType"
@@ -968,6 +980,7 @@ class MCPGatewayConfigRequest(BaseModel):
             credential_provider_arn=self.credential_provider_arn,
             aws_service=self.aws_service,
             aws_region=self.aws_region,
+            lambda_function_name=self.lambda_function_name,
             oauth_scopes=self.oauth_scopes,
             grant_type=self.grant_type,
             custom_parameters=self.custom_parameters,
@@ -1148,6 +1161,7 @@ class MCPGatewayConfigResponse(BaseModel):
     )
     aws_service: Optional[str] = Field(None, alias="awsService")
     aws_region: Optional[str] = Field(None, alias="awsRegion")
+    lambda_function_name: Optional[str] = Field(None, alias="lambdaFunctionName")
     oauth_scopes: List[str] = Field(default_factory=list, alias="oauthScopes")
     grant_type: str = Field(..., alias="grantType")
     custom_parameters: Optional[Dict[str, str]] = Field(
@@ -1174,6 +1188,7 @@ class MCPGatewayConfigResponse(BaseModel):
             credential_provider_arn=config.credential_provider_arn,
             aws_service=config.aws_service,
             aws_region=config.aws_region,
+            lambda_function_name=config.lambda_function_name,
             oauth_scopes=list(config.oauth_scopes),
             grant_type=config.grant_type
             if isinstance(config.grant_type, str)
@@ -1333,5 +1348,25 @@ class MCPDiscoverResponse(BaseModel):
     """Response body for POST /api/admin/tools/discover."""
 
     tools: List[DiscoveredMCPTool]
+
+
+class GatewayTargetStatusResponse(BaseModel):
+    """Live health of the Gateway target backing a protocol='mcp' tool.
+
+    Response body for GET /api/admin/tools/{tool_id}/gateway-status. The
+    AgentCore Gateway connects to and lists tools from the target
+    asynchronously after registration, so the catalog row alone can't tell an
+    admin whether the target is usable. `status` is the gateway target status
+    (CREATING / READY / FAILED / UPDATE_UNSUCCESSFUL / …); `status_reasons`
+    carries the gateway's explanation when unhealthy. `MISSING` is a synthetic
+    status used when the catalog references a target that no longer exists on
+    the gateway. `healthy` is a convenience the badge can render directly."""
+
+    target_id: str = Field(..., alias="targetId")
+    status: str
+    status_reasons: List[str] = Field(default_factory=list, alias="statusReasons")
+    healthy: bool
+
+    model_config = {"populate_by_name": True}
 
 

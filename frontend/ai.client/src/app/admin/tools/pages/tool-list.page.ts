@@ -4,6 +4,8 @@ import {
   inject,
   signal,
   computed,
+  effect,
+  DestroyRef,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -18,15 +20,83 @@ import {
   heroTrash,
   heroUserGroup,
   heroGlobeAlt,
+  heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { AdminToolService } from '../services/admin-tool.service';
 import {
   AdminTool,
+  GatewayTargetStatus,
   TOOL_CATEGORIES,
   TOOL_STATUSES,
   TOOL_PROTOCOLS,
 } from '../models/admin-tool.model';
+
+/** A gateway health value the row can render, including transient UI states. */
+export type GatewayHealth = GatewayTargetStatus | 'loading' | 'error';
+
+/** Compact badge descriptor derived from a tool's gateway health. */
+export interface GatewayBadge {
+  label: string;
+  cls: string;
+  title: string;
+  failed: boolean;
+}
+
+const GATEWAY_BADGE_BASE =
+  'shrink-0 inline-flex items-center gap-1 rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
+
+/** Gateway target statuses that are still settling (not yet Ready/Failed). */
+const TRANSIENT_GATEWAY_STATUSES = ['CREATING', 'UPDATING', 'SYNCHRONIZING'];
+
+/** Map a tool's gateway health to a compact badge, or null if not yet known. */
+export function gatewayBadgeFor(health: GatewayHealth | undefined): GatewayBadge | null {
+  if (health === undefined) {
+    return null;
+  }
+  const muted = `${GATEWAY_BADGE_BASE} bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400`;
+  if (health === 'loading') {
+    return { label: 'Checking…', cls: muted, title: 'Checking gateway target health', failed: false };
+  }
+  if (health === 'error') {
+    return { label: 'Unknown', cls: muted, title: 'Could not fetch gateway target health', failed: false };
+  }
+  if (health.healthy) {
+    return {
+      label: 'Ready',
+      cls: `${GATEWAY_BADGE_BASE} bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300`,
+      title: 'Gateway target is ready',
+      failed: false,
+    };
+  }
+  if (TRANSIENT_GATEWAY_STATUSES.includes(health.status.toUpperCase())) {
+    return {
+      label: 'Syncing',
+      cls: `${GATEWAY_BADGE_BASE} bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300`,
+      title: 'The gateway is connecting to the target and listing its tools…',
+      failed: false,
+    };
+  }
+  return {
+    label: health.status.toUpperCase() === 'MISSING' ? 'Missing' : 'Failed',
+    cls: `${GATEWAY_BADGE_BASE} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`,
+    title: health.statusReasons.join(' ') || 'Gateway target is not usable',
+    failed: true,
+  };
+}
+
+/** The joined failure reasons for an unhealthy gateway health, else null. */
+export function gatewayFailureReasonsFor(health: GatewayHealth | undefined): string | null {
+  if (!health || health === 'loading' || health === 'error' || health.healthy) {
+    return null;
+  }
+  return health.statusReasons.join(' ') || null;
+}
+
+/** Whether a gateway status string is still settling (drives re-polling). */
+export function isTransientGatewayStatus(status: string): boolean {
+  return TRANSIENT_GATEWAY_STATUSES.includes(status.toUpperCase());
+}
 import { AppRolesService } from '../../roles/services/app-roles.service';
 import { ToolRoleDialogComponent, ToolRoleDialogData, ToolRoleDialogResult } from '../components/tool-role-dialog.component';
 import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult } from '../components/delete-tool-dialog.component';
@@ -44,6 +114,7 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
       heroTrash,
       heroUserGroup,
       heroGlobeAlt,
+      heroExclamationTriangle,
       heroStarSolid,
     }),
   ],
@@ -234,6 +305,16 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                       }
                     </span>
 
+                    <!-- Gateway target health (protocol=mcp only) -->
+                    @if (tool.protocol === 'mcp' && gatewayBadge(tool.toolId); as badge) {
+                      <span [class]="badge.cls" [title]="badge.title">
+                        @if (badge.failed) {
+                          <ng-icon name="heroExclamationTriangle" class="size-3.5" aria-hidden="true" />
+                        }
+                        {{ badge.label }}
+                      </span>
+                    }
+
                     <!-- Status -->
                     <span [class]="getStatusClass(tool.status)">
                       {{ tool.status }}
@@ -373,6 +454,35 @@ import { DeleteToolDialogComponent, DeleteToolDialogData, DeleteToolDialogResult
                             </dd>
                           </div>
                         }
+
+                        @if (tool.mcpGatewayConfig) {
+                          <div class="sm:col-span-3">
+                            <dt class="flex items-center gap-2 text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                              Gateway target
+                              @if (gatewayBadge(tool.toolId); as badge) {
+                                <span [class]="badge.cls" [title]="badge.title">
+                                  @if (badge.failed) {
+                                    <ng-icon name="heroExclamationTriangle" class="size-3.5" aria-hidden="true" />
+                                  }
+                                  {{ badge.label }}
+                                </span>
+                              }
+                            </dt>
+                            <dd class="mt-0.5 space-y-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                              <p class="break-all font-mono text-xs/5">{{ tool.mcpGatewayConfig.endpointUrl }}</p>
+                              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                                target: {{ tool.mcpGatewayConfig.targetName }} ·
+                                outbound: {{ tool.mcpGatewayConfig.credentialType }} ·
+                                {{ tool.mcpGatewayConfig.tools.length }} tool{{ tool.mcpGatewayConfig.tools.length !== 1 ? 's' : '' }}
+                              </p>
+                              @if (gatewayFailureReasons(tool.toolId); as reasons) {
+                                <p class="mt-1 rounded-xl bg-red-50 px-2.5 py-1.5 text-xs/5 text-red-800 dark:bg-red-900/20 dark:text-red-200">
+                                  {{ reasons }}
+                                </p>
+                              }
+                            </dd>
+                          </div>
+                        }
                       </dl>
                     </div>
                   }
@@ -401,6 +511,32 @@ export class ToolListPage {
 
   // Row detail expansion state (set of tool ids currently expanded)
   private expandedIds = signal<ReadonlySet<string>>(new Set());
+
+  // Live gateway-target health per protocol='mcp' tool id. Lazily populated so
+  // a FAILED target (e.g. the gateway role can't invoke the endpoint) surfaces
+  // as a badge instead of only appearing later as "the agent can't see it".
+  private gatewayStatuses = signal<ReadonlyMap<string, GatewayHealth>>(new Map());
+  // Dedupe guard (plain field, not a signal, so the fetch effect doesn't depend
+  // on it and re-trigger itself).
+  private requestedStatusToolIds = new Set<string>();
+  private destroyRef = inject(DestroyRef);
+  private destroyed = false;
+
+  constructor() {
+    this.destroyRef.onDestroy(() => {
+      this.destroyed = true;
+    });
+    // Fetch live gateway health for each protocol='mcp' tool once, as the
+    // catalog loads. Typically a handful of rows, so per-row lazy fetch is fine.
+    effect(() => {
+      for (const tool of this.tools()) {
+        if (tool.protocol === 'mcp' && !this.requestedStatusToolIds.has(tool.toolId)) {
+          this.requestedStatusToolIds.add(tool.toolId);
+          void this.loadGatewayStatus(tool.toolId);
+        }
+      }
+    });
+  }
 
   // Computed
   readonly tools = computed(() => this.adminToolService.getTools());
@@ -494,6 +630,49 @@ export class ToolListPage {
       default:
         return `${base} bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300`;
     }
+  }
+
+  private async loadGatewayStatus(toolId: string, attempt = 0): Promise<void> {
+    if (attempt === 0) {
+      this.setGatewayStatus(toolId, 'loading');
+    }
+    try {
+      const status = await this.adminToolService.getGatewayTargetStatus(toolId);
+      if (this.destroyed) {
+        return;
+      }
+      this.setGatewayStatus(toolId, status);
+      // The gateway syncs a target asynchronously, so a freshly-saved tool is
+      // briefly transient. Re-poll a few times until it settles into
+      // Ready/Failed, so the badge converges without a manual reload.
+      if (isTransientGatewayStatus(status.status) && attempt < 5) {
+        setTimeout(() => void this.loadGatewayStatus(toolId, attempt + 1), 3000);
+      }
+    } catch {
+      // Keep any prior value on a re-poll failure; only the first attempt
+      // surfaces an explicit 'unknown'.
+      if (attempt === 0 && !this.destroyed) {
+        this.setGatewayStatus(toolId, 'error');
+      }
+    }
+  }
+
+  private setGatewayStatus(toolId: string, value: GatewayHealth): void {
+    this.gatewayStatuses.update(prev => {
+      const next = new Map(prev);
+      next.set(toolId, value);
+      return next;
+    });
+  }
+
+  /** Compact health badge for a gateway tool's row, or null if not yet known. */
+  gatewayBadge(toolId: string): GatewayBadge | null {
+    return gatewayBadgeFor(this.gatewayStatuses().get(toolId));
+  }
+
+  /** The joined failure reasons for an unhealthy gateway tool, else null. */
+  gatewayFailureReasons(toolId: string): string | null {
+    return gatewayFailureReasonsFor(this.gatewayStatuses().get(toolId));
   }
 
   async openRoleDialog(tool: AdminTool): Promise<void> {

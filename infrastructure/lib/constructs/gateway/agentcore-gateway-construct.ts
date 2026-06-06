@@ -15,11 +15,14 @@ export interface AgentCoreGatewayConstructProps {
  * protocol and AWS_IAM (SigV4) authorization.
  *
  * Provides:
- *   - Gateway IAM execution role with `lambda:InvokeFunction` against
- *     `arn:aws:lambda:.../function:{prefix}-mcp-*` (MCP Lambda
- *     functions are owned by the external mcp-servers repo, not this
- *     CDK app — the role grants invoke rights against the naming
- *     convention)
+ *   - Gateway IAM execution role with NO standing Lambda-invoke grant. The
+ *     permission to invoke an `mcpServer` target's Lambda Function URL is
+ *     granted *per target* at registration time by app-api
+ *     (`lambda:AddPermission` on the function's resource policy, naming this
+ *     role), and revoked on delete — so an admin can register any same-account
+ *     MCP server through the form with no infra change, and the role can invoke
+ *     only the functions explicitly registered (no naming-convention wildcard).
+ *     See `apis/shared/tools/gateway_lambda_grant.py`.
  *   - CloudWatch Logs publish rights for gateway-scoped log groups
  *   - `agentcore.CfnGateway` configured for MCP protocol with AWS_IAM
  *     authorizer and SEMANTIC search type
@@ -55,16 +58,11 @@ export class AgentCoreGatewayConstruct extends Construct {
       description: 'Execution role for AgentCore Gateway',
     });
 
-    this.gatewayRole.addToPolicy(
-      new iam.PolicyStatement({
-        sid: 'LambdaInvokeAccess',
-        effect: iam.Effect.ALLOW,
-        actions: ['lambda:InvokeFunction'],
-        resources: [
-          `arn:aws:lambda:${stack.region}:${stack.account}:function:${config.projectPrefix}-mcp-*`,
-        ],
-      }),
-    );
+    // NOTE: no standing `lambda:Invoke*` grant. Invoke permission for each
+    // mcpServer target's Lambda Function URL is granted per-target at
+    // registration by app-api (lambda:AddPermission naming this role) and
+    // revoked on delete — least-privilege, and admins add servers with no infra
+    // change. See AgentCoreGatewayTargetAccess on the app-api role.
 
     this.gatewayRole.addToPolicy(
       new iam.PolicyStatement({

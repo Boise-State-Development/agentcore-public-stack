@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
+import httpx
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -22,9 +23,11 @@ from apis.shared.tools.models import (
     AdminToolResponse,
     AdminToolListResponse,
     ToolDefinition,
+    ToolProtocol,
     MCPDiscoverRequest,
     MCPDiscoverResponse,
     DiscoveredMCPTool,
+    GatewayTargetStatusResponse,
     MCPAuthType,
 )
 
@@ -287,6 +290,69 @@ async def admin_delete_tool(
 # =============================================================================
 
 
+def _find_upstream_http_error(exc: BaseException) -> Optional[httpx.HTTPStatusError]:
+    """Recover the target's HTTP error from a discovery failure.
+
+    Strands' ``MCPClient`` wraps a target's HTTP rejection in an
+    ``MCPClientInitializationError`` whose cause is an ``ExceptionGroup`` of
+    anyio task errors; the real ``httpx.HTTPStatusError`` (which carries the
+    upstream status code) is buried inside. Walk the cause/context chain and
+    any ``ExceptionGroup`` members to find it, so discovery can report the
+    target's actual status (e.g. 403) instead of a generic 502.
+    """
+    seen: set[int] = set()
+    stack: list[Optional[BaseException]] = [exc]
+    while stack:
+        e = stack.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        if isinstance(e, httpx.HTTPStatusError):
+            return e
+        nested = getattr(e, "exceptions", None)  # BaseExceptionGroup members
+        if nested:
+            stack.extend(nested)
+        stack.append(e.__cause__)
+        stack.append(e.__context__)
+    return None
+
+
+def _response_status_for_upstream(status: int) -> int:
+    """Map a target's HTTP status to the status this endpoint returns.
+
+    Echo the target's own 4xx so the admin sees an actionable status (e.g. 403
+    = wrong/absent outbound credential), with two guards:
+      - 401 → 400: the SPA treats a 401 as "your session expired" and redirects
+        to login, but a target's auth rejection is a tool-config problem, not
+        the admin's session.
+      - 5xx → 502: we are a failing gateway, not the origin of a server error.
+    """
+    if status == 401:
+        return 400
+    if 400 <= status < 500:
+        return status
+    return 502
+
+
+def _discovery_failure_detail(status: int) -> str:
+    """Actionable message for a target that rejected the discovery request."""
+    base = f"The MCP server rejected the discovery request with HTTP {status}."
+    if status == 403:
+        return (
+            f"{base} If the endpoint requires AWS IAM (e.g. a Lambda Function URL "
+            "with AuthType=AWS_IAM), set the outbound credential to 'Gateway IAM "
+            "Role (SigV4)' and make sure the gateway — or your local identity — is "
+            "authorized to invoke it."
+        )
+    if status in (401, 407):
+        return (
+            f"{base} The endpoint requires authentication the discovery request "
+            "didn't supply (OAuth or an API key). OAuth-gated servers can't be "
+            "discovered admin-side — list the tool names manually."
+        )
+    return base
+
+
 @router.post("/discover", response_model=MCPDiscoverResponse)
 async def admin_discover_mcp_tools(
     request: MCPDiscoverRequest,
@@ -344,6 +410,13 @@ async def admin_discover_mcp_tools(
         tools = await asyncio.to_thread(_list_tools)
     except Exception as exc:
         logger.exception("MCP discovery failed for %s", request.server_url)
+        upstream = _find_upstream_http_error(exc)
+        if upstream is not None:
+            status = upstream.response.status_code
+            raise HTTPException(
+                status_code=_response_status_for_upstream(status),
+                detail=_discovery_failure_detail(status),
+            )
         raise HTTPException(
             status_code=502,
             detail=f"MCP server did not respond to tools/list: {exc}",
@@ -361,6 +434,68 @@ async def admin_discover_mcp_tools(
         discovered.append(DiscoveredMCPTool(name=name, description=description))
 
     return MCPDiscoverResponse(tools=discovered)
+
+
+@router.get("/{tool_id}/gateway-status", response_model=GatewayTargetStatusResponse)
+async def admin_gateway_target_status(
+    tool_id: str,
+    admin: User = Depends(require_admin),
+):
+    """Return the live AgentCore Gateway health for a protocol='mcp' tool.
+
+    The gateway connects to and lists tools from a target *asynchronously*
+    after registration, so a tool can be 'active' in the catalog yet unusable
+    because its target FAILED to sync (e.g. the gateway role can't invoke the
+    endpoint). The admin UI polls this after save and renders a per-row health
+    badge, so a failed target is visible here instead of only surfacing later
+    as "the agent doesn't have that tool".
+
+    Args:
+        tool_id: Catalog tool id (must be a protocol='mcp' Gateway target tool)
+        admin: Authenticated admin user (injected)
+
+    Returns:
+        GatewayTargetStatusResponse with the live status + any failure reasons
+    """
+    service = get_tool_catalog_service()
+    tool = await service.get_tool(tool_id)
+    if not tool:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found")
+
+    target_id = tool.mcp_gateway_config.target_id if tool.mcp_gateway_config else None
+    if tool.protocol != ToolProtocol.MCP_GATEWAY or not target_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tool '{tool_id}' is not a Gateway target tool",
+        )
+
+    from apis.shared.tools.gateway_target_service import get_gateway_target_service
+
+    gateway = get_gateway_target_service()
+    try:
+        info = await asyncio.to_thread(gateway.get_target, target_id=target_id)
+    except GatewayTargetNotFoundError:
+        # The catalog references a target that no longer exists on the gateway
+        # (deleted out of band). Surface it distinctly so the badge can prompt
+        # a re-create rather than implying a transient sync failure.
+        return GatewayTargetStatusResponse(
+            target_id=target_id,
+            status="MISSING",
+            status_reasons=[
+                "The Gateway target no longer exists on the gateway. "
+                "Re-save the tool to recreate it."
+            ],
+            healthy=False,
+        )
+    except (ClientError, RuntimeError) as e:
+        raise _raise_gateway_http(e)
+
+    return GatewayTargetStatusResponse(
+        target_id=info.target_id or target_id,
+        status=info.status,
+        status_reasons=info.status_reasons,
+        healthy=info.status.upper() == "READY",
+    )
 
 
 # =============================================================================
