@@ -18,12 +18,18 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 
+from .gateway_identity import resolve_gateway_id
+from .gateway_lambda_grant import (
+    grant_gateway_invoke,
+    is_lambda_function_url,
+    revoke_gateway_invoke,
+)
 from .models import (
     GatewayCredentialType,
     GatewayListingMode,
@@ -67,6 +73,11 @@ class GatewayTargetInfo:
     gateway_arn: str
     status: str
     name: str
+    # Human-readable explanations from the gateway when a target is unhealthy
+    # (e.g. ["Failed to connect and fetch tools from the provided MCP target
+    # server. Error - Authorization error when sending message"]). Empty for a
+    # healthy target. Surfaced to admins so a FAILED sync isn't invisible.
+    status_reasons: List[str] = field(default_factory=list)
 
 
 class GatewayTargetNotFoundError(LookupError):
@@ -88,6 +99,7 @@ class GatewayTargetService:
         project_prefix: Optional[str] = None,
         client: Any = None,
         ssm_client: Any = None,
+        lambda_client: Any = None,
     ):
         self._region = (
             region
@@ -97,9 +109,15 @@ class GatewayTargetService:
         self._client = client or boto3.client(
             "bedrock-agentcore-control", region_name=self._region
         )
+        # Lazily-created `lambda` client for the per-target invoke grant; may be
+        # injected for tests.
+        self._lambda_client = lambda_client
         # `gateway_id` may be supplied directly (tests / callers that already
         # know it); otherwise it is resolved from SSM on first use and cached.
         self._gateway_id = gateway_id
+        # Gateway execution role ARN, resolved from GetGateway on first use and
+        # cached — the principal granted InvokeFunctionUrl on IAM Lambda targets.
+        self._gateway_role_arn: Optional[str] = None
         self._ssm_client = ssm_client
         self._project_prefix = project_prefix or os.environ.get(
             "PROJECT_PREFIX", "agentcore"
@@ -107,40 +125,93 @@ class GatewayTargetService:
 
     # ----------------------------------------------------- gateway id (SSM)
     def _resolve_gateway_id(self) -> str:
-        """Return the gateway identifier.
+        """Return the gateway identifier (resolved once and cached).
 
-        Resolution order: an explicit `gateway_id` (constructor) → the
-        `AGENTCORE_GATEWAY_ID` env override → the SSM parameter
-        `/{prefix}/gateway/id` (read once and cached). The construct publishes
-        the SSM parameter and app-api reads it at runtime, which sidesteps the
-        same-stack deploy-time ordering deadlock; the env override exists for
-        local dev / CI, where the SSM parameter may not be present (or the
-        `PROJECT_PREFIX` may differ) — set it to the gateway identifier from
-        the deployed stack's `GatewayId` output or `list-gateways`.
+        Delegates to the shared `resolve_gateway_id` so the admin-side service
+        and the agent-side gateway client resolve the SAME gateway — the env
+        override → SSM `/{prefix}/gateway/id` order lives in one place.
         """
         if self._gateway_id:
             return self._gateway_id
 
-        env_override = os.environ.get("AGENTCORE_GATEWAY_ID")
-        if env_override:
-            self._gateway_id = env_override
-            return env_override
-
         if self._ssm_client is None:
             self._ssm_client = boto3.client("ssm", region_name=self._region)
 
-        param_name = f"/{self._project_prefix}/gateway/id"
-        try:
-            response = self._ssm_client.get_parameter(Name=param_name)
-        except ClientError as err:
-            raise RuntimeError(
-                f"Gateway id SSM parameter '{param_name}' is unavailable; is the "
-                f"gateway construct deployed (and PROJECT_PREFIX correct)? Set "
-                f"AGENTCORE_GATEWAY_ID to override for local/CI. ({err})"
-            ) from err
-
-        self._gateway_id = response["Parameter"]["Value"]
+        self._gateway_id = resolve_gateway_id(
+            project_prefix=self._project_prefix,
+            region=self._region,
+            ssm_client=self._ssm_client,
+        )
         return self._gateway_id
+
+    # ----------------------------------------------- gateway role + Lambda grant
+    def _resolve_gateway_role_arn(self) -> str:
+        """Return the gateway execution role ARN (GetGateway, cached)."""
+        if self._gateway_role_arn:
+            return self._gateway_role_arn
+        gateway_id = self._resolve_gateway_id()
+        response = self._client.get_gateway(gatewayIdentifier=gateway_id)
+        role_arn = response.get("roleArn")
+        if not role_arn:
+            raise RuntimeError(
+                f"Gateway '{gateway_id}' has no roleArn; cannot authorize Lambda "
+                "targets for the gateway execution role."
+            )
+        self._gateway_role_arn = role_arn
+        return role_arn
+
+    @staticmethod
+    def _needs_lambda_grant(config: MCPGatewayConfig) -> bool:
+        """True for a GATEWAY_IAM_ROLE target on a Lambda Function URL with a
+        named function — the only case the per-target grant applies to."""
+        cred = (
+            config.credential_type
+            if isinstance(config.credential_type, str)
+            else config.credential_type.value
+        )
+        return (
+            cred == GatewayCredentialType.GATEWAY_IAM_ROLE.value
+            and is_lambda_function_url(config.endpoint_url)
+            and bool(config.lambda_function_name)
+        )
+
+    def _grant_lambda_if_needed(self, config: MCPGatewayConfig) -> None:
+        """Authorize the gateway role to invoke an IAM Lambda-URL target.
+
+        Called *before* Create/UpdateGatewayTarget so the permission exists
+        before the gateway's async connect (no race). No-op for non-Lambda /
+        non-IAM targets. Raises GatewayLambdaGrantError (→ 400 at the route) for
+        a cross-account or unresolvable function.
+        """
+        if not self._needs_lambda_grant(config):
+            return
+        if self._lambda_client is None:
+            self._lambda_client = boto3.client("lambda", region_name=self._region)
+        grant_gateway_invoke(
+            function_name=config.lambda_function_name,
+            endpoint_url=config.endpoint_url,
+            gateway_role_arn=self._resolve_gateway_role_arn(),
+            statement_seed=config.target_name,
+            region=self._region,
+            lambda_client=self._lambda_client,
+        )
+
+    def _revoke_lambda_if_needed(self, config: Optional[MCPGatewayConfig]) -> None:
+        """Best-effort removal of a target's gateway-role grant (idempotent)."""
+        if (
+            config is None
+            or not config.lambda_function_name
+            or not is_lambda_function_url(config.endpoint_url)
+        ):
+            return
+        if self._lambda_client is None:
+            self._lambda_client = boto3.client("lambda", region_name=self._region)
+        revoke_gateway_invoke(
+            function_name=config.lambda_function_name,
+            statement_seed=config.target_name,
+            region=self._region,
+            lambda_client=self._lambda_client,
+        )
 
     # ------------------------------------------------------------------ create
     def create_target(
@@ -155,14 +226,22 @@ class GatewayTargetService:
                 the route can surface a 502 and log the failure.
         """
         gateway_id = self._resolve_gateway_id()
+        # Authorize the gateway role to invoke the target BEFORE creating it, so
+        # the gateway's async connect+list never races a missing permission.
+        # A cross-account / unresolvable function raises here, before any target
+        # is created (no orphan).
+        self._grant_lambda_if_needed(config)
+        kwargs: Dict[str, Any] = {
+            "gatewayIdentifier": gateway_id,
+            "name": config.target_name,
+            "description": description or f"MCP gateway target {config.target_name}",
+            "targetConfiguration": self._build_target_configuration(config),
+        }
+        creds = self._build_credential_configs(config)
+        if creds is not None:
+            kwargs["credentialProviderConfigurations"] = creds
         try:
-            response = self._client.create_gateway_target(
-                gatewayIdentifier=gateway_id,
-                name=config.target_name,
-                description=description or f"MCP gateway target {config.target_name}",
-                targetConfiguration=self._build_target_configuration(config),
-                credentialProviderConfigurations=self._build_credential_configs(config),
-            )
+            response = self._client.create_gateway_target(**kwargs)
         except ClientError as err:
             code = err.response.get("Error", {}).get("Code")
             if code in ("ConflictException", "ResourceAlreadyExistsException"):
@@ -186,15 +265,20 @@ class GatewayTargetService:
             GatewayTargetNotFoundError: No such target.
         """
         gateway_id = self._resolve_gateway_id()
+        # Re-grant before the update re-validates the target (idempotent).
+        self._grant_lambda_if_needed(config)
+        kwargs: Dict[str, Any] = {
+            "gatewayIdentifier": gateway_id,
+            "targetId": target_id,
+            "name": config.target_name,
+            "description": description or f"MCP gateway target {config.target_name}",
+            "targetConfiguration": self._build_target_configuration(config),
+        }
+        creds = self._build_credential_configs(config)
+        if creds is not None:
+            kwargs["credentialProviderConfigurations"] = creds
         try:
-            response = self._client.update_gateway_target(
-                gatewayIdentifier=gateway_id,
-                targetId=target_id,
-                name=config.target_name,
-                description=description or f"MCP gateway target {config.target_name}",
-                targetConfiguration=self._build_target_configuration(config),
-                credentialProviderConfigurations=self._build_credential_configs(config),
-            )
+            response = self._client.update_gateway_target(**kwargs)
         except ClientError as err:
             if self._is_not_found(err):
                 raise GatewayTargetNotFoundError(target_id) from err
@@ -224,12 +308,18 @@ class GatewayTargetService:
         return self._info_from_response(response, fallback_target_id=target_id)
 
     # ------------------------------------------------------------------ delete
-    def delete_target(self, *, target_id: str) -> None:
+    def delete_target(
+        self, *, target_id: str, config: Optional[MCPGatewayConfig] = None
+    ) -> None:
         """Delete the target. A missing target is treated as success.
 
         The route deletes the AWS target before the catalog row, so a 404 here
         means the row's reconciliation is already done — log loudly (this is the
         manual-repair signal in v1) and return.
+
+        When `config` is supplied (the stored gateway config), the per-target
+        Lambda invoke grant is revoked too, so the gateway role's authorization
+        on that function is torn down with the target it was created for.
         """
         gateway_id = self._resolve_gateway_id()
         try:
@@ -244,8 +334,11 @@ class GatewayTargetService:
                     target_id,
                     gateway_id,
                 )
-                return
-            raise
+            else:
+                raise
+        # Revoke the gateway-role grant regardless of whether the target existed
+        # (idempotent) so we never leave a dangling resource-policy statement.
+        self._revoke_lambda_if_needed(config)
 
     # -------------------------------------------------------------------- list
     def list_targets(self) -> List[GatewayTargetInfo]:
@@ -284,17 +377,25 @@ class GatewayTargetService:
         }
 
     @staticmethod
-    def _build_credential_configs(config: MCPGatewayConfig) -> List[Dict[str, Any]]:
+    def _build_credential_configs(
+        config: MCPGatewayConfig,
+    ) -> Optional[List[Dict[str, Any]]]:
         """Build `credentialProviderConfigurations` from the credential type.
 
-        The `MCPGatewayConfig` validator already guarantees the ARN/listing
-        invariants per credential type, so this only shapes the payload.
+        Returns None for a public (NONE) endpoint so the caller omits the
+        parameter entirely. The `MCPGatewayConfig` validator already guarantees
+        the ARN / aws_service / listing invariants per credential type, so this
+        only shapes the payload.
         """
         cred_value = (
             config.credential_type
             if isinstance(config.credential_type, str)
             else config.credential_type.value
         )
+
+        if cred_value == GatewayCredentialType.NONE.value:
+            return None
+
         aws_type = _CREDENTIAL_TYPE_TO_AWS[cred_value]
 
         if cred_value == GatewayCredentialType.OAUTH.value:
@@ -330,9 +431,20 @@ class GatewayTargetService:
                     },
                 }
             ]
-        # GATEWAY_IAM_ROLE — the gateway signs with its own execution role; no
-        # nested credentialProvider is sent.
-        return [{"credentialProviderType": aws_type}]
+        # GATEWAY_IAM_ROLE — the gateway signs with its own execution role.
+        # mcpServer targets require an explicit iamCredentialProvider naming the
+        # AWS service to sign for (unlike OpenAPI/Lambda targets, which accept a
+        # bare GATEWAY_IAM_ROLE). region is optional — AWS defaults it to the
+        # gateway's region.
+        iam_provider: Dict[str, Any] = {"service": config.aws_service}
+        if config.aws_region:
+            iam_provider["region"] = config.aws_region
+        return [
+            {
+                "credentialProviderType": aws_type,
+                "credentialProvider": {"iamCredentialProvider": iam_provider},
+            }
+        ]
 
     # ----------------------------------------------------------- parse helpers
     @staticmethod
@@ -348,6 +460,9 @@ class GatewayTargetService:
             gateway_arn=response.get("gatewayArn") or fallback_gateway_arn,
             status=response.get("status", ""),
             name=response.get("name") or fallback_name,
+            # `statusReasons` is present on get/update responses for an
+            # unhealthy target; the list-summary shape may omit it.
+            status_reasons=list(response.get("statusReasons") or []),
         )
 
     @staticmethod

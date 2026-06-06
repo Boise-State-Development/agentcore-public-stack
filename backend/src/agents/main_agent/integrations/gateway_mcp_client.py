@@ -5,12 +5,12 @@ Creates MCP client with SigV4 authentication for Gateway tools
 
 import logging
 import os
-import boto3
 from typing import Optional, List, Callable, Any
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
+from apis.shared.tools.gateway_identity import resolve_gateway_id, gateway_url_from_id
 from agents.main_agent.integrations.mcp_apps import (
     UICapableMCPClient,
     ensure_ui_extension_session_patch,
@@ -97,32 +97,26 @@ class FilteredMCPClient(MCPClient):
         return PaginatedList(filtered_tools, token=paginated_result.pagination_token)
 
 
-def get_gateway_url_from_ssm(
-    project_name: str = "strands-agent-chatbot",
-    environment: str = "dev",
-    region: str = "us-west-2"
-) -> Optional[str]:
-    """
-    Retrieve Gateway URL from SSM Parameter Store.
+def get_gateway_url_from_ssm(region: Optional[str] = None) -> Optional[str]:
+    """Resolve the centralized Gateway's MCP URL from infra config.
 
-    Args:
-        project_name: Project name for SSM parameter path
-        environment: Environment name (dev, prod, etc.)
-        region: AWS region
+    Uses the SAME resolution as the admin-side ``GatewayTargetService``
+    (``AGENTCORE_GATEWAY_ID`` override → SSM ``/{PROJECT_PREFIX}/gateway/id``,
+    published by the gateway CDK construct), so the agent connects to exactly
+    the gateway that admin-registered targets live on. Previously this read a
+    hardcoded ``/strands-agent-chatbot/dev/mcp/gateway-url``, which pointed at a
+    *different* gateway than the one the admin form manages.
 
-    Returns:
-        Gateway URL or None if not found
+    Returns None (and logs) on failure so the agent degrades gracefully instead
+    of failing the turn when no gateway is configured.
     """
     try:
-        ssm = boto3.client('ssm', region_name=region)
-        response = ssm.get_parameter(
-            Name=f'/{project_name}/{environment}/mcp/gateway-url'
-        )
-        gateway_url = response['Parameter']['Value']
-        logger.info(f"✅ Gateway URL retrieved from SSM: {gateway_url}")
+        gateway_id = resolve_gateway_id(region=region)
+        gateway_url = gateway_url_from_id(gateway_id, region=region)
+        logger.info(f"✅ Gateway URL resolved from infra config: {gateway_url}")
         return gateway_url
     except Exception as e:
-        logger.warning(f"⚠️  Failed to get Gateway URL from SSM: {e}")
+        logger.warning(f"⚠️  Failed to resolve Gateway URL from infra config: {e}")
         return None
 
 

@@ -49,6 +49,7 @@ def _iam_config(**overrides) -> MCPGatewayConfig:
         endpoint_url="https://example.com/mcp",
         listing_mode=GatewayListingMode.DEFAULT,
         credential_type=GatewayCredentialType.GATEWAY_IAM_ROLE,
+        aws_service="lambda",
         tools=[MCPToolEntry(name="get_forecast")],
     )
     base.update(overrides)
@@ -95,7 +96,10 @@ class TestCreateTarget:
             }
         }
         assert kwargs["credentialProviderConfigurations"] == [
-            {"credentialProviderType": "GATEWAY_IAM_ROLE"}
+            {
+                "credentialProviderType": "GATEWAY_IAM_ROLE",
+                "credentialProvider": {"iamCredentialProvider": {"service": "lambda"}},
+            }
         ]
         # gateway id was read from /{prefix}/gateway/id
         ssm_client.get_parameter.assert_called_once_with(Name="/myproj/gateway/id")
@@ -178,6 +182,28 @@ class TestCreateTarget:
             }
         ]
 
+    def test_iam_includes_region_when_set(self, service, boto_client):
+        boto_client.create_gateway_target.return_value = _create_response()
+        service.create_target(_iam_config(aws_service="execute-api", aws_region="us-east-1"))
+        iam = boto_client.create_gateway_target.call_args.kwargs[
+            "credentialProviderConfigurations"
+        ][0]["credentialProvider"]["iamCredentialProvider"]
+        assert iam == {"service": "execute-api", "region": "us-east-1"}
+
+    def test_none_credential_omits_configs(self, service, boto_client):
+        boto_client.create_gateway_target.return_value = _create_response()
+        config = MCPGatewayConfig(
+            target_name="public-target",
+            endpoint_url="https://public.example.com/mcp",
+            credential_type=GatewayCredentialType.NONE,
+        )
+        service.create_target(config)
+        # A public endpoint omits credentialProviderConfigurations entirely.
+        assert (
+            "credentialProviderConfigurations"
+            not in boto_client.create_gateway_target.call_args.kwargs
+        )
+
     def test_dynamic_listing_maps_to_uppercase(self, service, boto_client):
         boto_client.create_gateway_target.return_value = _create_response()
         service.create_target(_iam_config(listing_mode=GatewayListingMode.DYNAMIC))
@@ -233,6 +259,22 @@ class TestGetTarget:
         )
         assert info.target_id == "TGT1"
         assert info.status == "READY"
+        # A healthy target reports no reasons.
+        assert info.status_reasons == []
+
+    def test_get_captures_status_reasons_for_failed_target(self, service, boto_client):
+        """A FAILED target's statusReasons must be surfaced so the admin UI can
+        explain the failure instead of leaving it invisible (issue #419 UX)."""
+        reason = (
+            "Failed to connect and fetch tools from the provided MCP target "
+            "server. Error - Authorization error when sending message"
+        )
+        boto_client.get_gateway_target.return_value = _create_response(
+            status="FAILED", statusReasons=[reason]
+        )
+        info = service.get_target(target_id="TGT1")
+        assert info.status == "FAILED"
+        assert info.status_reasons == [reason]
 
     def test_get_not_found_raises(self, service, boto_client):
         boto_client.get_gateway_target.side_effect = _client_error(
@@ -312,4 +354,56 @@ class TestGatewayIdResolution:
         assert (
             boto_client.create_gateway_target.call_args.kwargs["gatewayIdentifier"]
             == "gw-from-env"
+        )
+
+
+class TestLambdaGrant:
+    """Per-target gateway-role InvokeFunctionUrl grant (#419 admin self-service)."""
+
+    LAMBDA_URL = "https://abc123.lambda-url.us-west-2.on.aws/mcp"
+
+    def _lambda(self):
+        lam = MagicMock()
+        lam.get_function_url_config.return_value = {"FunctionUrl": self.LAMBDA_URL}
+        lam.remove_permission.side_effect = _client_error("ResourceNotFoundException")
+        return lam
+
+    def test_create_grants_role_before_creating_target(self, boto_client):
+        boto_client.get_gateway.return_value = {"roleArn": "arn:aws:iam::1:role/gw"}
+        boto_client.create_gateway_target.return_value = _create_response()
+        lam = self._lambda()
+        svc = GatewayTargetService(
+            client=boto_client, gateway_id="gw-test-id", lambda_client=lam
+        )
+        svc.create_target(
+            _iam_config(endpoint_url=self.LAMBDA_URL, lambda_function_name="mcp-foo-dev")
+        )
+        # Grant names the gateway role on exactly the target function...
+        lam.add_permission.assert_called_once()
+        assert lam.add_permission.call_args.kwargs["Principal"] == "arn:aws:iam::1:role/gw"
+        assert lam.add_permission.call_args.kwargs["Action"] == "lambda:InvokeFunctionUrl"
+        # ...and the target is still created.
+        boto_client.create_gateway_target.assert_called_once()
+
+    def test_non_lambda_iam_target_skips_grant(self, boto_client):
+        boto_client.create_gateway_target.return_value = _create_response()
+        lam = MagicMock()
+        svc = GatewayTargetService(
+            client=boto_client, gateway_id="gw-test-id", lambda_client=lam
+        )
+        svc.create_target(_iam_config())  # endpoint is example.com, not a Lambda URL
+        lam.add_permission.assert_not_called()
+        boto_client.get_gateway.assert_not_called()
+
+    def test_delete_revokes_grant(self, boto_client):
+        lam = MagicMock()
+        svc = GatewayTargetService(
+            client=boto_client, gateway_id="gw-test-id", lambda_client=lam
+        )
+        cfg = _iam_config(
+            endpoint_url=self.LAMBDA_URL, lambda_function_name="mcp-foo-dev"
+        )
+        svc.delete_target(target_id="TGT1", config=cfg)
+        lam.remove_permission.assert_called_once_with(
+            FunctionName="mcp-foo-dev", StatementId="agentcore-gw-weather-target"
         )

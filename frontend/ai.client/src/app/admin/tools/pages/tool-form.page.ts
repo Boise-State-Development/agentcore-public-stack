@@ -19,6 +19,7 @@ import {
   heroShieldCheck,
   heroPlus,
   heroTrash,
+  heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
 import { ConnectorsService } from '../../connectors/services/connectors.service';
@@ -37,13 +38,15 @@ import {
   A2AAgentConfig,
   MCPGatewayConfig,
   ToolProtocol,
+  detectAwsServiceFromUrl,
+  extractAwsRegionFromUrl,
 } from '../models/admin-tool.model';
 
 @Component({
   selector: 'app-tool-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, ReactiveFormsModule, NgIcon],
-  providers: [provideIcons({ heroArrowLeft, heroServer, heroUserGroup, heroLink, heroShieldCheck, heroPlus, heroTrash })],
+  providers: [provideIcons({ heroArrowLeft, heroServer, heroUserGroup, heroLink, heroShieldCheck, heroPlus, heroTrash, heroExclamationTriangle })],
   template: `
     <div class="min-h-dvh">
       <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
@@ -525,8 +528,76 @@ import {
                     <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                       How the Gateway authenticates to the target endpoint.
                     </p>
+                    @if (showIamRecommendation()) {
+                      <p class="mt-1 flex items-start gap-1.5 text-xs/5 text-amber-700 dark:text-amber-400">
+                        <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                        <span>This looks like an AWS-hosted endpoint (Lambda / API Gateway /
+                        AgentCore). It likely requires IAM — pick <strong>Gateway IAM Role
+                        (SigV4)</strong>, or the gateway will get a 403 when it lists the
+                        target's tools.</span>
+                      </p>
+                    }
                   </div>
                 </div>
+
+                <!-- AWS service + region (for gateway IAM role) -->
+                @if (form.get('gwCredentialType')?.value === 'gateway_iam_role') {
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label for="gwAwsService" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        AWS service <span class="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="gwAwsService"
+                        type="text"
+                        formControlName="gwAwsService"
+                        placeholder="lambda, execute-api, bedrock-agentcore"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Auto-detected from the endpoint URL for Lambda / API Gateway /
+                        AgentCore hosts. Override only for a custom domain.
+                      </p>
+                    </div>
+                    <div>
+                      <label for="gwAwsRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        AWS region
+                      </label>
+                      <input
+                        id="gwAwsRegion"
+                        type="text"
+                        formControlName="gwAwsRegion"
+                        placeholder="defaults to the gateway's region"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Optional — auto-detected from the endpoint URL; AWS defaults it
+                        to the gateway's region.
+                      </p>
+                    </div>
+                  </div>
+
+                  @if (isLambdaUrlEndpoint()) {
+                    <div>
+                      <label for="gwLambdaFunctionName" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Lambda function name <span class="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="gwLambdaFunctionName"
+                        type="text"
+                        formControlName="gwLambdaFunctionName"
+                        placeholder="mcp-class-search-dev"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        The Lambda behind this Function URL. We grant the gateway
+                        permission to invoke it at save — no infra change needed.
+                        <strong>Same-account only</strong>; a cross-account function is
+                        rejected at save (make it public or use a credential provider).
+                      </p>
+                    </div>
+                  }
+                }
 
                 <!-- Credential provider ARN (for oauth / api_key) -->
                 @if (form.get('gwCredentialType')?.value === 'oauth' || form.get('gwCredentialType')?.value === 'api_key') {
@@ -906,6 +977,13 @@ export class ToolFormPage implements OnInit {
   discovering = signal(false);
   discoverError = signal<string | null>(null);
 
+  // Last values auto-derived from the Gateway endpoint URL. We only overwrite
+  // the AWS service/region controls while they still hold what we derived (i.e.
+  // the admin hasn't hand-edited or a load hasn't supplied a value), so manual
+  // overrides and loaded config are never clobbered. See syncDerivedAwsFields.
+  private lastDerivedAwsService = '';
+  private lastDerivedAwsRegion = '';
+
   readonly isEditMode = computed(() => !!this.toolId());
   readonly selectedProtocol = signal<ToolProtocol>('local');
 
@@ -945,8 +1023,11 @@ export class ToolFormPage implements OnInit {
     gwTargetName: [''],
     gwEndpointUrl: [''],
     gwListingMode: ['default'],
-    gwCredentialType: ['gateway_iam_role'],
+    gwCredentialType: ['none'],
     gwCredentialProviderArn: [''],
+    gwAwsService: [''],
+    gwAwsRegion: [''],
+    gwLambdaFunctionName: [''],
     gwOauthScopes: [''],
     gwGrantType: ['authorization_code'],
     gwTools: this.fb.array([] as FormGroup[]),
@@ -1060,6 +1141,57 @@ export class ToolFormPage implements OnInit {
    * API-key endpoints can't be discovered admin-side — the server's error is
    * surfaced, and the admin can add tool names by hand).
    */
+  /**
+   * Auto-populate the AWS service + region for a Gateway IAM-role target from
+   * the endpoint URL. Both are mechanically derivable from a Lambda Function
+   * URL / API Gateway / AgentCore Gateway host, so the admin shouldn't have to
+   * type them — the fields stay editable as overrides. We only overwrite a
+   * field while it still equals the value we last derived, so a hand-edited
+   * override (or a value loaded in edit mode) is preserved.
+   */
+  /**
+   * Recommend the IAM outbound credential when the endpoint is an AWS-hosted
+   * host (Lambda URL / API Gateway / AgentCore) but the admin left the credential
+   * as "None". Such endpoints almost always require SigV4, so "None" would make
+   * the gateway 403 when it lists the target's tools. URL-pattern heuristic only
+   * — a definitive AuthType check would need a backend probe (a later preflight).
+   */
+  showIamRecommendation(): boolean {
+    const cred = this.form.get('gwCredentialType')?.value;
+    const url = this.form.get('gwEndpointUrl')?.value ?? '';
+    return cred === 'none' && detectAwsServiceFromUrl(url) !== '';
+  }
+
+  /**
+   * True when the endpoint is a Lambda Function URL — the only case that needs
+   * the function name, so the platform can grant the gateway role invoke on it
+   * at registration.
+   */
+  isLambdaUrlEndpoint(): boolean {
+    return detectAwsServiceFromUrl(this.form.get('gwEndpointUrl')?.value ?? '') === 'lambda';
+  }
+
+  private syncDerivedAwsFields(): void {
+    if (this.form.get('gwCredentialType')?.value !== 'gateway_iam_role') {
+      return;
+    }
+    const url = this.form.get('gwEndpointUrl')?.value ?? '';
+
+    const service = detectAwsServiceFromUrl(url);
+    const serviceCtrl = this.form.get('gwAwsService');
+    if (service && (serviceCtrl?.value ?? '') === this.lastDerivedAwsService) {
+      serviceCtrl?.setValue(service);
+      this.lastDerivedAwsService = service;
+    }
+
+    const region = extractAwsRegionFromUrl(url);
+    const regionCtrl = this.form.get('gwAwsRegion');
+    if (region && (regionCtrl?.value ?? '') === this.lastDerivedAwsRegion) {
+      regionCtrl?.setValue(region);
+      this.lastDerivedAwsRegion = region;
+    }
+  }
+
   async discoverGatewayTools(): Promise<void> {
     const formValue = this.form.getRawValue();
     if (!formValue.gwEndpointUrl) {
@@ -1140,6 +1272,14 @@ export class ToolFormPage implements OnInit {
       if (value === 'oauth' && this.form.get('gwListingMode')?.value !== 'default') {
         this.form.get('gwListingMode')?.setValue('default');
       }
+      // Populate AWS service/region as soon as the admin picks IAM role, so the
+      // fields aren't blank when their panel first appears.
+      this.syncDerivedAwsFields();
+    });
+
+    // Auto-derive the IAM service/region from the endpoint host as it's typed.
+    this.form.get('gwEndpointUrl')?.valueChanges.subscribe(() => {
+      this.syncDerivedAwsFields();
     });
 
     const id = this.route.snapshot.paramMap.get('toolId');
@@ -1210,6 +1350,9 @@ export class ToolFormPage implements OnInit {
           gwListingMode: tool.mcpGatewayConfig.listingMode,
           gwCredentialType: tool.mcpGatewayConfig.credentialType,
           gwCredentialProviderArn: tool.mcpGatewayConfig.credentialProviderArn || '',
+          gwAwsService: tool.mcpGatewayConfig.awsService || '',
+          gwAwsRegion: tool.mcpGatewayConfig.awsRegion || '',
+          gwLambdaFunctionName: tool.mcpGatewayConfig.lambdaFunctionName || '',
           gwOauthScopes: (tool.mcpGatewayConfig.oauthScopes || []).join(' '),
           gwGrantType: tool.mcpGatewayConfig.grantType,
         });
@@ -1290,14 +1433,30 @@ export class ToolFormPage implements OnInit {
 
         const credentialType = formValue.gwCredentialType;
         const isOauth = credentialType === 'oauth';
+        const isIam = credentialType === 'gateway_iam_role';
         mcpGatewayConfig = {
           targetName: formValue.gwTargetName,
           endpointUrl: formValue.gwEndpointUrl,
           listingMode: formValue.gwListingMode,
           credentialType,
-          // IAM role uses the gateway's execution role — no ARN.
+          // ARN only applies to oauth / api_key.
           credentialProviderArn:
-            credentialType === 'gateway_iam_role' ? null : (formValue.gwCredentialProviderArn || null),
+            isOauth || credentialType === 'api_key' ? (formValue.gwCredentialProviderArn || null) : null,
+          // IAM role signs SigV4 against an AWS service. Both are normally
+          // auto-derived from the endpoint host into the form; fall back to
+          // deriving here so a blank field still saves a valid config.
+          awsService: isIam
+            ? (formValue.gwAwsService || detectAwsServiceFromUrl(formValue.gwEndpointUrl) || null)
+            : null,
+          awsRegion: isIam
+            ? (formValue.gwAwsRegion || extractAwsRegionFromUrl(formValue.gwEndpointUrl) || null)
+            : null,
+          // Only meaningful for an IAM target on a Lambda Function URL — lets the
+          // backend grant the gateway role invoke on exactly this function.
+          lambdaFunctionName:
+            isIam && detectAwsServiceFromUrl(formValue.gwEndpointUrl) === 'lambda'
+              ? (formValue.gwLambdaFunctionName?.trim() || null)
+              : null,
           oauthScopes:
             isOauth && formValue.gwOauthScopes
               ? formValue.gwOauthScopes.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => s)

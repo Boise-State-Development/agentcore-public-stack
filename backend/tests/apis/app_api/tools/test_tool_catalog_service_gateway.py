@@ -239,7 +239,11 @@ class TestDelete:
         ok = await _service(repo, gw).delete_tool("gw_weather", _admin(), soft=False)
 
         assert ok is True
-        gw.delete_target.assert_called_once_with(target_id="TGT1")
+        # Passes the stored config so the service can revoke the target's
+        # gateway-role Lambda grant alongside deleting the target.
+        gw.delete_target.assert_called_once_with(
+            target_id="TGT1", config=existing.mcp_gateway_config
+        )
         repo.delete_tool.assert_called_once_with("gw_weather")
 
     @pytest.mark.asyncio

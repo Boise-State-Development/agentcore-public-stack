@@ -265,15 +265,18 @@ describe('AgentCoreGatewayConstruct — detailed', () => {
     });
   });
 
-  it('gateway role allows lambda:InvokeFunction on mcp-* functions', () => {
+  it('gateway role has NO standing lambda:Invoke* grant (per-target only)', () => {
+    // Invoke is granted per-target by app-api at registration, not by a standing
+    // wildcard on the gateway role — so its only inline grant is CloudWatch Logs.
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Action: 'lambda:InvokeFunction',
-            Effect: 'Allow',
-          }),
-        ]),
+        Statement: Match.not(
+          Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith(['lambda:InvokeFunctionUrl']),
+            }),
+          ]),
+        ),
       },
     });
   });

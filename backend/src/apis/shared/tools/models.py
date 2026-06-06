@@ -82,11 +82,15 @@ class GatewayCredentialType(str, Enum):
     """How the Gateway authenticates outbound to a target's MCP endpoint.
 
     Maps to the `bedrock-agentcore-control` `credentialProviderType` enum.
-    GATEWAY_IAM_ROLE signs with the gateway's own execution role (SigV4, no
-    ARN); OAUTH and API_KEY reference an existing AgentCore credential
-    provider by ARN (provider provisioning is out of scope in v1).
+    NONE registers a public endpoint with no outbound credentials (the API's
+    `credentialProviderConfigurations` is omitted). GATEWAY_IAM_ROLE signs with
+    the gateway's own execution role (SigV4) — for an mcpServer target this
+    requires an explicit `iamCredentialProvider` naming the AWS service to sign
+    for (see `aws_service`). OAUTH and API_KEY reference an existing AgentCore
+    credential provider by ARN (provider provisioning is out of scope in v1).
     """
 
+    NONE = "none"
     GATEWAY_IAM_ROLE = "gateway_iam_role"
     OAUTH = "oauth"
     API_KEY = "api_key"
@@ -284,13 +288,33 @@ class MCPGatewayConfig(BaseModel):
 
     # Outbound auth from the Gateway to the target
     credential_type: GatewayCredentialType = Field(
-        default=GatewayCredentialType.GATEWAY_IAM_ROLE,
+        default=GatewayCredentialType.NONE,
         description="How the Gateway authenticates to the target endpoint",
     )
     credential_provider_arn: Optional[str] = Field(
         None,
         description="ARN of an existing AgentCore credential provider "
-        "(required for OAUTH and API_KEY; unused for GATEWAY_IAM_ROLE)",
+        "(required for OAUTH and API_KEY; unused for the others)",
+    )
+    aws_service: Optional[str] = Field(
+        None,
+        description="AWS service name for SigV4 signing (required for "
+        "GATEWAY_IAM_ROLE on an mcpServer target, e.g. 'lambda', 'execute-api', "
+        "'bedrock-agentcore'); unused for other credential types",
+    )
+    aws_region: Optional[str] = Field(
+        None,
+        description="AWS region for SigV4 signing (GATEWAY_IAM_ROLE only); "
+        "defaults to the gateway's region when omitted",
+    )
+    lambda_function_name: Optional[str] = Field(
+        None,
+        description="Name (or ARN) of the Lambda backing the endpoint, for a "
+        "GATEWAY_IAM_ROLE target on a Lambda Function URL. Lets the platform "
+        "grant the gateway role InvokeFunctionUrl on exactly this function at "
+        "registration (lambda:AddPermission) instead of a standing wildcard. "
+        "Same-account only; cross-account targets must be public or use a "
+        "credential provider.",
     )
     oauth_scopes: List[str] = Field(
         default_factory=list,
@@ -355,6 +379,13 @@ class MCPGatewayConfig(BaseModel):
                     "credential_type 'gateway_iam_role' signs with the gateway "
                     "execution role and must not set credential_provider_arn"
                 )
+            if not self.aws_service:
+                raise ValueError(
+                    "credential_type 'gateway_iam_role' requires aws_service "
+                    "(the AWS service name for SigV4 signing, e.g. 'lambda', "
+                    "'execute-api', 'bedrock-agentcore') — an mcpServer target's "
+                    "IAM credential provider must name the service to sign for"
+                )
         return self
 
     def to_dict(self) -> dict:
@@ -369,6 +400,9 @@ class MCPGatewayConfig(BaseModel):
             if isinstance(self.credential_type, str)
             else self.credential_type.value,
             "credentialProviderArn": self.credential_provider_arn,
+            "awsService": self.aws_service,
+            "awsRegion": self.aws_region,
+            "lambdaFunctionName": self.lambda_function_name,
             "oauthScopes": list(self.oauth_scopes),
             "grantType": self.grant_type
             if isinstance(self.grant_type, str)
@@ -387,9 +421,12 @@ class MCPGatewayConfig(BaseModel):
             endpoint_url=data.get("endpointUrl", ""),
             listing_mode=data.get("listingMode", GatewayListingMode.DEFAULT),
             credential_type=data.get(
-                "credentialType", GatewayCredentialType.GATEWAY_IAM_ROLE
+                "credentialType", GatewayCredentialType.NONE
             ),
             credential_provider_arn=data.get("credentialProviderArn"),
+            aws_service=data.get("awsService"),
+            aws_region=data.get("awsRegion"),
+            lambda_function_name=data.get("lambdaFunctionName"),
             oauth_scopes=data.get("oauthScopes") or [],
             grant_type=data.get(
                 "grantType", GatewayOAuthGrantType.AUTHORIZATION_CODE
@@ -914,11 +951,14 @@ class MCPGatewayConfigRequest(BaseModel):
         default=GatewayListingMode.DEFAULT, alias="listingMode"
     )
     credential_type: GatewayCredentialType = Field(
-        default=GatewayCredentialType.GATEWAY_IAM_ROLE, alias="credentialType"
+        default=GatewayCredentialType.NONE, alias="credentialType"
     )
     credential_provider_arn: Optional[str] = Field(
         None, alias="credentialProviderArn"
     )
+    aws_service: Optional[str] = Field(None, alias="awsService")
+    aws_region: Optional[str] = Field(None, alias="awsRegion")
+    lambda_function_name: Optional[str] = Field(None, alias="lambdaFunctionName")
     oauth_scopes: List[str] = Field(default_factory=list, alias="oauthScopes")
     grant_type: GatewayOAuthGrantType = Field(
         default=GatewayOAuthGrantType.AUTHORIZATION_CODE, alias="grantType"
@@ -938,6 +978,9 @@ class MCPGatewayConfigRequest(BaseModel):
             listing_mode=self.listing_mode,
             credential_type=self.credential_type,
             credential_provider_arn=self.credential_provider_arn,
+            aws_service=self.aws_service,
+            aws_region=self.aws_region,
+            lambda_function_name=self.lambda_function_name,
             oauth_scopes=self.oauth_scopes,
             grant_type=self.grant_type,
             custom_parameters=self.custom_parameters,
@@ -1116,6 +1159,9 @@ class MCPGatewayConfigResponse(BaseModel):
     credential_provider_arn: Optional[str] = Field(
         None, alias="credentialProviderArn"
     )
+    aws_service: Optional[str] = Field(None, alias="awsService")
+    aws_region: Optional[str] = Field(None, alias="awsRegion")
+    lambda_function_name: Optional[str] = Field(None, alias="lambdaFunctionName")
     oauth_scopes: List[str] = Field(default_factory=list, alias="oauthScopes")
     grant_type: str = Field(..., alias="grantType")
     custom_parameters: Optional[Dict[str, str]] = Field(
@@ -1140,6 +1186,9 @@ class MCPGatewayConfigResponse(BaseModel):
             if isinstance(config.credential_type, str)
             else config.credential_type.value,
             credential_provider_arn=config.credential_provider_arn,
+            aws_service=config.aws_service,
+            aws_region=config.aws_region,
+            lambda_function_name=config.lambda_function_name,
             oauth_scopes=list(config.oauth_scopes),
             grant_type=config.grant_type
             if isinstance(config.grant_type, str)
@@ -1299,5 +1348,25 @@ class MCPDiscoverResponse(BaseModel):
     """Response body for POST /api/admin/tools/discover."""
 
     tools: List[DiscoveredMCPTool]
+
+
+class GatewayTargetStatusResponse(BaseModel):
+    """Live health of the Gateway target backing a protocol='mcp' tool.
+
+    Response body for GET /api/admin/tools/{tool_id}/gateway-status. The
+    AgentCore Gateway connects to and lists tools from the target
+    asynchronously after registration, so the catalog row alone can't tell an
+    admin whether the target is usable. `status` is the gateway target status
+    (CREATING / READY / FAILED / UPDATE_UNSUCCESSFUL / …); `status_reasons`
+    carries the gateway's explanation when unhealthy. `MISSING` is a synthetic
+    status used when the catalog references a target that no longer exists on
+    the gateway. `healthy` is a convenience the badge can render directly."""
+
+    target_id: str = Field(..., alias="targetId")
+    status: str
+    status_reasons: List[str] = Field(default_factory=list, alias="statusReasons")
+    healthy: bool
+
+    model_config = {"populate_by_name": True}
 
 

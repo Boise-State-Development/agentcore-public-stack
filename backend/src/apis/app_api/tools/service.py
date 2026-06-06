@@ -494,7 +494,8 @@ class ToolCatalogService:
             and existing.mcp_gateway_config.target_id
         ):
             self._get_gateway_target_service().delete_target(
-                target_id=existing.mcp_gateway_config.target_id
+                target_id=existing.mcp_gateway_config.target_id,
+                config=existing.mcp_gateway_config,
             )
             target_deleted = True
 
