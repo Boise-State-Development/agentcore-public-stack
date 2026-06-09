@@ -87,6 +87,48 @@ class TestAppRoleRepository:
         roles = await role_repository.get_roles_for_model("gpt4")
         assert len(roles) >= 1
 
+    @pytest.mark.asyncio
+    async def test_granted_skills_round_trip(self, role_repository):
+        await role_repository.create_role(
+            _make_role("r1", granted_skills=["pdf_workflows", "doc_basics"])
+        )
+        role = await role_repository.get_role("r1")
+        assert set(role.granted_skills) == {"pdf_workflows", "doc_basics"}
+
+    @pytest.mark.asyncio
+    async def test_get_roles_for_skill(self, role_repository):
+        await role_repository.create_role(
+            _make_role("r1", granted_skills=["pdf_workflows"])
+        )
+        roles = await role_repository.get_roles_for_skill("pdf_workflows")
+        assert [r["roleId"] for r in roles] == ["r1"]
+
+    @pytest.mark.asyncio
+    async def test_skill_grant_does_not_collide_with_tool_grant(self, role_repository):
+        """Skill grants share GSI2 with tool grants but use a disjoint SKILL#
+        partition, so a tool query must not return skill-granting roles."""
+        await role_repository.create_role(
+            _make_role("r1", granted_tools=["calc"], granted_skills=["calc"])
+        )
+        # Same id 'calc' as both a tool and a skill — partitions stay disjoint.
+        tool_roles = await role_repository.get_roles_for_tool("calc")
+        skill_roles = await role_repository.get_roles_for_skill("calc")
+        assert [r["roleId"] for r in tool_roles] == ["r1"]
+        assert [r["roleId"] for r in skill_roles] == ["r1"]
+
+    @pytest.mark.asyncio
+    async def test_update_role_replaces_skill_grants(self, role_repository):
+        await role_repository.create_role(
+            _make_role("r1", granted_skills=["old_skill"])
+        )
+        role = await role_repository.get_role("r1")
+        role.granted_skills = ["new_skill"]
+        await role_repository.update_role(role)
+
+        assert [r["roleId"] for r in await role_repository.get_roles_for_skill("new_skill")] == ["r1"]
+        # The stale grant's reverse-lookup item must be gone.
+        assert await role_repository.get_roles_for_skill("old_skill") == []
+
 
 class TestRBACSeeder:
     @pytest.mark.asyncio

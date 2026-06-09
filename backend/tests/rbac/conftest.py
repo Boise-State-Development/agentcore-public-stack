@@ -31,8 +31,10 @@ def make_app_role():
         inherits_from: Optional[List[str]] = None,
         granted_tools: Optional[List[str]] = None,
         granted_models: Optional[List[str]] = None,
+        granted_skills: Optional[List[str]] = None,
         tools: Optional[List[str]] = None,
         models: Optional[List[str]] = None,
+        skills: Optional[List[str]] = None,
         quota_tier: Optional[str] = None,
         priority: int = 0,
         is_system_role: bool = False,
@@ -41,6 +43,7 @@ def make_app_role():
     ) -> AppRole:
         effective_tools = tools if tools is not None else (granted_tools or [])
         effective_models = models if models is not None else (granted_models or [])
+        effective_skills = skills if skills is not None else (granted_skills or [])
 
         return AppRole(
             role_id=role_id,
@@ -51,10 +54,12 @@ def make_app_role():
             effective_permissions=EffectivePermissions(
                 tools=effective_tools,
                 models=effective_models,
+                skills=effective_skills,
                 quota_tier=quota_tier,
             ),
             granted_tools=granted_tools if granted_tools is not None else [],
             granted_models=granted_models if granted_models is not None else [],
+            granted_skills=granted_skills if granted_skills is not None else [],
             priority=priority,
             is_system_role=is_system_role,
             enabled=enabled,

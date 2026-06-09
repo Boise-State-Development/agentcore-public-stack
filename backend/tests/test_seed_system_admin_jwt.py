@@ -71,6 +71,8 @@ class TestSeedSystemAdminRole:
         assert item["jwtRoleMappings"] == ["system_admin"]
         assert item["grantedTools"] == ["*"]
         assert item["grantedModels"] == ["*"]
+        assert item["grantedSkills"] == ["*"]
+        assert item["effectivePermissions"]["skills"] == ["*"]
         assert item["isSystemRole"] is True
         assert item["priority"] == 1000
 
@@ -90,6 +92,15 @@ class TestSeedSystemAdminRole:
         grant = resp["Item"]
         assert grant["GSI3PK"] == "MODEL#*"
         assert grant["GSI3SK"] == "ROLE#system_admin"
+        assert grant["enabled"] is True
+
+        # Verify SKILL_GRANT#* — reuses the GSI2 keyspace with a SKILL# partition
+        resp = dynamodb_table.get_item(
+            Key={"PK": "ROLE#system_admin", "SK": "SKILL_GRANT#*"}
+        )
+        grant = resp["Item"]
+        assert grant["GSI2PK"] == "SKILL#*"
+        assert grant["GSI2SK"] == "ROLE#system_admin"
         assert grant["enabled"] is True
 
         # Verify JWT_MAPPING#system_admin (maps Cognito group → AppRole)

@@ -18,9 +18,11 @@ SYSTEM_ADMIN_ROLE = AppRole(
     inherits_from=[],
     granted_tools=["*"],
     granted_models=["*"],
+    granted_skills=["*"],
     effective_permissions=EffectivePermissions(
         tools=["*"],
         models=["*"],
+        skills=["*"],
         quota_tier=None,  # No quota limits
     ),
     priority=1000,
@@ -38,9 +40,11 @@ DEFAULT_ROLE = AppRole(
     inherits_from=[],
     granted_tools=[],
     granted_models=[],
+    granted_skills=[],
     effective_permissions=EffectivePermissions(
         tools=[],
         models=[],
+        skills=[],
         quota_tier="tier_basic",
     ),
     priority=0,

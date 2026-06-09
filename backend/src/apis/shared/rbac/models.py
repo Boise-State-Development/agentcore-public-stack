@@ -11,6 +11,7 @@ class EffectivePermissions:
 
     tools: List[str] = field(default_factory=list)
     models: List[str] = field(default_factory=list)
+    skills: List[str] = field(default_factory=list)
     quota_tier: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -18,15 +19,22 @@ class EffectivePermissions:
         return {
             "tools": self.tools,
             "models": self.models,
+            "skills": self.skills,
             "quotaTier": self.quota_tier,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "EffectivePermissions":
-        """Create from dictionary (DynamoDB item)."""
+        """Create from dictionary (DynamoDB item).
+
+        `skills` defaults to [] for roles persisted before skills existed —
+        they pick up skill grants on their next save/sync (mirror of how a new
+        permission type rolls out for tools/models).
+        """
         return cls(
             tools=data.get("tools", []),
             models=data.get("models", []),
+            skills=data.get("skills", []),
             quota_tier=data.get("quotaTier"),
         )
 
@@ -58,6 +66,7 @@ class AppRole:
     # Direct permission grants (before inheritance resolution)
     granted_tools: List[str] = field(default_factory=list)
     granted_models: List[str] = field(default_factory=list)
+    granted_skills: List[str] = field(default_factory=list)
 
     # Metadata
     priority: int = 0
@@ -80,6 +89,7 @@ class AppRole:
             "effectivePermissions": self.effective_permissions.to_dict(),
             "grantedTools": self.granted_tools,
             "grantedModels": self.granted_models,
+            "grantedSkills": self.granted_skills,
             "priority": self.priority,
             "isSystemRole": self.is_system_role,
             "enabled": self.enabled,
@@ -101,6 +111,7 @@ class AppRole:
             effective_permissions=EffectivePermissions.from_dict(effective_perms_data),
             granted_tools=data.get("grantedTools", []),
             granted_models=data.get("grantedModels", []),
+            granted_skills=data.get("grantedSkills", []),
             priority=data.get("priority", 0),
             is_system_role=data.get("isSystemRole", False),
             enabled=data.get("enabled", True),
@@ -124,6 +135,9 @@ class UserEffectivePermissions:
     models: List[str]
     quota_tier: Optional[str]
     resolved_at: str
+    # Trailing default so existing positional/kwargs construction sites that
+    # predate skills keep working (they resolve to no skills).
+    skills: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -132,6 +146,7 @@ class UserEffectivePermissions:
             "appRoles": self.app_roles,
             "tools": self.tools,
             "models": self.models,
+            "skills": self.skills,
             "quotaTier": self.quota_tier,
             "resolvedAt": self.resolved_at,
         }
@@ -154,6 +169,7 @@ class AppRoleCreate(BaseModel):
     inherits_from: List[str] = Field(default_factory=list, alias="inheritsFrom")
     granted_tools: List[str] = Field(default_factory=list, alias="grantedTools")
     granted_models: List[str] = Field(default_factory=list, alias="grantedModels")
+    granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
     priority: int = Field(0, ge=0, le=999)
     enabled: bool = True
 
@@ -171,6 +187,7 @@ class AppRoleUpdate(BaseModel):
     inherits_from: Optional[List[str]] = Field(None, alias="inheritsFrom")
     granted_tools: Optional[List[str]] = Field(None, alias="grantedTools")
     granted_models: Optional[List[str]] = Field(None, alias="grantedModels")
+    granted_skills: Optional[List[str]] = Field(None, alias="grantedSkills")
     priority: Optional[int] = Field(None, ge=0, le=999)
     enabled: Optional[bool] = None
 
@@ -182,6 +199,7 @@ class EffectivePermissionsResponse(BaseModel):
 
     tools: List[str]
     models: List[str]
+    skills: List[str] = Field(default_factory=list)
     quota_tier: Optional[str] = Field(None, alias="quotaTier")
 
     model_config = {"populate_by_name": True}
@@ -197,6 +215,7 @@ class AppRoleResponse(BaseModel):
     inherits_from: List[str] = Field(..., alias="inheritsFrom")
     granted_tools: List[str] = Field(..., alias="grantedTools")
     granted_models: List[str] = Field(..., alias="grantedModels")
+    granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
     effective_permissions: EffectivePermissionsResponse = Field(
         ..., alias="effectivePermissions"
     )
@@ -220,9 +239,11 @@ class AppRoleResponse(BaseModel):
             inherits_from=role.inherits_from,
             granted_tools=role.granted_tools,
             granted_models=role.granted_models,
+            granted_skills=role.granted_skills,
             effective_permissions=EffectivePermissionsResponse(
                 tools=role.effective_permissions.tools,
                 models=role.effective_permissions.models,
+                skills=role.effective_permissions.skills,
                 quota_tier=role.effective_permissions.quota_tier,
             ),
             priority=role.priority,
