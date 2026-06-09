@@ -14,8 +14,16 @@ from .freshness import (
 )
 from .models import (
     SKILL_ID_PATTERN,
+    AddRemoveSkillRolesRequest,
+    AdminSkillListResponse,
+    AdminSkillResponse,
+    SetSkillRolesRequest,
+    SkillCreateRequest,
     SkillDefinition,
+    SkillRoleAssignment,
+    SkillRolesResponse,
     SkillStatus,
+    SkillUpdateRequest,
     SkillVisibility,
 )
 from .repository import SkillCatalogRepository, get_skill_catalog_repository
@@ -25,6 +33,14 @@ __all__ = [
     "SkillDefinition",
     "SkillStatus",
     "SkillVisibility",
+    "SkillCreateRequest",
+    "SkillUpdateRequest",
+    "SkillRoleAssignment",
+    "SkillRolesResponse",
+    "SetSkillRolesRequest",
+    "AddRemoveSkillRolesRequest",
+    "AdminSkillResponse",
+    "AdminSkillListResponse",
     "SkillCatalogRepository",
     "get_skill_catalog_repository",
     "get_all_skill_ids",

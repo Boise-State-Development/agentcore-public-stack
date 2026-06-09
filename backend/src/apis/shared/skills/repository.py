@@ -197,6 +197,32 @@ class SkillCatalogRepository:
             logger.error(f"Error updating skill {skill_id}: {e}")
             raise
 
+    async def delete_skill(self, skill_id: str) -> bool:
+        """
+        Hard delete a skill from the catalog.
+
+        Args:
+            skill_id: The skill identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        try:
+            existing = await self.get_skill(skill_id)
+            if not existing:
+                return False
+
+            self._table.delete_item(
+                Key={"PK": f"SKILL#{skill_id}", "SK": "METADATA"}
+            )
+
+            logger.info(f"Deleted skill: {skill_id}")
+            return True
+
+        except ClientError as e:
+            logger.error(f"Error deleting skill {skill_id}: {e}")
+            raise
+
     async def soft_delete_skill(
         self, skill_id: str, admin_user_id: Optional[str] = None
     ) -> Optional[SkillDefinition]:
