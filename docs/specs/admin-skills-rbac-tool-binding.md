@@ -1,9 +1,84 @@
 # Admin-Managed Skills with RBAC + Tool Binding
 
-**Status:** Design / Plan
+**Status:** Design / Plan — **re-scoped 2026-06-09**
 **Author:** (drafted with Claude)
-**Date:** 2026-06-08
+**Date:** 2026-06-08 (rev. 2026-06-09)
 **Targets branch:** `develop`
+**Built so far:** PR-1 (#461, data layer) · PR-2 (#462, RBAC) · PR-3 (#463, admin API) — all merged.
+
+---
+
+## 0. Revision 2026-06-09 — reference material in, scripts out
+
+This revision supersedes the original §1–§13 where they conflict. The original plan
+framed a skill as *instructions + bound tools*, justified mainly by token savings.
+That's narrower than what we actually want. The re-scope:
+
+### 0.1 Why we're building skills (three drivers, in priority order)
+1. **Tool-hiding UX (primary).** Users should never have to know which tools exist or
+   toggle them on/off. A skill carries the right tools for an outcome, so the user states
+   intent and the agent has what it needs — *without* enabling every tool all the time.
+   This is the product thesis; token savings is a side effect, not the goal.
+2. **Token efficiency.** Folding a role's tool schemas behind the two meta-tools keeps
+   them out of context every turn. Real, but eroding (prompt caching, large context
+   windows) — so it is a *supporting* benefit, not the justification.
+3. **Ecosystem-compatible authored expertise.** Adopt the `SKILL.md` + **supporting
+   reference files** bundle shape so we can *import* the large existing library of
+   authored skills and get richer progressive disclosure (the agent reads reference
+   docs on demand), not just a one-paragraph instruction blurb.
+
+Skills and **assistants** are *distinct primitives*, not redundant (per product owner):
+an **assistant** is a "Project" — a chatbot grounded to a knowledge base (RAG); a **skill**
+binds tools + procedure for a specific outcome. Do not converge them.
+
+### 0.2 The skill bundle (new data shape)
+A skill is now: metadata + a primary `SKILL.md` **instructions** body + **supporting
+reference files** (read-only markdown/resources, loaded on demand) + **bound catalog
+tools**. The bound-tools axis (PR-1..3) is the differentiator the ecosystem does *not*
+give you; the reference-files axis is what makes imports faithful and disclosure deep.
+
+### 0.3 Explicitly deferred (NOT this phase)
+- **Scripts + code execution inside skills.** Ecosystem skills often ship scripts that run
+  in a code sandbox; we are **not** wiring skill-bundled scripts to the code interpreter in
+  this phase. Importing a skill brings its **knowledge** (instructions + reference files)
+  faithfully; its executable behavior is re-expressed via our **bound catalog tools**,
+  chosen by the admin. This removes the largest risk/cost (a new code-exec path in the
+  agent loop) while keeping the durable value. Revisit as a separate, spec'd feature.
+- User-authored / shared skills (still Phase 2 — `owner_id`/`visibility` reserved).
+- AgentCore Registry backing (DynamoDB now).
+
+### 0.4 Import (new capability)
+Admin can **drag-and-drop an existing skill** — a `SKILL.md`, or a skill folder/zip — to
+**prefill** the form: frontmatter → `display_name`/`description`/`compose`, body →
+`instructions`, bundled `*.md`/resource files → the skill's reference files. **Tool
+bindings are NOT imported** (off-the-shelf skills carry no reference to our catalog) — the
+admin picks bound tools manually. Import is a *writing/asset shortcut*, not a capability
+transfer.
+
+### 0.5 Re-sequenced phasing (supersedes §11)
+PR-1..3 are merged unchanged. Remaining work is re-cut around the bundle model:
+- **PR-4 — Reference-file data layer.** Extend `SkillDefinition` with a `resources`
+  manifest; add an **S3-backed skill-resource store** (mirror the MCP-Apps UI-resource
+  store + content-hash dedupe and the artifacts bucket pattern — DynamoDB's 400 KB item
+  limit rules out inlining reference docs). Repository/service CRUD + admin API endpoints to
+  upload / list / read / delete a skill's reference files. Unit tests. (CDK: new
+  `skill-resources` bucket construct.)
+- **PR-5 — Admin frontend.** `admin/skills/` list + form (instructions editor + multi-file
+  reference-file upload/editor + bound-tool picker + role dialog) + **import-prefill** of a
+  `SKILL.md`/folder/zip. Mirror `admin/tools/` patterns.
+- **PR-6 — Runtime wiring.** Cross-source `bind_tools` resolver (the original hard part) +
+  thread `user_roles`/accessible-skills + `skills_hash` into `get_agent`'s cache key +
+  a progressive-disclosure **read-reference-file** level so the agent loads a skill's
+  reference docs on demand (a `read_skill_resource`-style mechanism; `SkillRegistry` learns
+  to scan/serve non-`SKILL.md` files) + bootstrap seed of one example bundled skill.
+- **PR-7 — Default/rollout (optional).** Flip default `agent_type` to `"skill"`; measure
+  `toolTokens` before/after via the context-attribution partition.
+
+### 0.6 Validation note
+Before/while building PR-6, walk one real published skill (e.g. Anthropic's `pdf` or `docx`
+skill) end-to-end to confirm the bundle/import shape and surface any runtime gaps early.
+
+---
 
 ## 1. Summary
 
@@ -21,10 +96,15 @@ The cost-effectiveness payoff (the original motivation): a role's tools get fold
 - **Don't code into a corner**: the data model reserves ownership/visibility fields so a future "users author & share their own skills" phase layers on cleanly.
 
 ### Non-goals (this phase)
+- **Scripts + code execution inside skills** (deferred — see §0.3). Skills carry instructions
+  + reference files + bound catalog tools; bundled scripts are not wired to the code
+  interpreter this phase.
 - User-authored or user-shared skills (Phase 2 — designed for, not built).
 - AgentCore **Registry** as the backing store (DynamoDB now; Registry is a later governance/discovery option — see `project_skills_registry_tool_binding`).
 - Binding the built-in **factory/context tools** (code-interpreter, artifacts, spreadsheet) — those stay always-on/context-bound. Skills bind **catalog** tools only in v1.
 - A skill "discover" endpoint (skills are authored, not discovered — unlike MCP tools).
+  *Note:* admin **import-prefill** of a `SKILL.md`/folder/zip *is* in scope now (§0.4) — that
+  is asset ingestion, not live discovery.
 
 ## 2. Background & the limitation we're removing
 
@@ -69,6 +149,10 @@ class SkillDefinition(BaseModel):
     instructions: str                  # Level-2 SKILL.md body, loaded on dispatch
     bound_tool_ids: List[str] = []     # catalog tool_ids, span all protocols
     compose: List[str] = []            # composite skills (existing concept)
+    # --- reference files (rev 2026-06-09 §0.2; added in PR-4) ---
+    # Manifest of supporting reference files for deep progressive disclosure.
+    # File BYTES live in S3 (see §5), not inline (400 KB DynamoDB item limit).
+    # resources: List[SkillResourceRef] = []   # {filename, content_hash, size, content_type, s3_key}
     status: SkillStatus = SkillStatus.ACTIVE
     category: Optional[str] = None      # optional grouping (reuse ToolCategory-like enum)
 
@@ -109,8 +193,15 @@ class AppRole:
 - **Keys:** `PK = SKILL#{skill_id}`, `SK = METADATA`. List via `scan` with `begins_with(PK, "SKILL#")` (same as tools).
 - **New GSI (add now for Phase 2):** `SkillOwnerIndex` — `GSI4PK = OWNER#{owner_id}`, `GSI4SK = SKILL#{skill_id}`. v1 admin lists don't need it, but provisioning it now avoids a later table migration when users own skills. (CDK: `infrastructure/lib/constructs/data/auth-tables-construct.ts`, alongside the existing tool/role GSIs.)
 - **Role→skill reverse lookup:** mirror the tool pattern — write `SKILL_GRANT#{skill_id}` items per role with `GSI`-indexed reverse mapping so `/admin/skills/{id}/roles` can answer "which roles grant this skill" (the tools path uses `ToolRoleMappingIndex`; reuse the same GSI keyspace with a `SKILL#` partition value).
-- **Methods:** `get_skill`, `list_skills(status?)`, `create_skill`, `update_skill`, `soft_delete_skill`, `skill_exists`, `batch_get_skills`.
+- **Methods:** `get_skill`, `list_skills(status?)`, `create_skill`, `update_skill`, `soft_delete_skill`, `delete_skill` (hard), `skill_exists`, `batch_get_skills`. *(All shipped in PR-1/PR-3.)*
 - **Freshness:** mirror `apis/shared/tools/freshness.py` (10s TTL, `invalidate(skill_id)` on admin write).
+- **Reference-file store (rev 2026-06-09 §0.2; PR-4):** an **S3-backed** `skill-resources`
+  bucket holds each skill's supporting reference files (the metadata row only carries a
+  `resources` manifest, not the bytes). Mirror the MCP-Apps UI-resource store (content-hash
+  keys, dedupe) and the artifacts bucket: object key `skills/{skill_id}/{content_hash}`,
+  server-side fetch + inline at dispatch time. Never inline file bytes into the DynamoDB
+  item (400 KB limit). New CDK construct (`skill-resources` bucket), threaded through
+  `PlatformComputeRefs`.
 
 ## 6. Backend API — `app_api/admin/skills/`
 
@@ -183,17 +274,23 @@ No v1 schema choices block any of this.
 
 ## 11. Phasing / PR breakdown
 
-Sequence so each PR is independently reviewable (branch from `develop`):
+> **Re-sequenced 2026-06-09 — see §0.5 for the authoritative breakdown.** PR-1..3 below
+> are **merged as-is**; the remaining PRs are re-cut around the reference-file bundle model
+> (PR-4 reference-file data layer → PR-5 frontend incl. import → PR-6 runtime incl.
+> read-reference-file level → PR-7 default flip). The list below is the original framing,
+> kept for history.
 
-1. **PR-1 — Shared model + persistence.** `apis/shared/skills/` (`models.py`, `repository.py`, `freshness.py`); CDK `SkillOwnerIndex` GSI. Unit tests. No behavior change.
-2. **PR-2 — RBAC extension.** `granted_skills` / `EffectivePermissions.skills`, effective-permission computation, role-assignment reverse lookup, `SkillAccessService`. Tests for resolution + wildcard + inheritance.
-3. **PR-3 — Admin API.** `app_api/admin/skills/routes.py` + `app_api/skills/service.py` (CRUD + role endpoints + bound-tool validation).
-4. **PR-4 — Admin frontend.** `admin/skills/` list + form + tool-picker dialog + role dialog + routes.
-5. **PR-5 — Runtime wiring.** `SkillRegistry` repo source; cross-source `bind_tools` resolver; thread `user_roles`/accessible-skills + `skills_hash` through `get_agent`; bootstrap seed of the two example skills.
-6. **PR-6 — Default/rollout (optional).** Flip default `agent_type` to `"skill"` (or pilot on one assistant); measure `toolTokens` before/after via the existing context-attribution partition.
+1. ✅ **PR-1 — Shared model + persistence** (#461). `apis/shared/skills/` (`models.py`, `repository.py`, `freshness.py`); CDK `SkillOwnerIndex` GSI. Unit tests. No behavior change.
+2. ✅ **PR-2 — RBAC extension** (#462). `granted_skills` / `EffectivePermissions.skills`, effective-permission computation, role-assignment reverse lookup, `SkillAccessService`. Tests for resolution + wildcard + inheritance.
+3. ✅ **PR-3 — Admin API** (#463). `app_api/admin/skills/routes.py` + `app_api/skills/service.py` (CRUD + role endpoints + bound-tool validation).
+4. **PR-4..7** — superseded by §0.5 (reference-file data layer → frontend+import → runtime → default flip).
 
 ## 12. Risks / open questions
 
+- **Reference-file runtime level (new, rev 2026-06-09)** — exposing a skill's reference
+  files to the agent on demand is *new agent-loop behavior* (when to load, token budgeting,
+  caching, serving from S3), not just CRUD. It's the hard third of the re-scope; de-risk
+  with the one-real-skill walk in §0.6 before building PR-6. Scripts/code-exec stay out (§0.3).
 - **Cross-source resolver correctness** (gateway expanded ids, external `.tool_name`, A2A) — the highest-risk piece; cover with runtime tests binding one tool of each protocol.
 - **Cache key completeness** — missing `skills_hash`/roles would cross-pollute agents between users; assert in tests.
 - **Skill-as-grant semantics** — confirm the policy that a granted skill authorizes its bound tools even when not individually enabled. (Recommended; admin is trusted. Flag for product sign-off.)
