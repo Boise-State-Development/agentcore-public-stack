@@ -67,13 +67,30 @@ describe('AuthTablesConstruct — detailed', () => {
     });
   });
 
-  it('AppRoles table has 3 GSIs', () => {
+  it('AppRoles table has 4 GSIs incl. SkillOwnerIndex', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'test-project-app-roles',
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'JwtRoleMappingIndex' }),
         Match.objectLike({ IndexName: 'ToolRoleMappingIndex' }),
         Match.objectLike({ IndexName: 'ModelRoleMappingIndex' }),
+        Match.objectLike({ IndexName: 'SkillOwnerIndex' }),
+      ]),
+    });
+  });
+
+  it('SkillOwnerIndex is keyed on GSI4PK/GSI4SK with full projection', () => {
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-app-roles',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'SkillOwnerIndex',
+          KeySchema: [
+            { AttributeName: 'GSI4PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI4SK', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
       ]),
     });
   });

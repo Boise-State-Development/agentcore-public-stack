@@ -184,11 +184,14 @@ def roles_table(aws, monkeypatch):
             {"AttributeName": "GSI2SK", "AttributeType": "S"},
             {"AttributeName": "GSI3PK", "AttributeType": "S"},
             {"AttributeName": "GSI3SK", "AttributeType": "S"},
+            {"AttributeName": "GSI4PK", "AttributeType": "S"},
+            {"AttributeName": "GSI4SK", "AttributeType": "S"},
         ],
         gsis=[
             _gsi("JwtRoleMappingIndex", "GSI1PK", "GSI1SK"),
             _gsi("ToolRoleMappingIndex", "GSI2PK", "GSI2SK"),
             _gsi("ModelRoleMappingIndex", "GSI3PK", "GSI3SK"),
+            _gsi("SkillOwnerIndex", "GSI4PK", "GSI4SK"),
         ],
     )
 
@@ -341,3 +344,9 @@ def file_repository(files_table):
 def role_repository(roles_table):
     from apis.shared.rbac.repository import AppRoleRepository
     return AppRoleRepository(table_name="test-app-roles")
+
+
+@pytest.fixture()
+def skill_repository(roles_table):
+    from apis.shared.skills.repository import SkillCatalogRepository
+    return SkillCatalogRepository(table_name="test-app-roles")
