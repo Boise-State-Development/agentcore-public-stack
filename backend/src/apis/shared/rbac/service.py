@@ -129,13 +129,15 @@ class AppRoleService:
                 app_roles=[],
                 tools=[],
                 models=[],
+                skills=[],
                 quota_tier=None,
                 resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
             )
 
-        # Collect all tools and models (union)
+        # Collect all tools, models and skills (union)
         all_tools: Set[str] = set()
         all_models: Set[str] = set()
+        all_skills: Set[str] = set()
 
         for role in roles:
             if role.effective_permissions:
@@ -149,6 +151,11 @@ class AppRoleService:
                     all_models.add("*")
                 else:
                     all_models.update(role.effective_permissions.models)
+
+                if "*" in role.effective_permissions.skills:
+                    all_skills.add("*")
+                else:
+                    all_skills.update(role.effective_permissions.skills)
 
         # Determine quota tier (highest priority wins)
         sorted_roles = sorted(roles, key=lambda r: r.priority, reverse=True)
@@ -166,6 +173,7 @@ class AppRoleService:
             app_roles=[r.role_id for r in roles],
             tools=list(all_tools),
             models=list(all_models),
+            skills=list(all_skills),
             quota_tier=quota_tier,
             resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
         )
@@ -190,6 +198,16 @@ class AppRoleService:
 
         return model_id in permissions.models
 
+    async def can_access_skill(self, user: User, skill_id: str) -> bool:
+        """Check if user can access a specific skill."""
+        permissions = await self.resolve_user_permissions(user)
+
+        # Wildcard grants access to all
+        if "*" in permissions.skills:
+            return True
+
+        return skill_id in permissions.skills
+
     async def get_accessible_tools(self, user: User) -> List[str]:
         """Get list of tool IDs user can access."""
         permissions = await self.resolve_user_permissions(user)
@@ -199,6 +217,11 @@ class AppRoleService:
         """Get list of model IDs user can access."""
         permissions = await self.resolve_user_permissions(user)
         return permissions.models
+
+    async def get_accessible_skills(self, user: User) -> List[str]:
+        """Get list of skill IDs user can access."""
+        permissions = await self.resolve_user_permissions(user)
+        return permissions.skills
 
     async def get_user_quota_tier(self, user: User) -> Optional[str]:
         """Get the quota tier for a user based on their roles."""

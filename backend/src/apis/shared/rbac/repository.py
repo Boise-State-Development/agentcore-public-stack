@@ -303,6 +303,40 @@ class AppRoleRepository:
             logger.error(f"Error querying model role mappings for {model_id}: {e}")
             raise
 
+    async def get_roles_for_skill(self, skill_id: str) -> List[Dict[str, Any]]:
+        """
+        Get AppRoles that grant access to a skill.
+
+        Reuses GSI2 (ToolRoleMappingIndex) with a `SKILL#` partition value, so
+        skill grants share the tool reverse-lookup index without a new GSI
+        (the `TOOL#` and `SKILL#` partitions are disjoint). See spec §5.
+
+        Args:
+            skill_id: The skill identifier
+
+        Returns:
+            List of role info dicts with roleId, displayName, enabled
+        """
+        try:
+            response = self._table.query(
+                IndexName="ToolRoleMappingIndex",
+                KeyConditionExpression="GSI2PK = :pk",
+                ExpressionAttributeValues={":pk": f"SKILL#{skill_id}"},
+            )
+
+            return [
+                {
+                    "roleId": item.get("roleId"),
+                    "displayName": item.get("displayName"),
+                    "enabled": item.get("enabled", True),
+                }
+                for item in response.get("Items", [])
+            ]
+
+        except ClientError as e:
+            logger.error(f"Error querying skill role mappings for {skill_id}: {e}")
+            raise
+
     # =========================================================================
     # Helper Methods
     # =========================================================================
@@ -361,6 +395,22 @@ class AppRoleRepository:
                 "SK": f"MODEL_GRANT#{model_id}",
                 "GSI3PK": f"MODEL#{model_id}",
                 "GSI3SK": f"ROLE#{role.role_id}",
+                "roleId": role.role_id,
+                "displayName": role.display_name,
+                "enabled": role.enabled,
+            }
+            items.append(
+                {"Put": {"TableName": self.table_name, "Item": mapping_item}}
+            )
+
+        # 5. Skill permission mapping items — reuse the GSI2 keyspace
+        # (ToolRoleMappingIndex) with a `SKILL#` partition value (spec §5).
+        for skill_id in role.granted_skills:
+            mapping_item = {
+                "PK": f"ROLE#{role.role_id}",
+                "SK": f"SKILL_GRANT#{skill_id}",
+                "GSI2PK": f"SKILL#{skill_id}",
+                "GSI2SK": f"ROLE#{role.role_id}",
                 "roleId": role.role_id,
                 "displayName": role.display_name,
                 "enabled": role.enabled,

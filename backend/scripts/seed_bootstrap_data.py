@@ -517,9 +517,11 @@ def seed_system_admin_role(
         "inheritsFrom": [],
         "grantedTools": ["*"],
         "grantedModels": ["*"],
+        "grantedSkills": ["*"],
         "effectivePermissions": {
             "tools": ["*"],
             "models": ["*"],
+            "skills": ["*"],
             "quotaTier": None,
         },
         "priority": 1000,
@@ -550,6 +552,18 @@ def seed_system_admin_role(
         "enabled": True,
     }
 
+    # Skill grants reuse the GSI2 keyspace with a SKILL# partition value
+    # (mirror of tool grants; the TOOL#/SKILL# partitions are disjoint).
+    skill_grant_item = {
+        "PK": pk,
+        "SK": "SKILL_GRANT#*",
+        "GSI2PK": "SKILL#*",
+        "GSI2SK": pk,
+        "roleId": role_id,
+        "displayName": "System Administrator",
+        "enabled": True,
+    }
+
     jwt_mapping_item = {
         "PK": pk,
         "SK": "JWT_MAPPING#system_admin",
@@ -566,11 +580,12 @@ def seed_system_admin_role(
                 {"Put": {"TableName": table_name, "Item": _serialize(definition_item)}},
                 {"Put": {"TableName": table_name, "Item": _serialize(tool_grant_item)}},
                 {"Put": {"TableName": table_name, "Item": _serialize(model_grant_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(skill_grant_item)}},
                 {"Put": {"TableName": table_name, "Item": _serialize(jwt_mapping_item)}},
             ]
         )
         result.created = 1
-        result.details.append("system_admin role created with TOOL_GRANT#*, MODEL_GRANT#*, and JWT_MAPPING#system_admin")
+        result.details.append("system_admin role created with TOOL_GRANT#*, MODEL_GRANT#*, SKILL_GRANT#*, and JWT_MAPPING#system_admin")
     except ClientError as e:
         msg = f"Failed to create system_admin role: {e}"
         logger.error(msg)
