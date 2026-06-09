@@ -716,6 +716,11 @@ from .tools.routes import router as tools_router
 
 router.include_router(tools_router)
 
+# ========== Include Skills Admin Subrouter ==========
+from .skills.routes import router as skills_router
+
+router.include_router(skills_router)
+
 # ========== Include OAuth Admin Subrouter ==========
 from .oauth.routes import router as oauth_admin_router
 

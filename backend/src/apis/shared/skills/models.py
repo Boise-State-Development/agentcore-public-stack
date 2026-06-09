@@ -181,3 +181,141 @@ class SkillDefinition(BaseModel):
             created_by=item.get("createdBy"),
             updated_by=item.get("updatedBy"),
         )
+
+
+# =============================================================================
+# API Request Models (admin) — mirror apis/shared/tools/models.py
+# =============================================================================
+
+
+class SkillCreateRequest(BaseModel):
+    """Request body for POST /admin/skills."""
+
+    skill_id: str = Field(..., pattern=SKILL_ID_PATTERN, alias="skillId")
+    display_name: str = Field(
+        ..., min_length=1, max_length=100, alias="displayName"
+    )
+    description: str = Field(..., max_length=500)
+    # SKILL.md body — uncapped (instructions can be long); empty is allowed so
+    # an admin can save a draft and fill it in later.
+    instructions: str = Field(default="")
+    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
+    compose: List[str] = Field(default_factory=list)
+    status: SkillStatus = Field(default=SkillStatus.ACTIVE)
+    category: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class SkillUpdateRequest(BaseModel):
+    """Request body for PUT /admin/skills/{skill_id}."""
+
+    display_name: Optional[str] = Field(
+        None, min_length=1, max_length=100, alias="displayName"
+    )
+    description: Optional[str] = Field(None, max_length=500)
+    instructions: Optional[str] = None
+    bound_tool_ids: Optional[List[str]] = Field(None, alias="boundToolIds")
+    compose: Optional[List[str]] = None
+    status: Optional[SkillStatus] = None
+    category: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class SkillRoleAssignment(BaseModel):
+    """Role assignment info for a skill (mirror ToolRoleAssignment)."""
+
+    role_id: str = Field(..., alias="roleId")
+    display_name: str = Field(..., alias="displayName")
+    grant_type: str = Field(
+        ..., alias="grantType", description="'direct' or 'inherited'"
+    )
+    inherited_from: Optional[str] = Field(None, alias="inheritedFrom")
+    enabled: bool
+
+    model_config = {"populate_by_name": True}
+
+
+class SkillRolesResponse(BaseModel):
+    """Response for GET /admin/skills/{skill_id}/roles."""
+
+    skill_id: str = Field(..., alias="skillId")
+    roles: List[SkillRoleAssignment]
+
+    model_config = {"populate_by_name": True}
+
+
+class SetSkillRolesRequest(BaseModel):
+    """Request body for PUT /admin/skills/{skill_id}/roles."""
+
+    app_role_ids: List[str] = Field(..., alias="appRoleIds")
+
+    model_config = {"populate_by_name": True}
+
+
+class AddRemoveSkillRolesRequest(BaseModel):
+    """Request body for POST /admin/skills/{skill_id}/roles/add or /remove."""
+
+    app_role_ids: List[str] = Field(..., alias="appRoleIds")
+
+    model_config = {"populate_by_name": True}
+
+
+# =============================================================================
+# API Response Models (admin)
+# =============================================================================
+
+
+class AdminSkillResponse(BaseModel):
+    """Response model for admin skill listing (mirror AdminToolResponse)."""
+
+    skill_id: str = Field(..., alias="skillId")
+    display_name: str = Field(..., alias="displayName")
+    description: str
+    instructions: str
+    bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
+    compose: List[str] = Field(default_factory=list)
+    status: SkillStatus
+    category: Optional[str] = None
+    owner_id: str = Field("system", alias="ownerId")
+    visibility: SkillVisibility = SkillVisibility.ADMIN
+    allowed_app_roles: List[str] = Field(
+        default_factory=list, alias="allowedAppRoles"
+    )
+    created_at: str = Field("", alias="createdAt")
+    updated_at: str = Field("", alias="updatedAt")
+    created_by: Optional[str] = Field(None, alias="createdBy")
+    updated_by: Optional[str] = Field(None, alias="updatedBy")
+
+    model_config = {"populate_by_name": True, "use_enum_values": True}
+
+    @classmethod
+    def from_skill_definition(
+        cls, skill: "SkillDefinition", allowed_roles: Optional[List[str]] = None
+    ) -> "AdminSkillResponse":
+        """Create response from a SkillDefinition."""
+        return cls(
+            skill_id=skill.skill_id,
+            display_name=skill.display_name,
+            description=skill.description,
+            instructions=skill.instructions,
+            bound_tool_ids=list(skill.bound_tool_ids),
+            compose=list(skill.compose),
+            status=skill.status,
+            category=skill.category,
+            owner_id=skill.owner_id,
+            visibility=skill.visibility,
+            allowed_app_roles=allowed_roles or skill.allowed_app_roles,
+            created_at=skill.created_at.isoformat() + "Z" if skill.created_at else "",
+            updated_at=skill.updated_at.isoformat() + "Z" if skill.updated_at else "",
+            created_by=skill.created_by,
+            updated_by=skill.updated_by,
+        )
+
+
+class AdminSkillListResponse(BaseModel):
+    """Response for GET /admin/skills."""
+
+    skills: List[AdminSkillResponse]
+    total: int
