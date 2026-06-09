@@ -131,6 +131,17 @@ export class AuthTablesConstruct extends Construct {
       nonKeyAttributes: ['roleId', 'displayName', 'enabled'],
     });
 
+    // SkillOwnerIndex — reverse lookup of skills by owner (GSI4PK=OWNER#{ownerId},
+    // GSI4SK=SKILL#{skillId}). Unused in v1 (admin lists scan SKILL# items), but
+    // provisioned now so the Phase-2 "list my skills" query needs no table
+    // migration. See docs/specs/admin-skills-rbac-tool-binding.md (§5).
+    this.appRolesTable.addGlobalSecondaryIndex({
+      indexName: 'SkillOwnerIndex',
+      partitionKey: { name: 'GSI4PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI4SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     new ssm.StringParameter(this, 'AppRolesTableNameParameter', {
       parameterName: `/${config.projectPrefix}/rbac/app-roles-table-name`,
       stringValue: this.appRolesTable.tableName,
