@@ -57,6 +57,7 @@ def _create_cache_key(
     provider: Optional[str],
     freshness_hash: str,
     agent_type: Optional[str],
+    skills_hash: str = "",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -65,6 +66,13 @@ def _create_cache_key(
     `updated_at` values (see `freshness.get_freshness_hash`). When an
     admin edits a tool's config, the hash changes and the cache misses,
     so the next turn builds a fresh agent with the new config.
+
+    `skills_hash` is the skills analog: a digest of the user's resolved
+    accessible skill ids AND their `updated_at` values (skills/freshness).
+    A SkillAgent's tool universe is derived from the user's granted skills,
+    which `enabled_tools` does not capture — so without this an edit to a
+    granted skill (or a role grant change) would serve a stale agent. Empty
+    for chat agents (no skills), so the default path is unaffected.
     """
     tools_hash = _hash_tools(enabled_tools)
 
@@ -84,6 +92,7 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
+        skills_hash,
     )
 
 
@@ -121,6 +130,7 @@ async def get_agent(
     extra_tools: Optional[list] = None,
     inference_params: Optional[Dict[str, Any]] = None,
     is_resume: bool = False,
+    accessible_skill_ids: Optional[List[str]] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -160,6 +170,18 @@ async def get_agent(
 
     freshness_hash = await get_freshness_hash(enabled_tools or [])
 
+    # Skills dimension of the cache key (skill agents only). Digest of the
+    # user's accessible skill ids + their updated_at, so an edit to a granted
+    # skill or a role-grant change invalidates the cached SkillAgent. Empty
+    # string for the chat path (no accessible_skill_ids) — key unchanged.
+    skills_hash = ""
+    if accessible_skill_ids:
+        from apis.shared.skills.freshness import (
+            get_freshness_hash as get_skills_freshness_hash,
+        )
+
+        skills_hash = await get_skills_freshness_hash(accessible_skill_ids)
+
     cache_key = _create_cache_key(
         session_id=session_id,
         user_id=user_id,
@@ -171,6 +193,7 @@ async def get_agent(
         provider=provider,
         freshness_hash=freshness_hash,
         agent_type=agent_type,
+        skills_hash=skills_hash,
     )
 
     if not extra_tools and cache_key in _agent_cache:
@@ -200,7 +223,7 @@ async def get_agent(
     # existing MainAgent (= ChatAgent) behavior; "skill" routes through
     # SkillAgent's progressive skill disclosure.
     resolved_agent_type = agent_type or "chat"
-    agent = create_agent(
+    create_kwargs: Dict[str, Any] = dict(
         agent_type=resolved_agent_type,
         session_id=session_id,
         user_id=user_id,
@@ -214,6 +237,11 @@ async def get_agent(
         extra_tools=extra_tools,
         inference_params=merged_params,
     )
+    # Only the SkillAgent accepts accessible_skill_ids; ChatAgent's constructor
+    # would reject the unknown kwarg, so gate it on the skill type.
+    if resolved_agent_type == "skill":
+        create_kwargs["accessible_skill_ids"] = accessible_skill_ids
+    agent = create_agent(**create_kwargs)
 
     # Stamp the type onto the construction snapshot so a paused turn can
     # resume on the same factory variant after cache eviction.

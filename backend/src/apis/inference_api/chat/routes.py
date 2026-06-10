@@ -656,6 +656,27 @@ async def ping():
     }
 
 
+async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
+    """Resolve the skills a user's RBAC roles grant (admin/DB-backed).
+
+    Uses the shared ``AppRoleService`` (the same import-boundary-safe path the
+    model-access check uses) so the runtime never imports ``app_api``. A ``"*"``
+    wildcard grant expands to every known skill id. Never raises — on any
+    failure the user simply gets no skills (the SkillAgent degrades to chat).
+    """
+    try:
+        from apis.shared.rbac.service import get_app_role_service
+        from apis.shared.skills.freshness import get_all_skill_ids
+
+        skills = await get_app_role_service().get_accessible_skills(current_user)
+        if "*" in skills:
+            return sorted(await get_all_skill_ids())
+        return list(skills)
+    except Exception:
+        logger.warning("Failed to resolve accessible skills", exc_info=True)
+        return []
+
+
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
     """
@@ -677,6 +698,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
+    # Resolve the user's accessible skills (admin/DB-backed, RBAC-gated) once
+    # for the whole request — only for the skill agent path. Threaded into
+    # every get_agent call below so they share one skills_hash cache key
+    # (otherwise the app-tool-call / resume paths would miss the main turn's
+    # cached SkillAgent). The default chat path stays free of the extra reads.
+    accessible_skill_ids = (
+        await _resolve_accessible_skill_ids(current_user)
+        if input_data.agent_type == "skill"
+        else None
+    )
     # A "Continue" after a max_tokens truncation. Like resume, it bypasses
     # quota / RAG / file resolution and does NOT clear the turn state; unlike
     # resume there is no interrupt to validate — the agent is rebuilt from the
@@ -717,6 +748,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=inference_params,
                 agent_type=input_data.agent_type,
                 is_resume=False,
+                accessible_skill_ids=accessible_skill_ids,
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -762,6 +794,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=inference_params,
                 agent_type=input_data.agent_type,
                 is_resume=False,
+                accessible_skill_ids=accessible_skill_ids,
             )
             payload = dispatch_app_context_update(
                 agent,
@@ -1277,6 +1310,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=resume_inference_params,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
+                accessible_skill_ids=accessible_skill_ids,
             )
         else:
             # Build the canonical request inference-params dict. The frontend
@@ -1358,6 +1392,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=input_data.agent_type,
                 extra_tools=extra_tools,
                 is_resume=False,
+                accessible_skill_ids=accessible_skill_ids,
             )
 
         # Resume requests must target interrupts that the cached agent
