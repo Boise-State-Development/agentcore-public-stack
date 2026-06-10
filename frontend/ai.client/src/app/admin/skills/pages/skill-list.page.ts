@@ -23,6 +23,7 @@ import {
 import { AdminSkillService } from '../services/admin-skill.service';
 import { AdminSkill, SKILL_STATUSES } from '../models/admin-skill.model';
 import { AppRolesService } from '../../roles/services/app-roles.service';
+import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
 import { AdminToolService } from '../../tools/services/admin-tool.service';
 import {
   SkillRoleDialogComponent,
@@ -375,7 +376,10 @@ export class SkillListPage {
   }
 
   getToolDisplayName(toolId: string): string {
-    return this.adminToolService.getToolById(toolId)?.displayName ?? toolId;
+    // A scoped id (`base::mcpToolName`) binds one tool of a server.
+    const { base, name } = parseScopedToolId(toolId);
+    const serverName = this.adminToolService.getToolById(base)?.displayName ?? base;
+    return name ? `${serverName} · ${name}` : serverName;
   }
 
   getStatusClass(status: string): string {

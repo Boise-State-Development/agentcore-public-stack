@@ -39,6 +39,7 @@ import {
   ToolPickerDialogData,
   ToolPickerDialogResult,
 } from '../components/tool-picker-dialog.component';
+import { parseScopedToolId } from '../../../shared/utils/scoped-tool-id';
 
 @Component({
   selector: 'app-skill-form',
@@ -517,7 +518,11 @@ export class SkillFormPage implements OnInit {
   }
 
   toolDisplayName(toolId: string): string {
-    return this.adminToolService.getToolById(toolId)?.displayName ?? toolId;
+    // A scoped id (`base::mcpToolName`) binds one tool of a server — show
+    // "Server · tool" so the chip reads cleanly.
+    const { base, name } = parseScopedToolId(toolId);
+    const serverName = this.adminToolService.getToolById(base)?.displayName ?? base;
+    return name ? `${serverName} · ${name}` : serverName;
   }
 
   formatSize(bytes: number): string {
