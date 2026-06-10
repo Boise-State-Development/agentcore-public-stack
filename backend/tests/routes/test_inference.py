@@ -168,3 +168,76 @@ class TestInvocationsInvalid:
             json={"message": "Hello"},
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# PR-7: default agent_type flips to "skill"
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultAgentTypeFlip:
+    """When the client omits agent_type, the turn routes through SkillAgent."""
+
+    def _mock_agent(self):
+        agent = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            yield "event: done\ndata: {}\n\n"
+
+        agent.stream_async = fake_stream
+        return agent
+
+    def test_omitted_agent_type_defaults_to_skill(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={"session_id": "sess-skill", "message": "hi"},
+            )
+            _ = resp.text  # force the streaming generator to run
+
+        assert resp.status_code == 200
+        # Skills were resolved even though the client sent no agent_type,
+        # and get_agent was built as a skill agent with them threaded in.
+        resolve_mock.assert_awaited()
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["agent_type"] == "skill"
+        assert kwargs["accessible_skill_ids"] == ["web_research"]
+
+    def test_explicit_chat_opts_out(self, authed_app, authed_client):
+        get_agent_mock = MagicMock(return_value=self._mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-chat",
+                    "message": "hi",
+                    "agent_type": "chat",
+                },
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        # Explicit chat → no skill resolution, no skills forwarded.
+        resolve_mock.assert_not_awaited()
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["agent_type"] == "chat"
+        assert kwargs["accessible_skill_ids"] is None
