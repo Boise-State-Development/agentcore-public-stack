@@ -106,9 +106,11 @@ class InvocationRequest(BaseModel):
     # continues the truncated assistant message already in restored history
     # (assistant-prefill). Bypasses quota / RAG / file resolution like resume.
     continue_truncated: Optional[bool] = None
-    # Selects which agent factory variant builds the turn. Defaults to "chat"
-    # (MainAgent / ChatAgent) when omitted, so existing clients are unaffected.
-    # Pass "skill" to route through SkillAgent's progressive skill disclosure.
+    # Selects which agent factory variant builds the turn. When omitted, the
+    # server applies its default (PR-7: "skill" — see routes.DEFAULT_AGENT_TYPE),
+    # routing through SkillAgent's progressive disclosure; a user with no granted
+    # skills degrades to plain ChatAgent behavior. Pass "chat" to opt out of the
+    # skill path for a turn.
     agent_type: Optional[str] = None
     # User-selected custom system prompt ("conversation mode") for this
     # turn. The frontend forwards the active selection on every submit so

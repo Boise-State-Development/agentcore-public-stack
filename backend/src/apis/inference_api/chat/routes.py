@@ -67,6 +67,17 @@ router = APIRouter(tags=["agentcore-runtime"])
 # Preview session prefix - sessions with this prefix skip persistence
 PREVIEW_SESSION_PREFIX = "preview-"
 
+# Default agent factory variant for a user turn when the client doesn't pin one
+# (PR-7). Flipped from "chat" to "skill": every turn now routes through the
+# SkillAgent's progressive disclosure, which folds a granted skill's bound tools
+# behind the two meta-tools. Safe by construction — a user with zero accessible
+# skills gets a SkillAgent that degrades to plain ChatAgent behavior
+# (skill_agent.py), so this is a no-op for them. Clients can still opt out per
+# turn by sending agent_type="chat". (The lower-level service.get_agent keeps a
+# conservative "chat" fallback for direct/programmatic callers that don't
+# resolve skills; this request-policy default lives here.)
+DEFAULT_AGENT_TYPE = "skill"
+
 
 def is_preview_session(session_id: str) -> bool:
     """Check if a session ID is a preview session (should skip persistence).
@@ -698,14 +709,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
+    # Resolve the effective agent type once: the client's explicit choice, else
+    # the server default (PR-7: "skill"). Used for the skill resolution below
+    # and the non-resume get_agent calls (resume reuses the snapshot's type).
+    effective_agent_type = input_data.agent_type or DEFAULT_AGENT_TYPE
     # Resolve the user's accessible skills (admin/DB-backed, RBAC-gated) once
     # for the whole request — only for the skill agent path. Threaded into
     # every get_agent call below so they share one skills_hash cache key
     # (otherwise the app-tool-call / resume paths would miss the main turn's
-    # cached SkillAgent). The default chat path stays free of the extra reads.
+    # cached SkillAgent). An explicit agent_type="chat" opts out and stays free
+    # of the extra reads.
     accessible_skill_ids = (
         await _resolve_accessible_skill_ids(current_user)
-        if input_data.agent_type == "skill"
+        if effective_agent_type == "skill"
         else None
     )
     # A "Continue" after a max_tokens truncation. Like resume, it bypasses
@@ -746,7 +762,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
                 inference_params=inference_params,
-                agent_type=input_data.agent_type,
+                agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=accessible_skill_ids,
             )
@@ -792,7 +808,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
                 inference_params=inference_params,
-                agent_type=input_data.agent_type,
+                agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=accessible_skill_ids,
             )
@@ -1310,7 +1326,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=resume_inference_params,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
-                accessible_skill_ids=accessible_skill_ids,
+                # Resume must rebuild the SAME cache key the original turn used,
+                # or the paused agent is orphaned. The original turn's
+                # skills_hash was derived from accessible_skill_ids only when it
+                # was a skill turn; mirror that off the snapshot's type (the
+                # request default is "skill", but a turn explicitly built as
+                # "chat" carried no skills → empty skills_hash).
+                accessible_skill_ids=(
+                    accessible_skill_ids if snapshot.agent_type == "skill" else None
+                ),
             )
         else:
             # Build the canonical request inference-params dict. The frontend
@@ -1389,7 +1413,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=effective_provider,
                 inference_params=inference_params,
-                agent_type=input_data.agent_type,
+                agent_type=effective_agent_type,
                 extra_tools=extra_tools,
                 is_resume=False,
                 accessible_skill_ids=accessible_skill_ids,

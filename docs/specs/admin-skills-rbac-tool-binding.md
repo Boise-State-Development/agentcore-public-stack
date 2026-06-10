@@ -4,7 +4,7 @@
 **Author:** (drafted with Claude)
 **Date:** 2026-06-08 (rev. 2026-06-09)
 **Targets branch:** `develop`
-**Built so far:** PR-1 (#461, data layer) · PR-2 (#462, RBAC) · PR-3 (#463, admin API) — all merged.
+**Built so far:** PR-1 (#461, data) · PR-2 (#462, RBAC) · PR-3 (#463, admin API) · PR-4 (#465, reference-file data layer) · PR-5 (#466, admin frontend) · PR-6a (#467, runtime DB-load/RBAC/local-fold) merged; PR-6b (#468, MCP-fold + reference-file disclosure + example seed) open; PR-7 (default `agent_type` flip) in progress.
 
 ---
 
@@ -71,8 +71,13 @@ PR-1..3 are merged unchanged. Remaining work is re-cut around the bundle model:
   a progressive-disclosure **read-reference-file** level so the agent loads a skill's
   reference docs on demand (a `read_skill_resource`-style mechanism; `SkillRegistry` learns
   to scan/serve non-`SKILL.md` files) + bootstrap seed of one example bundled skill.
-- **PR-7 — Default/rollout (optional).** Flip default `agent_type` to `"skill"`; measure
-  `toolTokens` before/after via the context-attribution partition.
+- **PR-7 — Default/rollout.** Flip the server default `agent_type` to `"skill"` (one
+  request-policy constant, `routes.DEFAULT_AGENT_TYPE`); every turn routes through the
+  SkillAgent, which degrades to plain ChatAgent for a user with no granted skills, so the
+  flip is a no-op for them. Clients can opt out per turn with `agent_type="chat"`.
+  `toolTokens` is measured post-deploy via the context-attribution `contextBreakdown`
+  partition (a granted-skill user's `tools` partition drops as the bound tools fold behind
+  the two meta-tools; the skill catalog moves into the `system` partition).
 
 ### 0.6 Validation note
 Before/while building PR-6, walk one real published skill (e.g. Anthropic's `pdf` or `docx`
