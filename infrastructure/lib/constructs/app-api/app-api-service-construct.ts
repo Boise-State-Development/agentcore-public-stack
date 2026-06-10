@@ -180,6 +180,10 @@ export class AppApiServiceConstruct extends Construct {
     environment['ARTIFACTS_ORIGIN'] = props.artifactsOrigin;
     environment['ARTIFACTS_RENDER_TOKEN_SECRET_ARN'] = props.refs.artifactRenderTokenSecret.secretArn;
 
+    // Skill reference-file bucket (admin-managed Skills, PR-4). Read by
+    // apis/shared/skills/resource_store.py via S3_SKILL_RESOURCES_BUCKET_NAME.
+    environment['S3_SKILL_RESOURCES_BUCKET_NAME'] = props.refs.skillResourcesBucket.bucketName;
+
     // Fine-tuning env vars (always-on). Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env
     // var names Python reads via os.environ.get(...).

@@ -217,6 +217,18 @@ export function createRuntimeExecutionRole(
     resources: [artifactsTableArn, `${artifactsTableArn}/index/*`],
   }));
 
+  // ── Skill reference files (S3, read-only) ──
+  // The runtime is a READER of a skill's reference files (PR-6 progressive
+  // disclosure); app-api owns writes. Provisioned now so PR-6 needs no infra
+  // change. No code consumes it yet.
+  const skillResourcesBucketArn = refs.skillResourcesBucket.bucketArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SkillResourcesBucketRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:GetObject', 's3:ListBucket'],
+    resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
+  }));
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
   const vectorIndexName = refs.ragVectorIndexName;

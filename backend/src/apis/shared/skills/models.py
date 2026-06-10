@@ -51,6 +51,43 @@ class SkillVisibility(str, Enum):
 # =============================================================================
 
 
+class SkillResourceRef(BaseModel):
+    """Manifest entry for one of a skill's supporting reference files.
+
+    A skill's reference files (read-only markdown/resources for deep
+    progressive disclosure) live as bytes in the ``skill-resources`` S3
+    bucket — never inline in the DynamoDB item (400 KB limit). The
+    ``SkillDefinition`` row carries only this lightweight manifest; the
+    bytes are addressed by ``s3_key`` (content-hash keyed, so identical
+    content within a skill dedupes to one object). See
+    ``docs/specs/admin-skills-rbac-tool-binding.md`` (§0.2, §5, PR-4) and
+    ``apis/shared/skills/resource_store.py``.
+
+    camelCase aliases are declared so the same model round-trips both the
+    admin API response (FastAPI serializes by alias) and is constructible
+    from snake_case kwargs (``populate_by_name``). DynamoDB (de)serialization
+    is handled explicitly in ``SkillDefinition.to_dynamo_item`` /
+    ``from_dynamo_item``.
+    """
+
+    filename: str = Field(..., description="Display filename, e.g. 'forms.md'")
+    content_hash: str = Field(
+        ..., alias="contentHash", description="sha256 hex of the file bytes"
+    )
+    size: int = Field(..., description="Size of the file in bytes")
+    content_type: str = Field(
+        ..., alias="contentType", description="MIME type, e.g. 'text/markdown'"
+    )
+    s3_key: str = Field(
+        ...,
+        alias="s3Key",
+        description="Object key in the skill-resources bucket "
+        "(skills/{skill_id}/{content_hash})",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
 class SkillDefinition(BaseModel):
     """
     Catalog entry for a skill stored in DynamoDB.
@@ -89,6 +126,16 @@ class SkillDefinition(BaseModel):
     compose: List[str] = Field(
         default_factory=list,
         description="skill_ids composed into this skill (composite skills)",
+    )
+
+    # Supporting reference files (rev 2026-06-09 §0.2; PR-4). Lightweight
+    # manifest only — the file BYTES live in the skill-resources S3 bucket
+    # (the 400 KB DynamoDB item limit rules out inlining reference docs).
+    # Managed via the /admin/skills/{id}/resources endpoints, NOT the
+    # create/update body. Old rows without this attribute deserialize to [].
+    resources: List[SkillResourceRef] = Field(
+        default_factory=list,
+        description="Manifest of S3-backed supporting reference files",
     )
 
     # Lifecycle / grouping
@@ -142,6 +189,18 @@ class SkillDefinition(BaseModel):
             "instructions": self.instructions,
             "boundToolIds": list(self.bound_tool_ids),
             "compose": list(self.compose),
+            # Reference-file manifest (camelCase maps, mirroring the row's
+            # convention). The bytes live in S3; this is just pointers.
+            "resources": [
+                {
+                    "filename": r.filename,
+                    "contentHash": r.content_hash,
+                    "size": r.size,
+                    "contentType": r.content_type,
+                    "s3Key": r.s3_key,
+                }
+                for r in self.resources
+            ],
             "status": self.status
             if isinstance(self.status, str)
             else self.status.value,
@@ -168,6 +227,17 @@ class SkillDefinition(BaseModel):
             instructions=item.get("instructions", ""),
             bound_tool_ids=list(item.get("boundToolIds") or []),
             compose=list(item.get("compose") or []),
+            resources=[
+                SkillResourceRef(
+                    filename=r.get("filename", ""),
+                    content_hash=r.get("contentHash", ""),
+                    # DynamoDB returns numbers as Decimal — coerce to int.
+                    size=int(r.get("size", 0)),
+                    content_type=r.get("contentType", ""),
+                    s3_key=r.get("s3Key", ""),
+                )
+                for r in (item.get("resources") or [])
+            ],
             status=item.get("status", SkillStatus.ACTIVE),
             category=item.get("category"),
             owner_id=item.get("ownerId", "system"),
@@ -276,6 +346,7 @@ class AdminSkillResponse(BaseModel):
     instructions: str
     bound_tool_ids: List[str] = Field(default_factory=list, alias="boundToolIds")
     compose: List[str] = Field(default_factory=list)
+    resources: List[SkillResourceRef] = Field(default_factory=list)
     status: SkillStatus
     category: Optional[str] = None
     owner_id: str = Field("system", alias="ownerId")
@@ -302,6 +373,7 @@ class AdminSkillResponse(BaseModel):
             instructions=skill.instructions,
             bound_tool_ids=list(skill.bound_tool_ids),
             compose=list(skill.compose),
+            resources=list(skill.resources),
             status=skill.status,
             category=skill.category,
             owner_id=skill.owner_id,
@@ -319,3 +391,17 @@ class AdminSkillListResponse(BaseModel):
 
     skills: List[AdminSkillResponse]
     total: int
+
+
+class SkillResourcesResponse(BaseModel):
+    """Response for the /admin/skills/{skill_id}/resources manifest endpoints.
+
+    Returned by list, upload, and delete so the caller always sees the
+    skill's current reference-file manifest after a write (the read-bytes
+    endpoint returns the raw file body instead).
+    """
+
+    skill_id: str = Field(..., alias="skillId")
+    resources: List[SkillResourceRef] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}

@@ -20,6 +20,8 @@ from .models import (
     SetSkillRolesRequest,
     SkillCreateRequest,
     SkillDefinition,
+    SkillResourceRef,
+    SkillResourcesResponse,
     SkillRoleAssignment,
     SkillRolesResponse,
     SkillStatus,
@@ -27,10 +29,17 @@ from .models import (
     SkillVisibility,
 )
 from .repository import SkillCatalogRepository, get_skill_catalog_repository
+from .resource_store import (
+    SkillResourceStore,
+    SkillResourceStoreError,
+    get_skill_resource_store,
+)
 
 __all__ = [
     "SKILL_ID_PATTERN",
     "SkillDefinition",
+    "SkillResourceRef",
+    "SkillResourcesResponse",
     "SkillStatus",
     "SkillVisibility",
     "SkillCreateRequest",
@@ -43,6 +52,9 @@ __all__ = [
     "AdminSkillListResponse",
     "SkillCatalogRepository",
     "get_skill_catalog_repository",
+    "SkillResourceStore",
+    "SkillResourceStoreError",
+    "get_skill_resource_store",
     "get_all_skill_ids",
     "get_freshness_hash",
     "get_skill_updated_at",

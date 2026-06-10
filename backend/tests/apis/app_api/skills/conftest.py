@@ -13,6 +13,7 @@ from apis.shared.auth.models import User
 
 AWS_REGION = "us-east-1"
 TABLE = "test-app-roles"
+SKILL_RESOURCES_BUCKET = "test-skill-resources"
 
 
 def _gsi(name, hash_key, range_key):
@@ -88,7 +89,20 @@ def tool_repo(app_roles_table):
 
 
 @pytest.fixture()
-def skill_service(app_roles_table):
+def skill_resource_store(aws):
+    """SkillResourceStore bound to a moto S3 bucket (for reference files)."""
+    from apis.shared.skills.resource_store import SkillResourceStore
+
+    s3 = boto3.client("s3", region_name=AWS_REGION)
+    s3.create_bucket(Bucket=SKILL_RESOURCES_BUCKET)
+    return SkillResourceStore(
+        bucket_name=SKILL_RESOURCES_BUCKET,
+        s3_client=s3,
+    )
+
+
+@pytest.fixture()
+def skill_service(app_roles_table, skill_resource_store):
     """SkillCatalogService wired to the moto table with isolated RBAC caches."""
     from apis.app_api.skills.service import SkillCatalogService
     from apis.shared.rbac.admin_service import AppRoleAdminService
@@ -105,6 +119,7 @@ def skill_service(app_roles_table):
         tool_repository=ToolCatalogRepository(table_name=TABLE),
         app_role_service=AppRoleService(repository=role_repo, cache=cache),
         app_role_admin_service=AppRoleAdminService(repository=role_repo, cache=cache),
+        resource_store=skill_resource_store,
     )
 
 

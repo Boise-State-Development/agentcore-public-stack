@@ -94,6 +94,9 @@ export interface PlatformComputeRefs {
   artifactRenderTokenSecret: secretsmanager.ISecret;
   artifactsOriginUrl: string;
 
+  // ── Skills (admin-managed) — S3-backed reference files (PR-4)
+  skillResourcesBucket: s3.IBucket;
+
   // ── Fine-tuning
   fineTuningJobsTable: dynamodb.ITable;
   fineTuningAccessTable: dynamodb.ITable;
