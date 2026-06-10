@@ -17,11 +17,13 @@ from apis.shared.tools.models import (
     ToolDefinition,
     ToolProtocol,
     UserToolAccess,
+    UserToolServerTool,
     UserToolPreference,
     ToolCategory,
     ToolRoleAssignment,
 )
 from apis.shared.tools.repository import ToolCatalogRepository, get_tool_catalog_repository
+from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, parse_scoped_tool_id
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,35 @@ class ToolCatalogService:
                 continue
 
             user_enabled = prefs.tool_preferences.get(tool.tool_id)
-            is_enabled = user_enabled if user_enabled is not None else tool.enabled_by_default
+            default_enabled = (
+                user_enabled if user_enabled is not None else tool.enabled_by_default
+            )
+
+            # Surface an MCP server's individual tools so the UI can enable a
+            # subset. Empty for non-MCP tools or servers with no curated list.
+            # Each sub-tool's effective state: its own scoped preference, else
+            # the server-level preference, else the catalog default.
+            cfg = tool.mcp_config or tool.mcp_gateway_config
+            server_tools = []
+            for entry in getattr(cfg, "tools", None) or []:
+                scoped_key = f"{tool.tool_id}{SCOPE_DELIMITER}{entry.name}"
+                scoped_pref = prefs.tool_preferences.get(scoped_key)
+                server_tools.append(
+                    UserToolServerTool(
+                        name=entry.name,
+                        description=entry.description,
+                        needs_approval=entry.needs_approval,
+                        enabled=scoped_pref if scoped_pref is not None else default_enabled,
+                    )
+                )
+
+            # The server row is "on" when any of its tools are on (or, for a
+            # server with no curated list, the server-level preference applies).
+            is_enabled = (
+                any(st.enabled for st in server_tools)
+                if server_tools
+                else default_enabled
+            )
 
             accessible.append(
                 UserToolAccess(
@@ -109,6 +139,7 @@ class ToolCatalogService:
                     enabled_by_default=tool.enabled_by_default,
                     user_enabled=user_enabled,
                     is_enabled=is_enabled,
+                    server_tools=server_tools,
                 )
             )
 
@@ -161,15 +192,32 @@ class ToolCatalogService:
         Raises:
             ValueError: If user tries to configure tools they don't have access to
         """
-        # Get accessible tools
+        # Get accessible tools. A preference key may be scoped
+        # (`tool_id::mcp_tool_name`) to enable a single tool of an MCP server;
+        # validate the base catalog id for access (RBAC) and the tool name
+        # against the server's curated list when it has one.
         accessible = await self.get_user_accessible_tools(user)
-        accessible_ids = {t.tool_id for t in accessible}
+        accessible_by_id = {t.tool_id: t for t in accessible}
 
-        # Validate preferences
-        invalid_tools = set(preferences.keys()) - accessible_ids
+        invalid_tools = set()
+        unexposed_tools = set()
+        for key in preferences:
+            base, tool_name = parse_scoped_tool_id(key)
+            if base not in accessible_by_id:
+                invalid_tools.add(key)
+                continue
+            if tool_name is not None:
+                server_names = {st.name for st in accessible_by_id[base].server_tools}
+                if server_names and tool_name not in server_names:
+                    unexposed_tools.add(key)
+
         if invalid_tools:
             raise ValueError(
                 f"Cannot configure tools user doesn't have access to: {invalid_tools}"
+            )
+        if unexposed_tools:
+            raise ValueError(
+                f"Cannot configure tools not exposed by their server: {unexposed_tools}"
             )
 
         # Save preferences
