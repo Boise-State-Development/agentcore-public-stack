@@ -150,6 +150,7 @@ export class AdminLayout {
       items: [
         { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models' },
         { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools' },
+        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills' },
         { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors' },
       ],
     },

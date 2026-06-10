@@ -70,6 +70,18 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./tools/pages/tool-form.page').then(m => m.ToolFormPage),
   },
   {
+    path: 'skills',
+    loadComponent: () => import('./skills/pages/skill-list.page').then(m => m.SkillListPage),
+  },
+  {
+    path: 'skills/new',
+    loadComponent: () => import('./skills/pages/skill-form.page').then(m => m.SkillFormPage),
+  },
+  {
+    path: 'skills/edit/:skillId',
+    loadComponent: () => import('./skills/pages/skill-form.page').then(m => m.SkillFormPage),
+  },
+  {
     path: 'connectors',
     loadComponent: () => import('./connectors/pages/connector-list.page').then(m => m.ConnectorListPage),
   },
