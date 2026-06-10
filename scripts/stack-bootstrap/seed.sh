@@ -49,6 +49,14 @@ main() {
 
     export AWS_REGION="${region}"
 
+    # Skill-resources S3 bucket — deterministic name from the project prefix
+    # (CDK: getResourceName(config, 'skill-resources') in
+    # infrastructure/lib/constructs/skills/skill-resources-construct.ts). Used by
+    # the example-skill seed to upload its reference file; the seed degrades to
+    # no reference bytes if this is unset.
+    export S3_SKILL_RESOURCES_BUCKET_NAME="${prefix}-skill-resources"
+    log_info "Skill resources bucket: ${S3_SKILL_RESOURCES_BUCKET_NAME}"
+
     # Invoke the Python seed script
     log_info "Running seed script..."
     python3 "${PROJECT_ROOT}/backend/scripts/seed_bootstrap_data.py"

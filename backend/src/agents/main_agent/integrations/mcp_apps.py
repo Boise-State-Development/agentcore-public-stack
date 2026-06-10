@@ -726,4 +726,12 @@ class UICapableMCPClient(MCPClient):
     def list_tools_sync(self, *args: Any, **kwargs: Any) -> PaginatedList:
         result = super().list_tools_sync(*args, **kwargs)
         filtered = record_and_filter_ui_tools(list(result), client=self)
+        # Drop tools folded behind a skill's meta-tools (PR-6b). No-op unless a
+        # SkillAgent registered a fold set for this client; imported lazily to
+        # avoid a module import cycle (mcp_tool_folding is integration-neutral).
+        from agents.main_agent.integrations.mcp_tool_folding import (
+            drop_folded_tools,
+        )
+
+        filtered = drop_folded_tools(self, filtered)
         return PaginatedList(filtered, token=result.pagination_token)

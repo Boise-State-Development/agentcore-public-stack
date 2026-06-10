@@ -11,9 +11,10 @@ Two skill sources:
   (the caller resolved them from the user's RBAC roles), the registry loads
   those ACTIVE skills from the catalog repository. A granted skill's bound
   catalog tools are added to the agent's tool universe so they materialize
-  (skill-as-grant), and locally-resolved bound tools are folded behind the
-  two meta-tools. Gateway / external MCP bound tools are surfaced as live
-  clients but not yet folded (PR-6b).
+  (skill-as-grant). Local tools fold behind the two meta-tools by object
+  identity; gateway / external MCP bound tools fold via the MCP client (their
+  schemas are dropped from the model tool list and they execute through
+  ``call_tool_sync`` — see ``skills/mcp_binding.py``, PR-6b).
 - **File / dev** (legacy): when ``accessible_skill_ids`` is None, the registry
   scans ``definitions/*/SKILL.md`` and binds local ``@skill``-decorated tools
   by their ``_skill_name`` stamp, exactly as before — unchanged behavior.
@@ -159,7 +160,8 @@ class SkillAgent(ChatAgent):
 
             # Step 3: Bind tools to skills.
             if self._db_mode:
-                self._bind_catalog_tools()
+                self._bind_catalog_tools()  # local tools (by catalog id)
+                self._bind_mcp_tools()      # gateway / external MCP tools (folded)
             else:
                 self._registry.bind_tools(all_tools)
 
@@ -208,30 +210,82 @@ class SkillAgent(ChatAgent):
             raise
 
     def _bind_catalog_tools(self) -> None:
-        """Resolve each DB skill's bound catalog tool ids to live objects.
+        """Resolve each DB skill's bound LOCAL catalog tool ids to live objects.
 
         Local tools resolve via the agent's tool registry (the same instances
         the tool filter materialized), so they fold cleanly behind the meta-
-        tools. Gateway / external MCP bound ids don't resolve to individual
-        objects here (they're live client objects) — they remain available to
-        the model but are not folded yet (PR-6b).
+        tools by object identity. Gateway / external MCP bound ids don't resolve
+        to individual objects here (they're live client objects) and are handled
+        by :meth:`_bind_mcp_tools`.
         """
         catalog_map: dict = {}
-        non_local: List[str] = []
         for tid in self._registry.all_bound_tool_ids():
             if self.tool_registry.has_tool(tid):
                 catalog_map[tid] = self.tool_registry.get_tool(tid)
-            else:
-                non_local.append(tid)
 
         self._registry.bind_catalog_tools(catalog_map)
 
-        if non_local:
-            logger.info(
-                "Skill-bound non-local tools are available to the model but not "
-                "folded behind the meta-tools yet (PR-6b): %s",
-                non_local,
-            )
+    def _bind_mcp_tools(self) -> None:
+        """Fold a granted skill's gateway / external MCP bound tools (PR-6b).
+
+        These materialize as *client objects* (one ``MCPClient`` per server,
+        exposing many tools), not individual callables — which is why PR-6a left
+        them visible. Here each bound non-local id is classified (gateway vs
+        external), resolved to its concrete MCP tool(s) + owning client, wrapped
+        as a ``FoldedMCPTool`` bound into the registry (so the meta-tools can
+        show its schema and run it), and its agent-facing name is folded off the
+        client's model tool list. The client object stays in the agent's tool
+        list, so Strands keeps its session alive for ``call_tool_sync``.
+        """
+        non_local = [
+            tid
+            for tid in self._registry.all_bound_tool_ids()
+            if not self.tool_registry.has_tool(tid)
+        ]
+        if not non_local:
+            return
+
+        # Classify the non-local bound ids with the same filter that
+        # materialized the clients (its external set was populated from the
+        # augmented enabled_tools in __init__).
+        classified = self.tool_filter.filter_tools_extended(non_local)
+        gateway_ids = classified.gateway_tool_ids
+        external_ids = classified.external_mcp_tool_ids
+        if not gateway_ids and not external_ids:
+            return
+
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from agents.main_agent.integrations.mcp_tool_folding import (
+            set_folded_tool_names,
+        )
+        from agents.main_agent.skills.mcp_binding import resolve_mcp_bindings
+
+        external_integration = get_external_mcp_integration()
+
+        bindings = resolve_mcp_bindings(
+            gateway_ids=gateway_ids,
+            external_ids=external_ids,
+            gateway_client=self.gateway_integration.client,
+            expand_gateway=self._expand_gateway_tool_ids,
+            external_client_lookup=lambda tid: external_integration.get_client(
+                tid, self.user_id
+            ),
+        )
+
+        if bindings.catalog_map:
+            self._registry.bind_catalog_tools(bindings.catalog_map)
+        for client, names in bindings.fold_by_client.items():
+            set_folded_tool_names(client, names)
+
+        folded_count = sum(len(v) for v in bindings.catalog_map.values())
+        logger.info(
+            "SkillAgent folded %d gateway/external MCP tool(s) behind the meta-"
+            "tools (%d unresolved)",
+            folded_count,
+            len(bindings.unresolved),
+        )
 
     @property
     def registry(self) -> Optional[SkillRegistry]:

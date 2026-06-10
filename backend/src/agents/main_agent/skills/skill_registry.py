@@ -26,6 +26,18 @@ _YAML_LINE_RE = re.compile(r"^(\w+):\s*(.*)$")
 _YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s+(.+)$")
 
 
+def _ref_attr(ref: Any, name: str) -> Any:
+    """Read a reference-manifest field, tolerating pydantic objects or dicts.
+
+    Records loaded from the repository carry ``SkillResourceRef`` objects;
+    duck-typed test stand-ins may pass dicts (snake_case or camelCase).
+    """
+    value = getattr(ref, name, None)
+    if value is None and isinstance(ref, dict):
+        value = ref.get(name)
+    return value
+
+
 class SkillRegistry:
     """
     Registry for discovering and managing agent skills.
@@ -160,11 +172,13 @@ class SkillRegistry:
         """Bind tools to skills by catalog ``tool_id`` (admin/DB skills).
 
         ``catalog_map`` maps a catalog ``tool_id`` to the live tool object the
-        agent materialized for it. For each skill, every ``bound_tool_id`` that
-        resolves in the map is attached. This is the cross-source-aware analog
-        of ``bind_tools`` (which matches the local-only ``_skill_name`` stamp);
-        in PR-6a only locally-materialized tools resolve here — gateway /
-        external MCP tools are surfaced as live clients but not yet folded.
+        agent materialized for it — or a *list* of objects, since one catalog
+        id can expand to several runtime tools (a gateway target or external
+        MCP server with many tools; see ``mcp_binding.resolve_mcp_bindings``).
+        For each skill, every ``bound_tool_id`` that resolves in the map is
+        attached. This is the cross-source-aware analog of ``bind_tools`` (which
+        matches the local-only ``_skill_name`` stamp): local tools and folded
+        gateway/external MCP tools both resolve here in PR-6b.
 
         Returns the number of (skill, tool) bindings made.
         """
@@ -172,11 +186,15 @@ class SkillRegistry:
         for info in self._skills.values():
             existing_ids = {id(t) for t in info["tools"]}
             for tid in info.get("bound_tool_ids", []) or []:
-                tool_obj = catalog_map.get(tid)
-                if tool_obj is not None and id(tool_obj) not in existing_ids:
-                    info["tools"].append(tool_obj)
-                    existing_ids.add(id(tool_obj))
-                    bound += 1
+                value = catalog_map.get(tid)
+                if value is None:
+                    continue
+                tool_objs = value if isinstance(value, list) else [value]
+                for tool_obj in tool_objs:
+                    if id(tool_obj) not in existing_ids:
+                        info["tools"].append(tool_obj)
+                        existing_ids.add(id(tool_obj))
+                        bound += 1
         logger.info(f"Bound {bound} catalog tools across {len(self._skills)} skills")
         return bound
 
@@ -262,6 +280,87 @@ class SkillRegistry:
         except Exception as e:
             logger.error(f"Error loading instructions for '{skill_name}': {e}")
             return None
+
+    def get_resource_names(self, skill_name: str) -> List[str]:
+        """List a skill's supporting reference filenames (Level-2.5).
+
+        These are the deep progressive-disclosure files (e.g. ``forms.md``)
+        that the SKILL.md body refers to. ``skill_dispatcher`` surfaces this
+        list so the model knows which files it may read; the bytes live in S3
+        (see :meth:`read_resource`). Empty for file/dev skills (no manifest).
+        """
+        skill = self._skills.get(skill_name)
+        if not skill:
+            return []
+        names: List[str] = []
+        for ref in skill.get("resources", []) or []:
+            filename = _ref_attr(ref, "filename")
+            if filename:
+                names.append(filename)
+        return names
+
+    def read_resource(
+        self, skill_name: str, filename: str, store: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch one of a skill's reference files on demand (Level-3 disclosure).
+
+        Resolves ``filename`` against the skill's ``resources`` manifest and
+        reads the bytes from the S3-backed ``SkillResourceStore`` (the runtime
+        was granted read access to the skill-resources bucket in PR-6a). Returns
+        a dict the dispatcher serializes:
+
+          - ``{"filename", "content_type", "content"}`` for text;
+          - ``{"filename", "content_type", "size", "note"}`` for binary
+            (never dumps raw bytes into the model context);
+          - ``{"error": ...}`` if the file is missing or storage is unavailable.
+
+        ``None`` only when the skill itself is unknown. ``store`` is injectable
+        for tests; defaults to the process-global store.
+        """
+        skill = self._skills.get(skill_name)
+        if not skill:
+            return None
+
+        ref = None
+        for candidate in skill.get("resources", []) or []:
+            if _ref_attr(candidate, "filename") == filename:
+                ref = candidate
+                break
+        if ref is None:
+            return {"error": f"Reference file '{filename}' not found in skill '{skill_name}'"}
+
+        s3_key = _ref_attr(ref, "s3_key") or _ref_attr(ref, "s3Key")
+        content_type = _ref_attr(ref, "content_type") or _ref_attr(ref, "contentType") or ""
+        size = _ref_attr(ref, "size")
+        if not s3_key:
+            return {"error": f"Reference file '{filename}' has no storage key"}
+
+        from apis.shared.skills.resource_store import (
+            SkillResourceStoreError,
+            get_skill_resource_store,
+        )
+
+        store = store or get_skill_resource_store()
+        try:
+            data = store.get(s3_key)
+        except SkillResourceStoreError as e:
+            logger.warning("Could not read reference '%s' for skill '%s': %s", filename, skill_name, e)
+            return {"error": f"Could not read reference file '{filename}': {e}"}
+
+        try:
+            text = data.decode("utf-8")
+        except (UnicodeDecodeError, AttributeError):
+            return {
+                "filename": filename,
+                "content_type": content_type or "application/octet-stream",
+                "size": size if size is not None else len(data),
+                "note": "Binary reference file — not rendered as text.",
+            }
+        return {
+            "filename": filename,
+            "content_type": content_type or "text/markdown",
+            "content": text,
+        }
 
     def get_tools(self, skill_name: str) -> List[Any]:
         """
