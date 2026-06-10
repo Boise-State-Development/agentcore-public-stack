@@ -336,6 +336,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         // with "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured".
         S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: props.refs.ragDocumentsBucket.bucketName,
 
+        // Skill reference-file bucket (admin-managed Skills). Provisioned now
+        // (read grant below) so the PR-6 runtime can read a skill's reference
+        // files at dispatch time; no code consumes it yet.
+        S3_SKILL_RESOURCES_BUCKET_NAME: props.refs.skillResourcesBucket.bucketName,
+
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 

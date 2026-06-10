@@ -11,7 +11,8 @@ skill folds those catalog tools behind the meta-tools at runtime.
 """
 
 import logging
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Optional, Tuple
 
 from apis.shared.auth.models import User
 from apis.shared.rbac.admin_service import (
@@ -21,11 +22,17 @@ from apis.shared.rbac.admin_service import (
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.skills.models import (
     SkillDefinition,
+    SkillResourceRef,
     SkillRoleAssignment,
 )
 from apis.shared.skills.repository import (
     SkillCatalogRepository,
     get_skill_catalog_repository,
+)
+from apis.shared.skills.resource_store import (
+    SkillResourceStore,
+    compute_content_hash,
+    get_skill_resource_store,
 )
 from apis.shared.tools.models import ToolStatus
 from apis.shared.tools.repository import (
@@ -34,6 +41,16 @@ from apis.shared.tools.repository import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Reference-file guardrails. Reference files are small read-only docs
+# (markdown/text), not bulk assets — keep both axes modest so a skill's
+# manifest stays well inside the DynamoDB item limit and the agent's
+# progressive-disclosure budget (PR-6) stays bounded.
+MAX_RESOURCE_BYTES = 1_048_576  # 1 MiB per file
+MAX_RESOURCES_PER_SKILL = 50
+# Safe, flat filenames only — no path separators, no traversal. Mirrors the
+# skill_id discipline: visible, predictable object keys.
+_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class SkillCatalogService:
@@ -51,6 +68,7 @@ class SkillCatalogService:
         tool_repository: Optional[ToolCatalogRepository] = None,
         app_role_service: Optional[AppRoleService] = None,
         app_role_admin_service: Optional[AppRoleAdminService] = None,
+        resource_store: Optional[SkillResourceStore] = None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_skill_catalog_repository()
@@ -59,6 +77,7 @@ class SkillCatalogService:
         self.app_role_admin_service = (
             app_role_admin_service or get_app_role_admin_service()
         )
+        self.resource_store = resource_store or get_skill_resource_store()
 
     # =========================================================================
     # Admin Methods - Skill CRUD
@@ -242,6 +261,195 @@ class SkillCatalogService:
             )
 
         return deleted
+
+    # =========================================================================
+    # Admin Methods - Reference Files (S3-backed)
+    # =========================================================================
+
+    async def list_resources(self, skill_id: str) -> List[SkillResourceRef]:
+        """Return a skill's reference-file manifest.
+
+        Raises:
+            ValueError: If the skill does not exist (mapped to 404 by route).
+        """
+        skill = await self.repository.get_skill(skill_id)
+        if skill is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+        return list(skill.resources)
+
+    async def add_resource(
+        self,
+        skill_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        admin: User,
+    ) -> List[SkillResourceRef]:
+        """Upload (or replace) one reference file and update the manifest.
+
+        Bytes are stored content-addressed in S3 (dedupe); the manifest on
+        the catalog row is updated atomically (single row write). Re-uploading
+        the same filename replaces its manifest entry; any S3 object that is
+        no longer referenced afterward is garbage-collected.
+
+        Returns the skill's updated manifest.
+
+        Raises:
+            ValueError: If the skill is missing, the filename is invalid, the
+                file is too large, or the per-skill file cap is exceeded.
+        """
+        skill = await self.repository.get_skill(skill_id)
+        if skill is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+
+        self._validate_filename(filename)
+        if len(content) > MAX_RESOURCE_BYTES:
+            raise ValueError(
+                f"Reference file '{filename}' is {len(content)} bytes; "
+                f"the limit is {MAX_RESOURCE_BYTES} bytes."
+            )
+        if not content:
+            raise ValueError(f"Reference file '{filename}' is empty.")
+
+        existing = list(skill.resources)
+        # Adding a NEW filename must respect the per-skill cap; replacing an
+        # existing filename is always allowed.
+        is_new = all(r.filename != filename for r in existing)
+        if is_new and len(existing) >= MAX_RESOURCES_PER_SKILL:
+            raise ValueError(
+                f"Skill '{skill_id}' already has the maximum of "
+                f"{MAX_RESOURCES_PER_SKILL} reference files."
+            )
+
+        resolved_type = content_type or "application/octet-stream"
+        digest = compute_content_hash(content)
+        s3_key = self.resource_store.put(
+            skill_id=skill_id, content=content, content_type=resolved_type
+        )
+        new_ref = SkillResourceRef(
+            filename=filename,
+            content_hash=digest,
+            size=len(content),
+            content_type=resolved_type,
+            s3_key=s3_key,
+        )
+
+        new_resources = [r for r in existing if r.filename != filename]
+        new_resources.append(new_ref)
+        new_resources.sort(key=lambda r: r.filename)
+
+        await self._persist_resources(skill_id, new_resources, admin)
+        self._gc_orphaned(existing, new_resources)
+
+        logger.info(
+            f"Admin {admin.email} uploaded reference file to skill {skill_id}",
+            extra={
+                "event": "skill_resource_added",
+                "skill_id": skill_id,
+                # NB: not "filename" — that key is reserved on LogRecord and
+                # raises KeyError when the record is actually emitted.
+                "resource_filename": filename,
+                "size": len(content),
+                "admin_user_id": admin.user_id,
+            },
+        )
+        return new_resources
+
+    async def read_resource(
+        self, skill_id: str, filename: str
+    ) -> Tuple[SkillResourceRef, bytes]:
+        """Return one reference file's manifest entry and its bytes.
+
+        Raises:
+            ValueError: If the skill or the named file does not exist.
+        """
+        skill = await self.repository.get_skill(skill_id)
+        if skill is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+
+        ref = next((r for r in skill.resources if r.filename == filename), None)
+        if ref is None:
+            raise ValueError(
+                f"Reference file '{filename}' not found on skill '{skill_id}'"
+            )
+
+        content = self.resource_store.get(ref.s3_key)
+        return ref, content
+
+    async def delete_resource(
+        self, skill_id: str, filename: str, admin: User
+    ) -> List[SkillResourceRef]:
+        """Remove one reference file from the manifest (and GC its object).
+
+        Returns the skill's updated manifest.
+
+        Raises:
+            ValueError: If the skill or the named file does not exist.
+        """
+        skill = await self.repository.get_skill(skill_id)
+        if skill is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+
+        existing = list(skill.resources)
+        if all(r.filename != filename for r in existing):
+            raise ValueError(
+                f"Reference file '{filename}' not found on skill '{skill_id}'"
+            )
+
+        new_resources = [r for r in existing if r.filename != filename]
+        await self._persist_resources(skill_id, new_resources, admin)
+        self._gc_orphaned(existing, new_resources)
+
+        logger.info(
+            f"Admin {admin.email} deleted reference file from skill {skill_id}",
+            extra={
+                "event": "skill_resource_deleted",
+                "skill_id": skill_id,
+                # NB: not "filename" — reserved on LogRecord (see add_resource).
+                "resource_filename": filename,
+                "admin_user_id": admin.user_id,
+            },
+        )
+        return new_resources
+
+    @staticmethod
+    def _validate_filename(filename: str) -> None:
+        """Reject path traversal / unsafe filenames up front."""
+        if not _FILENAME_PATTERN.match(filename or ""):
+            raise ValueError(
+                f"Invalid reference filename '{filename}'. Use letters, "
+                "digits, '.', '_' and '-' only (no path separators), "
+                "1-128 characters."
+            )
+
+    async def _persist_resources(
+        self,
+        skill_id: str,
+        resources: List[SkillResourceRef],
+        admin: User,
+    ) -> None:
+        """Write the manifest to the catalog row (single atomic item write)."""
+        await self.repository.update_skill(
+            skill_id, {"resources": resources}, admin_user_id=admin.user_id
+        )
+
+    def _gc_orphaned(
+        self,
+        old_resources: List[SkillResourceRef],
+        new_resources: List[SkillResourceRef],
+    ) -> None:
+        """Delete S3 objects no longer referenced by the new manifest.
+
+        Objects are content-addressed, so a key still referenced by another
+        manifest entry (identical content under a different filename) is
+        retained. Best-effort: a failed cleanup never fails the write — the
+        manifest is already consistent; an orphaned object is only wasted
+        storage.
+        """
+        old_keys = {r.s3_key for r in old_resources}
+        new_keys = {r.s3_key for r in new_resources}
+        for key in old_keys - new_keys:
+            self.resource_store.delete(key)
 
     # =========================================================================
     # Admin Methods - Role Sync

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from apis.shared.skills.models import (
     SkillDefinition,
+    SkillResourceRef,
     SkillStatus,
     SkillVisibility,
 )
@@ -109,6 +110,88 @@ class TestSkillRoundTrip:
         assert restored.owner_id == "system"
         assert restored.visibility == "admin"
         assert isinstance(restored.created_at, datetime)
+
+
+class TestSkillResourcesRoundTrip:
+    def _ref(self, **kw) -> SkillResourceRef:
+        defaults = dict(
+            filename="forms.md",
+            content_hash="a" * 64,
+            size=1234,
+            content_type="text/markdown",
+            s3_key="skills/pdf_workflows/" + "a" * 64,
+        )
+        defaults.update(kw)
+        return SkillResourceRef(**defaults)
+
+    def test_resource_ref_camel_case_aliases(self):
+        # Constructible from snake_case (populate_by_name) and serializes
+        # camelCase by alias (the admin API response shape).
+        ref = self._ref()
+        dumped = ref.model_dump(by_alias=True)
+        assert dumped["filename"] == "forms.md"
+        assert dumped["contentHash"] == "a" * 64
+        assert dumped["contentType"] == "text/markdown"
+        assert dumped["s3Key"].startswith("skills/pdf_workflows/")
+
+    def test_resources_serialized_to_dynamo_item(self):
+        skill = _skill(resources=[self._ref(), self._ref(filename="merge.md")])
+        item = skill.to_dynamo_item()
+
+        assert isinstance(item["resources"], list)
+        assert len(item["resources"]) == 2
+        first = item["resources"][0]
+        # camelCase maps, mirroring the row convention.
+        assert set(first) == {
+            "filename",
+            "contentHash",
+            "size",
+            "contentType",
+            "s3Key",
+        }
+        assert first["filename"] == "forms.md"
+        assert first["contentHash"] == "a" * 64
+
+    def test_resources_round_trip_preserves_manifest(self):
+        skill = _skill(resources=[self._ref(filename="forms.md", size=10)])
+        restored = SkillDefinition.from_dynamo_item(skill.to_dynamo_item())
+
+        assert len(restored.resources) == 1
+        ref = restored.resources[0]
+        assert ref.filename == "forms.md"
+        assert ref.size == 10
+        assert ref.content_type == "text/markdown"
+        assert ref.s3_key.startswith("skills/pdf_workflows/")
+
+    def test_size_coerced_from_decimal(self):
+        # DynamoDB returns numbers as Decimal; from_dynamo_item coerces to int.
+        from decimal import Decimal
+
+        item = _skill().to_dynamo_item()
+        item["resources"] = [
+            {
+                "filename": "forms.md",
+                "contentHash": "b" * 64,
+                "size": Decimal("2048"),
+                "contentType": "text/markdown",
+                "s3Key": "skills/pdf_workflows/" + "b" * 64,
+            }
+        ]
+        restored = SkillDefinition.from_dynamo_item(item)
+        assert restored.resources[0].size == 2048
+        assert isinstance(restored.resources[0].size, int)
+
+    def test_defaults_empty_and_backward_compatible(self):
+        # New skills default to no resources.
+        assert _skill().resources == []
+        # An old row with no `resources` attribute deserializes to [].
+        item = {
+            "skillId": "legacy_skill",
+            "displayName": "Legacy",
+            "description": "desc",
+            "instructions": "body",
+        }
+        assert SkillDefinition.from_dynamo_item(item).resources == []
 
 
 class TestSkillIdRegex:

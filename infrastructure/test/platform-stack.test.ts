@@ -113,8 +113,9 @@ describe('PlatformStack', () => {
 
   describe('S3 buckets', () => {
     it('creates all data buckets', () => {
-      // file-uploads, SPA static, mcp-sandbox, rag-documents, fine-tuning-data, artifacts-content
-      template.resourceCountIs('AWS::S3::Bucket', 6);
+      // file-uploads, SPA static, mcp-sandbox, rag-documents, fine-tuning-data,
+      // artifacts-content, skill-resources (admin-managed Skills reference files)
+      template.resourceCountIs('AWS::S3::Bucket', 7);
     });
   });
 

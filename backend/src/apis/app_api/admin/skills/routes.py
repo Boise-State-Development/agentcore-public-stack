@@ -8,7 +8,8 @@ create/edit form populates its tool picker from GET /admin/tools.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 
 from apis.shared.auth import User, require_admin
 from apis.shared.skills.models import (
@@ -18,6 +19,7 @@ from apis.shared.skills.models import (
     SetSkillRolesRequest,
     SkillCreateRequest,
     SkillDefinition,
+    SkillResourcesResponse,
     SkillRolesResponse,
     SkillUpdateRequest,
 )
@@ -228,3 +230,111 @@ async def remove_roles_from_skill(
         return {"message": f"Roles removed from skill '{skill_id}'"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =============================================================================
+# Reference-File Endpoints (S3-backed supporting reference files — PR-4)
+# =============================================================================
+
+
+def _resource_value_error(e: ValueError) -> HTTPException:
+    """Map a service ValueError to 404 (missing) or 400 (validation)."""
+    status = 404 if "not found" in str(e).lower() else 400
+    return HTTPException(status_code=status, detail=str(e))
+
+
+@router.get("/{skill_id}/resources", response_model=SkillResourcesResponse)
+async def list_skill_resources(
+    skill_id: str,
+    admin: User = Depends(require_admin),
+):
+    """List a skill's reference-file manifest (no bytes)."""
+    logger.info("Admin listing skill reference files")
+
+    service = get_skill_catalog_service()
+    try:
+        resources = await service.list_resources(skill_id)
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+@router.post("/{skill_id}/resources", response_model=SkillResourcesResponse)
+async def upload_skill_resource(
+    skill_id: str,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    """Upload (or replace) one supporting reference file for a skill.
+
+    Bytes are stored content-addressed in S3; the catalog row's manifest is
+    updated atomically. Re-uploading the same filename replaces it. Returns
+    the skill's updated manifest.
+    """
+    logger.info("Admin uploading skill reference file")
+
+    service = get_skill_catalog_service()
+    content = await file.read()
+    try:
+        resources = await service.add_resource(
+            skill_id,
+            filename=file.filename or "",
+            content=content,
+            content_type=file.content_type or "",
+            admin=admin,
+        )
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    from apis.shared.skills.freshness import invalidate as invalidate_freshness
+
+    invalidate_freshness(skill_id)
+
+    return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+@router.get("/{skill_id}/resources/{filename}")
+async def read_skill_resource(
+    skill_id: str,
+    filename: str,
+    admin: User = Depends(require_admin),
+):
+    """Return the raw bytes of one reference file with its content type."""
+    logger.info("Admin reading skill reference file")
+
+    service = get_skill_catalog_service()
+    try:
+        ref, content = await service.read_resource(skill_id, filename)
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    return Response(
+        content=content,
+        media_type=ref.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{ref.filename}"',
+        },
+    )
+
+
+@router.delete("/{skill_id}/resources/{filename}", response_model=SkillResourcesResponse)
+async def delete_skill_resource(
+    skill_id: str,
+    filename: str,
+    admin: User = Depends(require_admin),
+):
+    """Delete one reference file from a skill. Returns the updated manifest."""
+    logger.info("Admin deleting skill reference file")
+
+    service = get_skill_catalog_service()
+    try:
+        resources = await service.delete_resource(skill_id, filename, admin)
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    from apis.shared.skills.freshness import invalidate as invalidate_freshness
+
+    invalidate_freshness(skill_id)
+
+    return SkillResourcesResponse(skill_id=skill_id, resources=resources)

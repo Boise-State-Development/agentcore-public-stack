@@ -50,6 +50,7 @@ import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-inge
 import { ArtifactsDataConstruct } from './constructs/artifacts/artifacts-data-construct';
 import { ArtifactRenderLambdaConstruct } from './constructs/artifacts/artifact-render-lambda-construct';
 import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts-distribution-construct';
+import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -197,6 +198,9 @@ export class PlatformStack extends cdk.Stack {
    * Platform, this typed ref isn't needed for cross-stack.
    */
   public readonly artifactsOriginUrl: string;
+
+  // ── Skills (admin-managed) — S3-backed reference files (PR-4)
+  public readonly skillResourcesBucket: s3.IBucket;
 
   // ── Fine-tuning
   public readonly fineTuningJobsTable: dynamodb.ITable;
@@ -405,6 +409,18 @@ export class PlatformStack extends cdk.Stack {
     );
     this.artifactsContentBucket = this._artifactsDataConstruct.bucket;
     this.artifactsTable = this._artifactsDataConstruct.table;
+
+    // ============================================================
+    // Skill reference-file storage (admin-managed Skills, PR-4).
+    // Bytes-only S3 bucket; the skill catalog row (app-roles table)
+    // carries the lightweight manifest. Threaded to the compute roles
+    // via PlatformComputeRefs.skillResourcesBucket below.
+    // ============================================================
+    this.skillResourcesBucket = new SkillResourcesConstruct(
+      this,
+      'SkillResources',
+      { config },
+    ).bucket;
 
     const artifactsDomainName = config.domainName!;
     this.artifactsFrameAncestors = [
@@ -631,6 +647,7 @@ export class PlatformStack extends cdk.Stack {
       artifactsTable: this.artifactsTable,
       artifactRenderTokenSecret: this.artifactRenderTokenSecret,
       artifactsOriginUrl: this.artifactsOriginUrl,
+      skillResourcesBucket: this.skillResourcesBucket,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,

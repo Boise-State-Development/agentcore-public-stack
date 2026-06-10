@@ -287,6 +287,19 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Skill reference files (S3) ──
+  // app-api is the writer: admins upload/replace/delete a skill's reference
+  // files (apis/shared/skills/resource_store.py). Sourced from a typed ref.
+  const skillResourcesBucketArn = props.refs.skillResourcesBucket.bucketArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'SkillResourcesBucketReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
+      resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
+    }),
+  );
+
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
   const ftJobsTableArn = props.refs.fineTuningJobsTable.tableArn;

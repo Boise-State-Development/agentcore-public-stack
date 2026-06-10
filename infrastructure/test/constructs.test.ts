@@ -28,6 +28,7 @@ import { SharedConversationsConstruct } from '../lib/constructs/data/shared-conv
 import { RagDataConstruct } from '../lib/constructs/rag/rag-data-construct';
 import { FineTuningDataConstruct } from '../lib/constructs/fine-tuning/fine-tuning-data-construct';
 import { ArtifactsDataConstruct } from '../lib/constructs/artifacts/artifacts-data-construct';
+import { SkillResourcesConstruct } from '../lib/constructs/skills/skill-resources-construct';
 import { SpaBucketConstruct } from '../lib/constructs/spa/spa-bucket-construct';
 import { AgentCoreGatewayConstruct } from '../lib/constructs/gateway/agentcore-gateway-construct';
 
@@ -265,6 +266,28 @@ describe('ArtifactsDataConstruct', () => {
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::DynamoDB::Table', 1);
     t.resourceCountIs('AWS::S3::Bucket', 1);
+  });
+});
+
+describe('SkillResourcesConstruct', () => {
+  it('creates a private, encrypted S3 bucket', () => {
+    const stack = testStack();
+    new SkillResourcesConstruct(stack, 'SkillRes', { config: createMockConfig() });
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::S3::Bucket', 1);
+    t.hasResourceProperties('AWS::S3::Bucket', {
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        ],
+      },
+    });
   });
 });
 
