@@ -12,12 +12,18 @@ upfront, especially as the number of tools grows.
 
 from .decorators import skill, register_skill
 from .skill_registry import SkillRegistry
-from .skill_tools import skill_dispatcher, skill_executor, set_dispatcher_registry
+from .skill_tools import (
+    make_skill_tools,
+    skill_dispatcher,
+    skill_executor,
+    set_dispatcher_registry,
+)
 
 __all__ = [
     "skill",
     "register_skill",
     "SkillRegistry",
+    "make_skill_tools",
     "skill_dispatcher",
     "skill_executor",
     "set_dispatcher_registry",

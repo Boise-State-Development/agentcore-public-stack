@@ -114,3 +114,67 @@ class TestDecorators:
         register_skill("batch-skill", tools=[tool_a, tool_b])
         assert tool_a._skill_name == "batch-skill"
         assert tool_b._skill_name == "batch-skill"
+
+
+class TestMakeSkillTools:
+    """Req SD-3 (PR-6): per-agent meta-tools bound to their own registry.
+
+    The concurrency fix: two agents serving different users must not share
+    skill state through a process-global registry.
+    """
+
+    def _registry_with(self, skill_id):
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        reg = SkillRegistry()
+
+        class _Rec:
+            def __init__(self, sid):
+                self.skill_id = sid
+                self.description = f"desc {sid}"
+                self.instructions = f"# {sid} body"
+                self.compose = []
+                self.bound_tool_ids = []
+                self.resources = []
+                self.status = "active"
+
+        reg.load_records([_Rec(skill_id)])
+        return reg
+
+    def test_each_pair_resolves_against_its_own_registry(self):
+        from agents.main_agent.skills.skill_tools import (
+            make_skill_tools,
+            set_dispatcher_registry,
+        )
+
+        # A stray global registry must NOT leak into the closures.
+        set_dispatcher_registry(None)
+
+        reg_a = self._registry_with("skill_a")
+        reg_b = self._registry_with("skill_b")
+        dispatch_a, _ = make_skill_tools(reg_a)
+        dispatch_b, _ = make_skill_tools(reg_b)
+
+        a = json.loads(dispatch_a(skill_name="skill_a"))
+        assert "# skill_a body" in a["instructions"]
+
+        # reg_b doesn't know skill_a → its dispatcher reports it unknown,
+        # proving the pairs are isolated (no shared global).
+        cross = json.loads(dispatch_b(skill_name="skill_a"))
+        assert "error" in cross and "Unknown skill" in cross["error"]
+
+        b = json.loads(dispatch_b(skill_name="skill_b"))
+        assert "# skill_b body" in b["instructions"]
+
+    def test_factory_pair_ignores_module_global(self):
+        from agents.main_agent.skills.skill_tools import (
+            make_skill_tools,
+            set_dispatcher_registry,
+        )
+
+        reg = self._registry_with("only_skill")
+        dispatch, _ = make_skill_tools(reg)
+        # Even with the global cleared, the closure works.
+        set_dispatcher_registry(None)
+        result = json.loads(dispatch(skill_name="only_skill"))
+        assert "# only_skill body" in result["instructions"]

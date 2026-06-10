@@ -183,3 +183,69 @@ async def test_non_resume_keeps_non_paused_cached_agent(
 
     assert second is first
     assert mock_create_agent.call_count == 1
+
+
+def test_create_cache_key_includes_skills_hash():
+    """Two skill sets must not collide in the agent cache (skills_hash)."""
+    base = dict(
+        session_id="s",
+        user_id="u",
+        enabled_tools=["t"],
+        model_id="m",
+        inference_params={},
+        system_prompt=None,
+        caching_enabled=False,
+        provider="bedrock",
+        freshness_hash="f",
+        agent_type="skill",
+    )
+    k1 = service._create_cache_key(**base, skills_hash="aaa")
+    k2 = service._create_cache_key(**base, skills_hash="bbb")
+    assert k1 != k2
+    assert k1[-1] == "aaa"
+    # Default (chat) callers omit it → stable empty trailing element.
+    assert service._create_cache_key(**base)[-1] == ""
+
+
+@pytest.mark.asyncio
+async def test_skills_hash_separates_skill_agent_cache_slots(
+    mock_create_agent, mock_freshness_hash
+):
+    """Same session+user but different accessible skills → different agents;
+    identical skills → cache hit. Verifies skills_hash is threaded into the key.
+    """
+    with patch(
+        "apis.shared.skills.freshness.get_freshness_hash",
+        new=AsyncMock(side_effect=lambda ids: "|".join(sorted(ids))),
+    ):
+        a1 = await service.get_agent(
+            session_id="s", user_id="u", agent_type="skill",
+            accessible_skill_ids=["pdf"],
+        )
+        a1_again = await service.get_agent(
+            session_id="s", user_id="u", agent_type="skill",
+            accessible_skill_ids=["pdf"],
+        )
+        a2 = await service.get_agent(
+            session_id="s", user_id="u", agent_type="skill",
+            accessible_skill_ids=["pdf", "docx"],
+        )
+
+    assert a1 is a1_again            # same skills → cache hit
+    assert a1 is not a2             # different skills → distinct slot
+    assert mock_create_agent.call_count == 2
+    # The skill path forwards the resolved ids to the factory.
+    forwarded = [c.kwargs.get("accessible_skill_ids") for c in mock_create_agent.call_args_list]
+    assert ["pdf"] in forwarded and ["pdf", "docx"] in forwarded
+
+
+@pytest.mark.asyncio
+async def test_chat_path_unaffected_by_skills_hash(mock_create_agent, mock_freshness_hash):
+    """The default chat path passes no accessible skills → skills_hash empty,
+    cache behaves exactly as before, and accessible_skill_ids isn't forwarded.
+    """
+    a = await service.get_agent(session_id="s", user_id="u")
+    a_again = await service.get_agent(session_id="s", user_id="u")
+    assert a is a_again
+    assert mock_create_agent.call_count == 1
+    assert "accessible_skill_ids" not in mock_create_agent.call_args.kwargs
