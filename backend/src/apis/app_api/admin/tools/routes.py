@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
 from apis.app_api.tools.service import get_tool_catalog_service
+from apis.app_api.tools.discovery import discover_tools_for_saved_tool
 from apis.shared.tools.gateway_target_service import (
     GatewayTargetConflictError,
     GatewayTargetNotFoundError,
@@ -434,6 +435,32 @@ async def admin_discover_mcp_tools(
         discovered.append(DiscoveredMCPTool(name=name, description=description))
 
     return MCPDiscoverResponse(tools=discovered)
+
+
+@router.post("/{tool_id}/discover", response_model=MCPDiscoverResponse)
+async def admin_discover_saved_tool_tools(
+    tool_id: str,
+    admin: User = Depends(require_admin),
+):
+    """List the individual tools a *saved* catalog tool exposes.
+
+    Used by the admin skills picker to drive per-tool binding for an MCP server
+    whose tools aren't enumerated in the catalog. For a gateway target this
+    returns the tools the gateway recorded at registration; for an external MCP
+    server it connects live (OAuth-gated servers fall back to the curated list,
+    since the admin session has no end-user token).
+    """
+    service = get_tool_catalog_service()
+    tool = await service.get_tool(tool_id)
+    if tool is None:
+        raise HTTPException(status_code=404, detail="Tool not found")
+
+    try:
+        tools = await discover_tools_for_saved_tool(tool)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return MCPDiscoverResponse(tools=tools)
 
 
 @router.get("/{tool_id}/gateway-status", response_model=GatewayTargetStatusResponse)

@@ -20,9 +20,11 @@ from agents.main_agent.tools import (
 
 # Import new service and models
 from .service import get_tool_catalog_service
+from .discovery import discover_tools_for_saved_tool
 from apis.shared.tools.models import (
     UserToolsResponse,
     ToolPreferencesRequest,
+    MCPDiscoverResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,6 +132,37 @@ async def update_tool_preferences(
         return {"message": "Preferences saved successfully"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{tool_id}/discover", response_model=MCPDiscoverResponse)
+async def discover_my_tool_tools(
+    tool_id: str,
+    user: User = Depends(get_current_user_from_session),
+):
+    """List the individual tools a saved MCP server exposes (per-tool enablement).
+
+    Lets the model-settings UI offer per-tool toggles for an MCP server whose
+    tools aren't enumerated in the catalog (discovered live). Gated by the
+    user's RBAC access to the tool; ``forward_auth_token`` servers are
+    discovered with the user's own token.
+    """
+    service = get_tool_catalog_service()
+
+    # RBAC: the user must already have access to this catalog tool.
+    accessible = await service.get_user_accessible_tools(user)
+    if not any(t.tool_id == tool_id for t in accessible):
+        raise HTTPException(status_code=404, detail="Tool not found or not accessible")
+
+    tool = await service.repository.get_tool(tool_id)
+    if tool is None:
+        raise HTTPException(status_code=404, detail="Tool not found")
+
+    try:
+        tools = await discover_tools_for_saved_tool(tool, oauth_token=user.raw_token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return MCPDiscoverResponse(tools=tools)
 
 
 # =============================================================================
