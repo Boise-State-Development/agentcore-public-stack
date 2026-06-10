@@ -127,6 +127,39 @@ class TestFilterToolsExtended:
 
 
 # ---------------------------------------------------------------------------
+# Scoped ids (`base::tool`) — classify by the base catalog id, carry through
+# ---------------------------------------------------------------------------
+class TestFilterToolsScoped:
+    """A scoped id selecting one tool of an MCP server is classified by its base
+    catalog id; the scoped id rides through to the per-source resolver."""
+
+    def test_scoped_gateway_id_carried_through(self, tool_filter: ToolFilter):
+        result = tool_filter.filter_tools_extended(["gateway_wiki::search"])
+        assert result.gateway_tool_ids == ["gateway_wiki::search"]
+        assert result.external_mcp_tool_ids == []
+
+    def test_scoped_external_id_carried_through(self, tool_filter: ToolFilter):
+        tool_filter.set_external_mcp_tools(["ext_tool_a"])
+        result = tool_filter.filter_tools_extended(["ext_tool_a::do_thing"])
+        assert result.external_mcp_tool_ids == ["ext_tool_a::do_thing"]
+        assert result.local_tools == []
+
+    def test_bare_and_scoped_local_not_double_added(self, tool_filter: ToolFilter):
+        # A local tool is a single tool — bare + scoped must not add it twice.
+        result = tool_filter.filter_tools_extended(["calculator", "calculator::x"])
+        assert len(result.local_tools) == 1
+
+    def test_scoped_counts_as_its_base_category_in_stats(self, tool_filter: ToolFilter):
+        tool_filter.set_external_mcp_tools(["ext_tool_a"])
+        stats = tool_filter.get_statistics(
+            ["gateway_wiki::search", "ext_tool_a::do_thing"]
+        )
+        assert stats["gateway_tools"] == 1
+        assert stats["external_mcp_tools"] == 1
+        assert stats["unknown_tools"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Req 6.6 — get_statistics returns correct counts
 # ---------------------------------------------------------------------------
 class TestGetStatistics:

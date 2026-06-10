@@ -7,7 +7,7 @@ Integrates with the existing AppRole RBAC system.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -689,6 +689,23 @@ class ToolDefinition(BaseModel):
 
     model_config = {"use_enum_values": True}
 
+    def curated_tool_names(self) -> Optional[Set[str]]:
+        """The MCP tool names this catalog tool exposes, when known.
+
+        For an external-MCP (``mcp_external``) or Gateway (``mcp``) tool the
+        admin may curate the server's tool list; return those names so callers
+        can validate a per-tool selection (``tool_id::name``) against them.
+        Returns ``None`` when the tool is not an MCP server or has no curated
+        list (e.g. a DYNAMIC gateway target, or a server whose tools are
+        discovered live) — in which case per-tool names can't be validated
+        statically.
+        """
+        cfg = self.mcp_config or self.mcp_gateway_config
+        entries = getattr(cfg, "tools", None) if cfg else None
+        if not entries:
+            return None
+        return {entry.name for entry in entries}
+
     def to_dynamo_item(self) -> dict:
         """Convert to DynamoDB item format."""
         item = {
@@ -818,6 +835,24 @@ class UserToolPreference(BaseModel):
 # =============================================================================
 
 
+class UserToolServerTool(BaseModel):
+    """One tool exposed by an MCP-server catalog tool.
+
+    Surfaced on ``UserToolAccess`` so the user-facing tools UI can enable a
+    subset of a server's tools (per-tool enablement). ``name`` is the raw MCP
+    tool name; a preference for it is keyed ``<tool_id>::<name>``. ``enabled``
+    is the user's effective state for this individual tool (scoped preference,
+    falling back to the server-level preference, then the catalog default).
+    """
+
+    name: str
+    description: Optional[str] = None
+    needs_approval: bool = Field(default=False, alias="needsApproval")
+    enabled: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
 class UserToolAccess(BaseModel):
     """
     Computed tool access for a specific user.
@@ -831,6 +866,13 @@ class UserToolAccess(BaseModel):
     protocol: ToolProtocol
     status: ToolStatus
     requires_oauth_provider: Optional[str] = Field(None, alias="requiresOauthProvider")
+
+    # For MCP-server tools (protocol 'mcp'/'mcp_external'): the individual tools
+    # the server exposes, so the UI can offer per-tool enablement. Empty for
+    # non-MCP tools or servers whose tools are discovered live.
+    server_tools: List[UserToolServerTool] = Field(
+        default_factory=list, alias="serverTools"
+    )
 
     # Access info
     granted_by: List[str] = Field(

@@ -5,6 +5,7 @@ import logging
 from typing import List, Optional, Any, Tuple
 from agents.main_agent.config.constants import Prefixes
 from agents.main_agent.tools.tool_registry import ToolRegistry
+from apis.shared.tools.scoped_ids import base_tool_id
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +75,23 @@ class ToolFilter:
 
         filtered_tools = []
         gateway_tool_ids = []
+        seen_local: set[int] = set()
 
         for tool_id in enabled_tool_ids:
-            if self.registry.has_tool(tool_id):
-                # Local tool from registry
-                filtered_tools.append(self.registry.get_tool(tool_id))
-            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
+            # A scoped id (``base::tool``) selects one tool within an MCP server;
+            # classify by its base catalog id and let the per-source resolver
+            # apply the tool-name filter.
+            base = base_tool_id(tool_id)
+            if self.registry.has_tool(base):
+                # Local tool from registry — a single tool, so scoping is moot.
+                tool_obj = self.registry.get_tool(base)
+                if id(tool_obj) not in seen_local:
+                    seen_local.add(id(tool_obj))
+                    filtered_tools.append(tool_obj)
+            elif base.startswith(Prefixes.GATEWAY_TOOL):
                 # Gateway MCP tool - collect for separate handling
                 gateway_tool_ids.append(tool_id)
-            elif tool_id in self._external_mcp_tools:
+            elif base in self._external_mcp_tools:
                 # External MCP tool - handled separately
                 pass
             else:
@@ -113,15 +122,24 @@ class ToolFilter:
         filtered_tools = []
         gateway_tool_ids = []
         external_mcp_tool_ids = []
+        seen_local: set[int] = set()
 
         for tool_id in enabled_tool_ids:
-            if self.registry.has_tool(tool_id):
-                # Local tool from registry
-                filtered_tools.append(self.registry.get_tool(tool_id))
-            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
+            # A scoped id (``base::tool``) selects one tool within an MCP server;
+            # classify by its base catalog id. Scoped gateway/external ids ride
+            # through to their resolver (expand_gateway_tool_ids /
+            # load_external_tools), which applies the per-server tool filter.
+            base = base_tool_id(tool_id)
+            if self.registry.has_tool(base):
+                # Local tool from registry — a single tool, so scoping is moot.
+                tool_obj = self.registry.get_tool(base)
+                if id(tool_obj) not in seen_local:
+                    seen_local.add(id(tool_obj))
+                    filtered_tools.append(tool_obj)
+            elif base.startswith(Prefixes.GATEWAY_TOOL):
                 # Gateway MCP tool (AgentCore Gateway)
                 gateway_tool_ids.append(tool_id)
-            elif tool_id in self._external_mcp_tools:
+            elif base in self._external_mcp_tools:
                 # External MCP tool (deployed separately)
                 external_mcp_tool_ids.append(tool_id)
             else:
@@ -158,11 +176,12 @@ class ToolFilter:
         unknown_count = 0
 
         for tool_id in enabled_tool_ids:
-            if self.registry.has_tool(tool_id):
+            base = base_tool_id(tool_id)
+            if self.registry.has_tool(base):
                 local_count += 1
-            elif tool_id.startswith(Prefixes.GATEWAY_TOOL):
+            elif base.startswith(Prefixes.GATEWAY_TOOL):
                 gateway_count += 1
-            elif tool_id in self._external_mcp_tools:
+            elif base in self._external_mcp_tools:
                 external_mcp_count += 1
             else:
                 unknown_count += 1

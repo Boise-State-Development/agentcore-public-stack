@@ -124,6 +124,96 @@ describe('ToolService', () => {
     });
   });
 
+  describe('per-tool enablement', () => {
+    const baseServer: Tool = {
+      toolId: 'gmail', displayName: 'Gmail', description: 'Email', category: 'utility',
+      icon: null, protocol: 'mcp_external', status: 'active', grantedBy: ['user'],
+      enabledByDefault: false, userEnabled: null, isEnabled: true,
+    };
+
+    async function setupServer(server: Tool) {
+      TestBed.configureTestingModule({
+        providers: [
+          provideHttpClient(),
+          provideHttpClientTesting(),
+          ToolService,
+          { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+        ],
+      });
+      service = TestBed.inject(ToolService);
+      httpMock = TestBed.inject(HttpTestingController);
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/tools/').flush({
+          tools: [server], categories: ['utility'], appRolesApplied: ['user'],
+        });
+      });
+    }
+
+    it('emits scoped ids for a partially-enabled server', async () => {
+      await setupServer({
+        ...baseServer,
+        serverTools: [
+          { name: 'send', enabled: true },
+          { name: 'search', enabled: true },
+          { name: 'draft', enabled: false },
+        ],
+      });
+      expect(service.enabledToolIds()).toEqual(['gmail::send', 'gmail::search']);
+    });
+
+    it('emits the bare id when every tool is enabled', async () => {
+      await setupServer({
+        ...baseServer,
+        serverTools: [
+          { name: 'send', enabled: true },
+          { name: 'search', enabled: true },
+        ],
+      });
+      expect(service.enabledToolIds()).toEqual(['gmail']);
+    });
+
+    it('toggleServerTool saves a scoped preference and recomputes ids', async () => {
+      await setupServer({
+        ...baseServer,
+        serverTools: [
+          { name: 'send', enabled: true },
+          { name: 'draft', enabled: false },
+        ],
+      });
+      const promise = service.toggleServerTool('gmail', 'draft');
+      expect(service.getTool('gmail')?.serverTools?.find(s => s.name === 'draft')?.enabled).toBe(true);
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/tools/preferences');
+        expect(req.request.body).toEqual({ preferences: { 'gmail::draft': true } });
+        req.flush({});
+      });
+      await promise;
+      // Both tools now enabled → collapses to the bare server id.
+      expect(service.enabledToolIds()).toEqual(['gmail']);
+    });
+
+    it('whole-server toggle disables the server and every tool', async () => {
+      await setupServer({
+        ...baseServer,
+        serverTools: [
+          { name: 'send', enabled: true },
+          { name: 'search', enabled: true },
+        ],
+      });
+      const promise = service.toggleTool('gmail');
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/tools/preferences');
+        expect(req.request.body).toEqual({
+          preferences: { 'gmail': false, 'gmail::send': false, 'gmail::search': false },
+        });
+        req.flush({});
+      });
+      await promise;
+      expect(service.getTool('gmail')?.isEnabled).toBe(false);
+      expect(service.enabledToolIds()).toEqual([]);
+    });
+  });
+
   describe('reload', () => {
     beforeEach(setup);
 

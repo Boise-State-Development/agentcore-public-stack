@@ -306,3 +306,70 @@ class TestLoadExternalToolsPreflight:
 
         assert result == [good_client]
         assert integration.clients == {"gmail": good_client}
+
+
+class TestLoadExternalToolsScoped:
+    """Per-tool enablement: a scoped id (`base::tool`) restricts the client to
+    the selected tool names; a bare id exposes the whole server."""
+
+    @pytest.mark.asyncio
+    async def test_scoped_ids_collapse_to_one_filtered_client(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            await integration.load_external_tools(["gmail::send", "gmail::search"])
+
+        # Two scoped ids for one server build a single client, restricted to
+        # the selected tool names.
+        assert create_mock.call_count == 1
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {"send", "search"}
+
+    @pytest.mark.asyncio
+    async def test_bare_id_exposes_whole_server(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            await integration.load_external_tools(["gmail"])
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] is None
+
+    @pytest.mark.asyncio
+    async def test_different_subsets_are_distinct_cached_clients(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client_a = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        client_b = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[client_a, client_b],
+        ):
+            first = await integration.load_external_tools(["gmail::send"])
+            second = await integration.load_external_tools(["gmail::search"])
+
+        # A different selected-tool subset must not reuse the other's client.
+        assert first == [client_a]
+        assert second == [client_b]
+        assert len(integration.clients) == 2

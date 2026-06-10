@@ -216,6 +216,17 @@ export class AdminToolService {
   }
 
   /**
+   * List the individual tools a *saved* catalog tool exposes. Used by the
+   * skills picker to drive per-tool binding for an MCP server whose tools
+   * aren't enumerated in the catalog (discovered live).
+   */
+  async discoverSavedToolTools(toolId: string): Promise<MCPDiscoverResponse> {
+    return firstValueFrom(
+      this.http.post<MCPDiscoverResponse>(`${this.baseUrl()}/${toolId}/discover`, {})
+    );
+  }
+
+  /**
    * Fetch the live AgentCore Gateway health for a protocol='mcp' tool. The
    * gateway syncs a target asynchronously after registration, so this is how
    * the UI learns a target FAILED (e.g. the gateway role can't invoke the
