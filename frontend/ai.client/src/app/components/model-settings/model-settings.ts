@@ -1,8 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, input, output, signal, computed, effect, ElementRef } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroCheck, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
-import { ToolService } from '../../services/tool/tool.service';
+import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SystemPromptsService } from '../../services/system-prompts/system-prompts.service';
 import {
   KNOWN_PARAMS,
@@ -40,7 +40,7 @@ interface AdvancedParamRow {
   selector: 'app-model-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight })],
+  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath })],
   host: {
     '(document:click)': 'onDocumentClick($event)',
   },
@@ -266,8 +266,72 @@ export class ModelSettings {
     }
   }
 
+  /** Which MCP server rows are expanded to show their per-tool toggles. */
+  protected expandedServers = signal<Set<string>>(new Set());
+  /** Servers with a live discovery request in flight. */
+  protected discoveringServers = signal<Set<string>>(new Set());
+  /** Per-server discovery error messages. */
+  protected discoverError = signal<Record<string, string>>({});
+
   toggleTool(toolId: string): void {
     this.toolService.toggleTool(toolId);
+  }
+
+  /** True when a tool is an MCP server that supports per-tool enablement. */
+  isMcpServer(tool: Tool): boolean {
+    return tool.protocol === 'mcp' || tool.protocol === 'mcp_external';
+  }
+
+  isServerExpanded(toolId: string): boolean {
+    return this.expandedServers().has(toolId);
+  }
+
+  /** "3 of 8 tools enabled" when a server is partially enabled, else null. */
+  partialServerLabel(tool: Tool): string | null {
+    const subs = tool.serverTools ?? [];
+    if (subs.length === 0) return null;
+    const on = subs.filter((s) => s.enabled).length;
+    if (on === 0 || on === subs.length) return null;
+    return `${on} of ${subs.length} tools enabled`;
+  }
+
+  toggleServerExpanded(toolId: string): void {
+    this.expandedServers.update((set) => {
+      const next = new Set(set);
+      if (next.has(toolId)) {
+        next.delete(toolId);
+      } else {
+        next.add(toolId);
+      }
+      return next;
+    });
+  }
+
+  toggleServerTool(toolId: string, name: string): void {
+    this.toolService.toggleServerTool(toolId, name);
+  }
+
+  async discoverServerTools(tool: Tool): Promise<void> {
+    this.discoveringServers.update((s) => new Set(s).add(tool.toolId));
+    this.discoverError.update((m) => {
+      const next = { ...m };
+      delete next[tool.toolId];
+      return next;
+    });
+    try {
+      await this.toolService.discoverServerTools(tool.toolId);
+    } catch {
+      this.discoverError.update((m) => ({
+        ...m,
+        [tool.toolId]: 'Could not list this server’s tools.',
+      }));
+    } finally {
+      this.discoveringServers.update((s) => {
+        const next = new Set(s);
+        next.delete(tool.toolId);
+        return next;
+      });
+    }
   }
 
   selectPrompt(promptId: string | null): void {

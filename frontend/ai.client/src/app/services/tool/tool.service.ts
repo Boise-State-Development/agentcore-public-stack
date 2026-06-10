@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { makeScopedToolId } from '../../shared/utils/scoped-tool-id';
 /**
  * Tool category enum
  */
@@ -21,12 +22,23 @@ export type ToolCategory =
 /**
  * Tool protocol enum
  */
-export type ToolProtocol = 'local' | 'aws_sdk' | 'mcp' | 'a2a';
+export type ToolProtocol = 'local' | 'aws_sdk' | 'mcp' | 'mcp_external' | 'a2a';
 
 /**
  * Tool status enum
  */
 export type ToolStatus = 'active' | 'deprecated' | 'disabled' | 'coming_soon';
+
+/**
+ * One tool exposed by an MCP server, for per-tool enablement. `enabled` is the
+ * user's effective state for this individual tool.
+ */
+export interface ServerTool {
+  name: string;
+  description?: string | null;
+  needsApproval?: boolean;
+  enabled: boolean;
+}
 
 /**
  * Tool with user access and preference info
@@ -43,6 +55,11 @@ export interface Tool {
   enabledByDefault: boolean;
   userEnabled: boolean | null;
   isEnabled: boolean;
+  /**
+   * For MCP-server tools, the individual tools the server exposes. Empty for
+   * non-MCP tools or servers whose tools are discovered live.
+   */
+  serverTools?: ServerTool[];
 }
 
 /**
@@ -101,9 +118,32 @@ export class ToolService {
     this._tools().filter(t => t.isEnabled)
   );
 
-  readonly enabledToolIds = computed(() =>
-    this.enabledTools().map(t => t.toolId)
-  );
+  /**
+   * Tool ids to send to the agent. A server with a per-tool selection emits
+   * scoped ids (`toolId::name`) for its enabled tools; a fully-enabled server
+   * (or a tool with no sub-tools) emits its bare id.
+   */
+  readonly enabledToolIds = computed(() => {
+    const ids: string[] = [];
+    for (const tool of this._tools()) {
+      const subs = tool.serverTools ?? [];
+      if (subs.length === 0) {
+        if (tool.isEnabled) {
+          ids.push(tool.toolId);
+        }
+        continue;
+      }
+      const enabled = subs.filter(s => s.enabled);
+      if (enabled.length === subs.length) {
+        ids.push(tool.toolId);
+      } else {
+        for (const s of enabled) {
+          ids.push(makeScopedToolId(tool.toolId, s.name));
+        }
+      }
+    }
+    return ids;
+  });
 
   readonly enabledCount = computed(() =>
     this.enabledTools().length
@@ -151,15 +191,46 @@ export class ToolService {
   }
 
   /**
-   * Toggle a tool's enabled state.
+   * Toggle a tool's enabled state. For an MCP server with per-tool entries this
+   * toggles the whole server (every tool), authoritatively overriding any prior
+   * per-tool selection.
    */
   async toggleTool(toolId: string): Promise<void> {
     const tool = this._tools().find(t => t.toolId === toolId);
     if (!tool) return;
 
+    const subs = tool.serverTools ?? [];
     const newState = !tool.isEnabled;
 
-    // Optimistic update
+    if (subs.length > 0) {
+      // Whole-server toggle: set the server-level default AND every known tool
+      // so the new state wins over any lingering per-tool preference.
+      const prefs: Record<string, boolean> = { [toolId]: newState };
+      for (const s of subs) {
+        prefs[makeScopedToolId(toolId, s.name)] = newState;
+      }
+      this._tools.update(tools =>
+        tools.map(t =>
+          t.toolId === toolId
+            ? {
+                ...t,
+                isEnabled: newState,
+                userEnabled: newState,
+                serverTools: (t.serverTools ?? []).map(s => ({ ...s, enabled: newState })),
+              }
+            : t
+        )
+      );
+      try {
+        await this.savePreferences(prefs);
+      } catch (err) {
+        this._tools.update(tools => tools.map(t => (t.toolId === toolId ? tool : t)));
+        throw err;
+      }
+      return;
+    }
+
+    // Optimistic update (tool with no sub-tools)
     this._tools.update(tools =>
       tools.map(t =>
         t.toolId === toolId
@@ -181,6 +252,63 @@ export class ToolService {
       );
       throw err;
     }
+  }
+
+  /**
+   * Toggle a single tool of an MCP server (per-tool enablement). The server's
+   * `isEnabled` becomes "any tool enabled".
+   */
+  async toggleServerTool(toolId: string, name: string): Promise<void> {
+    const tool = this._tools().find(t => t.toolId === toolId);
+    const sub = tool?.serverTools?.find(s => s.name === name);
+    if (!tool || !sub) return;
+
+    const newState = !sub.enabled;
+
+    this._tools.update(tools =>
+      tools.map(t => {
+        if (t.toolId !== toolId) return t;
+        const serverTools = (t.serverTools ?? []).map(s =>
+          s.name === name ? { ...s, enabled: newState } : s
+        );
+        return { ...t, serverTools, isEnabled: serverTools.some(s => s.enabled) };
+      })
+    );
+
+    try {
+      await this.savePreferences({ [makeScopedToolId(toolId, name)]: newState });
+    } catch (err) {
+      // Revert on error
+      this._tools.update(tools => tools.map(t => (t.toolId === toolId ? tool : t)));
+      throw err;
+    }
+  }
+
+  /**
+   * Discover an MCP server's tools live and attach them as per-tool entries.
+   * New entries default to the server's current enabled state.
+   */
+  async discoverServerTools(toolId: string): Promise<void> {
+    const res = await firstValueFrom(
+      this.http.post<{ tools: { name: string; description?: string | null }[] }>(
+        `${this.baseUrl()}/${toolId}/discover`,
+        {}
+      )
+    );
+    this._tools.update(tools =>
+      tools.map(t =>
+        t.toolId === toolId
+          ? {
+              ...t,
+              serverTools: res.tools.map(d => ({
+                name: d.name,
+                description: d.description,
+                enabled: t.isEnabled,
+              })),
+            }
+          : t
+      )
+    );
   }
 
   /**
