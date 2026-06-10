@@ -61,6 +61,18 @@ def _dispatch(registry: Any, skill_name: str, reference: str = "", source: str =
             "available_skills": available,
         })
 
+    # Deep progressive disclosure: when a reference filename is given, serve
+    # that supporting file's bytes from S3 instead of the instructions block.
+    if reference:
+        ref_result = registry.read_resource(skill_name, reference)
+        if ref_result is None or "error" in (ref_result or {}):
+            return json.dumps({
+                "error": (ref_result or {}).get("error")
+                or f"Reference file '{reference}' not found in skill '{skill_name}'",
+                "available_references": registry.get_resource_names(skill_name),
+            })
+        return json.dumps(ref_result, default=str)
+
     result = {}
 
     # Load Level 2 instructions
@@ -72,6 +84,17 @@ def _dispatch(registry: Any, skill_name: str, reference: str = "", source: str =
     schemas = registry.get_tool_schemas(skill_name)
     if schemas:
         result["tool_schemas"] = schemas
+
+    # Surface the skill's supporting reference files so the model knows what it
+    # can read on demand (its instructions typically name them, e.g. "see
+    # forms.md"). Read one by calling skill_dispatcher again with `reference=`.
+    references = registry.get_resource_names(skill_name)
+    if references:
+        result["available_references"] = references
+        result["reference_hint"] = (
+            "Call skill_dispatcher again with reference=<filename> to read one "
+            "of these supporting files."
+        )
 
     if not result:
         result["error"] = f"No instructions or tools found for skill '{skill_name}'"
@@ -113,8 +136,11 @@ def _execute(registry: Any, skill_name: str, tool_name: str, tool_input: Any = N
     if tool_input is None:
         tool_input = {}
 
-    # Execute the tool
+    # Execute the tool. Folded gateway/external MCP tools (PR-6b) are not plain
+    # callables — they run through the MCP client via their own invoke().
     try:
+        if getattr(target_tool, "is_mcp_folded", False):
+            return target_tool.invoke(tool_input)
         return _execute_tool(target_tool, tool_input)
     except Exception as e:
         logger.error(f"Error executing {skill_name}/{tool_name}: {e}", exc_info=True)

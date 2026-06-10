@@ -21,6 +21,7 @@ Environment variables:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sys
@@ -28,7 +29,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -760,6 +761,263 @@ def seed_default_tools(
 
 
 
+# =============================================================================
+# Example bundled skill (PR-6b)
+# =============================================================================
+#
+# Seeds one demonstrable admin-managed Skill so the feature can be exercised
+# end-to-end: SKILL.md-style instructions + a bound LOCAL catalog tool
+# (fetch_url_content, seeded above) + a supporting reference file (uploaded to
+# the skill-resources S3 bucket and referenced by the row's `resources`
+# manifest). Mirrors the real `pdf`/`docx` bundle shape, where the instructions
+# body names a reference file the agent reads on demand via skill_dispatcher.
+#
+# The skill is granted to the `default` role so any user can reach it once an
+# assistant opts into agent_type="skill". It is otherwise inert: the default
+# agent_type stays "chat", so this changes nothing for existing chats.
+
+EXAMPLE_SKILL_ID = "web_research"
+
+EXAMPLE_SKILL_REFERENCE_FILENAME = "extraction_tips.md"
+
+EXAMPLE_SKILL_REFERENCE_BODY = b"""# Extraction Tips
+
+Guidance for turning a fetched web page into citable, well-structured notes.
+
+## Prefer primary sources
+- Quote the page's own words for any claim you will cite; paraphrase only
+  after you have the exact wording recorded.
+- Capture the page title and URL alongside every excerpt so a citation can be
+  reconstructed later.
+
+## Tables and lists
+- Re-render HTML tables as Markdown tables; keep the original column order.
+- Preserve list nesting - it usually encodes hierarchy that matters.
+
+## Noise to drop
+- Navigation chrome, cookie banners, "related articles", and ad copy are not
+  content. Exclude them before summarizing.
+
+## When a page is thin or blocked
+- If the fetched text is a paywall stub or a JS placeholder, say so explicitly
+  rather than summarizing the stub as if it were the article.
+"""
+
+EXAMPLE_SKILL_INSTRUCTIONS = (
+    "# Web Research Assistant\n"
+    "\n"
+    "Help the user research a topic by fetching web pages and turning them into\n"
+    "accurate, citable notes.\n"
+    "\n"
+    "## Workflow\n"
+    "1. Use the bound `fetch_url_content` tool (via `skill_executor`) to pull\n"
+    "   the page text for each URL the user provides.\n"
+    "2. Extract the relevant facts. For handling tables, paywalls, and noisy\n"
+    "   pages, read `extraction_tips.md` — call `skill_dispatcher` again with\n"
+    "   `reference=\"extraction_tips.md\"`.\n"
+    "3. Summarize with inline source attributions (page title + URL).\n"
+    "\n"
+    "Never invent details that are not present in the fetched content.\n"
+)
+
+
+def _upload_skill_reference(
+    skill_id: str, filename: str, content: bytes, content_type: str, region: str
+) -> Optional[dict[str, Any]]:
+    """Upload a reference file's bytes to the skill-resources bucket.
+
+    Content-addressed (``skills/{skill_id}/{sha256}``), mirroring
+    ``apis/shared/skills/resource_store.py``. Best-effort: returns the manifest
+    entry on success, or ``None`` (with a warning) when the bucket is not
+    configured or the put fails, so the skill still seeds without the bytes.
+    """
+    bucket = os.environ.get("S3_SKILL_RESOURCES_BUCKET_NAME", "")
+    if not bucket:
+        logger.warning(
+            "S3_SKILL_RESOURCES_BUCKET_NAME unset — seeding '%s' without its "
+            "reference file '%s'",
+            skill_id,
+            filename,
+        )
+        return None
+
+    digest = hashlib.sha256(content).hexdigest()
+    key = f"skills/{skill_id}/{digest}"
+    try:
+        s3 = boto3.Session(region_name=region).client("s3")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content,
+            ContentType=content_type,
+            ServerSideEncryption="AES256",
+        )
+    except ClientError as e:
+        logger.warning(
+            "Could not upload reference '%s' for skill '%s' to %s — seeding "
+            "without it: %s",
+            filename,
+            skill_id,
+            bucket,
+            e,
+        )
+        return None
+
+    logger.info("Uploaded reference '%s' for skill '%s' to s3://%s/%s", filename, skill_id, bucket, key)
+    return {
+        "filename": filename,
+        "contentHash": digest,
+        "size": len(content),
+        "contentType": content_type,
+        "s3Key": key,
+    }
+
+
+def _grant_skill_to_default_role(table, skill_id: str) -> None:
+    """Grant ``skill_id`` to the ``default`` role (idempotent).
+
+    RBAC resolution reads the precomputed ``effectivePermissions.skills`` on the
+    role DEFINITION (see ``apis/shared/rbac/service.py::_merge_permissions``), so
+    granting requires patching that array — the reverse-lookup ``SKILL_GRANT#``
+    item alone is not enough. Writes both. No-op if the default role is absent.
+    """
+    pk = "ROLE#default"
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": "DEFINITION"})
+    except ClientError as e:
+        logger.warning("Could not read default role for skill grant: %s", e)
+        return
+
+    item = existing.get("Item")
+    if not item:
+        logger.warning(
+            "default role not found — skipping grant of example skill '%s' "
+            "(system_admin's skills=['*'] still covers it)",
+            skill_id,
+        )
+        return
+
+    granted = list(item.get("grantedSkills", []) or [])
+    eff = dict(item.get("effectivePermissions", {}) or {})
+    eff_skills = list(eff.get("skills", []) or [])
+
+    changed = False
+    if skill_id not in granted:
+        granted.append(skill_id)
+        changed = True
+    if "*" not in eff_skills and skill_id not in eff_skills:
+        eff_skills.append(skill_id)
+        changed = True
+
+    if changed:
+        eff["skills"] = eff_skills
+        table.update_item(
+            Key={"PK": pk, "SK": "DEFINITION"},
+            UpdateExpression="SET grantedSkills = :g, effectivePermissions = :e",
+            ExpressionAttributeValues={":g": granted, ":e": eff},
+        )
+        logger.info("Granted example skill '%s' to default role", skill_id)
+
+    # Reverse-lookup grant item (so /admin/skills/{id}/roles lists 'default').
+    table.put_item(
+        Item={
+            "PK": pk,
+            "SK": f"SKILL_GRANT#{skill_id}",
+            "GSI2PK": f"SKILL#{skill_id}",
+            "GSI2SK": pk,
+            "roleId": "default",
+            "displayName": "Default",
+            "enabled": True,
+        }
+    )
+
+
+def seed_example_skills(
+    table_name: str,
+    region: str,
+) -> SeedResult:
+    """Seed one example bundled skill (instructions + bound tool + reference file)."""
+    result = SeedResult(category="skill")
+    session = boto3.Session(region_name=region)
+    dynamodb = session.resource("dynamodb")
+    table = dynamodb.Table(table_name)
+
+    skill_id = EXAMPLE_SKILL_ID
+    pk = f"SKILL#{skill_id}"
+    sk = "METADATA"
+
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": sk})
+        if "Item" in existing:
+            msg = f"Example skill '{skill_id}' already exists — skipped"
+            logger.info(msg)
+            result.skipped += 1
+            result.details.append(msg)
+            # Still (idempotently) ensure the default-role grant is present.
+            _grant_skill_to_default_role(table, skill_id)
+            return result
+    except ClientError as e:
+        msg = f"Failed to check existing skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+
+    # Upload the supporting reference file (best-effort — see helper).
+    resources: list[dict[str, Any]] = []
+    ref = _upload_skill_reference(
+        skill_id,
+        EXAMPLE_SKILL_REFERENCE_FILENAME,
+        EXAMPLE_SKILL_REFERENCE_BODY,
+        "text/markdown",
+        region,
+    )
+    if ref:
+        resources.append(ref)
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    item: dict[str, Any] = {
+        "PK": pk,
+        "SK": sk,
+        # SkillOwnerIndex (GSI4) — mirrors SkillDefinition.to_dynamo_item.
+        "GSI4PK": "OWNER#system",
+        "GSI4SK": f"SKILL#{skill_id}",
+        "skillId": skill_id,
+        "displayName": "Web Research Assistant",
+        "description": "Fetch web pages and turn them into accurate, citable notes.",
+        "instructions": EXAMPLE_SKILL_INSTRUCTIONS,
+        "boundToolIds": ["fetch_url_content"],
+        "compose": [],
+        "resources": resources,
+        "status": "active",
+        "ownerId": "system",
+        "visibility": "admin",
+        "createdAt": now,
+        "updatedAt": now,
+        "createdBy": "bootstrap-seed",
+    }
+
+    try:
+        table.put_item(Item=item)
+        msg = (
+            f"Example skill '{skill_id}' created "
+            f"({len(resources)} reference file(s))"
+        )
+        logger.info(msg)
+        result.created += 1
+        result.details.append(msg)
+    except ClientError as e:
+        msg = f"Failed to write example skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+
+    _grant_skill_to_default_role(table, skill_id)
+    return result
+
+
 def _serialize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a high-level DynamoDB item dict to low-level client format."""
     from boto3.dynamodb.types import TypeSerializer
@@ -819,6 +1077,9 @@ def main() -> None:
 
     # --- Tool seeding ---
     results.append(seed_default_tools(table_name=app_roles_table, region=region))
+
+    # --- Example bundled skill (PR-6b) ---
+    results.append(seed_example_skills(table_name=app_roles_table, region=region))
 
     # --- Summary ---
     print_summary(results)

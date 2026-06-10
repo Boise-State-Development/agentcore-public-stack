@@ -13,6 +13,9 @@ sys.path.insert(
 )
 
 from seed_bootstrap_data import (  # noqa: E402
+    EXAMPLE_SKILL_ID,
+    seed_default_role,
+    seed_example_skills,
     seed_system_admin_role,
     seed_default_tools,
 )
@@ -226,3 +229,83 @@ class TestSeedDefaultTools:
 
         assert result.created == 5
         assert result.skipped == 1
+
+
+class TestSeedExampleSkills:
+    """seed_example_skills — the PR-6b bundled-skill seed."""
+
+    def test_creates_skill_and_grants_to_default(self, dynamodb_table, monkeypatch):
+        monkeypatch.delenv("S3_SKILL_RESOURCES_BUCKET_NAME", raising=False)
+        seed_default_role(TABLE_NAME, REGION)
+
+        result = seed_example_skills(TABLE_NAME, REGION)
+        assert result.created == 1
+        assert result.failed == 0
+
+        # SKILL# record — instructions + bound LOCAL tool + active.
+        item = dynamodb_table.get_item(
+            Key={"PK": f"SKILL#{EXAMPLE_SKILL_ID}", "SK": "METADATA"}
+        )["Item"]
+        assert item["skillId"] == EXAMPLE_SKILL_ID
+        assert item["status"] == "active"
+        assert item["boundToolIds"] == ["fetch_url_content"]
+        assert item["instructions"]
+        assert item["GSI4PK"] == "OWNER#system"
+        # No bucket configured → seeded without reference bytes.
+        assert item["resources"] == []
+
+        # Default role granted (effectivePermissions is what RBAC reads).
+        role = dynamodb_table.get_item(
+            Key={"PK": "ROLE#default", "SK": "DEFINITION"}
+        )["Item"]
+        assert EXAMPLE_SKILL_ID in role["grantedSkills"]
+        assert EXAMPLE_SKILL_ID in role["effectivePermissions"]["skills"]
+
+        # Reverse-lookup grant item (GSI2 SKILL# keyspace).
+        grant = dynamodb_table.get_item(
+            Key={"PK": "ROLE#default", "SK": f"SKILL_GRANT#{EXAMPLE_SKILL_ID}"}
+        )["Item"]
+        assert grant["GSI2PK"] == f"SKILL#{EXAMPLE_SKILL_ID}"
+        assert grant["GSI2SK"] == "ROLE#default"
+        assert grant["enabled"] is True
+
+    def test_idempotent_skip(self, dynamodb_table, monkeypatch):
+        monkeypatch.delenv("S3_SKILL_RESOURCES_BUCKET_NAME", raising=False)
+        seed_default_role(TABLE_NAME, REGION)
+        seed_example_skills(TABLE_NAME, REGION)
+
+        result = seed_example_skills(TABLE_NAME, REGION)
+        assert result.skipped == 1
+        assert result.created == 0
+
+    def test_grant_skipped_when_no_default_role(self, dynamodb_table, monkeypatch):
+        monkeypatch.delenv("S3_SKILL_RESOURCES_BUCKET_NAME", raising=False)
+        # No default role seeded — skill still created, grant no-ops.
+        result = seed_example_skills(TABLE_NAME, REGION)
+        assert result.created == 1
+        resp = dynamodb_table.get_item(
+            Key={"PK": "ROLE#default", "SK": f"SKILL_GRANT#{EXAMPLE_SKILL_ID}"}
+        )
+        assert "Item" not in resp
+
+    def test_uploads_reference_file_to_s3_when_bucket_set(
+        self, dynamodb_table, monkeypatch
+    ):
+        bucket = "test-skill-resources"
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.create_bucket(Bucket=bucket)
+        monkeypatch.setenv("S3_SKILL_RESOURCES_BUCKET_NAME", bucket)
+        seed_default_role(TABLE_NAME, REGION)
+
+        seed_example_skills(TABLE_NAME, REGION)
+
+        item = dynamodb_table.get_item(
+            Key={"PK": f"SKILL#{EXAMPLE_SKILL_ID}", "SK": "METADATA"}
+        )["Item"]
+        assert len(item["resources"]) == 1
+        ref = item["resources"][0]
+        assert ref["filename"] == "extraction_tips.md"
+        assert ref["s3Key"].startswith(f"skills/{EXAMPLE_SKILL_ID}/")
+        # Bytes really landed in S3 at the content-addressed key.
+        body = s3.get_object(Bucket=bucket, Key=ref["s3Key"])["Body"].read()
+        assert b"Extraction Tips" in body
