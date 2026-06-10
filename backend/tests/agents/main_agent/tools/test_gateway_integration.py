@@ -71,6 +71,34 @@ async def test_unknown_and_empty_tool_list_pass_through():
 
 
 @pytest.mark.asyncio
+async def test_scoped_id_expands_to_single_runtime_id():
+    # A scoped catalog id selects ONE tool of the target.
+    repo = _FakeRepo(
+        {"gateway_class_search": _gateway_tool("gateway-class-search", ["search_classes", "get_class_details"])}
+    )
+    out = await expand_gateway_tool_ids(["gateway_class_search::search_classes"], repo)
+    assert out == ["gateway_gateway-class-search___search_classes"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_id_works_for_tool_not_in_curated_list():
+    # Discover-path: a scoped tool need not be in the curated tools[] (e.g. a
+    # DYNAMIC target discovered live). The target name still resolves it.
+    repo = _FakeRepo({"gateway_dyn": _gateway_tool("dyn-target", [])})
+    out = await expand_gateway_tool_ids(["gateway_dyn::live_tool"], repo)
+    assert out == ["gateway_dyn-target___live_tool"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_id_without_target_is_skipped():
+    # Cannot build a runtime id without a target_name — skip rather than emit a
+    # malformed id.
+    repo = _FakeRepo({"gateway_x": SimpleNamespace(protocol="mcp", mcp_gateway_config=None)})
+    out = await expand_gateway_tool_ids(["gateway_x::foo"], repo)
+    assert out == []
+
+
+@pytest.mark.asyncio
 async def test_dedupes_preserving_order():
     repo = _FakeRepo(
         {

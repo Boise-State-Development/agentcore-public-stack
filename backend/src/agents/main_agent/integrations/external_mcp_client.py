@@ -15,7 +15,7 @@ OAuth Support:
 
 import logging
 import re
-from typing import Any, Callable, Optional, List
+from typing import Any, Callable, Optional, List, Set
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -26,6 +26,7 @@ from apis.shared.tools.models import (
     MCPTransport,
     ToolDefinition,
 )
+from apis.shared.tools.scoped_ids import collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
@@ -97,6 +98,7 @@ def create_external_mcp_client(
     tool_definition: Optional[ToolDefinition] = None,
     oauth_token: Optional[str] = None,
     token_provider: Optional[Callable[[], Optional[str]]] = None,
+    allowed_tool_names: Optional[Set[str]] = None,
 ) -> Optional[MCPClient]:
     """
     Create an MCP client for an externally deployed MCP server.
@@ -109,6 +111,10 @@ def create_external_mcp_client(
         tool_definition: Optional tool definition for logging
         oauth_token: Optional static token (used for OIDC forwarding)
         token_provider: Optional callable returning the current token
+        allowed_tool_names: If provided, only these MCP-server tool names are
+            exposed to the model (per-tool enablement). ``None`` exposes the
+            whole server. Matched against the raw MCP tool name by the SDK's
+            ``ToolFilters`` (no prefix is applied to external clients).
 
     Returns:
         MCPClient instance or None if configuration is invalid
@@ -183,6 +189,15 @@ def create_external_mcp_client(
             transport = MCPTransport(transport)
 
         if transport == MCPTransport.STREAMABLE_HTTP:
+            # Per-tool enablement: restrict the model's view of this server to
+            # the selected tools. The base MCPClient applies this in
+            # list_tools_sync (matched against the raw MCP tool name); the UI
+            # filter then layers on top. Sorted for a stable client identity.
+            tool_filters = (
+                {"allowed": sorted(allowed_tool_names)}
+                if allowed_tool_names is not None
+                else None
+            )
             # UICapableMCPClient advertises the MCP Apps UI extension on
             # initialize and filters app-only tools out of the model's tool
             # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
@@ -191,11 +206,19 @@ def create_external_mcp_client(
                     url,
                     auth=auth
                 ),
+                tool_filters=tool_filters,
                 # Retained so the MCP Apps header can resolve the server's
                 # served-manifest icon from this origin (best-effort).
                 server_url=config.server_url,
             )
-            logger.info(f"✅ External MCP client created for {tool_id}: {config.server_url}")
+            scope_label = (
+                f" (tools: {', '.join(sorted(allowed_tool_names))})"
+                if allowed_tool_names is not None
+                else ""
+            )
+            logger.info(
+                f"✅ External MCP client created for {tool_id}: {config.server_url}{scope_label}"
+            )
             return mcp_client
         else:
             logger.warning(f"Unsupported transport type: {transport}")
@@ -282,7 +305,12 @@ class ExternalMCPIntegration:
         clients = []
         repository = get_tool_catalog_repository()
 
-        for tool_id in enabled_tool_ids:
+        # Scoped ids (`base::tool`) collapse to their base catalog id plus a
+        # per-server set of selected tool names; a bare id means the whole
+        # server (filter is None).
+        name_filters = collect_tool_name_filters(enabled_tool_ids)
+
+        for tool_id, allowed_tool_names in name_filters.items():
             try:
                 tool = await repository.get_tool(tool_id)
                 if not tool:
@@ -300,6 +328,11 @@ class ExternalMCPIntegration:
                 requires_user_auth = forward_auth or requires_oauth
 
                 cache_key = self._get_cache_key(tool_id, user_id, requires_user_auth)
+                # A different selected-tool subset is a different client, so fold
+                # the filter into the cache key (the integration is shared across
+                # agents — two users may select different subsets of one server).
+                if allowed_tool_names is not None:
+                    cache_key += "|allow:" + ",".join(sorted(allowed_tool_names))
                 tool_version = (
                     tool.updated_at.isoformat() + "Z" if tool.updated_at else ""
                 )
@@ -353,6 +386,7 @@ class ExternalMCPIntegration:
                     tool_definition=tool,
                     oauth_token=static_token,
                     token_provider=token_provider,
+                    allowed_tool_names=allowed_tool_names,
                 )
 
                 if client:
