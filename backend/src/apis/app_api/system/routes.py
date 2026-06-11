@@ -4,8 +4,12 @@ import logging
 from datetime import datetime, timezone
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.auth.models import User
+from apis.shared.platform_settings.models import ChatSettingsPublicResponse
+from apis.shared.platform_settings.service import get_chat_mode_settings_service
 from apis.shared.users.models import UserProfile, UserStatus
 from apis.shared.users.repository import UserRepository
 
@@ -30,6 +34,16 @@ async def get_system_status() -> SystemStatusResponse:
     except Exception:
         logger.exception("Failed to read first-boot status from DynamoDB")
         return SystemStatusResponse(first_boot_completed=False)
+
+
+@router.get("/chat-settings", response_model=ChatSettingsPublicResponse)
+async def get_chat_settings(
+    current_user: User = Depends(get_current_user_from_session),
+) -> ChatSettingsPublicResponse:
+    """Chat-mode policy for the SPA: default agent mode + whether the user may toggle."""
+    service = get_chat_mode_settings_service()
+    settings = await service.get_settings()
+    return ChatSettingsPublicResponse.from_settings(settings)
 
 
 @router.post("/first-boot", status_code=200)
