@@ -299,16 +299,19 @@ class ModelConfig:
         # unconditionally on the Bedrock path.
         config["use_native_token_count"] = True
 
-        # Bedrock prompt caching is intentionally deferred. The previous SDK
-        # blocker — strands PR #1438, which fixed `cachePoint` blocks landing
-        # alongside non-PDF document attachments — is resolved in
-        # strands-agents 1.39.0, so the technical barrier is gone. Re-enabling
-        # is being held for a separate, scoped rollout (cost/badge impact is
-        # user-visible the moment caching turns on).
+        # Bedrock prompt caching. CacheConfig(strategy="auto") lets Strands
+        # place cache points per-model: for a model that supports automatic
+        # caching it injects a cachePoint on the system/tools/last-user blocks;
+        # for one that doesn't it logs a warning and no-ops, so this is safe to
+        # set whenever caching is enabled. The earlier SDK blocker — strands PR
+        # #1438, where `cachePoint` blocks collided with non-PDF document
+        # attachments — was fixed in strands-agents 1.39.0 (we pin 1.40.0).
+        # Cache hits are user-visible in the cost/context badge the moment this
+        # is on.
         # See: https://github.com/strands-agents/sdk-python/pull/1438
-        # if self.caching_enabled:
-        #     from strands.models import CacheConfig
-        #     config["cache_config"] = CacheConfig(strategy="auto")
+        if self.caching_enabled:
+            from strands.models import CacheConfig
+            config["cache_config"] = CacheConfig(strategy="auto")
 
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig
