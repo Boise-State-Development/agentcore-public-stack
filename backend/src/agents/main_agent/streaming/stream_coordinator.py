@@ -1010,6 +1010,7 @@ class StreamCoordinator:
                 caching_enabled=snapshot_source.get("caching_enabled"),
                 max_tokens=inference_params.get("max_tokens"),
                 agent_type=snapshot_source.get("agent_type"),
+                enabled_skills=snapshot_source.get("enabled_skills"),
                 inference_params=dict(inference_params) if inference_params else None,
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),

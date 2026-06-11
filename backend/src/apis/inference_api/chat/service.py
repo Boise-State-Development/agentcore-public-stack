@@ -244,9 +244,13 @@ async def get_agent(
     agent = create_agent(**create_kwargs)
 
     # Stamp the type onto the construction snapshot so a paused turn can
-    # resume on the same factory variant after cache eviction.
+    # resume on the same factory variant after cache eviction. Skill turns
+    # also stamp their effective skill set: resume must rebuild the same
+    # skills_hash cache key even if the user toggles skills mid-pause.
     if hasattr(agent, "_construction_snapshot"):
         agent._construction_snapshot["agent_type"] = resolved_agent_type
+        if resolved_agent_type == "skill" and accessible_skill_ids is not None:
+            agent._construction_snapshot["enabled_skills"] = list(accessible_skill_ids)
 
     # Don't cache agents with context-bound extra_tools
     if extra_tools:

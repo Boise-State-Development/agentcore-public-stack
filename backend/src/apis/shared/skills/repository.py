@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import SkillDefinition, SkillStatus
+from .models import SkillDefinition, SkillStatus, UserSkillPreference
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +288,62 @@ class SkillCatalogRepository:
 
         except ClientError as e:
             logger.error(f"Error batch getting skills: {e}")
+            raise
+
+    # =========================================================================
+    # User Preferences (mirrors ToolCatalogRepository)
+    # =========================================================================
+
+    async def get_user_preferences(self, user_id: str) -> UserSkillPreference:
+        """
+        Get user's per-skill preferences.
+
+        Args:
+            user_id: The user identifier
+
+        Returns:
+            UserSkillPreference (empty if not found)
+        """
+        try:
+            response = self._table.get_item(
+                Key={"PK": f"USER#{user_id}", "SK": "SKILL_PREFERENCES"}
+            )
+            item = response.get("Item")
+            if not item:
+                return UserSkillPreference(user_id=user_id)
+            return UserSkillPreference.from_dynamo_item(item)
+        except ClientError as e:
+            logger.error(f"Error getting skill preferences for {user_id}: {e}")
+            raise
+
+    async def save_user_preferences(
+        self, user_id: str, preferences: Dict[str, bool]
+    ) -> UserSkillPreference:
+        """
+        Save user's per-skill preferences.
+
+        Merges with existing preferences (does not replace).
+
+        Args:
+            user_id: The user identifier
+            preferences: Map of skill_id -> enabled state
+
+        Returns:
+            Updated UserSkillPreference
+        """
+        try:
+            existing = await self.get_user_preferences(user_id)
+
+            existing.skill_preferences.update(preferences)
+            existing.updated_at = datetime.now(timezone.utc)
+
+            self._table.put_item(Item=existing.to_dynamo_item())
+
+            logger.info(f"Saved skill preferences for user: {user_id}")
+            return existing
+
+        except ClientError as e:
+            logger.error(f"Error saving skill preferences for {user_id}: {e}")
             raise
 
 

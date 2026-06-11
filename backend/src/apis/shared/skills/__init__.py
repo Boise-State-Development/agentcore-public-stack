@@ -28,6 +28,8 @@ from .models import (
     SkillUpdateRequest,
     SkillVisibility,
 )
+from .access import resolve_accessible_skill_ids
+from .models import UserSkillPreference
 from .repository import SkillCatalogRepository, get_skill_catalog_repository
 from .resource_store import (
     SkillResourceStore,
@@ -59,4 +61,6 @@ __all__ = [
     "get_freshness_hash",
     "get_skill_updated_at",
     "invalidate",
+    "resolve_accessible_skill_ids",
+    "UserSkillPreference",
 ]

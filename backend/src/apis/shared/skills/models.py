@@ -17,7 +17,7 @@ Persistence).
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -405,3 +405,44 @@ class SkillResourcesResponse(BaseModel):
     resources: List[SkillResourceRef] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
+
+
+class UserSkillPreference(BaseModel):
+    """
+    User's explicit per-skill enabled/disabled preferences (mirrors
+    ``UserToolPreference``). A skill absent from the map is enabled by
+    default — RBAC granted means on unless the user toggled it off.
+
+    Stored per-user in the skills/AppRoles table:
+    PK=USER#{user_id}, SK=SKILL_PREFERENCES.
+    """
+
+    user_id: str
+    skill_preferences: Dict[str, bool] = Field(
+        default_factory=dict, description="Map of skill_id -> enabled state"
+    )
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_dynamo_item(self) -> dict:
+        """Convert to DynamoDB item format."""
+        return {
+            "PK": f"USER#{self.user_id}",
+            "SK": "SKILL_PREFERENCES",
+            "userId": self.user_id,
+            "skillPreferences": self.skill_preferences,
+            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    @classmethod
+    def from_dynamo_item(cls, item: dict) -> "UserSkillPreference":
+        """Create from a DynamoDB item."""
+        updated_at = item.get("updatedAt")
+        return cls(
+            user_id=item.get("userId", ""),
+            skill_preferences=dict(item.get("skillPreferences", {})),
+            updated_at=(
+                datetime.fromisoformat(updated_at.rstrip("Z"))
+                if updated_at
+                else datetime.now(timezone.utc)
+            ),
+        )
