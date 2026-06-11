@@ -460,7 +460,7 @@ export class StreamParserService {
       id: computedId,
       role: data.role,
       contentBlocks: new Map(),
-      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       isComplete: false,
     };
 
@@ -938,7 +938,7 @@ export class StreamParserService {
       id: builder.id,
       role: builder.role,
       content: sortedBlocks,
-      created_at: builder.created_at,
+      createdAt: builder.createdAt,
       metadata: this.getMetadataForMessage(),
     };
 

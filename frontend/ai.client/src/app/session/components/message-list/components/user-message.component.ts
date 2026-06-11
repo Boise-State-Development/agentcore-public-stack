@@ -25,7 +25,17 @@ const MAX_HEIGHT_PX = 200;
   imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent],
   template: `
     @if (hasTextContent() || hasFileAttachments()) {
-      <div class="flex w-full flex-col items-end gap-2">
+      <div class="group relative flex w-full flex-col items-end gap-2">
+        <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
+        @if (formattedSentAt()) {
+          <span
+            class="pointer-events-none absolute -top-5 right-1 text-xs text-gray-400 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none dark:text-gray-500"
+            aria-hidden="true"
+          >
+            {{ formattedSentAt() }}
+          </span>
+        }
+
         <!-- Text content (message bubble) -->
         @if (hasTextContent()) {
           <div
@@ -109,6 +119,44 @@ export class UserMessageComponent implements AfterViewInit {
       return metadata['displayText'];
     }
     return null;
+  });
+
+  /**
+   * Hover-revealed "sent at" subtitle rendered above the topmost message slot.
+   *
+   * - Under 1 minute: "Just now"
+   * - Under 1 hour: "{n}m ago"
+   * - Under 24 hours: "{n}h ago"
+   * - 24 hours or older: full localized date and time
+   * - Missing/unparseable timestamp: "" (the subtitle slot collapses out)
+   *
+   * Note: this is a `computed()` keyed off `message().createdAt`, so the
+   * relative label is captured at render time and won't tick forward while
+   * a session sits idle. Streaming and message updates re-render the list,
+   * which is when the relative value refreshes for active conversations.
+   */
+  formattedSentAt = computed((): string => {
+    const createdAt = this.message().createdAt;
+    if (!createdAt) return '';
+
+    const sentMs = Date.parse(createdAt);
+    if (Number.isNaN(sentMs)) return '';
+
+    const diffMs = Date.now() - sentMs;
+    const diffMinutes = Math.floor(diffMs / 60_000);
+    const diffHours = Math.floor(diffMs / 3_600_000);
+
+    if (diffMs < 60_000) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+
+    return new Date(sentMs).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   });
 
   hasTextContent = computed(() => {

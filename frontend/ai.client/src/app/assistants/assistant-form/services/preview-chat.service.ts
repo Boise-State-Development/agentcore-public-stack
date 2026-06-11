@@ -165,7 +165,7 @@ export class PreviewChatService {
       id: userMessageId,
       role: 'user',
       content: [{ type: 'text', text: userMessage }],
-      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
     };
     this.messagesSignal.update((msgs) => [...msgs, userMsg]);
 
@@ -176,7 +176,7 @@ export class PreviewChatService {
       id: assistantMessageId,
       role: 'assistant',
       content: [{ type: 'text', text: '' }],
-      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
     };
     this.messagesSignal.update((msgs) => [...msgs, assistantMsg]);
     this.loadingSignal.set(true);

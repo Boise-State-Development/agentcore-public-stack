@@ -387,7 +387,7 @@ export interface MessageBuilder {
   id: string;
   role: 'user' | 'assistant';
   contentBlocks: Map<number, ContentBlockBuilder>;
-  created_at: string;
+  createdAt: string;
   isComplete: boolean;
 }
 

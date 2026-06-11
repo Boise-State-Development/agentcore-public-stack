@@ -114,8 +114,8 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   /** List of content blocks in the message */
   content: ContentBlock[];
-  /** ISO timestamp when the message was created */
-  created_at?: string;
+  /** ISO timestamp when the message was created (camelCase to match backend `createdAt` alias) */
+  createdAt?: string;
   /** Optional metadata associated with the message (may include displayText with the original user input before prompt modification) */
   metadata?: Record<string, unknown> | null;
   /** RAG citations from knowledge base retrieval (assistant messages only) */

@@ -89,7 +89,7 @@ describe('PreviewChatService', () => {
       id: 'test',
       role: 'user',
       content: [{ type: 'text', text: 'test' }],
-      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
     }]);
 
     service.clearMessages();
