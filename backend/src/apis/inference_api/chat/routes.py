@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from typing import AsyncGenerator, Union
+from typing import AsyncGenerator, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -28,6 +28,8 @@ from apis.shared.errors import (
 )
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
+from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
+from apis.shared.platform_settings.service import get_chat_mode_settings_service
 from apis.shared.quota import (
     QuotaExceededEvent,
     build_no_quota_configured_event,
@@ -76,7 +78,13 @@ PREVIEW_SESSION_PREFIX = "preview-"
 # turn by sending agent_type="chat". (The lower-level service.get_agent keeps a
 # conservative "chat" fallback for direct/programmatic callers that don't
 # resolve skills; this request-policy default lives here.)
-DEFAULT_AGENT_TYPE = "skill"
+#
+# Since the skills-mode work (docs/specs/skills-mode.md) the *runtime* default
+# comes from the admin-managed chat-mode policy (apis.shared.platform_settings),
+# which also decides whether a client agent_type override is honored at all —
+# see _resolve_effective_agent_type. This constant is the compiled-in fallback
+# the policy model itself defaults to, kept aliased so they can never drift.
+DEFAULT_AGENT_TYPE = DEFAULT_CHAT_MODE
 
 
 def is_preview_session(session_id: str) -> bool:
@@ -670,22 +678,57 @@ async def ping():
 async def _resolve_accessible_skill_ids(current_user: User) -> list[str]:
     """Resolve the skills a user's RBAC roles grant (admin/DB-backed).
 
-    Uses the shared ``AppRoleService`` (the same import-boundary-safe path the
-    model-access check uses) so the runtime never imports ``app_api``. A ``"*"``
-    wildcard grant expands to every known skill id. Never raises — on any
-    failure the user simply gets no skills (the SkillAgent degrades to chat).
+    Thin delegate to the shared resolver (``apis.shared.skills.access``) used
+    by both this path and the user-facing skills API, so the picker and the
+    runtime can never drift. Kept as a module-level seam for tests. Never
+    raises — on any failure the user simply gets no skills (the SkillAgent
+    degrades to chat).
     """
-    try:
-        from apis.shared.rbac.service import get_app_role_service
-        from apis.shared.skills.freshness import get_all_skill_ids
+    from apis.shared.skills.access import resolve_accessible_skill_ids
 
-        skills = await get_app_role_service().get_accessible_skills(current_user)
-        if "*" in skills:
-            return sorted(await get_all_skill_ids())
-        return list(skills)
-    except Exception:
-        logger.warning("Failed to resolve accessible skills", exc_info=True)
-        return []
+    return await resolve_accessible_skill_ids(current_user)
+
+
+def _resolve_effective_agent_type(
+    requested: Optional[str], settings: ChatModeSettings
+) -> str:
+    """Apply the admin chat-mode policy to a client's requested agent type.
+
+    The client's choice between "skill" and "chat" is honored only while the
+    policy allows mode toggling; otherwise the admin default wins (UI gating
+    alone is not enforcement — the SPA hides the toggle, but any client can
+    craft a request). Other values ("voice", future internal types) pass
+    through untouched: the policy governs the user-facing mode pair only.
+    """
+    if (
+        requested in ("skill", "chat")
+        and requested != settings.default_mode
+        and not settings.allow_mode_toggle
+    ):
+        logger.info(
+            "Client agent_type=%s overridden to %s (mode toggling disabled by admin)",
+            requested,
+            settings.default_mode,
+        )
+        requested = None
+    return requested or settings.default_mode
+
+
+def _apply_enabled_skills_filter(
+    accessible_skill_ids: list[str], enabled_skills: Optional[list[str]]
+) -> list[str]:
+    """Narrow the RBAC-accessible skill set by the client's per-turn selection.
+
+    ``None`` means the client predates (or isn't using) the skills picker —
+    all accessible skills stay active, the pre-picker behavior. A list is an
+    intersection: client input can narrow the set, never grant. The result
+    stays a list (possibly empty) because SkillAgent distinguishes [] (DB
+    mode, zero skills → degrade to chat) from None (file-scan fallback).
+    """
+    if enabled_skills is None:
+        return accessible_skill_ids
+    requested = set(enabled_skills)
+    return [sid for sid in accessible_skill_ids if sid in requested]
 
 
 @router.post("/invocations")
@@ -709,21 +752,29 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
-    # Resolve the effective agent type once: the client's explicit choice, else
-    # the server default (PR-7: "skill"). Used for the skill resolution below
-    # and the non-resume get_agent calls (resume reuses the snapshot's type).
-    effective_agent_type = input_data.agent_type or DEFAULT_AGENT_TYPE
-    # Resolve the user's accessible skills (admin/DB-backed, RBAC-gated) once
-    # for the whole request — only for the skill agent path. Threaded into
+    # Resolve the effective agent type once: the client's explicit choice
+    # (honored only while the admin chat-mode policy allows toggling), else
+    # the policy's default mode. Used for the skill resolution below and the
+    # non-resume get_agent calls (resume reuses the snapshot's type). The
+    # settings read is TTL-cached in-process (~60s) and degrades to compiled-in
+    # defaults, so this adds no per-turn Dynamo cost and can't fail the turn.
+    chat_mode_settings = await get_chat_mode_settings_service().get_settings()
+    effective_agent_type = _resolve_effective_agent_type(
+        input_data.agent_type, chat_mode_settings
+    )
+    # Resolve the user's *effective* skills once for the whole request — only
+    # for the skill agent path: the RBAC-accessible set (admin/DB-backed),
+    # narrowed by the client's per-turn enabled_skills selection. Threaded into
     # every get_agent call below so they share one skills_hash cache key
     # (otherwise the app-tool-call / resume paths would miss the main turn's
     # cached SkillAgent). An explicit agent_type="chat" opts out and stays free
     # of the extra reads.
-    accessible_skill_ids = (
-        await _resolve_accessible_skill_ids(current_user)
-        if effective_agent_type == "skill"
-        else None
-    )
+    effective_skill_ids = None
+    if effective_agent_type == "skill":
+        effective_skill_ids = _apply_enabled_skills_filter(
+            await _resolve_accessible_skill_ids(current_user),
+            input_data.enabled_skills,
+        )
     # A "Continue" after a max_tokens truncation. Like resume, it bypasses
     # quota / RAG / file resolution and does NOT clear the turn state; unlike
     # resume there is no interrupt to validate — the agent is rebuilt from the
@@ -764,7 +815,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=inference_params,
                 agent_type=effective_agent_type,
                 is_resume=False,
-                accessible_skill_ids=accessible_skill_ids,
+                accessible_skill_ids=effective_skill_ids,
             )
             payload = await dispatch_app_tool_call(
                 agent,
@@ -810,7 +861,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=inference_params,
                 agent_type=effective_agent_type,
                 is_resume=False,
-                accessible_skill_ids=accessible_skill_ids,
+                accessible_skill_ids=effective_skill_ids,
             )
             payload = dispatch_app_context_update(
                 agent,
@@ -1328,12 +1379,21 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 is_resume=True,
                 # Resume must rebuild the SAME cache key the original turn used,
                 # or the paused agent is orphaned. The original turn's
-                # skills_hash was derived from accessible_skill_ids only when it
-                # was a skill turn; mirror that off the snapshot's type (the
-                # request default is "skill", but a turn explicitly built as
-                # "chat" carried no skills → empty skills_hash).
+                # skills_hash was derived from its *effective* skill set only
+                # when it was a skill turn; mirror that off the snapshot's type
+                # (a turn explicitly built as "chat" carried no skills → empty
+                # skills_hash). New snapshots carry that exact set in
+                # enabled_skills; legacy snapshots (written before the field
+                # existed) fall back to this request's resolution, the
+                # pre-skills-picker behavior.
                 accessible_skill_ids=(
-                    accessible_skill_ids if snapshot.agent_type == "skill" else None
+                    (
+                        snapshot.enabled_skills
+                        if snapshot.enabled_skills is not None
+                        else effective_skill_ids
+                    )
+                    if snapshot.agent_type == "skill"
+                    else None
                 ),
             )
         else:
@@ -1416,7 +1476,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_type=effective_agent_type,
                 extra_tools=extra_tools,
                 is_resume=False,
-                accessible_skill_ids=accessible_skill_ids,
+                accessible_skill_ids=effective_skill_ids,
             )
 
         # Resume requests must target interrupts that the cached agent

@@ -107,11 +107,19 @@ class InvocationRequest(BaseModel):
     # (assistant-prefill). Bypasses quota / RAG / file resolution like resume.
     continue_truncated: Optional[bool] = None
     # Selects which agent factory variant builds the turn. When omitted, the
-    # server applies its default (PR-7: "skill" — see routes.DEFAULT_AGENT_TYPE),
-    # routing through SkillAgent's progressive disclosure; a user with no granted
-    # skills degrades to plain ChatAgent behavior. Pass "chat" to opt out of the
-    # skill path for a turn.
+    # server applies its default (PR-7: "skill" — admin-configurable via the
+    # chat-mode policy, see routes.py), routing through SkillAgent's progressive
+    # disclosure; a user with no granted skills degrades to plain ChatAgent
+    # behavior. Pass "chat" to opt out of the skill path for a turn — honored
+    # only while the admin policy allows mode toggling.
     agent_type: Optional[str] = None
+    # Per-turn selection of which accessible skills are active (skill agent
+    # path only). None/absent = all RBAC-accessible skills (back-compat with
+    # clients that predate the skills picker). A list is intersected
+    # server-side with the accessible set — client input can narrow the set,
+    # never grant. An empty (or fully inaccessible) list yields zero skills,
+    # so the SkillAgent degrades to plain chat behavior for the turn.
+    enabled_skills: Optional[List[str]] = None
     # User-selected custom system prompt ("conversation mode") for this
     # turn. The frontend forwards the active selection on every submit so
     # the inference path doesn't have to round-trip session metadata to

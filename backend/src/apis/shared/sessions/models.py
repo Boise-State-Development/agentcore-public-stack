@@ -107,6 +107,15 @@ class PausedTurnSnapshot(BaseModel):
     caching_enabled: Optional[bool] = Field(default=None, alias="cachingEnabled")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     agent_type: Optional[str] = Field(default=None, alias="agentType")
+    enabled_skills: Optional[List[str]] = Field(
+        default=None,
+        alias="enabledSkills",
+        description="Effective skill ids the paused skill turn was built with. "
+                    "Resume rebuilds the same skills_hash cache key from these "
+                    "even if the user toggles skills mid-pause. None on chat "
+                    "turns and on snapshots written before the field existed "
+                    "(those fall back to request-time resolution).",
+    )
     inference_params: Optional[Dict[str, Any]] = Field(
         default=None,
         alias="inferenceParams",

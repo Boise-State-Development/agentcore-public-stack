@@ -180,6 +180,7 @@ from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.tools.routes import router as tools_router
+from apis.app_api.skills.routes import router as user_skills_router
 from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
@@ -213,6 +214,7 @@ app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Pha
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
+app.include_router(user_skills_router)  # User-facing skill list + per-skill preferences
 app.include_router(files_router)  # File upload via pre-signed URLs
 app.include_router(connectors_router)  # User-facing connector catalog + consent flows
 app.include_router(file_sources_router)  # File-source catalog + browse/search over connectors
