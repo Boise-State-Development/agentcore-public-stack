@@ -98,8 +98,10 @@ export class ChatModeService {
 
     this._localMode.set(mode);
 
+    // Silent: the toggle already applied in-memory; a persistence failure
+    // (e.g. user-settings storage not configured) shouldn't raise a dialog.
     this.userSettingsService
-      .updateSettings({ preferredAgentMode: mode })
+      .updateSettings({ preferredAgentMode: mode }, { silent: true })
       .catch(err => console.error('Failed to persist preferred agent mode:', err));
 
     if (sessionId) {

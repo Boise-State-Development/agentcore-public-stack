@@ -92,7 +92,8 @@ describe('ChatModeService', () => {
     service.setMode('chat', 'sess-1');
 
     expect(service.mode()).toBe('chat');
-    expect(updateSettings).toHaveBeenCalledWith({ preferredAgentMode: 'chat' });
+    // silent: a failed background persist must not raise the error dialog
+    expect(updateSettings).toHaveBeenCalledWith({ preferredAgentMode: 'chat' }, { silent: true });
     expect(updateSessionPreferences).toHaveBeenCalledWith('sess-1', { agentType: 'chat' });
   });
 
@@ -102,7 +103,7 @@ describe('ChatModeService', () => {
     service.setMode('chat');
 
     expect(service.mode()).toBe('chat');
-    expect(updateSettings).toHaveBeenCalledWith({ preferredAgentMode: 'chat' });
+    expect(updateSettings).toHaveBeenCalledWith({ preferredAgentMode: 'chat' }, { silent: true });
     expect(updateSessionPreferences).not.toHaveBeenCalled();
   });
 
