@@ -338,6 +338,126 @@ class TestOAuthConsentHookConsentRequired:
         assert "google" in event.cancel_tool
 
 
+class TestOAuthConsentHookSkillFoldedTools:
+    """Regression guard for the skills-mode consent gap.
+
+    A skill-bound external MCP tool executes through the `skill_executor`
+    meta-tool, so `selected_tool` is the executor (not an MCPAgentTool) and
+    `provider_lookup` returns None. Before the `tool_use_provider_lookup`
+    fallback existed, the gate silently skipped these calls: the tool ran
+    tokenless, returned an auth error, and the model apologized in text
+    instead of the turn pausing with an `oauth_required` interrupt.
+    """
+
+    @staticmethod
+    def _tool_use_lookup(tool_use: dict) -> str | None:
+        # Stands in for skills/mcp_binding.make_folded_tool_provider_lookup
+        # (covered by its own tests); resolves the executor's folded target.
+        if tool_use.get("name") != "skill_executor":
+            return None
+        if (tool_use.get("input") or {}).get("tool_name") == "gmail_search":
+            return "google"
+        return None
+
+    def _executor_event(self):
+        event = _make_event(provider_id=None)
+        event.tool_use = {
+            "toolUseId": "tu_skill",
+            "name": "skill_executor",
+            "input": {
+                "skill_name": "gmail-for-employees",
+                "tool_name": "gmail_search",
+                "tool_input": {"query": "from:hr"},
+            },
+        }
+        return event
+
+    @pytest.mark.asyncio
+    async def test_skill_bound_tool_without_token_pauses_with_oauth_required(self):
+        identity = MagicMock()
+        identity.get_token_for_user = AsyncMock(
+            return_value=TokenResult(authorization_url="https://accounts/consent")
+        )
+
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: None,  # executor isn't an MCPAgentTool
+            scopes_lookup=lambda _: ["gmail.readonly"],
+            tool_use_provider_lookup=self._tool_use_lookup,
+        )
+        event = self._executor_event()
+
+        with patch(
+            "agents.main_agent.session.hooks.oauth_consent.get_agentcore_identity_client",
+            return_value=identity,
+        ):
+            with pytest.raises(InterruptException) as excinfo:
+                await hook._gate(event)
+
+        interrupt = excinfo.value.interrupt
+        assert interrupt.name == "oauth:google"
+        assert interrupt.reason == {
+            "type": "oauth_required",
+            "providerId": "google",
+            "authorizationUrl": "https://accounts/consent",
+        }
+
+    @pytest.mark.asyncio
+    async def test_skill_bound_tool_with_cached_token_proceeds(self):
+        oauth_token_cache.set("alice", "google", "warm-token")
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: None,
+            scopes_lookup=lambda _: [],
+            tool_use_provider_lookup=self._tool_use_lookup,
+        )
+        event = self._executor_event()
+
+        await hook._gate(event)
+
+        assert event.cancel_tool is None
+
+    @pytest.mark.asyncio
+    async def test_401_from_folded_tool_clears_cache_and_retries(self):
+        """The fold preserves error status (FoldedMCPTool returns a
+        ToolResult-shaped dict), so the AfterToolCallEvent retry path must
+        work through the executor too."""
+        oauth_token_cache.set("alice", "google", "stale-token")
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: None,
+            scopes_lookup=lambda _: [],
+            tool_use_provider_lookup=self._tool_use_lookup,
+        )
+        event = self._executor_event()
+        event.invocation_state = {}
+        event.result = {
+            "toolUseId": "tu_skill",
+            "status": "error",
+            "content": [{"text": "Error calling tool (HTTP 401): Unauthorized"}],
+        }
+        event.retry = False
+
+        await hook._handle_auth_failure(event)
+
+        assert event.retry is True
+        assert oauth_token_cache.get("alice", "google") is None
+
+    @pytest.mark.asyncio
+    async def test_without_tool_use_lookup_executor_is_not_gated(self):
+        """Plain ChatAgent wiring (no lookup) keeps the old behavior."""
+        hook = OAuthConsentHook(
+            user_id="alice",
+            provider_lookup=lambda _tool: None,
+            scopes_lookup=lambda _: [],
+        )
+        event = self._executor_event()
+
+        await hook._gate(event)
+
+        assert event.cancel_tool is None
+
+
 class TestParallelToolCallsSameProvider:
     """Regression guard for the OAuth interrupt collision concern.
 

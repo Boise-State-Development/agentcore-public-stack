@@ -8,7 +8,7 @@ stream_async() for their specific agent type.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactory
 from agents.main_agent.session import SessionFactory
@@ -316,6 +316,11 @@ class BaseAgent(ABC):
                 return None
             return integration.provider_for_client(selected_tool.mcp_client)
 
+        # Tools dispatched indirectly (SkillAgent's skill_executor meta-tool)
+        # never present as MCPAgentTool, so provider_lookup can't gate them.
+        # Subclasses that fold tools provide a tool_use-based second chance.
+        tool_use_provider_lookup = self._build_tool_use_provider_lookup()
+
         async def scopes_lookup(provider_id: str) -> List[str]:
             from apis.shared.oauth.provider_repository import get_provider_repository
 
@@ -363,7 +368,16 @@ class BaseAgent(ABC):
             provider_type_lookup=provider_type_lookup,
             custom_parameters_lookup=custom_parameters_lookup,
             disconnected_lookup=disconnected_lookup,
+            tool_use_provider_lookup=tool_use_provider_lookup,
         )
+
+    def _build_tool_use_provider_lookup(self) -> Optional[Callable[[dict], Optional[str]]]:
+        """OAuth provider resolution from a raw `tool_use` dict, for agents
+        that dispatch tools indirectly (SkillAgent's meta-tools). The base
+        agent has no such indirection, so the consent hook gets None and
+        relies on `provider_lookup` alone.
+        """
+        return None
 
     def _expand_gateway_tool_ids(self, gateway_tool_ids: List[str]) -> List[str]:
         """Expand #419 catalog gateway tools into the gateway's runtime per-tool

@@ -71,3 +71,58 @@ class TestFetchSkillRecords:
             # Never raises into agent construction — returns [] so the agent
             # degrades to chat.
             assert skill_agent._fetch_skill_records(["x"]) == []
+
+
+class TestToolUseProviderLookupWiring:
+    """SkillAgent must hand the OAuth consent hook a tool_use-based provider
+    resolver over ITS registry — that's what lets the consent gate see a
+    skill-bound external MCP tool behind skill_executor (the skills-mode
+    `oauth_required` regression). Built without a full agent: the override
+    only reads `self._registry` and the global external MCP integration.
+    """
+
+    def test_lookup_resolves_folded_tool_via_integration(self):
+        from agents.main_agent.skills.mcp_binding import FoldedMCPTool
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        client = object()
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="gmail-for-employees",
+                    description="",
+                    instructions="",
+                    compose=[],
+                    bound_tool_ids=["gmail_mcp"],
+                    resources=[],
+                )
+            ]
+        )
+        registry.bind_catalog_tools(
+            {"gmail_mcp": [FoldedMCPTool(client, mcp_tool_name="gmail_search")]}
+        )
+
+        agent = object.__new__(skill_agent.SkillAgent)
+        agent._registry = registry
+
+        integration = MagicMock()
+        integration.provider_for_client = (
+            lambda c: "google" if c is client else None
+        )
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=integration,
+        ):
+            lookup = agent._build_tool_use_provider_lookup()
+
+        assert lookup(
+            {
+                "name": "skill_executor",
+                "input": {
+                    "skill_name": "gmail-for-employees",
+                    "tool_name": "gmail_search",
+                },
+            }
+        ) == "google"
+        assert lookup({"name": "some_other_tool", "input": {}}) is None

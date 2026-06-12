@@ -287,6 +287,28 @@ class SkillAgent(ChatAgent):
             len(bindings.unresolved),
         )
 
+    def _build_tool_use_provider_lookup(self):
+        """See through the skill fold for the OAuth consent gate.
+
+        Skill-bound external MCP tools execute via ``skill_executor``, so the
+        consent hook's ``provider_lookup`` (keyed on ``MCPAgentTool``) can't
+        map them. This resolver reads the executor's tool_use input and maps
+        the folded tool's owning client back to its OAuth provider, so an
+        unauthorized call pauses the turn with ``oauth_required`` exactly
+        like a directly-enabled tool would.
+        """
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from agents.main_agent.skills.mcp_binding import (
+            make_folded_tool_provider_lookup,
+        )
+
+        integration = get_external_mcp_integration()
+        return make_folded_tool_provider_lookup(
+            self._registry, integration.provider_for_client
+        )
+
     @property
     def registry(self) -> Optional[SkillRegistry]:
         """Access the skill registry for inspection."""

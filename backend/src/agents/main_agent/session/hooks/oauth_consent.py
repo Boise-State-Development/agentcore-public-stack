@@ -6,6 +6,12 @@ the hook ensures we have an access token in the in-process cache. If we
 don't, it calls `event.interrupt(...)` to pause the agent mid-turn and
 hand the authorization URL back to the caller.
 
+Tools can be OAuth-gated through indirection too: in skills mode a bound
+external MCP tool runs behind the `skill_executor` meta-tool, so the
+selected tool alone doesn't identify the MCP server. The optional
+`tool_use_provider_lookup` resolves the provider from the raw tool_use
+(name + input) in that case — same gate, same interrupt, same resume.
+
 When the user completes consent in the popup and the frontend resumes the
 turn, the hook fires a second time and `event.interrupt(...)` returns the
 user's response (instead of raising). At that point AgentCore Identity has
@@ -105,6 +111,14 @@ def _looks_like_auth_failure(tool_result: Any) -> bool:
 # isn't OAuth-gated. Encapsulates the MCPClient -> provider mapping.
 ProviderLookup = Callable[[Any], Optional[str]]
 
+# Second-chance provider resolution from the raw `tool_use` dict (name +
+# input) for tools that dispatch indirectly — SkillAgent's `skill_executor`
+# meta-tool runs folded external MCP tools, so `selected_tool` is the
+# executor itself and `ProviderLookup` can't map it. Consulted only when
+# `ProviderLookup` returns None; return None for anything that isn't an
+# indirect OAuth-gated dispatch.
+ToolUseProviderLookup = Callable[[dict], Optional[str]]
+
 # Returns OAuth scopes for a provider_id. May be sync or async; the hook
 # awaits the result either way so we can read from an async repository
 # without forcing a sync wrapper.
@@ -142,6 +156,7 @@ class OAuthConsentHook(HookProvider):
         provider_type_lookup: Optional[ProviderTypeLookup] = None,
         custom_parameters_lookup: Optional[CustomParametersLookup] = None,
         disconnected_lookup: Optional[DisconnectedLookup] = None,
+        tool_use_provider_lookup: Optional[ToolUseProviderLookup] = None,
     ):
         """Initialize.
 
@@ -162,6 +177,10 @@ class OAuthConsentHook(HookProvider):
                 effectively assumes the user has not disconnected. Wire
                 this to the durable disconnect repository in production so
                 a /disconnect on one replica is visible from any other.
+            tool_use_provider_lookup: See `ToolUseProviderLookup`. Optional.
+                When omitted, only `provider_lookup` is consulted and
+                indirectly-dispatched tools (skill meta-tools) are not
+                OAuth-gated.
         """
         self._user_id = user_id
         self._provider_lookup = provider_lookup
@@ -169,6 +188,7 @@ class OAuthConsentHook(HookProvider):
         self._provider_type_lookup = provider_type_lookup
         self._custom_parameters_lookup = custom_parameters_lookup
         self._disconnected_lookup = disconnected_lookup
+        self._tool_use_provider_lookup = tool_use_provider_lookup
         # Cache scopes per provider for the lifetime of this hook (one agent
         # invocation). Avoids repeated DB hits if the same provider is used
         # across multiple tool calls in a single turn.
@@ -203,8 +223,26 @@ class OAuthConsentHook(HookProvider):
         """
         self._reauth_attempted_providers.clear()
 
+    def _resolve_provider_id(
+        self, selected_tool: Any, tool_use: Any
+    ) -> Optional[str]:
+        """Map a tool call to its OAuth provider, seeing through indirection.
+
+        `provider_lookup` handles directly-selected MCP tools. When it can't
+        map the tool (e.g. SkillAgent's `skill_executor` meta-tool, whose
+        folded target only appears in the tool_use input), the optional
+        `tool_use_provider_lookup` gets a second chance with the raw
+        tool_use dict.
+        """
+        provider_id = self._provider_lookup(selected_tool)
+        if provider_id:
+            return provider_id
+        if self._tool_use_provider_lookup is None or not isinstance(tool_use, dict):
+            return None
+        return self._tool_use_provider_lookup(tool_use)
+
     async def _gate(self, event: BeforeToolCallEvent) -> None:
-        provider_id = self._provider_lookup(event.selected_tool)
+        provider_id = self._resolve_provider_id(event.selected_tool, event.tool_use)
         if not provider_id:
             return  # Not an OAuth-gated tool
 
@@ -341,7 +379,7 @@ class OAuthConsentHook(HookProvider):
         explicit user intent (the "Disconnect" button in the settings
         page).
         """
-        provider_id = self._provider_lookup(event.selected_tool)
+        provider_id = self._resolve_provider_id(event.selected_tool, event.tool_use)
         if not provider_id:
             return
 
