@@ -31,6 +31,7 @@ import {
 } from '../assistants/components/share-assistant-dialog.component';
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
+import { ChatModeService } from '../services/chat-mode/chat-mode.service';
 
 @Component({
   selector: 'app-session-page',
@@ -62,6 +63,7 @@ export class ConversationPage implements OnDestroy {
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
   private systemPromptsService = inject(SystemPromptsService);
+  private chatModeService = inject(ChatModeService);
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
@@ -185,6 +187,14 @@ export class ConversationPage implements OnDestroy {
       if (session?.preferences?.lastModel) {
         this.modelService.setSelectedModelById(session.preferences.lastModel);
       }
+    });
+
+    // Restore the agent mode (skills vs. tools) this conversation was using.
+    // Sessions without a stored mode (new or pre-feature) are ignored so the
+    // current selection carries into the first message of a new conversation.
+    effect(() => {
+      const session = this.sessionConversation();
+      this.chatModeService.hydrateFromSession(session?.preferences?.agentType);
     });
 
     // Hydrate active system prompt from session preferences. We treat the

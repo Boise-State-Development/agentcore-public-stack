@@ -9,6 +9,8 @@ import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
+import { SkillService } from '../../../services/skill/skill.service';
+import { ChatModeService, ChatMode } from '../../../services/chat-mode/chat-mode.service';
 import { FileUploadService } from '../../../services/file-upload';
 
 describe('ChatRequestService', () => {
@@ -17,9 +19,11 @@ describe('ChatRequestService', () => {
   let mockRouter: any;
   let mockModelService: any;
   let mockToolService: any;
+  let currentMode: ChatMode;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
+    currentMode = 'skill';
     mockChatHttpService = {
       sendChatRequest: vi.fn().mockResolvedValue(undefined),
     };
@@ -49,6 +53,8 @@ describe('ChatRequestService', () => {
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },
         { provide: ToolService, useValue: mockToolService },
+        { provide: SkillService, useValue: { getEnabledSkillIds: vi.fn().mockReturnValue(['skill_a']) } },
+        { provide: ChatModeService, useValue: { mode: () => currentMode } },
         { provide: FileUploadService, useValue: { getReadyFileById: vi.fn() } },
       ],
     });
@@ -59,7 +65,7 @@ describe('ChatRequestService', () => {
     TestBed.resetTestingModule();
   });
 
-  it('should submit chat request with existing session', async () => {
+  it('should submit chat request with existing session (skills mode)', async () => {
     await service.submitChatRequest('Hello', 'session1');
 
     expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
@@ -68,12 +74,15 @@ describe('ChatRequestService', () => {
         session_id: 'session1',
         model_id: 'test-model',
         provider: 'test',
-        enabled_tools: ['tool1', 'tool2'],
+        agent_type: 'skill',
+        enabled_skills: ['skill_a'],
+        // Skills mode: capabilities come from skills, not the tool picker.
+        enabled_tools: [],
       })
     );
   });
 
-  it('should submit chat request with new session', async () => {
+  it('should submit chat request with new session (skills mode)', async () => {
     await service.submitChatRequest('Hello', null);
 
     expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
@@ -81,9 +90,34 @@ describe('ChatRequestService', () => {
         message: 'Hello',
         model_id: 'test-model',
         provider: 'test',
+        agent_type: 'skill',
+        enabled_skills: ['skill_a'],
+        enabled_tools: [],
+      })
+    );
+  });
+
+  it('sends the tool selection and no skills in tools mode', async () => {
+    currentMode = 'chat';
+    await service.submitChatRequest('Hello', 'session1');
+
+    expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent_type: 'chat',
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+    const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+    expect('enabled_skills' in sent).toBe(false);
+  });
+
+  it('assistant turns carry no agent_type or enabled_skills (pre-skills-mode behavior)', async () => {
+    await service.submitChatRequest('Hello', 'session1', undefined, 'assistant1');
+
+    const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
+    expect('agent_type' in sent).toBe(false);
+    expect('enabled_skills' in sent).toBe(false);
+    expect(sent['enabled_tools']).toEqual([]);
   });
 
   it('should include assistant ID in request', async () => {

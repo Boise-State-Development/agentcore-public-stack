@@ -3,6 +3,8 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
+import { SkillService } from '../../services/skill/skill.service';
+import { ChatMode, ChatModeService } from '../../services/chat-mode/chat-mode.service';
 import { SystemPromptsService } from '../../services/system-prompts/system-prompts.service';
 import {
   KNOWN_PARAMS,
@@ -51,6 +53,8 @@ export class ModelSettings {
   private elementRef = inject(ElementRef);
   protected modelService = inject(ModelService);
   protected toolService = inject(ToolService);
+  protected skillService = inject(SkillService);
+  protected chatModeService = inject(ChatModeService);
   protected systemPromptsService = inject(SystemPromptsService);
 
   // Input to control visibility
@@ -70,6 +74,7 @@ export class ModelSettings {
   // grow taller for users who never touch inference params.
   protected isAdvancedOpen = signal(false);
   protected isToolsOpen = signal(false);
+  protected isSkillsOpen = signal(false);
 
   // Per-param transient "clamped to N" notice keyed by param key. Cleared
   // ~3s after it's set or the moment the user edits the row again.
@@ -346,6 +351,19 @@ export class ModelSettings {
 
   toggleTools(): void {
     this.isToolsOpen.update((open) => !open);
+  }
+
+  toggleSkills(): void {
+    this.isSkillsOpen.update((open) => !open);
+  }
+
+  setMode(mode: ChatMode): void {
+    this.chatModeService.setMode(mode, this.sessionId());
+  }
+
+  toggleSkill(skillId: string): void {
+    this.skillService.toggleSkill(skillId)
+      .catch(err => console.error('Failed to toggle skill:', err));
   }
 
   /**

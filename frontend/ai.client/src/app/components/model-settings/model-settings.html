@@ -124,6 +124,43 @@
         }
       </div>
 
+      <!-- Capabilities Mode (Skills vs. Tools) Section -->
+      @if (chatModeService.canToggle()) {
+        <div class="border-b border-gray-200 p-4 dark:border-white/10">
+          <label id="chat-mode-label" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+            Capabilities
+          </label>
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            Skills bundle instructions and tools for you; Tools gives you direct control.
+          </p>
+          <div
+            role="group"
+            aria-labelledby="chat-mode-label"
+            class="mt-2 grid grid-cols-2 gap-1 rounded-2xl bg-gray-100 p-1 dark:bg-gray-800">
+            <button
+              type="button"
+              [attr.aria-pressed]="chatModeService.isSkillsMode()"
+              (click)="setMode('skill')"
+              class="rounded-xl px-3 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              [class]="chatModeService.isSkillsMode()
+                ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-600 dark:text-white'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'">
+              Skills
+            </button>
+            <button
+              type="button"
+              [attr.aria-pressed]="!chatModeService.isSkillsMode()"
+              (click)="setMode('chat')"
+              class="rounded-xl px-3 py-1.5 text-sm/6 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              [class]="!chatModeService.isSkillsMode()
+                ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-600 dark:text-white'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'">
+              Tools
+            </button>
+          </div>
+        </div>
+      }
+
       <!-- Advanced (Inference Parameters) Section -->
       @if (hasAdvancedParams()) {
         <div class="border-b border-gray-200 dark:border-white/10">
@@ -296,7 +333,91 @@
         </div>
       }
 
-      <!-- Tools Section -->
+      <!-- Skills Section (skills mode) -->
+      @if (chatModeService.isSkillsMode()) {
+        <div class="border-b border-gray-200 dark:border-white/10">
+          <button
+            type="button"
+            (click)="toggleSkills()"
+            [attr.aria-expanded]="isSkillsOpen()"
+            aria-controls="skills-body"
+            class="flex w-full items-center justify-between gap-3 px-4 py-4 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5">
+            <div class="flex items-center gap-2">
+              <ng-icon [name]="isSkillsOpen() ? 'heroChevronDown' : 'heroChevronRight'" class="size-4 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+              <h3 id="skills-heading" class="text-sm/6 font-medium text-gray-900 dark:text-white">Skills</h3>
+            </div>
+            <span class="text-xs/5 text-gray-500 dark:text-gray-400">
+              {{ skillService.enabledCount() }} enabled
+            </span>
+          </button>
+
+          @if (isSkillsOpen()) {
+            <div id="skills-body" class="px-4 pb-4">
+              @if (skillService.loading()) {
+                <div class="text-sm/6 text-gray-500 dark:text-gray-400">Loading skills...</div>
+              } @else if (skillService.error()) {
+                <div class="text-sm/6 text-red-600 dark:text-red-400" role="alert">
+                  {{ skillService.error() }}
+                </div>
+              } @else if (!skillService.hasSkills()) {
+                <div class="text-sm/6 text-gray-500 dark:text-gray-400">
+                  No skills are available for your role.
+                  @if (chatModeService.canToggle()) {
+                    <span class="block text-xs/5">Switch to Tools to pick capabilities directly.</span>
+                  }
+                </div>
+              } @else {
+                <div class="space-y-3" role="group" aria-labelledby="skills-heading">
+                  @for (skill of skillService.skills(); track skill.skillId) {
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0 flex-1">
+                        <label
+                          [id]="'skill-label-' + skill.skillId"
+                          [for]="'skill-toggle-' + skill.skillId"
+                          class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                          {{ skill.displayName }}
+                        </label>
+                        <p
+                          [id]="'skill-desc-' + skill.skillId"
+                          class="text-xs/5 text-gray-500 dark:text-gray-400">
+                          {{ skill.description }}
+                        </p>
+                        @if (skill.boundToolCount > 0) {
+                          <p class="text-xs/5 text-gray-400 dark:text-gray-500">
+                            {{ skill.boundToolCount }} {{ skill.boundToolCount === 1 ? 'tool' : 'tools' }}
+                          </p>
+                        }
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        [id]="'skill-toggle-' + skill.skillId"
+                        [attr.aria-checked]="skill.isEnabled"
+                        [attr.aria-labelledby]="'skill-label-' + skill.skillId"
+                        [attr.aria-describedby]="'skill-desc-' + skill.skillId"
+                        (click)="toggleSkill(skill.skillId)"
+                        (keydown.space)="$event.preventDefault(); toggleSkill(skill.skillId)"
+                        (keydown.enter)="toggleSkill(skill.skillId)"
+                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                        [class]="skill.isEnabled ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                        <span
+                          aria-hidden="true"
+                          class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
+                          [class.translate-x-5]="skill.isEnabled"
+                          [class.translate-x-0]="!skill.isEnabled">
+                        </span>
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+
+      <!-- Tools Section (tools mode) -->
+      @if (!chatModeService.isSkillsMode()) {
       <div class="border-b border-gray-200 dark:border-white/10">
         <button
           type="button"
@@ -435,6 +556,7 @@
           </div>
         }
       </div>
+      }
 
       <!-- Conversation Mode Section -->
       @if (systemPromptsService.hasPrompts()) {
