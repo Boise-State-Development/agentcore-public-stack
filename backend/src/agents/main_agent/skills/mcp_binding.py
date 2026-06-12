@@ -76,6 +76,12 @@ class FoldedMCPTool:
         return self._agent_tool_name
 
     @property
+    def client(self) -> Any:
+        """The owning ``MCPClient`` — lets the OAuth consent gate map this
+        folded tool back to its provider via ``provider_for_client``."""
+        return self._client
+
+    @property
     def tool_spec(self) -> Dict[str, Any]:
         """The tool's parameter spec, resolved lazily for gateway tools.
 
@@ -104,10 +110,18 @@ class FoldedMCPTool:
         return spec
 
     def invoke(self, tool_input: Optional[dict]) -> Any:
-        """Execute the tool through the MCP client and return a string result.
+        """Execute the tool through the MCP client.
 
         Synthesizes a ``tool_use_id`` (the executor path has none) and reduces
         the structured ``MCPToolResult`` to text/JSON the model can read.
+
+        Failures return a ToolResult-shaped dict (``status: error``) rather
+        than a plain string: ``skill_executor`` returns it verbatim and
+        Strands' ``@tool`` decorator passes status+content dicts through
+        unchanged, so the error status survives the fold. Without it every
+        folded failure surfaced as a *success*-status result and the OAuth
+        consent hook's 401-retry heuristic (gated on ``status == "error"``)
+        could never fire for skill-bound tools.
         """
         try:
             result = self._client.call_tool_sync(
@@ -120,8 +134,22 @@ class FoldedMCPTool:
                 "Folded MCP tool %s failed: %s", self._agent_tool_name, e,
                 exc_info=True,
             )
-            return json.dumps({"error": str(e)})
-        return _stringify_mcp_result(result)
+            return _error_tool_result(json.dumps({"error": str(e)}))
+
+        status = (
+            result.get("status")
+            if isinstance(result, dict)
+            else getattr(result, "status", None)
+        )
+        text = _stringify_mcp_result(result)
+        if status == "error":
+            return _error_tool_result(text)
+        return text
+
+
+def _error_tool_result(text: str) -> dict:
+    """ToolResult-shaped error for the executor to return as-is."""
+    return {"status": "error", "content": [{"text": text}]}
 
 
 def _stringify_mcp_result(result: Any) -> str:
@@ -155,6 +183,52 @@ def _stringify_mcp_result(result: Any) -> str:
         return json.dumps(result, default=str)
     except (TypeError, ValueError):
         return str(result)
+
+
+def make_folded_tool_provider_lookup(
+    registry: Any, provider_for_client: Callable[[Any], Optional[str]]
+) -> Callable[[dict], Optional[str]]:
+    """Build the OAuth consent gate's tool_use → provider resolver for skills.
+
+    A skill-bound external MCP tool executes through the ``skill_executor``
+    meta-tool, so the consent hook's ``provider_lookup`` (which keys off the
+    selected tool being an ``MCPAgentTool``) can't see it — the OAuth gate
+    silently never fired for skills mode, and an unauthorized tool ran
+    tokenless instead of pausing the turn with ``oauth_required``. This
+    resolver gives the hook a second chance: it reads ``skill_name`` /
+    ``tool_name`` from the executor's tool_use input, finds the bound
+    :class:`FoldedMCPTool` in the registry, and maps its owning client to a
+    provider via ``provider_for_client`` (gateway clients aren't in that map,
+    so they resolve to None — correct, they auth with SigV4, not user OAuth).
+
+    Resolution is lazy (registry consulted per call), so building the lookup
+    before bindings exist is safe.
+    """
+    from agents.main_agent.skills.skill_tools import SKILL_EXECUTOR_TOOL_NAME
+
+    def lookup(tool_use: dict) -> Optional[str]:
+        if (tool_use or {}).get("name") != SKILL_EXECUTOR_TOOL_NAME:
+            return None
+        tool_input = tool_use.get("input") or {}
+        if not isinstance(tool_input, dict):
+            return None
+        skill_name = tool_input.get("skill_name")
+        tool_name = tool_input.get("tool_name")
+        if not skill_name or not tool_name:
+            return None
+        try:
+            tools = registry.get_tools(skill_name)
+        except Exception:  # noqa: BLE001 - unknown skill → not OAuth-gated
+            return None
+        for t in tools or []:
+            if not getattr(t, "is_mcp_folded", False):
+                continue
+            if getattr(t, "tool_name", None) != tool_name:
+                continue
+            return provider_for_client(t.client)
+        return None
+
+    return lookup
 
 
 class MCPBindingResult:

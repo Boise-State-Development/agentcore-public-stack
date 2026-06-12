@@ -12,6 +12,7 @@ import pytest
 from agents.main_agent.skills.mcp_binding import (
     FoldedMCPTool,
     _stringify_mcp_result,
+    make_folded_tool_provider_lookup,
     resolve_mcp_bindings,
 )
 
@@ -178,13 +179,27 @@ class TestFoldedMCPToolExecution:
         FoldedMCPTool(client, mcp_tool_name="t").invoke(None)
         assert client.calls[0][2] == {}
 
-    def test_invoke_surfaces_errors_as_tool_result(self):
+    def test_invoke_surfaces_exceptions_as_error_status_result(self):
+        """A client exception must keep its error status through the fold —
+        Strands' @tool decorator passes status+content dicts through, and the
+        OAuth consent hook's 401-retry heuristic only fires on error-status
+        results."""
+
         class _Boom(_FakeClient):
             def call_tool_sync(self, *a, **k):
                 raise RuntimeError("mcp down")
 
         out = FoldedMCPTool(_Boom(), mcp_tool_name="t").invoke({})
-        assert "mcp down" in out
+        assert out["status"] == "error"
+        assert "mcp down" in out["content"][0]["text"]
+
+    def test_invoke_preserves_error_status_from_mcp_result(self):
+        client = _FakeClient(
+            result={"status": "error", "content": [{"text": "HTTP 401 Unauthorized"}]}
+        )
+        out = FoldedMCPTool(client, mcp_tool_name="t").invoke({})
+        assert out["status"] == "error"
+        assert "401" in out["content"][0]["text"]
 
     def test_is_mcp_folded_marker(self):
         assert FoldedMCPTool(_FakeClient(), mcp_tool_name="t").is_mcp_folded is True
@@ -207,6 +222,101 @@ class TestFoldedMCPToolSpec:
         client = _FakeClient(raise_on_list=True)
         tool = FoldedMCPTool(client, mcp_tool_name="t")
         assert tool.tool_spec == {"name": "t"}
+
+
+class TestFoldedToolProviderLookup:
+    """`make_folded_tool_provider_lookup` lets the OAuth consent gate see
+    through the skill fold: skill_executor tool_use input → bound
+    FoldedMCPTool → owning client → provider_id."""
+
+    def _registry_with_folded_gmail(self, client):
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="gmail-for-employees",
+                    description="Gmail",
+                    instructions="Use Gmail tools.",
+                    compose=[],
+                    bound_tool_ids=["gmail_mcp"],
+                    resources=[],
+                )
+            ]
+        )
+        folded = FoldedMCPTool(
+            client, mcp_tool_name="gmail_search", agent_tool_name="gmail_search"
+        )
+        registry.bind_catalog_tools({"gmail_mcp": [folded]})
+        return registry
+
+    def _executor_tool_use(self, skill_name="gmail-for-employees", tool_name="gmail_search"):
+        return {
+            "toolUseId": "tu_1",
+            "name": "skill_executor",
+            "input": {"skill_name": skill_name, "tool_name": tool_name},
+        }
+
+    def test_resolves_provider_for_folded_tool(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_provider_lookup(
+            registry, lambda c: "google" if c is client else None
+        )
+        assert lookup(self._executor_tool_use()) == "google"
+
+    def test_ignores_non_executor_tool_use(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_provider_lookup(registry, lambda c: "google")
+        assert lookup({"name": "gmail_search", "input": {}}) is None
+
+    def test_unknown_skill_or_tool_resolves_none(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_provider_lookup(registry, lambda c: "google")
+        assert lookup(self._executor_tool_use(skill_name="nope")) is None
+        assert lookup(self._executor_tool_use(tool_name="nope")) is None
+
+    def test_local_non_folded_tool_resolves_none(self):
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="local-skill",
+                    description="",
+                    instructions="",
+                    compose=[],
+                    bound_tool_ids=["local_tool"],
+                    resources=[],
+                )
+            ]
+        )
+        registry.bind_catalog_tools(
+            {"local_tool": SimpleNamespace(tool_name="local_tool")}
+        )
+        lookup = make_folded_tool_provider_lookup(registry, lambda c: "google")
+        assert (
+            lookup(self._executor_tool_use("local-skill", "local_tool")) is None
+        )
+
+    def test_unmapped_client_resolves_none(self):
+        # Gateway clients aren't in the provider map (SigV4, not user OAuth).
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_provider_lookup(registry, lambda c: None)
+        assert lookup(self._executor_tool_use()) is None
+
+    def test_malformed_input_resolves_none(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_provider_lookup(registry, lambda c: "google")
+        assert lookup({}) is None
+        assert lookup({"name": "skill_executor"}) is None
+        assert lookup({"name": "skill_executor", "input": "not-a-dict"}) is None
 
 
 class TestStringify:
