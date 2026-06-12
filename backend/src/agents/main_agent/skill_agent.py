@@ -309,6 +309,29 @@ class SkillAgent(ChatAgent):
             self._registry, integration.provider_for_client
         )
 
+    def _build_tool_use_approval_lookup(self):
+        """See through the skill fold for the per-tool approval gate.
+
+        Skill-bound external MCP tools execute via ``skill_executor``, so the
+        approval hook's ``approval_names_lookup`` (keyed on ``MCPAgentTool``)
+        can't gate them — an admin's ``needs_approval`` flag was silently
+        bypassed in skills mode. This resolver reads the executor's tool_use
+        input and checks the folded tool against its owning client's flagged
+        set, so the user sees the same approval prompt (describing the inner
+        tool, not the executor) as a directly-enabled tool would raise.
+        """
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from agents.main_agent.skills.mcp_binding import (
+            make_folded_tool_approval_lookup,
+        )
+
+        integration = get_external_mcp_integration()
+        return make_folded_tool_approval_lookup(
+            self._registry, integration.approval_names_for_client
+        )
+
     @property
     def registry(self) -> Optional[SkillRegistry]:
         """Access the skill registry for inspection."""

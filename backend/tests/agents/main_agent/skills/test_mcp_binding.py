@@ -12,6 +12,7 @@ import pytest
 from agents.main_agent.skills.mcp_binding import (
     FoldedMCPTool,
     _stringify_mcp_result,
+    make_folded_tool_approval_lookup,
     make_folded_tool_provider_lookup,
     resolve_mcp_bindings,
 )
@@ -317,6 +318,113 @@ class TestFoldedToolProviderLookup:
         assert lookup({}) is None
         assert lookup({"name": "skill_executor"}) is None
         assert lookup({"name": "skill_executor", "input": "not-a-dict"}) is None
+
+
+class TestFoldedToolApprovalLookup:
+    """`make_folded_tool_approval_lookup` lets the per-tool approval gate see
+    through the skill fold: skill_executor tool_use input → bound
+    FoldedMCPTool → owning client's needs_approval set → the inner tool's
+    name + args for the approval dialog."""
+
+    def _registry_with_folded_gmail(self, client):
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="gmail-for-employees",
+                    description="Gmail",
+                    instructions="Use Gmail tools.",
+                    compose=[],
+                    bound_tool_ids=["gmail_mcp"],
+                    resources=[],
+                )
+            ]
+        )
+        folded = FoldedMCPTool(
+            client, mcp_tool_name="gmail_send", agent_tool_name="gmail_send"
+        )
+        registry.bind_catalog_tools({"gmail_mcp": [folded]})
+        return registry
+
+    def _executor_tool_use(
+        self, skill_name="gmail-for-employees", tool_name="gmail_send"
+    ):
+        return {
+            "toolUseId": "tu_1",
+            "name": "skill_executor",
+            "input": {
+                "skill_name": skill_name,
+                "tool_name": tool_name,
+                "tool_input": {"to": "hr@example.com"},
+            },
+        }
+
+    def test_resolves_flagged_folded_tool_with_inner_args(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_approval_lookup(
+            registry, lambda c: {"gmail_send"} if c is client else set()
+        )
+        target = lookup(self._executor_tool_use())
+        assert target is not None
+        assert target.tool_name == "gmail_send"
+        assert target.tool_input == {"to": "hr@example.com"}
+
+    def test_unflagged_folded_tool_resolves_none(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_approval_lookup(
+            registry, lambda c: {"some_other_tool"}
+        )
+        assert lookup(self._executor_tool_use()) is None
+
+    def test_unflagged_client_resolves_none(self):
+        # Gateway clients have no needs_approval snapshot — empty set.
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_approval_lookup(registry, lambda c: set())
+        assert lookup(self._executor_tool_use()) is None
+
+    def test_ignores_non_executor_tool_use(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_approval_lookup(registry, lambda c: {"gmail_send"})
+        assert lookup({"name": "gmail_send", "input": {}}) is None
+
+    def test_unknown_skill_or_tool_resolves_none(self):
+        client = _FakeClient()
+        registry = self._registry_with_folded_gmail(client)
+        lookup = make_folded_tool_approval_lookup(registry, lambda c: {"gmail_send"})
+        assert lookup(self._executor_tool_use(skill_name="nope")) is None
+        assert lookup(self._executor_tool_use(tool_name="nope")) is None
+
+    def test_local_non_folded_tool_resolves_none(self):
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="local-skill",
+                    description="",
+                    instructions="",
+                    compose=[],
+                    bound_tool_ids=["local_tool"],
+                    resources=[],
+                )
+            ]
+        )
+        registry.bind_catalog_tools(
+            {"local_tool": SimpleNamespace(tool_name="local_tool")}
+        )
+        lookup = make_folded_tool_approval_lookup(
+            registry, lambda c: {"local_tool"}
+        )
+        assert (
+            lookup(self._executor_tool_use("local-skill", "local_tool")) is None
+        )
 
 
 class TestStringify:

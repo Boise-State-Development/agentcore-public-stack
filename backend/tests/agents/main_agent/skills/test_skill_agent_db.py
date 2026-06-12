@@ -126,3 +126,63 @@ class TestToolUseProviderLookupWiring:
             }
         ) == "google"
         assert lookup({"name": "some_other_tool", "input": {}}) is None
+
+
+class TestToolUseApprovalLookupWiring:
+    """SkillAgent must hand the per-tool approval hook a tool_use-based
+    resolver over ITS registry — that's what lets the hook see an admin's
+    needs_approval flag on a skill-bound external MCP tool behind
+    skill_executor (the skills-mode approval-bypass regression). Built
+    without a full agent: the override only reads `self._registry` and the
+    global external MCP integration.
+    """
+
+    def test_lookup_resolves_flagged_folded_tool_via_integration(self):
+        from agents.main_agent.skills.mcp_binding import FoldedMCPTool
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        client = object()
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="gmail-for-employees",
+                    description="",
+                    instructions="",
+                    compose=[],
+                    bound_tool_ids=["gmail_mcp"],
+                    resources=[],
+                )
+            ]
+        )
+        registry.bind_catalog_tools(
+            {"gmail_mcp": [FoldedMCPTool(client, mcp_tool_name="gmail_send")]}
+        )
+
+        agent = object.__new__(skill_agent.SkillAgent)
+        agent._registry = registry
+
+        integration = MagicMock()
+        integration.approval_names_for_client = (
+            lambda c: {"gmail_send"} if c is client else set()
+        )
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=integration,
+        ):
+            lookup = agent._build_tool_use_approval_lookup()
+
+        target = lookup(
+            {
+                "name": "skill_executor",
+                "input": {
+                    "skill_name": "gmail-for-employees",
+                    "tool_name": "gmail_send",
+                    "tool_input": {"to": "hr@example.com"},
+                },
+            }
+        )
+        assert target is not None
+        assert target.tool_name == "gmail_send"
+        assert target.tool_input == {"to": "hr@example.com"}
+        assert lookup({"name": "some_other_tool", "input": {}}) is None

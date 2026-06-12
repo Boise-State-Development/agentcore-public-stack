@@ -185,6 +185,39 @@ def _stringify_mcp_result(result: Any) -> str:
         return str(result)
 
 
+def _resolve_folded_tool(registry: Any, tool_use: dict) -> Optional[FoldedMCPTool]:
+    """Resolve a ``skill_executor`` tool_use to the bound :class:`FoldedMCPTool`.
+
+    Shared by the OAuth-consent and tool-approval second-chance lookups:
+    reads ``skill_name`` / ``tool_name`` from the executor's tool_use input
+    and finds the matching folded tool in the registry. Returns None for
+    anything that isn't an executor call over a known skill's folded MCP
+    tool (local callables, unknown skills, malformed input).
+    """
+    from agents.main_agent.skills.skill_tools import SKILL_EXECUTOR_TOOL_NAME
+
+    if (tool_use or {}).get("name") != SKILL_EXECUTOR_TOOL_NAME:
+        return None
+    tool_input = tool_use.get("input") or {}
+    if not isinstance(tool_input, dict):
+        return None
+    skill_name = tool_input.get("skill_name")
+    tool_name = tool_input.get("tool_name")
+    if not skill_name or not tool_name:
+        return None
+    try:
+        tools = registry.get_tools(skill_name)
+    except Exception:  # noqa: BLE001 - unknown skill → nothing to gate
+        return None
+    for t in tools or []:
+        if not getattr(t, "is_mcp_folded", False):
+            continue
+        if getattr(t, "tool_name", None) != tool_name:
+            continue
+        return t
+    return None
+
+
 def make_folded_tool_provider_lookup(
     registry: Any, provider_for_client: Callable[[Any], Optional[str]]
 ) -> Callable[[dict], Optional[str]]:
@@ -195,38 +228,56 @@ def make_folded_tool_provider_lookup(
     selected tool being an ``MCPAgentTool``) can't see it — the OAuth gate
     silently never fired for skills mode, and an unauthorized tool ran
     tokenless instead of pausing the turn with ``oauth_required``. This
-    resolver gives the hook a second chance: it reads ``skill_name`` /
-    ``tool_name`` from the executor's tool_use input, finds the bound
-    :class:`FoldedMCPTool` in the registry, and maps its owning client to a
-    provider via ``provider_for_client`` (gateway clients aren't in that map,
-    so they resolve to None — correct, they auth with SigV4, not user OAuth).
+    resolver gives the hook a second chance: it finds the bound
+    :class:`FoldedMCPTool` and maps its owning client to a provider via
+    ``provider_for_client`` (gateway clients aren't in that map, so they
+    resolve to None — correct, they auth with SigV4, not user OAuth).
 
     Resolution is lazy (registry consulted per call), so building the lookup
     before bindings exist is safe.
     """
-    from agents.main_agent.skills.skill_tools import SKILL_EXECUTOR_TOOL_NAME
 
     def lookup(tool_use: dict) -> Optional[str]:
-        if (tool_use or {}).get("name") != SKILL_EXECUTOR_TOOL_NAME:
+        folded = _resolve_folded_tool(registry, tool_use)
+        if folded is None:
             return None
-        tool_input = tool_use.get("input") or {}
-        if not isinstance(tool_input, dict):
+        return provider_for_client(folded.client)
+
+    return lookup
+
+
+def make_folded_tool_approval_lookup(
+    registry: Any, approval_names_for_client: Callable[[Any], set]
+) -> Callable[[dict], Optional[Any]]:
+    """Build the approval gate's tool_use → flagged-target resolver for skills.
+
+    Mirrors :func:`make_folded_tool_provider_lookup` for the per-tool
+    approval hook: a skill-bound external MCP tool runs behind
+    ``skill_executor``, so the hook's ``approval_names_lookup`` (keyed on the
+    selected tool being an ``MCPAgentTool``) can't see the admin's
+    ``needs_approval`` flag and the call ran without the user prompt. This
+    resolver finds the bound :class:`FoldedMCPTool`, checks its agent-facing
+    name against the owning client's flagged set (same name the direct path
+    matches when the tool is enabled outside a skill), and returns the inner
+    tool's name + args so the approval dialog describes the real tool, not
+    the executor. Returns None when the folded target isn't flagged.
+
+    Resolution is lazy (registry consulted per call), so building the lookup
+    before bindings exist is safe.
+    """
+
+    def lookup(tool_use: dict) -> Optional[Any]:
+        from agents.main_agent.session.hooks.tool_approval import FoldedToolApproval
+
+        folded = _resolve_folded_tool(registry, tool_use)
+        if folded is None:
             return None
-        skill_name = tool_input.get("skill_name")
-        tool_name = tool_input.get("tool_name")
-        if not skill_name or not tool_name:
+        if folded.tool_name not in approval_names_for_client(folded.client):
             return None
-        try:
-            tools = registry.get_tools(skill_name)
-        except Exception:  # noqa: BLE001 - unknown skill → not OAuth-gated
-            return None
-        for t in tools or []:
-            if not getattr(t, "is_mcp_folded", False):
-                continue
-            if getattr(t, "tool_name", None) != tool_name:
-                continue
-            return provider_for_client(t.client)
-        return None
+        return FoldedToolApproval(
+            tool_name=folded.tool_name,
+            tool_input=(tool_use.get("input") or {}).get("tool_input"),
+        )
 
     return lookup
 
