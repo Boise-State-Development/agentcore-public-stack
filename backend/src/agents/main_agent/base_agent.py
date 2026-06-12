@@ -298,7 +298,24 @@ class BaseAgent(ABC):
                 return set()
             return integration.approval_names_for_client(selected_tool.mcp_client)
 
-        return MCPExternalApprovalHook(approval_names_lookup=approval_names_lookup)
+        # Tools dispatched indirectly (SkillAgent's skill_executor meta-tool)
+        # never present as MCPAgentTool, so approval_names_lookup can't gate
+        # them. Subclasses that fold tools provide a tool_use-based second
+        # chance — mirrors the OAuth consent hook's fold-aware lookup.
+        return MCPExternalApprovalHook(
+            approval_names_lookup=approval_names_lookup,
+            tool_use_approval_lookup=self._build_tool_use_approval_lookup(),
+        )
+
+    def _build_tool_use_approval_lookup(
+        self,
+    ) -> Optional[Callable[[dict], Optional[Any]]]:
+        """Approval-target resolution from a raw `tool_use` dict, for agents
+        that dispatch tools indirectly (SkillAgent's meta-tools). The base
+        agent has no such indirection, so the approval hook gets None and
+        relies on `approval_names_lookup` alone.
+        """
+        return None
 
     def _build_oauth_consent_hook(self) -> OAuthConsentHook:
         """Construct the OAuth consent hook with closures over the MCP
