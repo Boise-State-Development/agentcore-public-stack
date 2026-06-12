@@ -135,6 +135,7 @@ class SessionPreferences(BaseModel):
     selected_prompt_id: Optional[str] = Field(default=None, alias="selectedPromptId", description="ID of selected prompt template")
     custom_prompt_text: Optional[str] = Field(default=None, alias="customPromptText", description="Custom prompt text if used")
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
+    agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
 
     # System prompt hash for tracking exact prompt version sent to the model
     # This is a hash of the FINAL rendered system prompt (after date injection, variable substitution, etc.)
@@ -244,6 +245,7 @@ class UpdateSessionMetadataRequest(BaseModel):
     custom_prompt_text: Optional[str] = Field(None, alias="customPromptText", description="Custom prompt text")
     system_prompt_hash: Optional[str] = Field(None, alias="systemPromptHash", description="MD5 hash of final rendered system prompt")
     assistant_id: Optional[str] = Field(None, alias="assistantId", description="Assistant ID attached to this session")
+    agent_type: Optional[Literal["skill", "chat"]] = Field(None, alias="agentType", description="Agent mode for this conversation")
 
 
 class SessionMetadataResponse(BaseModel):

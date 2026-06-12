@@ -327,6 +327,75 @@ class TestUpdateSessionMetadata:
         assert resp.status_code == 200
         assert captured["metadata"].preferences.selected_prompt_id == "keep-me"
 
+    def test_agent_type_persists_and_merges(self, app, make_user, authenticated_client):
+        """agentType (skills-mode) lands in preferences without clobbering others."""
+        from apis.shared.sessions.models import SessionPreferences
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        existing = _make_session_metadata("sess-001", user.user_id)
+        existing.preferences = SessionPreferences(selected_prompt_id="keep-me")
+
+        captured = {}
+
+        async def capture_store(*, session_id, user_id, session_metadata):
+            captured["metadata"] = session_metadata
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            side_effect=capture_store,
+        ):
+            resp = client.put(
+                "/sessions/sess-001/metadata",
+                json={"agentType": "chat"},
+            )
+
+        assert resp.status_code == 200
+        prefs = captured["metadata"].preferences
+        assert prefs.agent_type == "chat"
+        assert prefs.selected_prompt_id == "keep-me"
+
+    def test_agent_type_set_on_brand_new_session(self, app, make_user, authenticated_client):
+        """agentType alone is enough to create the preferences object."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        captured = {}
+
+        async def capture_store(*, session_id, user_id, session_metadata):
+            captured["metadata"] = session_metadata
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            side_effect=capture_store,
+        ):
+            resp = client.put(
+                "/sessions/sess-new/metadata",
+                json={"agentType": "skill"},
+            )
+
+        assert resp.status_code == 200
+        assert captured["metadata"].preferences.agent_type == "skill"
+
+    def test_agent_type_rejects_unknown_mode(self, app, make_user, authenticated_client):
+        """agentType is constrained to the skill/chat mode pair."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        resp = client.put(
+            "/sessions/sess-001/metadata",
+            json={"agentType": "voice"},
+        )
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Requirement 3.6: DELETE /sessions/{session_id} returns 204

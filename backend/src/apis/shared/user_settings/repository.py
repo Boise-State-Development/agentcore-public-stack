@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 # Default settings returned when no record exists
 DEFAULT_SETTINGS = {
     "defaultModelId": None,
+    "preferredAgentMode": None,
 }
 
 
@@ -63,6 +64,7 @@ class UserSettingsRepository:
             item = response["Item"]
             return {
                 "defaultModelId": item.get("defaultModelId"),
+                "preferredAgentMode": item.get("preferredAgentMode"),
             }
         except ClientError as e:
             logger.error(f"Error getting settings for user {user_id}: {e}")

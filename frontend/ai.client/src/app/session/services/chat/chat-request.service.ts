@@ -8,6 +8,8 @@ import { SessionService } from '../session/session.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
+import { SkillService } from '../../../services/skill/skill.service';
+import { ChatModeService } from '../../../services/chat-mode/chat-mode.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -39,6 +41,8 @@ export class ChatRequestService implements OnDestroy {
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
+  private skillService = inject(SkillService);
+  private chatModeService = inject(ChatModeService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
@@ -206,8 +210,14 @@ export class ChatRequestService implements OnDestroy {
     // If using the system default model, send null for model_id to let backend use its default
     const isDefaultModel = this.modelService.isUsingDefaultModel();
 
-    // Get enabled tools from tool service (RBAC-based)
-    const enabledTools = this.toolService.getEnabledToolIds();
+    // Skills mode vs. tools mode (assistant turns are excluded below — they
+    // keep their pre-skills-mode behavior and let the server default apply).
+    const chatMode = this.chatModeService.mode();
+    const isSkillsMode = !assistantId && chatMode === 'skill';
+
+    // In skills mode capabilities come exclusively from the enabled skills'
+    // bound tools — the raw tool selection is intentionally not sent.
+    const enabledTools = isSkillsMode ? [] : this.toolService.getEnabledToolIds();
 
     const requestObject: Record<string, unknown> = {
       message,
@@ -216,6 +226,15 @@ export class ChatRequestService implements OnDestroy {
       enabled_tools: enabledTools,
       provider: isDefaultModel ? null : selectedModel.provider,
     };
+
+    if (!assistantId) {
+      // Pin the turn to the user's mode. The server honors this only while
+      // the admin policy allows toggling; otherwise it enforces the default.
+      requestObject['agent_type'] = chatMode;
+      if (isSkillsMode) {
+        requestObject['enabled_skills'] = this.skillService.getEnabledSkillIds();
+      }
+    }
 
     // Per-model inference param overrides set in the Settings → Advanced
     // panel. Backend layers these on top of admin defaults and clamps to the

@@ -5,6 +5,8 @@ import { ConfigService } from './config.service';
 
 export interface UserSettings {
   defaultModelId: string | null;
+  /** User-level default for the skills/tools mode toggle. */
+  preferredAgentMode?: 'skill' | 'chat' | null;
 }
 
 @Injectable({
