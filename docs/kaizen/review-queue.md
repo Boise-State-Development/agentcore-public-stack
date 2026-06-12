@@ -5,6 +5,44 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-06-12] Bump Strands 1.40 → 1.43 — supersedes [2026-06-05] keystone; closes #2635 + context_manager="auto" + A2A isolation fix
+- **Source**: research/2026-06-12.md ▸ Top 5 #1 — Strands v1.43.0 released June 12, 2026. **Supersedes** [2026-06-05] "Strands 1.40 → 1.42 bump" — target advances one more minor; no additional blast radius. Also closes the [2026-06-05] "#2635 guard" queue item.
+- **Surface**: backend (`pyproject.toml`/`uv.lock` — `strands-agents==1.40.0` → `==1.43.0`; agent invocation in `inference_api`; `BedrockModel`/`CacheConfig`; SSE `limit_*` stop-reason)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — library-native `Limits` retires the hand-rolled runaway guardrail; `cache_tools_ttl` retires hand-rolled TTL; #2635 defensive guard resolves as part of the bump; three queue items collapse into one PR
+- **Unlocks**: native per-turn cost ceiling; 1h prompt caching; accurate context attribution on tool-heavy turns
+- **Status**: open — prerequisite: confirm Nightly CI is green (see [2026-06-12] nightly investigation item) before landing. #2636 (non-ASCII) still live in 1.43.0 — add a known-limitation comment, a second bump will follow once PR #2661 merges.
+
+### [2026-06-12] Add Claude Fable 5 to model settings + audit model-ID string matching
+- **Source**: research/2026-06-12.md ▸ Top 5 #2 — Claude Fable 5 GA June 9 (https://aws.amazon.com/about-aws/whats-new/2026/06/claude-fable-5-aws/). Naming convention shift (`-fable-`/`-mythos-` suffixes vs. `claude-opus-4.N`) is a live breakage risk.
+- **Surface**: frontend (`model-settings.html`, `model-settings.ts` — add `claude-fable-5` to dropdown) + backend (grep `claude-opus-4` in capability gates: prompt-caching beta header, fine-grained tool-streaming beta header; admin model catalog)
+- **Effort × Impact**: L-M × H
+- **Subtracts**: partial — Fable 5 at $10/$50/M may replace Opus 4.8 as default once benchmarked; no hard retirement yet
+- **Unlocks**: top-of-range Anthropic model on Bedrock at materially lower cost; model-list parity for end users
+- **Status**: open — use the `claude-api` skill to confirm exact Bedrock IDs before committing; verify context window + caching API support on Bedrock model card before flipping to default
+
+### [2026-06-12] Investigate + triage Nightly Build & Test (7 consecutive failures June 5–12)
+- **Source**: research/2026-06-12.md ▸ Internal Audit — CI failures. Same pattern resolved via PR #290 in May; root cause unknown this time.
+- **Surface**: CI — `.github/workflows/` nightly workflow + backend test suite
+- **Effort × Impact**: L × H
+- **Subtracts**: no — hygiene; prerequisite for trusting the Strands 1.43 keystone bump and any other dep changes
+- **Status**: open — time-sensitive; run `gh run view <latest-nightly-id> --log-failed`; classify flaky-vs-regression; quarantine or file. Do not land dep bumps on an untrusted suite.
+
+### [2026-06-12] Bump `bedrock-agentcore` 1.9.1 → 1.14.1 + adopt `async_mode` + note A2A cap prerequisite
+- **Source**: research/2026-06-12.md ▸ Top 5 #4 — bedrock-agentcore v1.14.1 (June 11). **Consolidates** [2026-05-22] "Bump bedrock-agentcore 1.9.1 → 1.11.0" and [2026-05-22] "Re-bump 1.9.1 → 1.11.0 + async_mode" open items (which were already 4+ minors behind; now 5).
+- **Surface**: `backend/pyproject.toml` + `uv.lock`; `AgentCoreMemoryConfig` construction (`async_mode` adoption)
+- **Effort × Impact**: L × M
+- **Subtracts**: `async_mode` adoption retires the latent #452 event-loop-blocking failure mode; two queue items consolidate into one
+- **Unlocks**: interactive shell API access; A2A cap fix is a hard prerequisite for the first A2A server PR
+- **Status**: open — can bundle with the starlette CVE bump (#5 below) as a single "dep hygiene" PR
+
+### [2026-06-12] Bump `starlette` 1.0.0 → 1.0.1 to close CVE-2026-48710
+- **Source**: research/2026-06-12.md ▸ Top 5 #5 — FastMCP v3.4.1 (June 5) surfaced CVE-2026-48710 affecting starlette < 1.0.1. Our `pyproject.toml` pins `starlette==1.0.0`.
+- **Surface**: `backend/pyproject.toml` — 1-line pin bump
+- **Effort × Impact**: L × M
+- **Subtracts**: no — 1-line security fix; the existing comment says the pin was already security-motivated
+- **Status**: open — bundle with bedrock-agentcore bump (#4 above) as a single dep-hygiene PR; also flag to MCP server repos to bump FastMCP to ≥3.4.1
+
 ### [2026-06-05] Strands 1.40 → 1.42 bump — unblocks `Limits` (cost caps) + `cache_tools_ttl` (#269 caching)
 - **Source**: research/2026-06-05.md ▸ Top 5 #1 — Strands v1.42.0 (June 1). **Consolidates** the queued 2026-05-22 "Strands 1.40→1.41 + caching #269" item AND the 2026-05-29 #2 "Adopt Strands `Limits`" item — both were gated on 1.42, which is now out. Treat as one keystone bump, not two.
 - **Surface**: backend (`pyproject.toml`/`uv.lock`, agent invocation in `inference_api`, `BedrockModel`/`CacheConfig`, SSE `limit_*` stop-reason) + infrastructure (CloudWatch Bedrock-spend alarm)
