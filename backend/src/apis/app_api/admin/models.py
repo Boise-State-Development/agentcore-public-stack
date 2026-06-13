@@ -100,6 +100,29 @@ class OpenAIModelsResponse(BaseModel):
     total_count: int = Field(..., alias="totalCount")
 
 
+class MantleModelSummary(BaseModel):
+    """Summary information for a Bedrock Mantle model.
+
+    Mantle's `GET /v1/models` is OpenAI-wire-compatible, so the per-model
+    fields mirror the OpenAI list shape. `ownedBy` carries the upstream
+    model provider when Mantle populates it; otherwise the model id prefix
+    (e.g. `qwen.`, `openai.`) is the provider hint.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    created: Optional[int] = None
+    owned_by: str = Field(..., alias="ownedBy")
+    object: Optional[str] = None
+
+
+class MantleModelsResponse(BaseModel):
+    """Response model for listing Bedrock Mantle models."""
+    models: List[MantleModelSummary]
+    region: str
+    total_count: int = Field(..., alias="totalCount")
+
+
 # =============================================================================
 # Managed Models (Model Management)
 # =============================================================================

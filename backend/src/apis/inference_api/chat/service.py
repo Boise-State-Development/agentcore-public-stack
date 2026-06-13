@@ -129,6 +129,7 @@ async def get_agent(
     agent_type: Optional[str] = None,
     extra_tools: Optional[list] = None,
     inference_params: Optional[Dict[str, Any]] = None,
+    mantle_endpoint_path: Optional[str] = None,
     is_resume: bool = False,
     accessible_skill_ids: Optional[List[str]] = None,
 ) -> BaseAgent:
@@ -236,6 +237,7 @@ async def get_agent(
         max_tokens=max_tokens,
         extra_tools=extra_tools,
         inference_params=merged_params,
+        mantle_endpoint_path=mantle_endpoint_path,
     )
     # Only the SkillAgent accepts accessible_skill_ids; ChatAgent's constructor
     # would reject the unknown kwarg, so gate it on the skill type.

@@ -37,6 +37,21 @@ def _resolve_supports_caching(supports_caching: Optional[bool], provider: str) -
     # Admins can explicitly set this to False for Bedrock models that don't support it
     return provider.lower() == 'bedrock'
 
+
+def _resolve_mantle_endpoint_path(endpoint_path: Optional[str], provider: str) -> Optional[str]:
+    """Resolve the Bedrock Mantle endpoint path for a model.
+
+    Only meaningful for ``provider == 'mantle'`` — Mantle serves different
+    models on different OpenAI-compatible paths (``/v1`` vs ``/openai/v1``)
+    and exposes no API to discover which, so the value is recorded per model
+    (from the model card / curated catalog). Defaults to ``/v1`` for Mantle
+    models when unset; ``None`` for every other provider (the field is inert
+    there).
+    """
+    if provider.lower() != 'mantle':
+        return None
+    return endpoint_path or '/v1'
+
 # Initialize DynamoDB client
 dynamodb = boto3.resource('dynamodb')
 
@@ -218,6 +233,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         knowledge_cutoff_date=model_data.knowledge_cutoff_date,
         supports_caching=_resolve_supports_caching(model_data.supports_caching, model_data.provider),
         is_default=model_data.is_default,
+        mantle_endpoint_path=_resolve_mantle_endpoint_path(model_data.mantle_endpoint_path, model_data.provider),
         supported_params=model_data.supported_params,
         created_at=now,
         updated_at=now,
@@ -256,6 +272,9 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['cacheReadPricePerMillionTokens'] = model_data.cache_read_price_per_million_tokens
     if model_data.knowledge_cutoff_date is not None:
         item['knowledgeCutoffDate'] = model_data.knowledge_cutoff_date
+    resolved_mantle_path = _resolve_mantle_endpoint_path(model_data.mantle_endpoint_path, model_data.provider)
+    if resolved_mantle_path is not None:
+        item['mantleEndpointPath'] = resolved_mantle_path
     if model_data.supported_params is not None:
         item['supportedParams'] = model_data.supported_params.model_dump(by_alias=True, exclude_none=True)
 

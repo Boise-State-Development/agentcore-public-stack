@@ -62,6 +62,46 @@ class AgentFactory:
         return OpenAIModel(client_args=client_args, **openai_config)
 
     @staticmethod
+    def _create_mantle_model(model_config: ModelConfig) -> OpenAIModel:
+        """
+        Create an OpenAIModel pointed at Bedrock Mantle
+
+        Mantle is AWS's OpenAI-compatible inference surface for Bedrock-hosted
+        models, so the Strands OpenAIModel does the protocol work — only the
+        client differs: the regional Mantle base URL plus a short-term bearer
+        token minted from the runtime role's credentials (requires
+        `bedrock:CallWithBearerToken`). The token is minted per agent build;
+        it lives 12h and an agent is built per turn, so expiry is a non-issue.
+
+        Args:
+            model_config: Model configuration
+
+        Returns:
+            OpenAIModel: Configured model targeting Bedrock Mantle
+
+        Raises:
+            ValueError: If no AWS credentials are available to mint the token
+        """
+        from apis.shared.bedrock import (
+            generate_bedrock_bearer_token,
+            get_mantle_base_url,
+        )
+
+        region = os.getenv(EnvVars.AWS_REGION)
+        base_url = get_mantle_base_url(region, model_config.mantle_endpoint_path)
+        client_args = {
+            "api_key": generate_bedrock_bearer_token(region),
+            "base_url": base_url,
+        }
+
+        mantle_config = model_config.to_mantle_config()
+        logger.info(
+            f"Creating Bedrock Mantle model with model_id={model_config.model_id} "
+            f"base_url={base_url}"
+        )
+        return OpenAIModel(client_args=client_args, **mantle_config)
+
+    @staticmethod
     def _create_gemini_model(model_config: ModelConfig) -> GeminiModel:
         """
         Create a GeminiModel instance
@@ -121,6 +161,8 @@ class AgentFactory:
             model = AgentFactory._create_bedrock_model(model_config)
         elif provider == ModelProvider.OPENAI:
             model = AgentFactory._create_openai_model(model_config)
+        elif provider == ModelProvider.MANTLE:
+            model = AgentFactory._create_mantle_model(model_config)
         elif provider == ModelProvider.GEMINI:
             model = AgentFactory._create_gemini_model(model_config)
         else:

@@ -410,6 +410,55 @@ class TestToOpenAIConfig:
         assert "params" not in result
 
 
+class TestToMantleConfig:
+    """Bedrock Mantle — OpenAI-wire-compatible config translation."""
+
+    def test_mantle_config_basic(self):
+        cfg = ModelConfig(
+            model_id="openai.gpt-oss-120b",
+            provider=ModelProvider.MANTLE,
+            inference_params={"temperature": 0.5},
+        )
+        result = cfg.to_mantle_config()
+
+        assert result["model_id"] == "openai.gpt-oss-120b"
+        assert result["params"]["temperature"] == 0.5
+
+    def test_mantle_config_without_inference_params_omits_params_block(self):
+        cfg = ModelConfig(
+            model_id="qwen.qwen3-coder-30b-a3b-instruct",
+            provider=ModelProvider.MANTLE,
+        )
+        result = cfg.to_mantle_config()
+
+        assert "params" not in result
+
+    def test_mantle_config_drops_top_k(self):
+        """OpenAI wire protocol has no top_k — translation drops it silently."""
+        cfg = ModelConfig(
+            model_id="openai.gpt-oss-120b",
+            provider=ModelProvider.MANTLE,
+            inference_params={"top_k": 40},
+        )
+        result = cfg.to_mantle_config()
+
+        assert "params" not in result
+
+    def test_explicit_mantle_provider_wins_over_auto_detect(self):
+        """Mantle is never auto-detected; explicit provider must stick even
+        for ids that look like other providers' (e.g. `openai.` prefix)."""
+        cfg = ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE)
+
+        assert cfg.get_provider() == ModelProvider.MANTLE
+
+    def test_from_params_accepts_mantle(self):
+        cfg = ModelConfig.from_params(
+            model_id="qwen.qwen3-coder-30b-a3b-instruct", provider="mantle"
+        )
+
+        assert cfg.get_provider() == ModelProvider.MANTLE
+
+
 class TestToGeminiConfig:
     """Validates: Requirement 1.9"""
 
@@ -454,6 +503,7 @@ class TestToDict:
             "caching_enabled",
             "provider",
             "inference_params",
+            "mantle_endpoint_path",
         }
 
 
