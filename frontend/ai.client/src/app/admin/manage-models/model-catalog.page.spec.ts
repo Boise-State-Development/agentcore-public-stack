@@ -7,7 +7,7 @@ import { ModelCatalogPage } from './model-catalog.page';
 import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AddCuratedModelDialogComponent } from './components/add-curated-model-dialog.component';
-import { CURATED_BEDROCK_MODELS } from './models/curated-models';
+import { CURATED_BEDROCK_MODELS, CURATED_MANTLE_MODELS } from './models/curated-models';
 
 function createMockManagedModelsService(overrides: Partial<{
   isModelAdded: (modelId: string) => boolean;
@@ -193,6 +193,22 @@ describe('ModelCatalogPage', () => {
     expect(page.errorFor(target.key)).toBe('Model ID already in use');
     expect(routerNavigate).not.toHaveBeenCalled();
     expect(page.addingKey()).toBeNull();
+  });
+
+  it('renders curated Mantle cards (with vetted endpoint paths) on the Mantle tab', () => {
+    const page = createComponent();
+    page.selectTab('mantle');
+
+    const keys = page.visibleModels().map(m => m.key);
+    expect(keys).toEqual(CURATED_MANTLE_MODELS.map(m => m.key));
+
+    // Gemma 4 must carry the /openai/v1 path; the Qwen coder the default /v1.
+    const gemma = page.visibleModels().find(m => m.key === 'gemma-4-31b');
+    const qwen = page.visibleModels().find(m => m.key === 'qwen3-coder-30b');
+    expect(gemma?.template.mantleEndpointPath).toBe('/openai/v1');
+    expect(qwen?.template.mantleEndpointPath).toBe('/v1');
+    // Mantle models never cache (model-bound to Claude/Nova).
+    expect(gemma?.template.supportsCaching).toBe(false);
   });
 
   it('ignores a second addCuratedModel while a create is in flight', async () => {

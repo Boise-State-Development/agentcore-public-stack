@@ -16,7 +16,9 @@ import {
   AVAILABLE_PROVIDERS,
   KNOWN_PARAMS,
   KnownParamMeta,
+  MANTLE_ENDPOINT_PATHS,
   ManagedModelFormData,
+  MantleEndpointPath,
   ModelParamSpec,
   ModelProvider,
   SupportedParams,
@@ -229,6 +231,7 @@ interface ModelFormGroup {
   cacheReadPricePerMillionTokens: FormControl<number | null>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
+  mantleEndpointPath: FormControl<MantleEndpointPath>;
   inferenceParams: FormArray<FormGroup<ParamRowGroup>>;
   customInferenceParams: FormArray<FormGroup<CustomParamRowGroup>>;
 }
@@ -252,6 +255,25 @@ export class ModelFormPage implements OnInit {
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
   readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'SPEECH', 'EMBEDDING'];
+  readonly mantleEndpointPaths = MANTLE_ENDPOINT_PATHS;
+
+  /**
+   * Tracks the selected provider as a signal so the template can show/hide
+   * the Mantle-only endpoint-path field and suppress the caching controls
+   * (Mantle open-weight models never cache). Kept in sync with the form
+   * control in ngOnInit + its valueChanges subscription.
+   */
+  readonly selectedProvider = signal<ModelProvider>('bedrock');
+  readonly isMantle = computed(() => this.selectedProvider() === 'mantle');
+
+  /**
+   * Model-id suggestions for the Mantle escape-hatch form, sourced from the
+   * live `GET /admin/mantle/models` roster. The curated cards are the primary
+   * path; this just spares an admin adding an off-catalog model from typing
+   * an exact id. Fetched once, lazily, the first time the form is on Mantle.
+   */
+  readonly mantleModelIdOptions = signal<string[]>([]);
+  private mantleModelIdsLoaded = false;
 
   // AppRoles from the API (reactive resource)
   readonly rolesResource = this.appRolesService.rolesResource;
@@ -288,6 +310,7 @@ export class ModelFormPage implements OnInit {
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     supportsCaching: this.fb.control(false, { nonNullable: true }),
+    mantleEndpointPath: this.fb.control<MantleEndpointPath>('/v1', { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
       validators: [thinkingInvariantsValidator, maxTokensCeilingValidator],
     }),
@@ -383,10 +406,23 @@ export class ModelFormPage implements OnInit {
       }
     });
 
+    // Mirror the initial provider into the signal so Mantle-only UI is
+    // correct on first paint (edit mode / curated prefill set it before this).
+    this.selectedProvider.set(this.modelForm.controls.provider.value);
+    if (this.isMantle()) {
+      this.loadMantleModelIdOptions();
+    }
+
     // Rebuild the inference-param rows whenever the provider changes so the
-    // visible knobs match what the selected SDK actually understands.
+    // visible knobs match what the selected SDK actually understands. Also
+    // keep the provider signal in sync and lazily pull the Mantle model-id
+    // suggestions the first time the form lands on Mantle.
     this.modelForm.controls.provider.valueChanges.subscribe(provider => {
       this.rebuildInferenceParamRows(provider);
+      this.selectedProvider.set(provider);
+      if (provider === 'mantle') {
+        this.loadMantleModelIdOptions();
+      }
     });
 
     // Keep the max_tokens row pinned to the model's output ceiling: pre-fill
@@ -783,6 +819,7 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
+        mantleEndpointPath: this.coerceMantlePath(model.mantleEndpointPath),
       });
 
       // Repopulate the inference-params rows with any persisted spec.
@@ -824,6 +861,7 @@ export class ModelFormPage implements OnInit {
       cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
       knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
       supportsCaching: template.supportsCaching ?? true,
+      mantleEndpointPath: this.coerceMantlePath(template.mantleEndpointPath),
     });
 
     this.rebuildInferenceParamRows(template.provider, template.supportedParams ?? null);
@@ -845,6 +883,23 @@ export class ModelFormPage implements OnInit {
         maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : 0,
         knowledgeCutoffDate: params['knowledgeCutoffDate'] || null,
       });
+    }
+  }
+
+  /**
+   * Fetch the live Bedrock Mantle roster once to seed the model-id datalist
+   * for the escape-hatch form. Best-effort: failures leave the datalist empty
+   * (the admin can still type any id), so we swallow errors quietly.
+   */
+  private async loadMantleModelIdOptions(): Promise<void> {
+    if (this.mantleModelIdsLoaded) return;
+    this.mantleModelIdsLoaded = true;
+    try {
+      const response = await this.managedModelsService.fetchMantleModels();
+      this.mantleModelIdOptions.set(response.models.map(m => m.id));
+    } catch {
+      // Non-fatal — the datalist is a convenience, not a requirement.
+      this.mantleModelIdsLoaded = false;
     }
   }
 
@@ -906,6 +961,9 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: v.supportsCaching,
+        // Only meaningful for Mantle; null elsewhere so the backend stores
+        // nothing for other providers.
+        mantleEndpointPath: v.provider === 'mantle' ? v.mantleEndpointPath : null,
         supportedParams: this.collectSupportedParams(),
       };
 
@@ -928,6 +986,17 @@ export class ModelFormPage implements OnInit {
     } finally {
       this.isSubmitting.set(false);
     }
+  }
+
+  /**
+   * Normalize a stored/templated Mantle path onto the known options, falling
+   * back to the default `/v1` for null/legacy/unknown values so the select
+   * always has a valid selection.
+   */
+  private coerceMantlePath(value: string | null | undefined): MantleEndpointPath {
+    return MANTLE_ENDPOINT_PATHS.includes(value as MantleEndpointPath)
+      ? (value as MantleEndpointPath)
+      : '/v1';
   }
 
   /**

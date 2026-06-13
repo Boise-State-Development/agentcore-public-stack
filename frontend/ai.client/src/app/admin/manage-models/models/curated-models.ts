@@ -127,7 +127,96 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
 ];
 
 /**
- * Provider-keyed lookup for the catalog tabs. Bedrock is populated;
+ * Shared defaults for Bedrock Mantle (OpenAI-compatible open-weight) models.
+ *
+ * Caching is intentionally absent: prompt caching on Bedrock is model-bound
+ * to Anthropic Claude + a small set of Amazon Nova models, none of which run
+ * through the Mantle provider, so these never cache and carry no cache
+ * pricing. `mantleEndpointPath` is the one Mantle-specific field — sourced
+ * from each model card (there is no API that exposes it).
+ */
+const mantleDefaults = (): Pick<
+  ManagedModelFormData,
+  | 'provider'
+  | 'outputModalities'
+  | 'responseStreamingSupported'
+  | 'allowedAppRoles'
+  | 'availableToRoles'
+  | 'enabled'
+  | 'isDefault'
+  | 'supportsCaching'
+> => ({
+  provider: 'mantle',
+  outputModalities: ['TEXT'],
+  responseStreamingSupported: true,
+  allowedAppRoles: [],
+  availableToRoles: [],
+  enabled: true,
+  isDefault: false,
+  supportsCaching: false,
+});
+
+// Pricing verified against the AWS Bedrock pricing page (2026-06); modalities,
+// capabilities, context, and endpoint path verified against each model card.
+// Mantle per-token pricing equals the bedrock-runtime price for the same model.
+// Re-verify when AWS revises pricing or a newer model version ships.
+export const CURATED_MANTLE_MODELS: CuratedModel[] = [
+  {
+    key: 'qwen3-coder-30b',
+    tagline: 'Qwen3 Coder 30B — long-context coding model on Bedrock Mantle.',
+    capabilities: ['Coding', 'Long context'],
+    template: {
+      ...mantleDefaults(),
+      modelId: 'qwen.qwen3-coder-30b-a3b-instruct',
+      modelName: 'Qwen3 Coder 30B',
+      providerName: 'Qwen',
+      inputModalities: ['TEXT'],
+      maxInputTokens: 256_000,
+      maxOutputTokens: 8_192,
+      mantleEndpointPath: '/v1',
+      inputPricePerMillionTokens: 0.15,
+      outputPricePerMillionTokens: 0.6,
+      supportedParams: {
+        params: {
+          temperature: { supported: true, min: 0, max: 2, default: 0.7 },
+          top_p: { supported: true, min: 0, max: 1, default: null },
+          max_tokens: { supported: true, min: 1, max: 8_192, default: 4_096 },
+        },
+      },
+    },
+  },
+  {
+    key: 'gemma-4-31b',
+    tagline:
+      "Google Gemma 4 31B — reasoning, vision + tool use, served on Mantle's /openai/v1 path.",
+    capabilities: ['Reasoning', 'Tool use', 'Vision', '256K context'],
+    template: {
+      ...mantleDefaults(),
+      modelId: 'google.gemma-4-31b',
+      modelName: 'Gemma 4 31B',
+      providerName: 'Google',
+      // Per the AWS model card: text + image + video in, text out. (The
+      // request payload note explicitly covers images and video.)
+      inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
+      maxInputTokens: 256_000,
+      maxOutputTokens: 8_192,
+      // Gemma 4 is served on the /openai/v1 path, NOT the default /v1.
+      mantleEndpointPath: '/openai/v1',
+      inputPricePerMillionTokens: 0.14,
+      outputPricePerMillionTokens: 0.4,
+      supportedParams: {
+        params: {
+          temperature: { supported: true, min: 0, max: 2, default: 0.7 },
+          top_p: { supported: true, min: 0, max: 1, default: null },
+          max_tokens: { supported: true, min: 1, max: 8_192, default: 4_096 },
+        },
+      },
+    },
+  },
+];
+
+/**
+ * Provider-keyed lookup for the catalog tabs. Bedrock + Mantle are populated;
  * OpenAI/Gemini are intentional empty arrays — the page renders a
  * 'Coming soon' empty state when the active tab has no entries.
  */
@@ -135,4 +224,5 @@ export const CURATED_MODELS_BY_PROVIDER: Record<ModelProvider, CuratedModel[]> =
   bedrock: CURATED_BEDROCK_MODELS,
   openai: [],
   gemini: [],
+  mantle: CURATED_MANTLE_MODELS,
 };
