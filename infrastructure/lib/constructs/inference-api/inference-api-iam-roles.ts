@@ -82,6 +82,31 @@ export function createRuntimeExecutionRole(
     resources: [`arn:aws:bedrock:*::foundation-model/*`, `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`],
   }));
 
+  // ── Bedrock Mantle inference ──
+  // Managed models with provider="mantle" run through Bedrock Mantle's
+  // OpenAI-compatible endpoint. The agent factory presigns a short-term
+  // bearer token with this role (apis/shared/bedrock/bearer_token.py).
+  //
+  // Mantle has its OWN IAM service namespace — `bedrock-mantle:*`, NOT
+  // `bedrock:*`. These statements mirror the AWS managed policy
+  // AmazonBedrockMantleInferenceAccess: chat completions need
+  // bedrock-mantle:CreateInference (plus Get/List) on the project resource,
+  // and the bearer-token transport is authorized separately on `*`.
+  // NOTE: this only takes effect once Bedrock Mantle is ENABLED for the
+  // account in the target region — IAM alone can't grant a disabled service.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'BedrockMantleInference',
+    effect: iam.Effect.ALLOW,
+    actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:Get*', 'bedrock-mantle:List*'],
+    resources: [`arn:aws:bedrock-mantle:*:${config.awsAccount}:project/*`],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'BedrockMantleCallWithBearerToken',
+    effect: iam.Effect.ALLOW,
+    actions: ['bedrock-mantle:CallWithBearerToken'],
+    resources: ['*'],
+  }));
+
   // ── AWS Marketplace (model subscription validation) ──
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'MarketplaceModelAccess',

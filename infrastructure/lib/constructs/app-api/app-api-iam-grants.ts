@@ -405,6 +405,30 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Bedrock Mantle model browsing ──
+  // GET /admin/mantle/models authenticates against the OpenAI-compatible
+  // Bedrock Mantle endpoint with a short-term bearer token presigned by this
+  // role (apis/shared/bedrock/bearer_token.py). Mantle has its OWN IAM
+  // service namespace — `bedrock-mantle:*`, NOT `bedrock:*`. Listing models
+  // needs the Get/List actions on the project resource plus the bearer-token
+  // transport on `*` (read-only subset of AmazonBedrockMantleInferenceAccess).
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockMantleList',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-mantle:Get*', 'bedrock-mantle:List*'],
+      resources: [`arn:aws:bedrock-mantle:*:${cdk.Stack.of(scope).account}:project/*`],
+    }),
+  );
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockMantleCallWithBearerToken',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-mantle:CallWithBearerToken'],
+      resources: ['*'],
+    }),
+  );
+
   // ── SSM read for inference-api image tag (runtime endpoint resolution) ──
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
