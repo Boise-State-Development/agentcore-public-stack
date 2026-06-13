@@ -195,6 +195,14 @@ class ManagedModelCreate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    mantle_endpoint_path: Optional[str] = Field(
+        None,
+        alias="mantleEndpointPath",
+        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
+                    "'/v1' (OpenAI Chat Completions, the default) or '/openai/v1' "
+                    "(e.g. Gemma 4). The per-model value comes from the model card; "
+                    "there is no API that exposes it. Ignored for other providers."
+    )
     supported_params: Optional[SupportedParams] = Field(
         None,
         alias="supportedParams",
@@ -257,6 +265,12 @@ class ManagedModelUpdate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions."
     )
+    mantle_endpoint_path: Optional[str] = Field(
+        None,
+        alias="mantleEndpointPath",
+        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
+                    "'/v1' or '/openai/v1'. Ignored for other providers."
+    )
     supported_params: Optional[SupportedParams] = Field(
         None,
         alias="supportedParams",
@@ -316,6 +330,12 @@ class ManagedModel(BaseModel):
         False,
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
+    )
+    mantle_endpoint_path: Optional[str] = Field(
+        None,
+        alias="mantleEndpointPath",
+        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
+                    "'/v1' or '/openai/v1'. Ignored for other providers."
     )
     supported_params: Optional[SupportedParams] = Field(
         None,

@@ -18,6 +18,8 @@ from .models import (
     GeminiModelSummary,
     OpenAIModelsResponse,
     OpenAIModelSummary,
+    MantleModelsResponse,
+    MantleModelSummary,
     ManagedModelsListResponse,
 )
 from apis.shared.models.models import (
@@ -365,6 +367,107 @@ async def list_openai_models(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching OpenAI models: {str(e)}"
+        )
+
+
+@router.get("/mantle/models", response_model=MantleModelsResponse)
+async def list_mantle_models(
+    region: Optional[str] = Query(None, description="AWS region to query (defaults to the service region)"),
+    max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return"),
+    admin_user: User = Depends(require_admin),
+):
+    """
+    List available Amazon Bedrock Mantle models (admin only).
+
+    Bedrock Mantle is AWS's OpenAI-compatible inference surface for
+    Bedrock-hosted models. Discovery is the standard OpenAI `GET /v1/models`
+    against `https://bedrock-mantle.<region>.api.aws/v1`, authenticated with
+    a short-term bearer token minted from this service's IAM credentials
+    (requires `bedrock:CallWithBearerToken`). The roster is regional, so the
+    optional `region` filter lets admins browse other regions.
+
+    Args:
+        region: Optional AWS region override (defaults to AWS_REGION)
+        max_results: Optional limit on number of models to return
+        admin_user: Authenticated admin user (injected by dependency)
+
+    Returns:
+        MantleModelsResponse with the models available in the region
+
+    Raises:
+        HTTPException:
+            - 401 if not authenticated
+            - 403 if user lacks admin role
+            - 500 if token minting or the Mantle API call fails
+    """
+    logger.info("Admin listing Bedrock Mantle models")
+
+    try:
+        from apis.shared.bedrock import (
+            generate_bedrock_bearer_token,
+            get_mantle_base_url,
+        )
+
+        # Import OpenAI SDK (Mantle speaks the OpenAI wire protocol)
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("OpenAI SDK not installed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="OpenAI SDK not installed. Please install openai package."
+            )
+
+        resolved_region = region or os.environ.get('AWS_REGION', 'us-east-1')
+        base_url = get_mantle_base_url(resolved_region)
+        bearer_token = generate_bedrock_bearer_token(resolved_region)
+
+        client = OpenAI(base_url=base_url, api_key=bearer_token)
+
+        logger.debug("Fetching Mantle models")
+        all_models = []
+        response = client.models.list()
+        for model in response.data:
+            all_models.append(
+                MantleModelSummary(
+                    id=model.id,
+                    created=getattr(model, 'created', None),
+                    ownedBy=getattr(model, 'owned_by', '') or '',
+                    object=getattr(model, 'object', None),
+                )
+            )
+
+        # Sort by id for a stable roster (Mantle ids are provider-prefixed,
+        # so this groups models by upstream provider).
+        all_models.sort(key=lambda m: m.id)
+
+        if max_results and len(all_models) > max_results:
+            all_models = all_models[:max_results]
+            logger.debug("Limited results to max_results models")
+
+        logger.info("✅ Retrieved Bedrock Mantle models")
+
+        return MantleModelsResponse(
+            models=all_models,
+            region=resolved_region,
+            totalCount=len(all_models),
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except ValueError as e:
+        # Credential resolution failure from the token generator
+        logger.error("Failed to mint Bedrock bearer token", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error minting Bedrock bearer token: {str(e)}"
+        )
+    except Exception as e:
+        logger.error("Unexpected error listing Mantle models", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching Bedrock Mantle models: {str(e)}"
         )
 
 

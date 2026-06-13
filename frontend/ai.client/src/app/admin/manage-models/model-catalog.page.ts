@@ -32,6 +32,7 @@ const PROVIDER_TABS: ProviderTab[] = [
   { id: 'bedrock', label: 'Bedrock' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'gemini', label: 'Gemini' },
+  { id: 'mantle', label: 'Bedrock Mantle' },
 ];
 
 const PROVIDER_LOGO_DIR: Record<string, string> = {

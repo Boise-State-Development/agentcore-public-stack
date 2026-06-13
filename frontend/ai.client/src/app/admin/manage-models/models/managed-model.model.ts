@@ -1,12 +1,17 @@
 /**
  * Available model providers.
+ *
+ * `mantle` is Amazon Bedrock Mantle — AWS's OpenAI-compatible inference
+ * surface for Bedrock-hosted open-weight models. It is a distinct provider
+ * from `bedrock` because the backend reaches it over the OpenAI wire
+ * protocol with a bearer token rather than the Converse API.
  */
-export type ModelProvider = 'bedrock' | 'openai' | 'gemini';
+export type ModelProvider = 'bedrock' | 'openai' | 'gemini' | 'mantle';
 
 /**
  * Available model providers as a constant array.
  */
-export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini'];
+export const AVAILABLE_PROVIDERS: ModelProvider[] = ['bedrock', 'openai', 'gemini', 'mantle'];
 
 /**
  * Capability + bounds for a single inference parameter.
@@ -93,6 +98,13 @@ export interface ManagedModel {
   supportsCaching: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /**
+   * Bedrock Mantle endpoint path (`provider === 'mantle'` only): `/v1`
+   * (OpenAI Chat Completions, the default) or `/openai/v1` (e.g. Gemma 4).
+   * Sourced from the model card — there is no API that exposes it. Null/absent
+   * for every other provider.
+   */
+  mantleEndpointPath?: string | null;
   /** Per-model inference parameter capabilities (temperature, top_p, etc.) */
   supportedParams?: SupportedParams | null;
   /** Date the model was added to the system (ISO string from API) */
@@ -145,9 +157,18 @@ export interface ManagedModelFormData {
   supportsCaching?: boolean;
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
+  /**
+   * Bedrock Mantle endpoint path (`provider === 'mantle'` only): `/v1` or
+   * `/openai/v1`. Inert for other providers.
+   */
+  mantleEndpointPath?: string | null;
   /** Per-model inference parameter capabilities */
   supportedParams?: SupportedParams | null;
 }
+
+/** Selectable Bedrock Mantle endpoint paths for the model form. */
+export const MANTLE_ENDPOINT_PATHS = ['/v1', '/openai/v1'] as const;
+export type MantleEndpointPath = (typeof MANTLE_ENDPOINT_PATHS)[number];
 
 /**
  * Frontend catalog of well-known canonical inference params.
@@ -210,8 +231,9 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
       bedrock: { min: 0, max: 1 },   // Anthropic/Bedrock cap
       openai: { min: 0, max: 2 },    // OpenAI accepts 0–2
       gemini: { min: 0, max: 1 },
+      mantle: { min: 0, max: 2 },    // OpenAI wire protocol range
     },
-    providers: ['bedrock', 'openai', 'gemini'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
   },
   {
     key: 'top_p',
@@ -220,7 +242,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     kind: 'number',
     defaultMin: 0,
     defaultMax: 1,
-    providers: ['bedrock', 'openai', 'gemini'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
   },
   {
     key: 'top_k',
@@ -236,7 +258,7 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
     description: 'Maximum tokens in the model response.',
     kind: 'integer',
     defaultMin: 1,
-    providers: ['bedrock', 'openai', 'gemini'],
+    providers: ['bedrock', 'openai', 'gemini', 'mantle'],
   },
   {
     key: 'thinking',
@@ -263,9 +285,9 @@ export const KNOWN_PARAMS: KnownParamMeta[] = [
   {
     key: 'reasoning_effort',
     label: 'Reasoning Effort',
-    description: 'Reasoning depth (OpenAI o-series).',
+    description: 'Reasoning depth (OpenAI o-series and reasoning models on Bedrock Mantle).',
     kind: 'number',
-    providers: ['openai'],
+    providers: ['openai', 'mantle'],
   },
 ];
 

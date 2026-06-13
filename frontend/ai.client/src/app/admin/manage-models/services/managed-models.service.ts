@@ -13,6 +13,26 @@ export interface ManagedModelsListResponse {
 }
 
 /**
+ * A model on Bedrock Mantle's live roster (`GET /admin/mantle/models`).
+ * Mirrors the OpenAI list-models shape the Mantle endpoint speaks.
+ */
+export interface MantleModelSummary {
+  id: string;
+  created?: number | null;
+  ownedBy: string;
+  object?: string | null;
+}
+
+/**
+ * Response model for the Bedrock Mantle browse endpoint.
+ */
+export interface MantleModelsResponse {
+  models: MantleModelSummary[];
+  region: string;
+  totalCount: number;
+}
+
+/**
  * Service to manage the list of models that have been added to the system.
  * This service maintains the state of managed models and provides utilities
  * to check if a model has already been added.
@@ -78,6 +98,24 @@ export class ManagedModelsService {
     } catch (error) {
       throw error;
     }
+  }
+
+  /**
+   * Fetch the live Bedrock Mantle roster for the deployment's region.
+   *
+   * Unlike the curated catalog, Mantle's available models are discovered
+   * server-side (the backend authenticates against the regional Mantle
+   * endpoint with an IAM-derived bearer token).
+   *
+   * @returns Promise resolving to MantleModelsResponse
+   * @throws Error if the API request fails or user lacks admin privileges
+   */
+  async fetchMantleModels(): Promise<MantleModelsResponse> {
+    return firstValueFrom(
+      this.http.get<MantleModelsResponse>(
+        `${this.config.appApiUrl()}/admin/mantle/models`
+      )
+    );
   }
 
   /**

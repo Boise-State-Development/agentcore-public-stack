@@ -93,6 +93,41 @@ class TestManagedModels:
         model = await create_managed_model(_make_model_data("gpt4", provider="openai"))
         assert model.supports_caching is False
 
+    @pytest.mark.asyncio
+    async def test_mantle_endpoint_path_defaults_to_v1(self):
+        from apis.shared.models.managed_models import create_managed_model, get_managed_model
+        model = await create_managed_model(
+            _make_model_data("qwen.qwen3-32b", provider="mantle", providerName="Qwen")
+        )
+        assert model.mantle_endpoint_path == "/v1"
+        # Persists and reloads.
+        reloaded = await get_managed_model(model.id)
+        assert reloaded.mantle_endpoint_path == "/v1"
+
+    @pytest.mark.asyncio
+    async def test_mantle_endpoint_path_explicit_openai_v1(self):
+        from apis.shared.models.managed_models import create_managed_model, get_managed_model
+        model = await create_managed_model(
+            _make_model_data(
+                "google.gemma-4-31b",
+                provider="mantle",
+                providerName="Google",
+                mantleEndpointPath="/openai/v1",
+            )
+        )
+        assert model.mantle_endpoint_path == "/openai/v1"
+        reloaded = await get_managed_model(model.id)
+        assert reloaded.mantle_endpoint_path == "/openai/v1"
+
+    @pytest.mark.asyncio
+    async def test_mantle_endpoint_path_none_for_non_mantle(self):
+        from apis.shared.models.managed_models import create_managed_model
+        # Even if a path is supplied, it's inert for non-Mantle providers.
+        model = await create_managed_model(
+            _make_model_data("claude-3", provider="bedrock", mantleEndpointPath="/openai/v1")
+        )
+        assert model.mantle_endpoint_path is None
+
 
 class TestMaxTokensCeiling:
     """max_tokens spec must not exceed the model's declared output ceiling."""

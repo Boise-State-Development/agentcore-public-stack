@@ -87,6 +87,42 @@ describe('Single-stack integration', () => {
       });
     });
 
+    it('grants bedrock-mantle:CallWithBearerToken for Bedrock Mantle (runtime + app-api)', () => {
+      // Bedrock Mantle (the OpenAI-compatible Bedrock surface) has its own
+      // IAM service namespace — `bedrock-mantle:*`, NOT `bedrock:*`. It
+      // authenticates with a presigned bearer token; the service authorizes
+      // the signer against bedrock-mantle:CallWithBearerToken. The runtime
+      // role needs it for mantle-provider inference, the app-api task role
+      // for the GET /admin/mantle/models browse endpoint. Both statements
+      // carry the same Sid, so assert the shape appears at least twice.
+      const statementsOf = (resources: Record<string, any>) =>
+        Object.values(resources).flatMap((res: any) => [
+          ...(res.Properties?.PolicyDocument?.Statement ?? []),
+          ...(res.Properties?.Policies ?? []).flatMap(
+            (p: any) => p.PolicyDocument?.Statement ?? [],
+          ),
+        ]);
+      const allStatements = [
+        ...statementsOf(template.findResources('AWS::IAM::Policy')),
+        ...statementsOf(template.findResources('AWS::IAM::ManagedPolicy')),
+        ...statementsOf(template.findResources('AWS::IAM::Role')),
+      ];
+      const bearerStatements = allStatements.filter(
+        (stmt: any) => stmt.Sid === 'BedrockMantleCallWithBearerToken',
+      );
+      expect(bearerStatements.length).toBeGreaterThanOrEqual(2);
+      for (const stmt of bearerStatements) {
+        expect(stmt.Action).toBe('bedrock-mantle:CallWithBearerToken');
+        expect(stmt.Resource).toBe('*');
+      }
+      // The runtime role must also be able to create inferences.
+      const inferenceStatement = allStatements.find(
+        (stmt: any) => stmt.Sid === 'BedrockMantleInference',
+      );
+      expect(inferenceStatement).toBeDefined();
+      expect(inferenceStatement.Action).toContain('bedrock-mantle:CreateInference');
+    });
+
     it('creates the AgentCore Memory + CI + Browser + Gateway', () => {
       template.resourceCountIs('AWS::BedrockAgentCore::Memory', 1);
       template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 1);
