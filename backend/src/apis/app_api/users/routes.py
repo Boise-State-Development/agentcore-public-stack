@@ -60,29 +60,34 @@ async def sync_my_profile(
     lacks. This keeps the Users table current so the backend can resolve
     email for features like assistant sharing and fine-tuning access.
 
-    Identity-display fields only. ``roles`` are sourced exclusively from
-    the validated session (i.e. the JWT-derived ``current_user.roles``)
-    and are never read from the request body. The Users-table roles are
-    populated server-side by the BFF callback's
-    ``_sync_user_from_id_token`` off the ID token; this endpoint
-    refreshes the display fields without granting clients any influence
-    over authorization.
+    Identity-display fields only. ``roles`` and ``email`` are sourced
+    exclusively from the validated session (i.e. the JWT-derived
+    ``current_user.roles`` / ``current_user.email``) and are never read
+    from the request body. Both are populated server-side by the BFF
+    callback's ``_sync_user_from_id_token`` off the ID token; this
+    endpoint refreshes the remaining display fields (name, picture)
+    without granting clients any influence over authorization.
     """
     if not user_repo.enabled:
         return
 
-    email = body.email.strip().lower()
+    email = (current_user.email or "").strip().lower()
     if not email:
-        raise HTTPException(status_code=422, detail="Email is required")
+        # Indicates the BFF callback never seeded the Users row for this
+        # session. The user has a valid token but no IdP-issued email
+        # claim is reachable — refuse rather than persist an empty row.
+        raise HTTPException(status_code=422, detail="Authenticated session is missing an email claim")
 
-    # Surface clients that are still sending the legacy ``roles`` field so
-    # we can chase down stale code. The model's ``extra="allow"`` config
-    # makes those extras visible via ``model_extra``; we don't act on them.
+    # Surface clients still sending dropped fields so we can chase down
+    # stale code.  ``extra="allow"`` exposes them via ``model_extra``;
+    # the values are not acted on either way.
     extras = getattr(body, "model_extra", None) or {}
-    if "roles" in extras:
+    legacy_fields = [k for k in ("roles", "email") if k in extras]
+    if legacy_fields:
         logger.warning(
-            "Profile sync request from %s included a 'roles' field; ignoring (roles flow from JWT only)",
+            "Profile sync request from %s included legacy fields %s; ignoring (sourced from JWT only)",
             current_user.user_id,
+            legacy_fields,
         )
 
     email_domain = email.split("@")[1] if "@" in email else ""
