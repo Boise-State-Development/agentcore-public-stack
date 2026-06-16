@@ -1289,6 +1289,64 @@ async def get_session_metadata(session_id: str, user_id: str) -> Optional[Sessio
     )
 
 
+async def session_exists_for_other_user(session_id: str, current_user_id: str) -> bool:
+    """Return True if a session metadata row exists for *session_id* but is
+    owned by a user other than *current_user_id*.
+
+    Used by routes that mutate session-keyed records (e.g. PUT
+    /sessions/{session_id}/metadata) to refuse writes that would create a
+    second metadata row for the same session id under a different user
+    partition. The storage layer's ``_get_session_by_gsi`` already
+    declines to return rows that don't match the caller's user, so
+    callers can't tell the difference between "doesn't exist" and
+    "exists, not yours" — this helper closes that gap.
+
+    The function looks at the SessionLookupIndex GSI directly and
+    inspects the raw record's ``userId`` attribute; it deliberately does
+    not reuse ``_get_session_by_gsi`` because that helper filters on
+    ownership and returns None in both cases.
+
+    Returns False if the GSI is unavailable, no row exists, or the row
+    is owned by the current user.
+    """
+    sessions_metadata_table = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+
+    try:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(sessions_metadata_table)
+
+        response = table.query(
+            IndexName='SessionLookupIndex',
+            KeyConditionExpression=Key('GSI_PK').eq(f'SESSION#{session_id}')
+            & Key('GSI_SK').eq('META'),
+        )
+        items = response.get('Items', [])
+        if not items:
+            return False
+        # The GSI is keyed by session_id+'META', so at most one row should
+        # ever land here under healthy data. Defensively check every row.
+        for item in items:
+            owner = item.get('userId')
+            if owner and owner != current_user_id:
+                return True
+        return False
+    except Exception as exc:
+        # Failing closed (returning True) would block legitimate writes
+        # whenever the GSI is unavailable; failing open is the same risk
+        # window the existing GET path already accepts. Log loudly.
+        logger.warning(
+            "session_exists_for_other_user: GSI lookup failed for %s: %s",
+            session_id,
+            exc,
+        )
+        return False
+
+
 async def get_all_message_metadata(session_id: str, user_id: str) -> Dict[str, Any]:
     """
     Retrieve all message metadata for a session.

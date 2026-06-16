@@ -23,6 +23,7 @@ from apis.shared.sessions.metadata import (
     list_user_sessions,
     get_session_metadata,
     remove_pending_interrupts,
+    session_exists_for_other_user,
     store_session_metadata,
 )
 from .services.session_service import SessionService
@@ -206,6 +207,24 @@ async def update_session_metadata_endpoint(
         )
 
         if not existing_metadata:
+            # The per-user fetch can return None either because the session
+            # is genuinely fresh OR because a row exists for this
+            # session_id under a different user's partition (the
+            # SessionLookupIndex GSI is shared across users). Mirror GET's
+            # 404 in the second case so the caller cannot use a write to
+            # claim ownership of a session id that's already taken.
+            if await session_exists_for_other_user(
+                session_id=session_id, current_user_id=user_id
+            ):
+                logger.warning(
+                    "PUT /sessions/%s/metadata: session id is taken under a different user; refusing",
+                    session_id,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Session not found: {session_id}",
+                )
+
             # Create new session metadata with defaults
             now = datetime.now(timezone.utc).isoformat() + "Z"
 

@@ -232,6 +232,10 @@ class TestUpdateSessionMetadata:
             new_callable=AsyncMock,
             return_value=None,
         ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
             "apis.app_api.sessions.routes.store_session_metadata",
             new_callable=AsyncMock,
         ):
@@ -374,6 +378,10 @@ class TestUpdateSessionMetadata:
             new_callable=AsyncMock,
             return_value=None,
         ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
             "apis.app_api.sessions.routes.store_session_metadata",
             side_effect=capture_store,
         ):
@@ -395,6 +403,130 @@ class TestUpdateSessionMetadata:
             json={"agentType": "voice"},
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Session-metadata ownership: PUT cannot land on another user's session
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateSessionMetadataOwnership:
+    """PUT /sessions/{session_id}/metadata refuses to write when the session
+    already exists for a different user. Behaves like GET in that case —
+    returns 404 — so non-owners cannot enumerate session ids by probing."""
+
+    def test_returns_404_when_session_exists_for_another_user(
+        self, app, make_user, authenticated_client
+    ):
+        """The session id is taken; the caller is not its owner. 404."""
+        user = make_user(user_id="user-attacker")
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            new_callable=AsyncMock,
+        ) as mock_store:
+            resp = client.put(
+                "/sessions/victim-session-id/metadata",
+                json={"title": "IDOR-ATTEMPT"},
+            )
+
+        assert resp.status_code == 404
+        # And no write must have happened.
+        mock_store.assert_not_called()
+
+    def test_persists_no_data_when_existence_check_fails(
+        self, app, make_user, authenticated_client
+    ):
+        """If the existence check returns True the write must not run, even
+        if the per-user fetch returned None (the create-new path)."""
+        user = make_user(user_id="user-attacker")
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            new_callable=AsyncMock,
+        ) as mock_store:
+            client.put(
+                "/sessions/victim-session-id/metadata",
+                json={"title": "anything", "starred": True},
+            )
+
+        mock_store.assert_not_called()
+
+    def test_brand_new_session_id_creates_normally(
+        self, app, make_user, authenticated_client
+    ):
+        """When the session id is genuinely free, the create-new branch
+        still runs."""
+        user = make_user(user_id="u-1")
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=False,
+        ), patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            new_callable=AsyncMock,
+        ) as mock_store:
+            resp = client.put(
+                "/sessions/fresh-session-id/metadata",
+                json={"title": "First conversation"},
+            )
+
+        assert resp.status_code == 200
+        mock_store.assert_awaited_once()
+
+    def test_owner_update_does_not_invoke_existence_check(
+        self, app, make_user, authenticated_client
+    ):
+        """When the user already owns the session, the existence-check
+        helper is unnecessary — the per-user fetch returned a record."""
+        user = make_user(user_id="u-1")
+        client = authenticated_client(app, user)
+
+        existing = _make_session_metadata("owned-session", user.user_id)
+
+        with patch(
+            "apis.app_api.sessions.routes.get_session_metadata",
+            new_callable=AsyncMock,
+            return_value=existing,
+        ), patch(
+            "apis.app_api.sessions.routes.session_exists_for_other_user",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as exists_check, patch(
+            "apis.app_api.sessions.routes.store_session_metadata",
+            new_callable=AsyncMock,
+        ):
+            resp = client.put(
+                "/sessions/owned-session/metadata",
+                json={"title": "Renamed"},
+            )
+
+        assert resp.status_code == 200
+        exists_check.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
