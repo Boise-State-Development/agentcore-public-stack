@@ -74,14 +74,33 @@ def extract_bucket_names_from_constructs() -> set[str]:
 
 
 def extract_backup_tables() -> set[str]:
-    """Parse the backup script to find which tables it backs up."""
+    """Parse the backup script to find which tables it backs up.
+
+    Section-aware: only reads logical names from DYNAMODB_TABLES,
+    DYNAMODB_TABLES_BY_CONVENTION, and DYNAMODB_TABLES_EPHEMERAL —
+    not from S3_BUCKETS or VECTOR_INDEXES (which also use the
+    "logical": key).
+    """
     content = BACKUP_SCRIPT.read_text()
     tables = set()
-
-    # Match "logical": "xxx" entries in DYNAMODB_TABLES and DYNAMODB_TABLES_BY_CONVENTION
-    for match in re.finditer(r'"logical":\s*"([^"]+)"', content):
-        tables.add(match.group(1))
-
+    section_starts = ("DYNAMODB_TABLES", "DYNAMODB_TABLES_BY_CONVENTION",
+                      "DYNAMODB_TABLES_EPHEMERAL")
+    in_table_section = False
+    for line in content.split("\n"):
+        if any(s in line for s in section_starts) and "list[" in line:
+            in_table_section = True
+            continue
+        if in_table_section:
+            if line.strip() == "]" or (
+                line.strip()
+                and not line.startswith(" ")
+                and not line.startswith("{")
+            ):
+                in_table_section = False
+                continue
+            match = re.search(r'"logical":\s*"([^"]+)"', line)
+            if match:
+                tables.add(match.group(1))
     return tables
 
 
@@ -123,6 +142,66 @@ def extract_restore_tables() -> set[str]:
                 tables.add(match.group(1))
 
     return tables
+
+
+def extract_vector_indexes_from_constructs() -> set[str]:
+    """Scan all construct .ts files for AWS::S3Vectors::Index resources.
+
+    Vector indexes are declared as:
+        new CfnResource(this, '<id>', {
+          type: 'AWS::S3Vectors::Index',
+          properties: { VectorBucketName: ..., IndexName: ..., ... },
+        });
+
+    The "logical name" we care about for backup coverage is the
+    `IndexName` value, which goes through `getResourceName(config, 'X-...')`.
+    For coverage purposes we care that *every* CDK-defined index is
+    represented in `VECTOR_INDEXES` of backup.py. Returns the set of
+    construct id substrings (e.g. "rag-vector") so the assertion is
+    robust against `getResourceName` versioning suffixes.
+    """
+    indexes = set()
+    for ts_file in CONSTRUCTS_DIR.rglob("*.ts"):
+        if ".d.ts" in ts_file.name:
+            continue
+        content = ts_file.read_text()
+        # Find every "AWS::S3Vectors::Index" type declaration
+        for match in re.finditer(
+            r"type:\s*'AWS::S3Vectors::Index'", content
+        ):
+            # Walk backward to find the construct id from `new CfnResource(this, '<id>'`
+            preceding = content[: match.start()]
+            id_match = re.search(
+                r"new CfnResource\([^,]+,\s*'([^']+)'\s*,\s*\{[^}]*$",
+                preceding,
+                re.DOTALL,
+            )
+            if id_match:
+                # Construct id like 'RagVectorIndex' → normalize for matching
+                indexes.add(id_match.group(1).lower())
+    return indexes
+
+
+def extract_backup_vector_indexes() -> set[str]:
+    """Parse backup.py's VECTOR_INDEXES list for logical names."""
+    content = BACKUP_SCRIPT.read_text()
+    indexes = set()
+    in_section = False
+    for line in content.split("\n"):
+        if "VECTOR_INDEXES" in line and "list[" in line:
+            in_section = True
+            continue
+        if in_section:
+            if line.strip() == "]" or (
+                line.strip()
+                and not line.startswith(" ")
+                and not line.startswith("{")
+            ):
+                break
+            match = re.search(r'"logical":\s*"([^"]+)"', line)
+            if match:
+                indexes.add(match.group(1))
+    return indexes
 
 
 # ============================================================
@@ -302,3 +381,76 @@ class TestRestoreIsIdempotent:
     def test_has_dry_run(self):
         content = RESTORE_SCRIPT.read_text()
         assert "--dry-run" in content
+
+
+class TestBackupCoversVectorIndexes:
+    """Every AWS::S3Vectors::Index in the CDK constructs must be backed up.
+
+    S3 Vectors is a *separate AWS service* from regular S3 — the
+    `s3vectors` boto3 client + `AWS::S3Vectors::*` CFN types — so
+    `aws s3 sync` cannot reach the embeddings stored in a vector index.
+    Without an explicit backup step that calls `s3vectors.list_vectors`,
+    the index is silently dropped through teardown→redeploy→restore: the
+    DDB document metadata and the originals in the rag-documents bucket
+    are restored, but the vector index ends up empty and assistant RAG
+    queries return zero hits.
+
+    See also:
+      scripts/backup-data/backup.py::VECTOR_INDEXES
+      scripts/backup-data/backup.py::backup_vector_index
+      scripts/restore-data/restore.py::restore_vector_index
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.cdk_indexes = extract_vector_indexes_from_constructs()
+        self.backup_indexes = extract_backup_vector_indexes()
+        self.restore_content = RESTORE_SCRIPT.read_text()
+        self.backup_content = BACKUP_SCRIPT.read_text()
+
+    def test_at_least_one_vector_index_in_cdk(self):
+        """Sanity: the rag-data construct should declare a vector index."""
+        assert len(self.cdk_indexes) >= 1, (
+            "Expected at least one AWS::S3Vectors::Index in CDK constructs; "
+            f"found {self.cdk_indexes}"
+        )
+
+    def test_backup_has_vector_indexes_inventory(self):
+        """backup.py must declare a VECTOR_INDEXES list with at least one entry
+        whenever the CDK declares vector indexes."""
+        assert len(self.backup_indexes) >= 1, (
+            "CDK declares an AWS::S3Vectors::Index but backup.py has no "
+            "VECTOR_INDEXES entries. Vectors will be lost on every "
+            "teardown→redeploy→restore cycle. Add an entry to "
+            "scripts/backup-data/backup.py::VECTOR_INDEXES."
+        )
+
+    def test_backup_calls_list_vectors(self):
+        """backup.py must invoke s3vectors.list_vectors paginated. Without
+        this call the VECTOR_INDEXES list above would be a dead config."""
+        assert "list_vectors" in self.backup_content, (
+            "backup.py declares VECTOR_INDEXES but never calls "
+            "s3vectors.list_vectors. The backup step is incomplete."
+        )
+        # Also assert it requests data + metadata (without these, the
+        # restore can't reconstruct the vectors).
+        assert "returnData" in self.backup_content
+        assert "returnMetadata" in self.backup_content
+
+    def test_restore_calls_put_vectors(self):
+        """restore.py must invoke s3vectors.put_vectors to repopulate the
+        index. Reading the backup file but not pushing it back is a no-op."""
+        assert "put_vectors" in self.restore_content, (
+            "restore.py never calls s3vectors.put_vectors. The vectors "
+            "backup file is read but never replayed into the target index."
+        )
+
+    def test_restore_has_vector_index_function(self):
+        """The restore-side function must exist and be wired into run_restore."""
+        assert "def restore_vector_index" in self.restore_content
+        assert "restore_vector_index(" in self.restore_content
+        # And it must be called from somewhere in the orchestrator
+        assert self.restore_content.count("restore_vector_index(") >= 2, (
+            "restore_vector_index is defined but appears to never be called. "
+            "Wire it into run_restore() after the S3 buckets pass."
+        )

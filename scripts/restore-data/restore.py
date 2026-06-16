@@ -117,6 +117,17 @@ BUCKET_SSM_MAP: dict[str, str] = {
     "fine-tuning-data":  "/fine-tuning/data-bucket-name",
 }
 
+# S3 Vectors indexes. Mirrors `VECTOR_INDEXES` in scripts/backup-data/backup.py.
+# Each entry maps a logical name to the SSM paths that hold the target
+# bucket name and index name on the destination platform. The backup
+# component layout is `vectors/{logical}.jsonl.gz` and the restore step
+# replays those vectors via `s3vectors.put_vectors`.
+VECTOR_INDEXES: list[dict[str, str]] = [
+    {"logical": "rag-vectors",
+     "bucket_ssm": "/rag/vector-bucket-name",
+     "index_ssm":  "/rag/vector-index-name"},
+]
+
 SSM_USER_POOL_ID = "/auth/cognito/user-pool-id"
 SSM_MEMORY_ID = "/inference-api/memory-id"
 
@@ -512,6 +523,120 @@ def _compute_created_username(
     seed = f"{first.get('providerName', '')}/{first.get('userId', '')}".encode("utf-8")
     digest = hashlib.sha256(seed).hexdigest()[:16]
     return f"migrated-{digest}"
+
+
+# --------------------------------------------------------------------------- #
+# S3 Vectors restore                                                          #
+# --------------------------------------------------------------------------- #
+def restore_vector_index(ctx: RestoreContext, logical_name: str) -> dict:
+    """Replay backed-up vectors into the target S3 Vectors index.
+
+    Reads `vectors/{logical}.jsonl.gz` from the backup bucket — written by
+    `scripts/backup-data/backup.py::backup_vector_index` — and pushes each
+    record back into the destination index via `s3vectors.put_vectors`.
+    Each line of the file is a JSON object with the exact shape
+    put_vectors accepts:
+        {"key": str, "data": {"float32": [floats]}, "metadata": {...}}
+
+    `put_vectors` is an upsert keyed on `key`, so this function is
+    idempotent on re-run: a partially-completed previous restore can be
+    resumed by re-invoking the script. We also tolerate the backup file
+    being missing (older backups predate the vectors backup feature):
+    in that case we return a `skipped` status with a clear reason rather
+    than failing the whole restore.
+
+    Batch size matches `bedrock_embeddings.store_embeddings_in_s3`'s
+    BATCH_SIZE=50, which is the safe upper bound for the S3 Vectors
+    PutVectors request body limit.
+    """
+    # Find the matching backup-side config to know which SSM paths to look up.
+    cfg = next((c for c in VECTOR_INDEXES if c["logical"] == logical_name), None)
+    if cfg is None:
+        return {"logical": logical_name, "status": "skipped",
+                "reason": "no matching VECTOR_INDEXES entry"}
+
+    target_bucket = get_ssm_param(ctx.session, ctx.target_prefix, cfg["bucket_ssm"])
+    target_index = get_ssm_param(ctx.session, ctx.target_prefix, cfg["index_ssm"])
+    if not target_bucket or not target_index:
+        return {"logical": logical_name, "status": "skipped",
+                "reason": "target vector bucket/index not found via SSM"}
+
+    root_prefix = ctx.manifest.get("root_prefix", "")
+    if root_prefix and not root_prefix.endswith("/"):
+        root_prefix = root_prefix + "/"
+    backup_key = f"{root_prefix}vectors/{logical_name}.jsonl.gz"
+
+    s3 = ctx.session.client("s3", config=BOTO_CONFIG)
+    try:
+        obj = s3.get_object(Bucket=ctx.backup_bucket, Key=backup_key)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchKey":
+            return {"logical": logical_name, "status": "skipped",
+                    "reason": f"no vectors backup file at {backup_key} "
+                              "(backup may pre-date vectors support)"}
+        return {"logical": logical_name, "status": "failed",
+                "error": f"GetObject {backup_key}: {e}"}
+
+    body = gzip.decompress(obj["Body"].read())
+    if not body.strip():
+        return {"logical": logical_name, "status": "ok",
+                "vectors_written": 0, "target_bucket": target_bucket,
+                "target_index": target_index,
+                "reason": "backup file empty"}
+
+    if ctx.dry_run:
+        line_count = sum(1 for line in body.decode("utf-8").splitlines() if line.strip())
+        return {"logical": logical_name, "status": "skipped",
+                "reason": "dry-run", "vectors_in_backup": line_count}
+
+    s3vectors = ctx.session.client("s3vectors", config=BOTO_CONFIG)
+    BATCH_SIZE = 50
+    batch: list[dict[str, Any]] = []
+    vectors_written = 0
+    batches_sent = 0
+
+    def _flush() -> None:
+        nonlocal batch, vectors_written, batches_sent
+        if not batch:
+            return
+        s3vectors.put_vectors(
+            vectorBucketName=target_bucket,
+            indexName=target_index,
+            vectors=batch,
+        )
+        vectors_written += len(batch)
+        batches_sent += 1
+        batch = []
+
+    for line in body.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as parse_err:
+            LOG.warning(f"[Vectors] {logical_name}: skipping malformed line: {parse_err}")
+            continue
+        # Defensive shape validation — the line must have key + data + metadata
+        # in the put_vectors-compatible form. metadata is permitted to be
+        # absent/None on the live API but we backed up returnMetadata=True
+        # so it should always be present.
+        if "key" not in record or "data" not in record:
+            LOG.warning(f"[Vectors] {logical_name}: skipping record missing 'key' or 'data'")
+            continue
+        batch.append(record)
+        if len(batch) >= BATCH_SIZE:
+            _flush()
+
+    _flush()
+
+    LOG.info(f"[Vectors] {logical_name}: wrote {vectors_written} vectors "
+             f"to {target_bucket}/{target_index} ({batches_sent} batches)")
+    return {"logical": logical_name, "status": "ok",
+            "vectors_written": vectors_written,
+            "batches_sent": batches_sent,
+            "target_bucket": target_bucket,
+            "target_index": target_index}
 
 
 # --------------------------------------------------------------------------- #
@@ -1330,6 +1455,31 @@ def run_restore(ctx: RestoreContext) -> dict:
             continue
         result = restore_s3_bucket(ctx, comp["logical_name"], comp)
         ctx.results.append(result)
+
+    # --- S3 Vectors ---
+    # Runs after the S3 documents bucket so the on-disk originals exist
+    # before the assistants RAG knowledge base goes live. Vectors are an
+    # entirely separate AWS service from regular S3, hence its own step.
+    # The backup may pre-date vectors support (older snapshots before
+    # PR #N), in which case each entry skips cleanly with a clear reason.
+    vector_components = components.get("vectors", [])
+    if vector_components:
+        LOG.info(f"Restoring {len(vector_components)} S3 Vectors index(es)...")
+        for comp in vector_components:
+            if comp.get("status") != "ok":
+                ctx.results.append({"logical": comp["logical_name"], "status": "skipped",
+                                    "reason": "backup status was not ok"})
+                continue
+            result = restore_vector_index(ctx, comp["logical_name"])
+            ctx.results.append(result)
+    else:
+        # Older backup with no vectors component at all. Try the
+        # configured indexes anyway — restore_vector_index() will skip
+        # cleanly if the corresponding backup file isn't present.
+        LOG.info("No vectors component in manifest; probing configured indexes "
+                 "(harmless skip if backup pre-dates vectors support)")
+        for cfg in VECTOR_INDEXES:
+            ctx.results.append(restore_vector_index(ctx, cfg["logical"]))
 
     # --- AgentCore Memory ---
     # Runs after Cognito (so sub_map is populated for actorId remap) AND
