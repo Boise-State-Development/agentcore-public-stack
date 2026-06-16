@@ -103,6 +103,25 @@ S3_BUCKETS: list[dict[str, Any]] = [
     {"logical": "fine-tuning-data",     "ssm": "/fine-tuning/data-bucket-name",         "optional": True},
 ]
 
+# S3 Vectors indexes. Distinct from S3_BUCKETS because S3 Vectors is a
+# separate AWS service (`AWS::S3Vectors::*` / boto3 `s3vectors` client) —
+# `aws s3 sync` cannot reach the vectors and `list_objects_v2` won't see
+# them. Each entry is backed up via `s3vectors.list_vectors` paginated
+# enumeration and replayed on restore via `s3vectors.put_vectors`.
+#
+# The vector index backs the assistants RAG knowledge base:
+# `bedrock_embeddings.search_assistant_knowledgebase` issues
+# `query_vectors(filter={"assistant_id": ...})` against this index, so an
+# empty index post-restore = silently broken RAG even though the DDB
+# document metadata and S3 originals are intact. See
+# `tests/supply_chain/test_backup_coverage.py::TestBackupCoversVectorIndexes`
+# for the canary that enforces this list stays in sync with CDK.
+VECTOR_INDEXES: list[dict[str, Any]] = [
+    {"logical": "rag-vectors",
+     "bucket_ssm": "/rag/vector-bucket-name",
+     "index_ssm":  "/rag/vector-index-name"},
+]
+
 SSM_USER_POOL_ID = "/auth/cognito/user-pool-id"
 SSM_MEMORY_ID = "/inference-api/memory-id"
 
@@ -432,6 +451,98 @@ def backup_s3_bucket(ctx: BackupContext, logical: str, source_bucket: str) -> Co
             error=f"Destination count {dest_count} < source count {obj_count}",
         )
     return ComponentResult("s3", logical, "ok", detail=detail)
+
+
+# --------------------------------------------------------------------------- #
+# S3 Vectors                                                                  #
+# --------------------------------------------------------------------------- #
+def backup_vector_index(
+    ctx: BackupContext,
+    logical: str,
+    vector_bucket: str,
+    index_name: str,
+) -> ComponentResult:
+    """Snapshot every vector in an S3 Vectors index to a gzipped JSONL.
+
+    Calls `s3vectors.list_vectors(returnData=True, returnMetadata=True)` in
+    a paginated loop, streaming each `(key, data, metadata)` triple to
+    `vectors/{logical}.jsonl.gz` in the backup bucket. The output format
+    is byte-for-byte compatible with `s3vectors.put_vectors` on restore —
+    each line is a JSON object that can be passed straight to the
+    `vectors=[...]` argument.
+
+    The API surface used here is documented at:
+      https://docs.aws.amazon.com/cli/latest/reference/s3vectors/list-vectors.html
+
+    Permissions required (granted by the backup workflow's IAM role):
+      - s3vectors:ListVectors
+      - s3vectors:GetVectors  (needed when returnData/returnMetadata=true)
+    """
+    s3vectors = ctx.session.client("s3vectors", config=BOTO_CONFIG)
+
+    detail: dict[str, Any] = {
+        "vector_bucket": vector_bucket,
+        "index_name": index_name,
+        "destination_key": f"s3://{ctx.bucket}/{ctx.root_prefix}/vectors/{logical}.jsonl.gz",
+    }
+
+    if ctx.dry_run:
+        try:
+            # Cheap probe to confirm the index exists / is reachable.
+            probe = s3vectors.list_vectors(
+                vectorBucketName=vector_bucket,
+                indexName=index_name,
+                maxResults=1,
+            )
+            detail["probe_vector_count"] = len(probe.get("vectors", []))
+        except ClientError as exc:
+            return ComponentResult(
+                "vectors", logical, "failed",
+                detail=detail,
+                error=f"ListVectors probe: {exc.response.get('Error', {}).get('Code')}",
+            )
+        return ComponentResult("vectors", logical, "skipped",
+                               detail={**detail, "reason": "dry-run"})
+
+    rel_key = f"vectors/{logical}.jsonl.gz"
+    vector_count = 0
+    next_token: str | None = None
+
+    try:
+        with _GzS3Writer(ctx, rel_key) as writer:
+            while True:
+                kwargs: dict[str, Any] = {
+                    "vectorBucketName": vector_bucket,
+                    "indexName": index_name,
+                    "returnData": True,
+                    "returnMetadata": True,
+                }
+                if next_token is not None:
+                    kwargs["nextToken"] = next_token
+                resp = s3vectors.list_vectors(**kwargs)
+                for v in resp.get("vectors", []):
+                    # The list_vectors response shape:
+                    #   {"key": str, "data": {"float32": [floats]},
+                    #    "metadata": <document>}
+                    # — exactly the shape put_vectors accepts on restore.
+                    writer.write(
+                        (json.dumps(_scrub_datetimes(v), separators=(",", ":")) + "\n").encode("utf-8")
+                    )
+                    vector_count += 1
+                next_token = resp.get("nextToken")
+                if not next_token:
+                    break
+    except ClientError as exc:
+        return ComponentResult(
+            "vectors", logical, "failed",
+            detail=detail,
+            error=f"ListVectors: {exc.response.get('Error', {}).get('Code')}",
+        )
+
+    detail["vector_count"] = vector_count
+    LOG.info("Backed up %d vectors from %s/%s → %s",
+             vector_count, vector_bucket, index_name, rel_key)
+    return ComponentResult("vectors", logical, "ok", detail=detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -835,6 +946,30 @@ def run(ctx: BackupContext) -> int:
                    for lg, nm in s3_targets}
         for fut in as_completed(futures):
             ctx.results.append(fut.result())
+
+    # ---- S3 Vectors indexes (sequential — usually 1 index, paginated API) ----
+    for cfg in VECTOR_INDEXES:
+        logical = cfg["logical"]
+        bucket_path = f"/{ctx.project_prefix}{cfg['bucket_ssm']}"
+        index_path = f"/{ctx.project_prefix}{cfg['index_ssm']}"
+        vector_bucket = get_ssm_param(ctx.session, bucket_path)
+        index_name = get_ssm_param(ctx.session, index_path)
+        if not vector_bucket or not index_name:
+            if cfg.get("optional"):
+                ctx.results.append(ComponentResult(
+                    "vectors", logical, "skipped",
+                    detail={"bucket_ssm": bucket_path, "index_ssm": index_path,
+                            "reason": "optional, not present"},
+                ))
+            else:
+                ctx.results.append(ComponentResult(
+                    "vectors", logical, "failed",
+                    detail={"bucket_ssm": bucket_path, "index_ssm": index_path},
+                    error="Required SSM parameters not found "
+                          "(both bucket-name and index-name must be published)",
+                ))
+            continue
+        ctx.results.append(backup_vector_index(ctx, logical, vector_bucket, index_name))
 
     # ---- Cognito ----
     user_pool_id = get_ssm_param(ctx.session, f"/{ctx.project_prefix}{SSM_USER_POOL_ID}")

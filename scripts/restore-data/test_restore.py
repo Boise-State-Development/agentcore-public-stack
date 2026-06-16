@@ -1470,3 +1470,231 @@ def test_cognito_federated_user_idempotent_rerun_uses_migrated_username():
 
     # Sub map records old → existing-on-rerun.
     assert ctx.sub_map == {"OLD-SUB-UUID": "EXISTING-SUB"}
+
+
+# --------------------------------------------------------------------------- #
+# S3 Vectors restore                                                          #
+# --------------------------------------------------------------------------- #
+def _vectors_jsonl_gz(records: list[dict]) -> bytes:
+    """Helper: build a gzipped JSONL body from a list of put_vectors records."""
+    body = "\n".join(json.dumps(r) for r in records).encode("utf-8")
+    return gzip.compress(body)
+
+
+def test_restore_vector_index_replays_via_put_vectors():
+    """Backed-up vectors must be re-pushed to the target index in batches
+    of 50 (matching bedrock_embeddings.store_embeddings_in_s3.BATCH_SIZE).
+    Each record's key/data/metadata must round-trip 1:1."""
+    records = [
+        {
+            "key": f"doc-1#{i}",
+            "data": {"float32": [0.1 * i, 0.2 * i, 0.3 * i]},
+            "metadata": {"text": f"chunk {i}", "assistant_id": "ast-abc",
+                         "document_id": "doc-1", "source": "report.pdf"},
+        }
+        for i in range(125)  # > 2 batches of 50 to confirm flushing logic
+    ]
+    body = _vectors_jsonl_gz(records)
+
+    s3 = MagicMock()
+    s3.get_object.return_value = {"Body": io.BytesIO(body)}
+    s3vectors = MagicMock()
+    s3vectors.put_vectors.return_value = {}
+
+    def client_factory(name, *_a, **_kw):
+        if name == "s3":
+            return s3
+        if name == "s3vectors":
+            return s3vectors
+        return MagicMock()
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    def fake_get(_session, _prefix, ssm_path):
+        if ssm_path.endswith("/vector-bucket-name"):
+            return "target-vector-bucket"
+        if ssm_path.endswith("/vector-index-name"):
+            return "target-vector-index"
+        return None
+
+    with patch.object(restore, "get_ssm_param", side_effect=fake_get):
+        result = restore.restore_vector_index(ctx, "rag-vectors")
+
+    assert result["status"] == "ok"
+    assert result["vectors_written"] == 125
+    # 125 records / 50 batch = 3 batches (50 + 50 + 25)
+    assert result["batches_sent"] == 3
+    assert result["target_bucket"] == "target-vector-bucket"
+    assert result["target_index"] == "target-vector-index"
+
+    # Verify put_vectors was called 3 times with the right batch sizes
+    assert s3vectors.put_vectors.call_count == 3
+    sizes = [len(c.kwargs["vectors"]) for c in s3vectors.put_vectors.call_args_list]
+    assert sizes == [50, 50, 25]
+    # Bucket + index args constant across calls
+    for c in s3vectors.put_vectors.call_args_list:
+        assert c.kwargs["vectorBucketName"] == "target-vector-bucket"
+        assert c.kwargs["indexName"] == "target-vector-index"
+    # First record matches the input shape exactly (1:1 round-trip)
+    first_pushed = s3vectors.put_vectors.call_args_list[0].kwargs["vectors"][0]
+    assert first_pushed == records[0]
+
+
+def test_restore_vector_index_skips_when_backup_file_missing():
+    """Older backups (pre-vectors-support) won't have vectors/*.jsonl.gz.
+    Restore must skip cleanly with a clear reason rather than failing."""
+    from botocore.exceptions import ClientError as _CE
+    s3 = MagicMock()
+    s3.get_object.side_effect = _CE(
+        {"Error": {"Code": "NoSuchKey"}}, "GetObject",
+    )
+    s3vectors = MagicMock()
+
+    def client_factory(name, *_a, **_kw):
+        if name == "s3":
+            return s3
+        if name == "s3vectors":
+            return s3vectors
+        return MagicMock()
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    def fake_get(_session, _prefix, ssm_path):
+        if ssm_path.endswith("/vector-bucket-name"):
+            return "target-vector-bucket"
+        if ssm_path.endswith("/vector-index-name"):
+            return "target-vector-index"
+        return None
+
+    with patch.object(restore, "get_ssm_param", side_effect=fake_get):
+        result = restore.restore_vector_index(ctx, "rag-vectors")
+
+    assert result["status"] == "skipped"
+    assert "no vectors backup file" in result["reason"]
+    s3vectors.put_vectors.assert_not_called()
+
+
+def test_restore_vector_index_skips_when_target_bucket_missing():
+    """If the target platform doesn't publish the vector-bucket-name SSM
+    (e.g. RAG disabled in this prefix), skip gracefully without making
+    any AWS calls beyond the SSM lookup."""
+    s3 = MagicMock()
+    s3vectors = MagicMock()
+
+    def client_factory(name, *_a, **_kw):
+        if name == "s3":
+            return s3
+        if name == "s3vectors":
+            return s3vectors
+        return MagicMock()
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value=None):
+        result = restore.restore_vector_index(ctx, "rag-vectors")
+
+    assert result["status"] == "skipped"
+    assert "vector bucket/index not found" in result["reason"]
+    s3.get_object.assert_not_called()
+    s3vectors.put_vectors.assert_not_called()
+
+
+def test_restore_vector_index_dry_run_does_not_call_put_vectors():
+    """Dry run must report what *would* be restored without making any
+    s3vectors API calls."""
+    records = [
+        {"key": f"k{i}", "data": {"float32": [0.0]}, "metadata": {}}
+        for i in range(7)
+    ]
+    body = _vectors_jsonl_gz(records)
+
+    s3 = MagicMock()
+    s3.get_object.return_value = {"Body": io.BytesIO(body)}
+    s3vectors = MagicMock()
+
+    def client_factory(name, *_a, **_kw):
+        if name == "s3":
+            return s3
+        if name == "s3vectors":
+            return s3vectors
+        return MagicMock()
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=True)
+    ctx.session.client.side_effect = client_factory
+
+    def fake_get(_session, _prefix, ssm_path):
+        if ssm_path.endswith("/vector-bucket-name"):
+            return "target-bucket"
+        if ssm_path.endswith("/vector-index-name"):
+            return "target-index"
+        return None
+
+    with patch.object(restore, "get_ssm_param", side_effect=fake_get):
+        result = restore.restore_vector_index(ctx, "rag-vectors")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "dry-run"
+    assert result["vectors_in_backup"] == 7
+    s3vectors.put_vectors.assert_not_called()
+
+
+def test_restore_vector_index_idempotent_on_rerun_via_put_vectors_upsert():
+    """put_vectors keyed on `key` is an upsert in S3 Vectors — re-running
+    the restore should call put_vectors with the SAME records again
+    without raising. The test exercises that path."""
+    records = [
+        {"key": "doc-1#0", "data": {"float32": [0.1]}, "metadata": {"a": 1}},
+    ]
+    body = _vectors_jsonl_gz(records)
+
+    s3 = MagicMock()
+    s3.get_object.return_value = {"Body": io.BytesIO(body)}
+    s3vectors = MagicMock()
+    s3vectors.put_vectors.return_value = {}
+
+    def client_factory(name, *_a, **_kw):
+        if name == "s3":
+            return s3
+        if name == "s3vectors":
+            return s3vectors
+        return MagicMock()
+
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    ctx.session.client.side_effect = client_factory
+
+    with patch.object(restore, "get_ssm_param", return_value="target"):
+        # Need to return a non-None for both bucket and index lookups —
+        # the side-effect form would be cleaner but a plain return value
+        # is enough here since both lookups expect a string.
+        r1 = restore.restore_vector_index(ctx, "rag-vectors")
+
+    # Re-run — same input, fresh body (S3 Body is a one-shot stream)
+    s3.get_object.return_value = {"Body": io.BytesIO(body)}
+    with patch.object(restore, "get_ssm_param", return_value="target"):
+        r2 = restore.restore_vector_index(ctx, "rag-vectors")
+
+    assert r1["status"] == "ok" and r2["status"] == "ok"
+    assert s3vectors.put_vectors.call_count == 2
+    # Both calls had the same vectors payload
+    assert (
+        s3vectors.put_vectors.call_args_list[0].kwargs["vectors"]
+        == s3vectors.put_vectors.call_args_list[1].kwargs["vectors"]
+    )
+
+
+def test_restore_vector_index_skips_unknown_logical_name():
+    """Defensive: if a manifest references a logical name that's not in
+    VECTOR_INDEXES, skip cleanly without crashing."""
+    ctx = _make_ctx({"root_prefix": "root"}, dry_run=False)
+    result = restore.restore_vector_index(ctx, "nonexistent-vector-store")
+    assert result["status"] == "skipped"
+    assert "no matching VECTOR_INDEXES entry" in result["reason"]
+
+
+def test_restore_vector_index_in_vector_indexes_constant():
+    """The known live deployment uses the `rag-vectors` logical name."""
+    logicals = {c["logical"] for c in restore.VECTOR_INDEXES}
+    assert "rag-vectors" in logicals
