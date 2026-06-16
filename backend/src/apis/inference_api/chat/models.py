@@ -6,7 +6,13 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# Hard upper bound on a user-supplied custom system prompt. Mirrors the
+# limit applied inside SystemPromptBuilder.from_user_prompt — surfacing
+# it at the API layer so oversized payloads are rejected before any
+# downstream work runs.
+MAX_USER_SYSTEM_PROMPT_CHARS = 8 * 1024
 
 
 class FileContent(BaseModel):
@@ -135,6 +141,21 @@ class InvocationRequest(BaseModel):
     # `message` is ignored; no model turn runs. The context is merged into
     # (and cleared before) the next real user turn's prompt.
     app_context_update: Optional[AppContextUpdateEntry] = None
+
+    @field_validator("system_prompt")
+    @classmethod
+    def _bound_system_prompt_length(cls, value: Optional[str]) -> Optional[str]:
+        """Reject user-supplied system prompts larger than the configured cap.
+
+        The cap is also enforced inside ``SystemPromptBuilder.from_user_prompt``
+        as defense in depth. Surfacing it at the request boundary lets us
+        return a proper 4xx instead of silently truncating downstream.
+        """
+        if value is None:
+            return value
+        if len(value) > MAX_USER_SYSTEM_PROMPT_CHARS:
+            raise ValueError(f"system_prompt exceeds maximum length of {MAX_USER_SYSTEM_PROMPT_CHARS} characters")
+        return value
 
 
 class InvocationResponse(BaseModel):

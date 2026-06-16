@@ -6,7 +6,6 @@ Requirements: 3.1–3.5
 
 from unittest.mock import patch
 
-import pytest
 
 from agents.main_agent.core.system_prompt_builder import (
     DEFAULT_SYSTEM_PROMPT,
@@ -119,25 +118,44 @@ class TestCustomBasePrompt:
 
 
 # ---------------------------------------------------------------------------
-# Requirement 3.4: from_user_prompt configures builder with user prompt
+# Requirement 3.4: from_user_prompt wraps the user prompt with the platform
+# safety floor.
 # ---------------------------------------------------------------------------
 class TestFromUserPrompt:
-    """from_user_prompt creates a builder configured with the user prompt."""
+    """from_user_prompt sandwiches a user-supplied prompt below the platform
+    safety floor and wraps it in <user_instructions> tags.
+    """
 
-    def test_sets_base_prompt_to_user_prompt(self):
+    def test_assembled_prompt_starts_with_safety_floor(self):
+        from agents.main_agent.core.system_prompt_builder import PLATFORM_SAFETY_FLOOR
+
         user_prompt = "You are a research assistant for biology."
         builder = SystemPromptBuilder.from_user_prompt(user_prompt)
 
-        assert builder.base_prompt == user_prompt
+        assert builder.base_prompt.startswith(PLATFORM_SAFETY_FLOOR)
+
+    def test_assembled_prompt_contains_user_text_inside_tags(self):
+        user_prompt = "You are a research assistant for biology."
+        builder = SystemPromptBuilder.from_user_prompt(user_prompt)
+
+        assert "<user_instructions>" in builder.base_prompt
+        assert "</user_instructions>" in builder.base_prompt
+        # User text appears inside the tags.
+        opening = builder.base_prompt.index("<user_instructions>")
+        closing = builder.base_prompt.index("</user_instructions>")
+        assert opening < builder.base_prompt.index(user_prompt) < closing
 
     def test_returns_system_prompt_builder_instance(self):
         builder = SystemPromptBuilder.from_user_prompt("Any prompt")
 
         assert isinstance(builder, SystemPromptBuilder)
 
-    def test_build_without_date_returns_user_prompt(self):
+    def test_build_without_date_includes_floor_and_user_prompt(self):
+        from agents.main_agent.core.system_prompt_builder import PLATFORM_SAFETY_FLOOR
+
         user_prompt = "User-provided prompt with date already."
         builder = SystemPromptBuilder.from_user_prompt(user_prompt)
         result = builder.build(include_date=False)
 
-        assert result == user_prompt
+        assert result.startswith(PLATFORM_SAFETY_FLOOR)
+        assert user_prompt in result
