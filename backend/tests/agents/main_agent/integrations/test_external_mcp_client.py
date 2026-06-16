@@ -68,10 +68,13 @@ class TestDetectAwsServiceFromUrl:
         url = "https://gateway-abc.bedrock-agentcore.us-west-2.amazonaws.com/mcp"
         assert detect_aws_service_from_url(url) == "bedrock-agentcore"
 
-    def test_defaults_to_lambda_for_unknown_url(self):
-        """Req 25.3: Defaults to 'lambda' for unrecognized URL patterns."""
+    def test_returns_none_for_unknown_url(self):
+        """Req 25.3: Returns None for any URL that isn't a recognized AWS
+        service hostname. Callers wiring SigV4 must treat None as a refusal
+        — issuing a SigV4 request to an arbitrary host would attach IAM
+        credentials to a request the destination has no business seeing."""
         url = "https://example.com/api/v1"
-        assert detect_aws_service_from_url(url) == "lambda"
+        assert detect_aws_service_from_url(url) is None
 
 
 class TestProviderForClient:

@@ -66,7 +66,7 @@ def extract_region_from_url(url: str) -> Optional[str]:
     return None
 
 
-def detect_aws_service_from_url(url: str) -> str:
+def detect_aws_service_from_url(url: str) -> Optional[str]:
     """
     Detect the AWS service name for SigV4 signing based on URL pattern.
 
@@ -75,11 +75,18 @@ def detect_aws_service_from_url(url: str) -> str:
     - API Gateway: "execute-api"
     - AgentCore Gateway: "bedrock-agentcore"
 
+    Returns ``None`` for any URL that doesn't match a recognized AWS service
+    hostname pattern. Callers that wire SigV4 auth must treat ``None`` as a
+    refusal — issuing a SigV4-signed request to a non-AWS host would attach
+    the task's temporary IAM credentials to a request that the destination
+    has no business seeing.
+
     Args:
         url: The server URL
 
     Returns:
-        AWS service name for SigV4 signing
+        AWS service name for SigV4 signing, or None if the URL doesn't match
+        a known AWS service.
     """
     if ".lambda-url." in url and ".on.aws" in url:
         return "lambda"
@@ -88,9 +95,11 @@ def detect_aws_service_from_url(url: str) -> str:
     elif ".bedrock-agentcore." in url and ".amazonaws.com" in url:
         return "bedrock-agentcore"
     else:
-        # Default to lambda for unknown patterns (most common for MCP servers)
-        logger.warning(f"Could not detect AWS service from URL, defaulting to 'lambda': {url}")
-        return "lambda"
+        logger.debug(
+            "URL is not a recognized AWS service endpoint; SigV4 signing not applicable: %s",
+            url,
+        )
+        return None
 
 
 def create_external_mcp_client(
@@ -151,15 +160,25 @@ def create_external_mcp_client(
 
         # AWS IAM SigV4 authentication (for Lambda/API Gateway without OAuth)
         elif config.auth_type == MCPAuthType.AWS_IAM or config.auth_type == "aws-iam":
+            # Detect the correct AWS service name for SigV4 signing. The
+            # detector returns None for any host that isn't a recognized
+            # AWS service endpoint — refuse to construct the client in
+            # that case rather than ship the task's IAM credentials to
+            # an arbitrary destination.
+            service = detect_aws_service_from_url(config.server_url)
+            if service is None:
+                logger.warning(
+                    "MCP client construction refused: auth_type=aws-iam against non-AWS URL %s",
+                    config.server_url,
+                )
+                return None
+
             region = config.aws_region
             if not region:
                 region = extract_region_from_url(config.server_url)
             if not region:
                 region = "us-west-2"  # Default fallback
                 logger.warning(f"Could not extract region from URL, using default: {region}")
-
-            # Detect the correct AWS service name for SigV4 signing
-            service = detect_aws_service_from_url(config.server_url)
 
             sigv4_auth = get_sigv4_auth(service=service, region=region)
             auth_handlers.append(sigv4_auth)
