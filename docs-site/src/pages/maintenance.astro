@@ -70,31 +70,9 @@ const fontHref =
 
 				<div class="progress" aria-hidden="true"><span></span></div>
 
-				<div class="actions">
-					<button type="button" id="retry" class="btn btn--primary">
-						Try again
-					</button>
-					<a
-						class="btn btn--ghost"
-						href="https://github.com/Boise-State-Development/agentcore-public-stack"
-						target="_blank"
-						rel="noreferrer noopener"
-					>
-						Status &amp; updates
-					</a>
-				</div>
-
 				<p class="signoff">Thanks for your patience — the Boise State AI team.</p>
 			</section>
 		</main>
-
-		<script>
-			// "Try again" simply reloads — by the time the user clicks, the platform
-			// has usually come back, and a reload is the most predictable recovery.
-			document.getElementById('retry')?.addEventListener('click', () => {
-				window.location.reload();
-			});
-		</script>
 
 		<style>
 			/* ---- Brand palette (derived from #0033a0, matching the docs theme) ---- */
@@ -527,63 +505,6 @@ const fontHref =
 			@keyframes progress-slide {
 				0% { left: -45%; }
 				100% { left: 105%; }
-			}
-
-			.actions {
-				display: flex;
-				flex-wrap: wrap;
-				justify-content: center;
-				gap: 0.75rem;
-				margin-top: 0.4rem;
-			}
-
-			.btn {
-				appearance: none;
-				cursor: pointer;
-				display: inline-flex;
-				align-items: center;
-				justify-content: center;
-				padding: 0.7rem 1.4rem;
-				font-family: var(--font-body);
-				font-size: 0.95rem;
-				font-weight: 600;
-				border-radius: 0.7rem;
-				text-decoration: none;
-				transition:
-					transform 0.2s ease,
-					box-shadow 0.2s ease,
-					background 0.2s ease,
-					border-color 0.2s ease;
-			}
-
-			.btn:focus-visible {
-				outline: 2px solid var(--brand-300);
-				outline-offset: 2px;
-			}
-
-			.btn--primary {
-				color: white;
-				border: 1px solid color-mix(in oklab, var(--brand-300) 45%, transparent);
-				background: linear-gradient(180deg, var(--brand-400) 0%, var(--brand) 100%);
-				box-shadow: 0 10px 30px -10px color-mix(in oklab, var(--brand) 75%, transparent);
-			}
-
-			.btn--primary:hover {
-				transform: translateY(-2px);
-				box-shadow: 0 16px 40px -12px color-mix(in oklab, var(--brand) 85%, transparent);
-			}
-
-			.btn--ghost {
-				color: var(--ink);
-				border: 1px solid color-mix(in oklab, var(--brand) 32%, transparent);
-				background: color-mix(in oklab, var(--bg) 40%, transparent);
-				-webkit-backdrop-filter: blur(10px);
-				backdrop-filter: blur(10px);
-			}
-
-			.btn--ghost:hover {
-				border-color: color-mix(in oklab, var(--brand) 55%, transparent);
-				background: color-mix(in oklab, var(--brand) 14%, transparent);
 			}
 
 			.signoff {
