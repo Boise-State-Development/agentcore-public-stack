@@ -175,13 +175,35 @@ async def list_all_jobs(
 
     try:
         jobs = jobs_repo.list_all_jobs(status_filter=status_filter)
-        return JobListResponse(
-            jobs=[JobResponse(**j) for j in jobs],
-            total_count=len(jobs),
-        )
     except Exception as e:
         logger.error(f"Error listing all fine-tuning jobs: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+    # Validate each record individually so a single malformed row
+    # doesn't take down the entire response. Skipped rows are logged
+    # at WARN with their job_id when available so operators can chase
+    # the underlying schema drift.
+    serialized: list[JobResponse] = []
+    skipped = 0
+    for raw in jobs:
+        try:
+            serialized.append(JobResponse(**raw))
+        except Exception as e:
+            skipped += 1
+            logger.warning(
+                "Dropping malformed fine-tuning job record (job_id=%r): %s",
+                raw.get("job_id") if isinstance(raw, dict) else None,
+                e,
+            )
+    if skipped:
+        logger.warning(
+            "Fine-tuning jobs listing dropped %d malformed record(s)", skipped
+        )
+
+    return JobListResponse(
+        jobs=serialized,
+        total_count=len(serialized),
+    )
 
 
 # ========== Inference Job Management ==========

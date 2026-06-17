@@ -256,6 +256,11 @@ function handler(event) {
         ...distributionProps,
         domainNames: [config.domainName],
         certificate,
+        // Pin to the 2021-vintage minimum: TLS 1.2+ only, CBC ciphers
+        // pruned. CloudFront's default (`TLSv1`) accepts TLS 1.0 with
+        // legacy ciphers, which is exactly what TLS-baseline scanners
+        // flag.
+        minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       };
     }
 

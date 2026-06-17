@@ -223,10 +223,13 @@ async def list_gemini_models(
         # Try both GOOGLE_API_KEY and GOOGLE_GEMINI_API_KEY for compatibility
         google_api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_GEMINI_API_KEY')
         if not google_api_key:
-            logger.error("GOOGLE_API_KEY or GOOGLE_GEMINI_API_KEY environment variable not set")
+            logger.error(
+                "External Gemini provider not configured "
+                "(set GOOGLE_API_KEY or GOOGLE_GEMINI_API_KEY)"
+            )
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Google API key not configured. Please set GOOGLE_API_KEY or GOOGLE_GEMINI_API_KEY environment variable."
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="External model provider not configured.",
             )
 
         # Import Google AI SDK
@@ -335,10 +338,12 @@ async def list_openai_models(
         # Check if OpenAI API key is configured
         openai_api_key = os.environ.get('OPENAI_API_KEY')
         if not openai_api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
+            logger.error(
+                "External OpenAI provider not configured (set OPENAI_API_KEY)"
+            )
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="External model provider not configured.",
             )
 
         # Import OpenAI SDK

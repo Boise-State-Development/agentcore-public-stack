@@ -88,6 +88,11 @@ export class AlbConstruct extends Construct {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [certificate],
+        // Pin to the 2021 TLS-1.3 policy: TLS 1.2 minimum, all CBC
+        // cipher suites removed, modern AEAD ciphers only. The default
+        // (ELBSecurityPolicy-2016-08) still allows TLS 1.0 + CBC,
+        // which is the BEAST exposure path.
+        sslPolicy: elbv2.SslPolicy.TLS13_RES,
         defaultAction: elbv2.ListenerAction.fixedResponse(404, {
           contentType: 'text/plain',
           messageBody: 'Not Found - No matching route',
