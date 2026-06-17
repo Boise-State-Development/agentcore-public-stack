@@ -5,9 +5,10 @@ Requires admin role (Admin or SuperAdmin) via JWT token.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, status
-from typing import Optional
+from typing import Literal, Optional
 import logging
 import os
+import re
 import boto3
 from botocore.exceptions import ClientError, BotoCoreError
 
@@ -46,12 +47,40 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 
+# AWS Bedrock's accepted shape for byProvider — alphanumerics, hyphens, and
+# spaces, 1-63 chars. Validating client-side keeps obviously-malformed input
+# (HTML, control chars, oversized strings) from reaching the AWS API at all.
+_BEDROCK_PROVIDER_RE = re.compile(r"^[A-Za-z0-9 -]{1,63}$")
+
+
 @router.get("/bedrock/models", response_model=BedrockModelsResponse)
 async def list_bedrock_models(
-    by_provider: Optional[str] = Query(None, description="Filter by provider name (e.g., 'Anthropic', 'Amazon')"),
-    by_output_modality: Optional[str] = Query(None, description="Filter by output modality (e.g., 'TEXT', 'IMAGE')"),
-    by_inference_type: Optional[str] = Query(None, description="Filter by inference type (e.g., 'ON_DEMAND', 'PROVISIONED')"),
-    by_customization_type: Optional[str] = Query(None, description="Filter by customization type (e.g., 'FINE_TUNING', 'CONTINUED_PRE_TRAINING')"),
+    by_provider: Optional[str] = Query(
+        None,
+        regex=_BEDROCK_PROVIDER_RE.pattern,
+        description="Filter by provider name (e.g., 'Anthropic', 'Amazon')",
+    ),
+    by_output_modality: Optional[
+        Literal["SPEECH", "TEXT", "EMBEDDING", "VIDEO", "IMAGE"]
+    ] = Query(None, description="Filter by output modality"),
+    by_inference_type: Optional[
+        Literal[
+            "INFERENCE_PROFILE",
+            "ON_DEMAND",
+            "MODEL_GATEWAY",
+            "PROVISIONED",
+            "PROVISIONED_THROUGHPUT",
+        ]
+    ] = Query(None, description="Filter by inference type"),
+    by_customization_type: Optional[
+        Literal[
+            "REINFORCEMENT_FINE_TUNING",
+            "DISTILLATION",
+            "PREFERENCE_FINE_TUNING",
+            "CONTINUED_PRE_TRAINING",
+            "FINE_TUNING",
+        ]
+    ] = Query(None, description="Filter by customization type"),
     max_results: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of models to return (client-side limit)"),
     admin_user: User = Depends(require_admin),
 ):
@@ -146,26 +175,21 @@ async def list_bedrock_models(
             totalCount=len(model_summaries),
         )
 
-    except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-        error_message = e.response.get('Error', {}).get('Message', str(e))
-        logger.error("AWS Bedrock API error", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AWS Bedrock API error: {error_code} - {error_message}"
-        )
-    except BotoCoreError as e:
+    except HTTPException:
+        raise
+    except BotoCoreError:
+        # Connectivity / config error talking to AWS. Generic 502;
+        # full traceback is logged by the global handler chain.
         logger.error("Boto3 error calling Bedrock API", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error connecting to AWS Bedrock: {str(e)}"
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Upstream service error.",
         )
-    except Exception as e:
-        logger.error("Unexpected error listing Bedrock models", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
-        )
+    # ClientError is intentionally not caught here — the app-wide
+    # ``register_aws_client_error_handler`` maps ValidationException-class
+    # codes to a generic 400 and other ClientErrors to a generic 502
+    # without echoing the AWS message back. Catching here would re-surface
+    # the AWS message, the user input, and AWS-internal pattern detail.
 
 
 @router.get("/gemini/models", response_model=GeminiModelsResponse)

@@ -25,6 +25,8 @@ from .services.memory_service import (
     is_memory_available,
     get_memory_config_info,
     delete_memory,
+    get_memory_record_owner,
+    record_namespace_owner,
 )
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
@@ -483,6 +485,22 @@ async def delete_memory_endpoint(
         raise HTTPException(
             status_code=503,
             detail="AgentCore Memory is not available. Memory features require cloud mode with AGENTCORE_MEMORY_ID configured."
+        )
+
+    # Ownership check: the record's namespace encodes the owning user id
+    # (segment after ``/actors/``). Fetch the record and verify the
+    # caller owns it before issuing the delete. A non-owner — or a
+    # missing record — receives 404 (matching the ``GET /memory``
+    # surface's "your records only" contract) so non-owners can't
+    # enumerate record ids by probing.
+    record = await get_memory_record_owner(record_id)
+    if record is None or record_namespace_owner(record) != user_id:
+        logger.warning(
+            "DELETE /memory/{record_id}: ownership check failed; refusing",
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Memory record {record_id} not found",
         )
 
     try:
