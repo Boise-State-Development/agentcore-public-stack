@@ -73,6 +73,11 @@ jobs:
       CDK_COGNITO_LOGOUT_URLS: ${{ vars.CDK_COGNITO_LOGOUT_URLS }}
       CDK_COGNITO_SUPPORTED_IDPS: ${{ vars.CDK_COGNITO_SUPPORTED_IDPS }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
+      # Extra origins allowed to frame the artifacts iframe via CSP
+      # frame-ancestors (beyond the deployed SPA origin) — e.g.
+      # http://localhost:4200 for a local SPA pointed at this deployment.
+      # Empty on prod. Mirrors CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS below.
+      CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
       # MCP Apps sandbox-proxy origin (mcp-sandbox.{domain}). Without the
       # cert ARN the construct silently falls back to the CloudFront default
