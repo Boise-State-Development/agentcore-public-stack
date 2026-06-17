@@ -120,7 +120,15 @@ class TestAuthProviderService:
         mock_response.json.return_value = discovery_data
         mock_response.raise_for_status = MagicMock()
 
-        with patch("apis.shared.auth_providers.service.httpx.AsyncClient") as mock_client:
+        # The URL validator resolves DNS — fake the lookup so the test
+        # hostname can pass without an internet round-trip.
+        import socket
+        def _fake_getaddrinfo(host, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+        with patch(
+            "apis.shared.security.url_validator.socket.getaddrinfo", _fake_getaddrinfo
+        ), patch("apis.shared.auth_providers.service.httpx.AsyncClient") as mock_client:
             mock_client.return_value.__aenter__ = AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=mock_response)))
             mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
             result = await service.discover_endpoints("https://okta.example.com")
@@ -134,7 +142,13 @@ class TestAuthProviderService:
         mock_response.status_code = 404
         mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_response)
 
-        with patch("apis.shared.auth_providers.service.httpx.AsyncClient") as mock_client:
+        import socket
+        def _fake_getaddrinfo(host, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+        with patch(
+            "apis.shared.security.url_validator.socket.getaddrinfo", _fake_getaddrinfo
+        ), patch("apis.shared.auth_providers.service.httpx.AsyncClient") as mock_client:
             mock_client.return_value.__aenter__ = AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=mock_response)))
             mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
             with pytest.raises(HTTPException):

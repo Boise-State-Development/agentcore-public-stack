@@ -18,6 +18,18 @@ from .models import FileMetadata, UserFileQuota, FileStatus
 logger = logging.getLogger(__name__)
 
 
+class InvalidCursorError(ValueError):
+    """Raised when a pagination cursor cannot be safely used.
+
+    The cursor is base64-encoded JSON containing a DynamoDB
+    ``LastEvaluatedKey``; a cursor whose embedded ``PK`` doesn't match
+    the calling user's expected partition (or that fails to decode at
+    all) cannot be forwarded to DynamoDB without producing a
+    cross-partition mismatch — which historically surfaced as a 500.
+    Routes catch this and return a generic 400.
+    """
+
+
 class FileUploadRepository:
     """
     Repository for File Upload CRUD operations in DynamoDB.
@@ -193,9 +205,25 @@ class FileUploadRepository:
             if cursor:
                 import base64
                 import json
-                query_params["ExclusiveStartKey"] = json.loads(
-                    base64.b64decode(cursor).decode("utf-8")
-                )
+
+                expected_pk = f"USER#{user_id}"
+                try:
+                    decoded = json.loads(base64.b64decode(cursor).decode("utf-8"))
+                except (ValueError, TypeError, UnicodeDecodeError) as exc:
+                    logger.warning("Rejected pagination cursor: decode failed: %s", exc)
+                    raise InvalidCursorError() from exc
+
+                if not isinstance(decoded, dict) or decoded.get("PK") != expected_pk:
+                    # The cursor's partition key doesn't match the
+                    # caller — could be a legitimate stale cursor from
+                    # a different login, or a probe for cross-user data.
+                    # Either way, treat as invalid.
+                    logger.warning(
+                        "Rejected pagination cursor: PK does not match caller"
+                    )
+                    raise InvalidCursorError()
+
+                query_params["ExclusiveStartKey"] = decoded
 
             response = self._table.query(**query_params)
 

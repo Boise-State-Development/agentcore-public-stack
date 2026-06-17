@@ -36,6 +36,38 @@ _CLIENT_ERROR_CODES: frozenset[str] = frozenset(
 _GENERIC_BAD_REQUEST = "Invalid request parameters."
 _GENERIC_UPSTREAM_ERROR = "Upstream service error."
 _GENERIC_INTERNAL_ERROR = "Internal server error."
+_GENERIC_VALIDATION_ERROR = "Invalid request parameters."
+
+
+def register_validation_error_handler(app: Any) -> None:
+    """Install a FastAPI handler for ``RequestValidationError`` that
+    returns a generic body.
+
+    FastAPI's default 422 response includes the offending input value,
+    the field path, and (for regex/length validators) the pattern or
+    bound the value violated. Echoing user input back creates an XSS
+    reflection sink and leaks server-side validation rules. This
+    handler replaces the body with a generic
+    ``{"detail": "Invalid request parameters."}`` while preserving the
+    422 status; the offending input and structural reason are still
+    logged server-side at WARN for operator visibility.
+    """
+    from fastapi import Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+
+    async def _handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        logger.warning(
+            "Request validation error on %s %s: %s",
+            request.method,
+            request.url.path,
+            # exc.errors() carries the structural detail; safe to log,
+            # never echoed in the response.
+            exc.errors(),
+        )
+        return JSONResponse(status_code=422, content={"detail": _GENERIC_VALIDATION_ERROR})
+
+    app.add_exception_handler(RequestValidationError, _handler)
 
 
 def register_aws_client_error_handler(app: Any) -> None:

@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
     PresignRequest,
     PresignResponse,
@@ -267,14 +268,17 @@ async def list_files(
     """
     logger.info("User listing files")
 
-    response = await service.list_user_files(
-        user_id=user.user_id,
-        session_id=session_id,
-        limit=limit,
-        cursor=cursor,
-        sort_by=sort_by.value,
-        sort_order=sort_order.value,
-    )
+    try:
+        response = await service.list_user_files(
+            user_id=user.user_id,
+            session_id=session_id,
+            limit=limit,
+            cursor=cursor,
+            sort_by=sort_by.value,
+            sort_order=sort_order.value,
+        )
+    except InvalidCursorError:
+        raise HTTPException(status_code=400, detail="Invalid pagination cursor.")
     return response
 
 

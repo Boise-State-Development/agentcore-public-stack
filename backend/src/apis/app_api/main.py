@@ -111,8 +111,12 @@ app = FastAPI(
 # Centralized exception handlers: AWS ClientError responses are mapped to
 # generic 400/502 bodies (logged server-side) so AWS error messages, internal
 # parameter names, and reflected user input never leak into HTTP responses.
-from apis.shared.security import register_aws_client_error_handler
+from apis.shared.security import (
+    register_aws_client_error_handler,
+    register_validation_error_handler,
+)
 register_aws_client_error_handler(app)
+register_validation_error_handler(app)
 logger.info("Registered AWS ClientError handler")
 
 # Add CORS middleware - origins from CDK-provided CORS_ORIGINS env var

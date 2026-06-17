@@ -19,6 +19,7 @@ from apis.shared.security.ownership import (
 from apis.shared.security.error_handler import (
     register_aws_client_error_handler,
     register_safe_500_handler,
+    register_validation_error_handler,
 )
 from apis.shared.security.python_ast_policy import (
     PolicyError,
@@ -35,6 +36,7 @@ __all__ = [
     "register_ownership_handler",
     "register_aws_client_error_handler",
     "register_safe_500_handler",
+    "register_validation_error_handler",
     "PolicyError",
     "validate_diagram_code",
 ]

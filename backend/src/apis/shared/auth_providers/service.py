@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from botocore.exceptions import ClientError
+
+from apis.shared.security import UrlValidationError, validate_external_url
 from fastapi import HTTPException, status
 
 from .cognito_idp_service import (
@@ -55,6 +57,19 @@ class AuthProviderService:
         Raises:
             HTTPException: If discovery fails
         """
+        # Refuse anything the SSRF validator rejects: loopback,
+        # link-local (incl. cloud metadata), private, multicast,
+        # reserved, or schemes other than https. OIDC issuers are
+        # public HTTPS endpoints by spec; we're strict on purpose.
+        try:
+            validate_external_url(issuer_url, allow_schemes={"https"})
+        except UrlValidationError:
+            logger.warning("OIDC discovery refused by URL validator")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Issuer URL is not permitted.",
+            )
+
         discovery_url = issuer_url.rstrip("/") + "/.well-known/openid-configuration"
 
         try:
@@ -417,6 +432,13 @@ class AuthProviderService:
         """
         Test provider connectivity by verifying JWKS and token endpoints are reachable.
 
+        Each stored URL is run through the SSRF validator before any
+        outbound call. URLs that fail validation are reported as
+        unreachable with a generic error string and are not contacted —
+        the same protection applied at the discover endpoint, repeated
+        here as defense in depth so a bad URL persisted from elsewhere
+        cannot be turned into an outbound dispatch.
+
         Returns:
             Dict with test results
         """
@@ -435,11 +457,24 @@ class AuthProviderService:
             "errors": [],
         }
 
+        def _safe(url: Optional[str], schemes: set[str] = {"https"}) -> Optional[str]:
+            """Return the URL if it passes the SSRF validator, else None
+            (and append a generic error to the result map)."""
+            if not url:
+                return None
+            try:
+                validate_external_url(url, allow_schemes=schemes)
+                return url
+            except UrlValidationError:
+                results["errors"].append("Endpoint URL is not permitted.")
+                return None
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             # Test JWKS endpoint
-            if provider.jwks_uri:
+            jwks_uri = _safe(provider.jwks_uri)
+            if jwks_uri:
                 try:
-                    resp = await client.get(provider.jwks_uri)
+                    resp = await client.get(jwks_uri)
                     results["jwks_reachable"] = resp.status_code == 200
                     if resp.status_code != 200:
                         results["errors"].append(
@@ -449,21 +484,24 @@ class AuthProviderService:
                     results["errors"].append(f"JWKS endpoint error: {str(e)}")
 
             # Test OIDC discovery
-            discovery_url = provider.issuer_url.rstrip("/") + "/.well-known/openid-configuration"
-            try:
-                resp = await client.get(discovery_url)
-                results["discovery_reachable"] = resp.status_code == 200
-                if resp.status_code != 200:
-                    results["errors"].append(
-                        f"Discovery endpoint returned {resp.status_code}"
-                    )
-            except Exception as e:
-                results["errors"].append(f"Discovery endpoint error: {str(e)}")
+            issuer = _safe(provider.issuer_url)
+            if issuer:
+                discovery_url = issuer.rstrip("/") + "/.well-known/openid-configuration"
+                try:
+                    resp = await client.get(discovery_url)
+                    results["discovery_reachable"] = resp.status_code == 200
+                    if resp.status_code != 200:
+                        results["errors"].append(
+                            f"Discovery endpoint returned {resp.status_code}"
+                        )
+                except Exception as e:
+                    results["errors"].append(f"Discovery endpoint error: {str(e)}")
 
             # Test token endpoint (HEAD/OPTIONS only)
-            if provider.token_endpoint:
+            token_endpoint = _safe(provider.token_endpoint)
+            if token_endpoint:
                 try:
-                    resp = await client.options(provider.token_endpoint)
+                    resp = await client.options(token_endpoint)
                     results["token_endpoint_reachable"] = resp.status_code < 500
                 except Exception as e:
                     results["errors"].append(f"Token endpoint error: {str(e)}")

@@ -416,6 +416,73 @@ def get_memory_config_info() -> Dict[str, Any]:
         }
 
 
+async def get_memory_record_owner(
+    record_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Fetch a memory record's metadata for ownership checks.
+
+    Returns a dict with ``memoryRecordId`` and ``namespaces`` keys if the
+    record exists, else ``None``. The record's namespaces encode the
+    owning user id (the path segment after ``/actors/``); callers
+    compare that against the calling user before proceeding with
+    mutating operations like delete.
+
+    Returning a small dict (rather than the full AWS response) keeps
+    the contract narrow and easy to mock in tests.
+    """
+    import boto3
+
+    config = load_memory_config()
+    if not config.is_cloud_mode:
+        return None
+
+    try:
+        client = boto3.client("bedrock-agentcore", region_name=config.region)
+        response = client.get_memory_record(
+            memoryId=config.memory_id,
+            memoryRecordId=record_id,
+        )
+        record = response.get("memoryRecord", {})
+        if not record:
+            return None
+        return {
+            "memoryRecordId": record.get("memoryRecordId"),
+            "namespaces": list(record.get("namespaces") or []),
+        }
+    except client.exceptions.ResourceNotFoundException:  # type: ignore[union-attr]
+        return None
+    except Exception:
+        # Distinguish "not found" from "lookup failed" — the caller
+        # treats both as 404 (better to fail closed than to allow a
+        # delete to land based on a missed read), but we log the
+        # underlying cause for operator visibility.
+        logger.warning("Memory record lookup failed", exc_info=True)
+        return None
+
+
+def record_namespace_owner(record: Dict[str, Any]) -> Optional[str]:
+    """Return the owning user id encoded in a record's namespace, if any.
+
+    Memory namespaces follow ``/strategies/{strategy_id}/actors/{user_id}``;
+    the owning user is the path segment after the ``/actors/`` marker.
+    A record with no namespaces — or with namespaces that don't follow
+    the expected shape — has no resolvable owner and is treated as
+    unowned.
+    """
+    namespaces = record.get("namespaces") or []
+    for ns in namespaces:
+        if not isinstance(ns, str):
+            continue
+        marker = "/actors/"
+        idx = ns.find(marker)
+        if idx == -1:
+            continue
+        owner = ns[idx + len(marker) :].split("/", 1)[0]
+        if owner:
+            return owner
+    return None
+
+
 async def delete_memory(
     user_id: str,
     record_id: str,
