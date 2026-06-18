@@ -258,16 +258,34 @@ class SkillAgent(ChatAgent):
             get_external_mcp_integration,
         )
         from agents.main_agent.integrations.mcp_tool_folding import (
+            reset_folded_tool_names,
             set_folded_tool_names,
         )
         from agents.main_agent.skills.mcp_binding import resolve_mcp_bindings
 
         external_integration = get_external_mcp_integration()
 
+        # Clients are process-global and reused across agent builds; a prior
+        # build's fold persists on them (set_folded_tool_names only adds).
+        # resolve_mcp_bindings enumerates an external server through that same
+        # fold-filtered list_tools_sync, so a stale fold makes this re-bind see
+        # zero tools (the bound tool "works once, then disappears"). Reset each
+        # client this build will resolve so enumeration sees the full server;
+        # the fold is recomputed and re-applied from the bindings just below.
+        gateway_client = self.gateway_integration.client
+        if gateway_client is not None:
+            reset_folded_tool_names(gateway_client)
+        seen_clients: set = set()
+        for tid in external_ids:
+            client = external_integration.get_client(tid, self.user_id)
+            if client is not None and id(client) not in seen_clients:
+                seen_clients.add(id(client))
+                reset_folded_tool_names(client)
+
         bindings = resolve_mcp_bindings(
             gateway_ids=gateway_ids,
             external_ids=external_ids,
-            gateway_client=self.gateway_integration.client,
+            gateway_client=gateway_client,
             expand_gateway=self._expand_gateway_tool_ids,
             external_client_lookup=lambda tid: external_integration.get_client(
                 tid, self.user_id
