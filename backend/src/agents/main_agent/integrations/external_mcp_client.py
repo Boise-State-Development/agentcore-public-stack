@@ -26,7 +26,7 @@ from apis.shared.tools.models import (
     MCPTransport,
     ToolDefinition,
 )
-from apis.shared.tools.scoped_ids import collect_tool_name_filters
+from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
 from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
@@ -446,11 +446,36 @@ class ExternalMCPIntegration:
         return clients
 
     def get_client(self, tool_id: str, user_id: Optional[str] = None) -> Optional[MCPClient]:
-        if user_id:
-            user_key = f"{user_id}:{tool_id}"
-            if user_key in self.clients:
-                return self.clients[user_key]
-        return self.clients.get(tool_id)
+        """Return the live client for a (possibly-scoped) catalog tool id.
+
+        Clients are cached under the *base* catalog id — optionally
+        ``"{user_id}:"``-prefixed (user-auth tools) and optionally
+        ``"|allow:<names>"``-suffixed when only a subset of the server's tools
+        is selected (per-tool enablement, e.g. a skill binding a subset of a
+        Canvas server's tools). A scoped lookup id (``base::tool``) therefore
+        never matches a stored key directly, so collapse it to its base and
+        match that, tolerating the ``|allow:`` suffix:
+        ``collect_tool_name_filters`` folds every scoped id for one server into
+        a single client per agent build, so the base uniquely identifies it.
+
+        Without this, a skill that bound a *subset* of an external MCP server
+        resolved to no client at fold time → the skill folded zero tools and
+        the model reported the server "not connected" (the OAuth consent gate
+        never fired because no FoldedMCPTool existed to trigger it).
+        """
+        base = base_tool_id(tool_id)
+        # Exact keys win — a whole-server binding has no "|allow:" suffix.
+        exact_keys = [f"{user_id}:{base}", base] if user_id else [base]
+        for key in exact_keys:
+            if key in self.clients:
+                return self.clients[key]
+        # Subset-scoped fallback: cache key is "<base>|allow:<names>".
+        for key in exact_keys:
+            prefix = f"{key}|allow:"
+            for cache_key, client in self.clients.items():
+                if cache_key.startswith(prefix):
+                    return client
+        return None
 
     def add_to_tool_list(self, tools: List[Any]) -> List[Any]:
         for client in self.clients.values():

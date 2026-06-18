@@ -376,3 +376,73 @@ class TestLoadExternalToolsScoped:
         assert first == [client_a]
         assert second == [client_b]
         assert len(integration.clients) == 2
+
+
+class TestGetClientResolvesScopedBindings:
+    """`get_client` must map a (possibly-scoped) catalog id back to the client
+    `load_external_tools` cached, including the per-tool `|allow:` cache-key
+    suffix a subset binding produces. Regression: a skill binding a *subset*
+    of an external MCP server (scoped ids like `canvas::courses`) resolved to
+    no client at fold time, so the skill folded zero tools and the model
+    reported the server "not connected"."""
+
+    @staticmethod
+    def _oauth_tool(tool_id="canvas"):
+        return SimpleNamespace(
+            tool_id=tool_id,
+            protocol="mcp_external",
+            mcp_config=SimpleNamespace(
+                server_url="https://example.com/mcp",
+                approval_required_names=lambda: set(),
+            ),
+            forward_auth_token=False,
+            requires_oauth_provider="canvas-oauth",
+            updated_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolves_scoped_oauth_binding_round_trip(self):
+        integration = ExternalMCPIntegration()
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            await integration.load_external_tools(
+                ["canvas::courses", "canvas::submissions"], user_id="alice"
+            )
+
+        # Cached under "alice:canvas|allow:courses,submissions"; the skill folds
+        # by the scoped id (or the base) — every form must find that client.
+        assert integration.get_client("canvas::courses", "alice") is client
+        assert integration.get_client("canvas::submissions", "alice") is client
+        assert integration.get_client("canvas", "alice") is client
+
+    @pytest.mark.asyncio
+    async def test_whole_server_binding_still_resolves(self):
+        integration = ExternalMCPIntegration()
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            await integration.load_external_tools(["canvas"], user_id="alice")
+
+        # Exact whole-server key resolves, and a scoped lookup against it does too.
+        assert integration.get_client("canvas", "alice") is client
+        assert integration.get_client("canvas::courses", "alice") is client
+
+    def test_missing_returns_none(self):
+        integration = ExternalMCPIntegration()
+        assert integration.get_client("canvas::courses", "alice") is None
+        assert integration.get_client("canvas") is None

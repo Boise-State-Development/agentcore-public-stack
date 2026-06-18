@@ -25,6 +25,7 @@ from agents.main_agent.tools import (
 )
 from agents.main_agent.multimodal import PromptBuilder
 from agents.main_agent.streaming import StreamCoordinator
+from apis.shared.tools.scoped_ids import base_tool_id
 
 logger = logging.getLogger(__name__)
 
@@ -224,10 +225,22 @@ class BaseAgent(ABC):
             external_tool_ids = []
 
             async def check_tools():
+                # A scoped id (`base::tool`) selects one tool of an MCP server;
+                # the catalog only knows the base id, and the tool filter
+                # classifies by the base too (`base in _external_mcp_tools`), so
+                # look up and register the BASE id. Registering the raw scoped
+                # id would miss the catalog entirely (`get_tool` is an exact PK
+                # lookup) and never match the base-keyed classifier — leaving a
+                # per-tool external binding unclassified and never loaded.
+                seen: set[str] = set()
                 for tool_id in self.enabled_tools:
-                    tool = await repository.get_tool(tool_id)
+                    base = base_tool_id(tool_id)
+                    if base in seen:
+                        continue
+                    seen.add(base)
+                    tool = await repository.get_tool(base)
                     if tool and tool.protocol == "mcp_external":
-                        external_tool_ids.append(tool_id)
+                        external_tool_ids.append(base)
                 return external_tool_ids
 
             try:
