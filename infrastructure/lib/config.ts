@@ -23,7 +23,17 @@ export interface AppConfig {
   domainName?: string; // Primary domain name for the application (used for frontend, CORS, etc.)
   infrastructureHostedZoneDomain?: string;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
-  certificateArn?: string; // ACM certificate ARN for HTTPS on ALB
+  certificateArn?: string; // ACM certificate ARN for HTTPS on the ALB (MUST be in the stack's own region)
+  // Shared ACM certificate ARN for ALL CloudFront origins (SPA / artifacts /
+  // mcp-sandbox). MUST be in us-east-1 (CloudFront requirement) and SHOULD be
+  // a wildcard that covers both the apex/SPA domain and its subdomain origins,
+  // i.e. SANs `{domainName}` AND `*.{domainName}`. When set, each CloudFront
+  // section falls back to this value if its own section-specific ARN is unset.
+  // A section-specific ARN (frontend/artifacts/mcpSandbox.certificateArn) always
+  // wins, so an operator can override a single origin while sharing the rest.
+  // The ALB cert (`certificateArn` above) is intentionally NOT covered here —
+  // it lives in the stack's deploy region, not us-east-1.
+  cloudfrontCertificateArn?: string;
   cognito: CognitoConfig;
   frontend: FrontendConfig;
   appApi: AppApiConfig;
@@ -187,6 +197,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
     certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
+    cloudfrontCertificateArn: process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN || scope.node.tryGetContext('cloudfrontCertificateArn'),
     cognito: {
       domainPrefix: process.env.CDK_COGNITO_DOMAIN_PREFIX
         || scope.node.tryGetContext('cognito')?.domainPrefix
@@ -250,6 +261,24 @@ export function loadConfig(scope: cdk.App): AppConfig {
       ...(scope.node.tryGetContext('tags') || {}),
     },
   };
+
+  // Resolve the shared CloudFront certificate fallback. A single wildcard
+  // cert in us-east-1 (SANs `{domainName}` + `*.{domainName}`) can terminate
+  // TLS for all three CloudFront origins — the SPA (`{domainName}`), the
+  // artifacts iframe (`artifacts.{domainName}`), and the MCP sandbox proxy
+  // (`mcp-sandbox.{domainName}`). Operators that supply one
+  // CDK_CLOUDFRONT_CERTIFICATE_ARN therefore satisfy every origin at once,
+  // instead of having to mint and wire three separate ARNs (the first-deploy
+  // footgun this collapses). A section-specific ARN still wins, so a single
+  // origin can be overridden while the rest share the wildcard.
+  if (config.cloudfrontCertificateArn) {
+    config.frontend.certificateArn =
+      config.frontend.certificateArn || config.cloudfrontCertificateArn;
+    config.artifacts.certificateArn =
+      config.artifacts.certificateArn || config.cloudfrontCertificateArn;
+    config.mcpSandbox.certificateArn =
+      config.mcpSandbox.certificateArn || config.cloudfrontCertificateArn;
+  }
 
   // Log loaded configuration for debugging
   console.log('📋 Loaded CDK Configuration:');

@@ -66,6 +66,11 @@ jobs:
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
+      # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
+      # Each CloudFront origin (SPA / artifacts / mcp-sandbox) falls back to this
+      # when its section-specific cert var is unset, so one wildcard satisfies all
+      # three. A section-specific var still overrides per origin.
+      CDK_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CDK_CLOUDFRONT_CERTIFICATE_ARN }}
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}

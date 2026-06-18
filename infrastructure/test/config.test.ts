@@ -695,4 +695,92 @@ describe('RAG Ingestion Configuration', () => {
       expect(config2.ragIngestion.lambdaMemorySize).toBe(originalMemory);
     });
   });
+
+  // ============================================================
+  // CloudFront Certificate Resolution Tests
+  //
+  // A single shared CDK_CLOUDFRONT_CERTIFICATE_ARN must satisfy all
+  // three CloudFront origins (SPA / artifacts / mcp-sandbox), while a
+  // section-specific ARN still overrides per origin. This is the
+  // first-deploy footgun fix: one wildcard cert instead of three.
+  // ============================================================
+
+  describe('CloudFront Certificate Resolution', () => {
+    const SHARED = 'arn:aws:acm:us-east-1:123456789012:certificate/shared-wildcard';
+    const ARTIFACTS_SPECIFIC = 'arn:aws:acm:us-east-1:123456789012:certificate/artifacts-only';
+    const FRONTEND_SPECIFIC = 'arn:aws:acm:us-east-1:123456789012:certificate/frontend-only';
+
+    const CF_CERT_ENV_KEYS = [
+      'CDK_CLOUDFRONT_CERTIFICATE_ARN',
+      'CDK_FRONTEND_CERTIFICATE_ARN',
+      'CDK_ARTIFACTS_CERTIFICATE_ARN',
+      'CDK_MCP_SANDBOX_CERTIFICATE_ARN',
+    ];
+
+    function clearCfCertEnv(): void {
+      for (const key of CF_CERT_ENV_KEYS) {
+        delete process.env[key];
+      }
+    }
+
+    beforeEach(clearCfCertEnv);
+    afterEach(clearCfCertEnv);
+
+    test('shared cert flows to all three CloudFront origins when none are set individually', () => {
+      process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN = SHARED;
+
+      const config = loadConfig(app);
+
+      expect(config.cloudfrontCertificateArn).toBe(SHARED);
+      expect(config.frontend.certificateArn).toBe(SHARED);
+      expect(config.artifacts.certificateArn).toBe(SHARED);
+      expect(config.mcpSandbox.certificateArn).toBe(SHARED);
+    });
+
+    test('section-specific cert overrides the shared cert per origin', () => {
+      process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN = SHARED;
+      process.env.CDK_ARTIFACTS_CERTIFICATE_ARN = ARTIFACTS_SPECIFIC;
+      process.env.CDK_FRONTEND_CERTIFICATE_ARN = FRONTEND_SPECIFIC;
+
+      const config = loadConfig(app);
+
+      // Overridden origins keep their own cert...
+      expect(config.artifacts.certificateArn).toBe(ARTIFACTS_SPECIFIC);
+      expect(config.frontend.certificateArn).toBe(FRONTEND_SPECIFIC);
+      // ...while the un-overridden origin falls back to the shared cert.
+      expect(config.mcpSandbox.certificateArn).toBe(SHARED);
+    });
+
+    test('the shared cert resolves from CDK context when the env var is unset', () => {
+      app.node.setContext('cloudfrontCertificateArn', SHARED);
+
+      const config = loadConfig(app);
+
+      expect(config.frontend.certificateArn).toBe(SHARED);
+      expect(config.artifacts.certificateArn).toBe(SHARED);
+      expect(config.mcpSandbox.certificateArn).toBe(SHARED);
+    });
+
+    test('the env var takes precedence over context for the shared cert', () => {
+      app.node.setContext('cloudfrontCertificateArn', 'arn:aws:acm:us-east-1:123456789012:certificate/from-context');
+      process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN = SHARED;
+
+      const config = loadConfig(app);
+
+      expect(config.mcpSandbox.certificateArn).toBe(SHARED);
+    });
+
+    test('no cert anywhere leaves every CloudFront origin undefined (guards live in the constructs, not loadConfig)', () => {
+      const config = loadConfig(app);
+
+      expect(config.cloudfrontCertificateArn).toBeUndefined();
+      expect(config.frontend.certificateArn).toBeUndefined();
+      expect(config.artifacts.certificateArn).toBeUndefined();
+      expect(config.mcpSandbox.certificateArn).toBeUndefined();
+      // loadConfig itself must not throw on a domain-without-cert config —
+      // that fail-loud behaviour is the constructs' responsibility, exercised
+      // only on full synth (see *-cert-guard.test.ts).
+      expect(() => loadConfig(app)).not.toThrow();
+    });
+  });
 });

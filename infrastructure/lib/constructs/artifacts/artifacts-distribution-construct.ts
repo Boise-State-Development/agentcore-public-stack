@@ -19,8 +19,8 @@ export interface ArtifactsDistributionConstructProps {
 }
 
 /**
- * ArtifactsDistributionConstruct — CloudFront on
- * `artifacts.{domainName}` + Route53 ALIAS A record.
+ * ArtifactsDistributionConstruct — CloudFront for the artifact iframe
+ * origin, with a Route53 ALIAS A record on `artifacts.{domainName}`.
  *
  * Fronts the artifact render Lambda with TLS termination and a strict
  * CSP. `connect-src 'none'` is the critical line — artifact JS cannot
@@ -35,9 +35,17 @@ export interface ArtifactsDistributionConstructProps {
  * Cost-optimised price class (PRICE_CLASS_100) — artifacts aren't
  * latency-critical and most of the audience is regional.
  *
+ * Custom domain + cert + Route53 are attached only when BOTH a domain
+ * and an ACM cert are configured (config.ts enforces both — and the
+ * constructor guards the domain-without-cert case). Keeping it
+ * conditional lets the construct synthesize on the CloudFront default
+ * domain for unit/synth tests and domain-less local stacks, mirroring
+ * McpSandboxDistributionConstruct.
+ *
  * SSM publication: `/{prefix}/artifacts/origin` →
- * `https://artifacts.{domainName}` (consumed by inference-api,
- * app-api, frontend).
+ * `https://artifacts.{domainName}` (or the CloudFront default domain
+ * fallback when no custom domain is configured; consumed by
+ * inference-api, app-api, frontend).
  */
 export class ArtifactsDistributionConstruct extends Construct {
   public readonly distribution: cloudfront.Distribution;
@@ -59,19 +67,39 @@ export class ArtifactsDistributionConstruct extends Construct {
 
     const { config, renderFunctionUrl, frameAncestors } = props;
 
-    // Validation in config.ts has already enforced these for enabled stacks.
-    const domainName = config.domainName!;
-    const hostedZoneDomain = config.infrastructureHostedZoneDomain!;
-    const certificateArn = config.artifacts.certificateArn!;
-    const artifactsSubdomain = `artifacts.${domainName}`;
+    // Fail loudly on the dangerous middle case: a real domain is configured
+    // but no ACM cert is available for the artifacts origin. Without this the
+    // custom-domain branch below would hand `undefined` to `fromCertificateArn`,
+    // producing an opaque CDK error (`Cannot read properties of undefined
+    // (reading 'startsWith')`) instead of an actionable one. Mirrors the
+    // McpSandboxDistributionConstruct guard. The cert is resolved in config.ts,
+    // where each CloudFront section falls back to the shared
+    // CDK_CLOUDFRONT_CERTIFICATE_ARN when its own ARN is unset — so this only
+    // trips when neither the section-specific nor the shared cert was supplied
+    // for a domained deploy.
+    const domainName = config.domainName;
+    const certificateArn = config.artifacts.certificateArn;
+    if (domainName && !certificateArn) {
+      const artifactsSubdomainForError = `artifacts.${domainName}`;
+      throw new Error(
+        `Artifacts iframe origin requires an ACM certificate when a domain is configured. ` +
+          `domainName="${domainName}" is set but config.artifacts.certificateArn is empty. ` +
+          `Set CDK_ARTIFACTS_CERTIFICATE_ARN (or the shared CDK_CLOUDFRONT_CERTIFICATE_ARN) ` +
+          `to a us-east-1 cert covering ${artifactsSubdomainForError}. Without it the ` +
+          `artifact iframe origin has no valid TLS cert and the SPA cannot frame artifacts.`,
+      );
+    }
 
-    const certificate = acm.Certificate.fromCertificateArn(
-      this,
-      'ArtifactsCertificate',
-      certificateArn,
-    );
-
-    // Strict CSP for the artifact origin.
+    // Custom domain + cert + Route53 are attached only when BOTH a domain and
+    // a cert are configured (the guard above rejects the domain-without-cert
+    // case). Keeping it conditional lets the construct synthesize on the
+    // CloudFront default domain for unit/synth tests and domain-less local
+    // stacks — matching McpSandboxDistributionConstruct, instead of crashing
+    // on `fromCertificateArn(undefined)`.
+    const useCustomDomain = Boolean(domainName && certificateArn);
+    const artifactsSubdomain = domainName
+      ? `artifacts.${domainName}`
+      : undefined;
     const cspDirectives = [
       `default-src 'none'`,
       `script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com`,
@@ -116,8 +144,6 @@ export class ArtifactsDistributionConstruct extends Construct {
       'ArtifactsDistribution',
       {
         comment: getResourceName(config, 'artifacts-cdn'),
-        domainNames: [artifactsSubdomain],
-        certificate,
         minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
         defaultBehavior: {
           origin: origins.FunctionUrlOrigin.withOriginAccessControl(
@@ -132,24 +158,38 @@ export class ArtifactsDistributionConstruct extends Construct {
           compress: true,
         },
         priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+        ...(useCustomDomain
+          ? {
+              domainNames: [artifactsSubdomain!],
+              certificate: acm.Certificate.fromCertificateArn(
+                this,
+                'ArtifactsCertificate',
+                certificateArn!,
+              ),
+            }
+          : {}),
       },
     );
 
-    const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-      domainName: hostedZoneDomain,
-    });
+    if (useCustomDomain) {
+      const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
+        domainName: config.infrastructureHostedZoneDomain!,
+      });
 
-    new route53.ARecord(this, 'ArtifactsAliasRecord', {
-      zone: hostedZone,
-      recordName: artifactsSubdomain,
-      target: route53.RecordTarget.fromAlias(
-        new route53Targets.CloudFrontTarget(this.distribution),
-      ),
-      comment:
-        'Artifact iframe origin — proxies to CloudFront → render Lambda',
-    });
+      new route53.ARecord(this, 'ArtifactsAliasRecord', {
+        zone: hostedZone,
+        recordName: artifactsSubdomain!,
+        target: route53.RecordTarget.fromAlias(
+          new route53Targets.CloudFrontTarget(this.distribution),
+        ),
+        comment:
+          'Artifact iframe origin — proxies to CloudFront → render Lambda',
+      });
+    }
 
-    this.originUrl = `https://${artifactsSubdomain}`;
+    this.originUrl = useCustomDomain
+      ? `https://${artifactsSubdomain}`
+      : `https://${this.distribution.distributionDomainName}`;
 
   }
 }

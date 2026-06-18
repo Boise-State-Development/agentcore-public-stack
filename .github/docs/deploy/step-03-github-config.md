@@ -67,8 +67,8 @@ Switch to the **Variables** tab and add these values. All are required.
 | `CDK_HOSTED_ZONE_DOMAIN` | `example.com` | Route 53 hosted zone domain (from Step 2b) |
 | `CDK_ALB_SUBDOMAIN` | `api` | Subdomain for the API load balancer |
 | `CDK_DOMAIN_NAME` | `app.example.com` | Full domain for the frontend |
-| `CDK_CERTIFICATE_ARN` | `arn:aws:acm:us-west-2:...` | ALB certificate ARN (from Step 2c) |
-| `CDK_FRONTEND_CERTIFICATE_ARN` | `arn:aws:acm:us-east-1:...` | CloudFront certificate ARN (from Step 2c) |
+| `CDK_CERTIFICATE_ARN` | `arn:aws:acm:us-west-2:...` | ALB certificate ARN (from Step 2c). **Your deployment region.** |
+| `CDK_CLOUDFRONT_CERTIFICATE_ARN` | `arn:aws:acm:us-east-1:...` | Shared CloudFront certificate ARN (from Step 2c). **Must be in `us-east-1`** and cover `{CDK_DOMAIN_NAME}` + `*.{CDK_DOMAIN_NAME}`. Serves the SPA, artifacts, and MCP-sandbox origins. Required for a domained deploy — a missing cert fails at `cdk synth`. |
 
 <details>
 <summary>How do I find my AWS account ID?</summary>
@@ -97,12 +97,15 @@ This prefix is prepended to all AWS resource names to avoid conflicts. Use somet
 
 ### Feature & Edge Configuration
 
-Artifacts, the MCP Apps sandbox, and SageMaker fine-tuning are **always provisioned** as part of `PlatformStack` — there are no `CDK_*_ENABLED` flags. When `CDK_DOMAIN_NAME` is set, the artifacts and MCP-sandbox CloudFront origins each need their own `us-east-1` certificate ARN below. **A domained deploy that omits either cert ARN fails at `cdk synth`** — it aborts before shipping an origin with no Route 53 record, rather than silently degrading to the CloudFront default domain.
+Artifacts, the MCP Apps sandbox, and SageMaker fine-tuning are **always provisioned** as part of `PlatformStack` — there are no `CDK_*_ENABLED` flags. When `CDK_DOMAIN_NAME` is set, all three CloudFront origins (SPA, artifacts, MCP-sandbox) need a `us-east-1` certificate. The simplest correct setup is the single shared **`CDK_CLOUDFRONT_CERTIFICATE_ARN`** in the required table above — every origin falls back to it. **A domained deploy with no effective cert for any origin fails at `cdk synth`** (it aborts before shipping an origin with no Route 53 record, rather than silently degrading to the CloudFront default domain).
+
+The per-origin cert vars below are **optional overrides** — set one only if you deliberately want that origin to use a *different* certificate than the shared one. If `CDK_CLOUDFRONT_CERTIFICATE_ARN` is set, you can leave all three blank.
 
 | Variable Name | Default | Description |
 |---------------|---------|-------------|
-| `CDK_ARTIFACTS_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `artifacts.{CDK_DOMAIN_NAME}`. **Must be in `us-east-1`** (CloudFront requirement). Reuse `CDK_FRONTEND_CERTIFICATE_ARN` **only if `CDK_DOMAIN_NAME` is your apex** (a `*.example.com` cert covers `artifacts.example.com`). If `CDK_DOMAIN_NAME` is itself a subdomain (e.g. `alpha.example.com`), wildcards are one label deep so `*.example.com` does **not** cover `artifacts.alpha.example.com` — issue a dedicated `us-east-1` cert for `*.alpha.example.com`. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
-| `CDK_MCP_SANDBOX_CERTIFICATE_ARN` | — | ACM certificate ARN that covers `mcp-sandbox.{CDK_DOMAIN_NAME}` — the cross-origin shell the SPA frames MCP Apps in. **Must be in `us-east-1`.** Same wildcard-depth rule as artifacts; because a single `*.{CDK_DOMAIN_NAME}` wildcard covers both `artifacts.` and `mcp-sandbox.`, you can **reuse the same cert ARN** as `CDK_ARTIFACTS_CERTIFICATE_ARN`. Without it the sandbox would deploy on the CloudFront default domain with no Route 53 ALIAS and every MCP App would fail to load with a `chrome-error` postMessage error — so a domained deploy now fails at synth instead. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
+| `CDK_FRONTEND_CERTIFICATE_ARN` | falls back to `CDK_CLOUDFRONT_CERTIFICATE_ARN` | Override cert for the SPA origin (`{CDK_DOMAIN_NAME}`). **Must be in `us-east-1`.** |
+| `CDK_ARTIFACTS_CERTIFICATE_ARN` | falls back to `CDK_CLOUDFRONT_CERTIFICATE_ARN` | Override cert for the artifacts origin (`artifacts.{CDK_DOMAIN_NAME}`). **Must be in `us-east-1`.** Same wildcard-depth rule as the shared cert — see [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
+| `CDK_MCP_SANDBOX_CERTIFICATE_ARN` | falls back to `CDK_CLOUDFRONT_CERTIFICATE_ARN` | Override cert for the MCP Apps sandbox origin (`mcp-sandbox.{CDK_DOMAIN_NAME}`) — the cross-origin shell the SPA frames MCP Apps in. **Must be in `us-east-1`.** Without an effective cert (neither this nor the shared var) a domained deploy fails at synth, because otherwise the sandbox would land on the CloudFront default domain with no Route 53 ALIAS and every MCP App would fail to load with a `chrome-error` postMessage error. See [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates). |
 | `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed artifact iframes via CSP `frame-ancestors` — applied to both the CloudFront response-headers policy and the render Lambda. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production**: every listed origin can frame your users' artifacts (still render-token gated, but a real loosening on a shared environment). |
 | `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` | — | Comma-separated extra origins (beyond `https://{CDK_DOMAIN_NAME}`) allowed to embed the MCP Apps sandbox proxy via CSP `frame-ancestors`. Set to `http://localhost:4200` to point a local SPA at this deployment. **Leave unset in production.** |
 | `CDK_FINE_TUNING_CORS_ORIGINS` | — | Comma-separated extra CORS origins for the SageMaker fine-tuning data bucket, beyond `https://{CDK_DOMAIN_NAME}`. Optional — fine-tuning itself is always provisioned. |

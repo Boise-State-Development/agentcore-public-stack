@@ -71,6 +71,25 @@
 </details>
 
 <details>
+<summary>Platform deploy fails at synth: "requires an ACM certificate when a domain is configured"</summary>
+
+**Symptom:** `cdk synth`/`deploy` aborts with an error like *"MCP sandbox proxy requires an ACM certificate when a domain is configured"* or *"Artifacts iframe origin requires an ACM certificate when a domain is configured"*.
+
+**Cause:** `CDK_DOMAIN_NAME` is set, but no `us-east-1` CloudFront certificate is available for one of the edge origins (SPA / artifacts / mcp-sandbox). This is a deliberate guard — without a cert the origin would deploy on the CloudFront default domain with no Route 53 ALIAS, so the SPA would frame a host that doesn't resolve and MCP Apps / artifacts would silently fail to load.
+
+**Fix:**
+1. Issue **one** `us-east-1` ACM certificate whose SANs cover both `{CDK_DOMAIN_NAME}` and `*.{CDK_DOMAIN_NAME}` (see [Step 2c](./step-02-aws-setup.md#2c-create-acm-certificates)). Mind the wildcard depth: if `CDK_DOMAIN_NAME` is itself a subdomain (e.g. `ai.example.com`), a `*.example.com` cert does **not** cover `mcp-sandbox.ai.example.com` — you need `*.ai.example.com`.
+2. Set the GitHub **Variable** `CDK_CLOUDFRONT_CERTIFICATE_ARN` to that ARN. It covers the SPA, artifacts, and mcp-sandbox origins at once — you do **not** need to set the per-origin `CDK_FRONTEND_/ARTIFACTS_/MCP_SANDBOX_CERTIFICATE_ARN` vars unless you want a different cert per origin.
+3. Verify the SANs before re-running:
+   ```bash
+   aws acm describe-certificate --region us-east-1 --certificate-arn <arn> \
+     --query 'Certificate.SubjectAlternativeNames'
+   ```
+4. Re-run the platform workflow.
+
+</details>
+
+<details>
 <summary>Infrastructure deploy fails with "resource already exists"</summary>
 
 **Symptom:** CDK deployment fails because a resource name conflicts.
