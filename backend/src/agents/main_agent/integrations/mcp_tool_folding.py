@@ -55,6 +55,30 @@ def set_folded_tool_names(client: Any, names: Iterable[str]) -> None:
             logger.debug("could not reset _loaded_tools on %r", client, exc_info=True)
 
 
+def reset_folded_tool_names(client: Any) -> None:
+    """Clear any fold set on ``client`` (and its cached tool list).
+
+    The fold set is *per-agent-build* state, but clients are process-global and
+    reused across builds (the external / gateway integrations cache them), and
+    :func:`set_folded_tool_names` only ever *adds*. Each build must therefore
+    start from a clean fold and recompute it from its own skill bindings —
+    otherwise a prior build's fold persists and poisons this build's
+    enumeration: ``resolve_mcp_bindings`` lists an external server through the
+    same fold-filtered ``list_tools_sync``, so a stale fold makes a re-bind see
+    zero tools (the bound tool "works once, then disappears" on the next turn).
+
+    Call this on every client a build is about to (re)bind, *before* resolving,
+    then let the build re-apply the fold via :func:`set_folded_tool_names`.
+    """
+    if getattr(client, _FOLD_ATTR, None):
+        setattr(client, _FOLD_ATTR, set())
+    if getattr(client, "_loaded_tools", None) is not None:
+        try:
+            client._loaded_tools = None
+        except Exception:  # pragma: no cover - defensive; attr is a plain field
+            logger.debug("could not reset _loaded_tools on %r", client, exc_info=True)
+
+
 def folded_tool_names(client: Any) -> set:
     """Return the (copy of the) fold set on ``client``, or an empty set."""
     existing = getattr(client, _FOLD_ATTR, None)

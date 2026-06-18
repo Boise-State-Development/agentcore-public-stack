@@ -186,3 +186,97 @@ class TestToolUseApprovalLookupWiring:
         assert target.tool_name == "gmail_send"
         assert target.tool_input == {"to": "hr@example.com"}
         assert lookup({"name": "some_other_tool", "input": {}}) is None
+
+
+class _FoldAwareClient:
+    """Stand-in external MCP client that folds like the real ones.
+
+    ``list_tools_sync`` re-derives the full server list every call and applies
+    ``drop_folded_tools`` against the persisted fold set — exactly the seam
+    that poisons a re-bind when the fold from a prior build is still present.
+    """
+
+    def __init__(self, names):
+        self._names = list(names)
+        self._loaded_tools = None
+
+    def list_tools_sync(self):
+        from agents.main_agent.integrations.mcp_tool_folding import (
+            drop_folded_tools,
+        )
+
+        tools = [
+            SimpleNamespace(
+                tool_name=n,
+                tool_spec={"name": n},
+                mcp_tool=SimpleNamespace(name=n),
+            )
+            for n in self._names
+        ]
+        return drop_folded_tools(self, tools)
+
+
+class TestBindMcpToolsRebindsAcrossBuilds:
+    """A skill-bound external server must stay foldable on EVERY agent build,
+    not just the first. Clients are process-global and reused; the fold set
+    persists on them and accumulates, and resolve enumerates through the same
+    fold-filtered list_tools_sync — so without a per-build reset the second
+    build sees zero tools (the reported "works once, then disappears"). """
+
+    @staticmethod
+    def _build_once(client):
+        from agents.main_agent.tools.tool_filter import ToolFilter
+        from agents.main_agent.skills.skill_registry import SkillRegistry
+
+        registry = SkillRegistry()
+        registry.load_records(
+            [
+                SimpleNamespace(
+                    skill_id="canvas_check",
+                    description="",
+                    instructions="",
+                    compose=[],
+                    bound_tool_ids=["canvas::a"],
+                    resources=[],
+                )
+            ]
+        )
+
+        agent = object.__new__(skill_agent.SkillAgent)
+        agent._registry = registry
+        agent._db_mode = True
+        agent.tool_registry = SimpleNamespace(has_tool=lambda _t: False)
+        tool_filter = ToolFilter(SimpleNamespace(has_tool=lambda _b: False))
+        tool_filter.set_external_mcp_tools(["canvas"])
+        agent.tool_filter = tool_filter
+        agent.gateway_integration = SimpleNamespace(client=None)
+        agent._expand_gateway_tool_ids = lambda _ids: []
+        agent.user_id = "u1"
+
+        integration = SimpleNamespace(get_client=lambda _tid, _uid=None: client)
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=integration,
+        ):
+            agent._bind_mcp_tools()
+        return registry
+
+    def test_second_build_still_resolves_and_folds(self):
+        from agents.main_agent.integrations.mcp_tool_folding import (
+            folded_tool_names,
+        )
+
+        client = _FoldAwareClient(["a", "b"])  # shared across both builds
+
+        reg1 = self._build_once(client)
+        assert reg1.get_tools("canvas_check"), "first build should bind tools"
+        assert folded_tool_names(client) == {"a", "b"}, "first build folds them"
+
+        # Second build: a fresh registry (as in production) but the SAME cached
+        # client, still carrying build 1's fold. The reset must let it rebind.
+        reg2 = self._build_once(client)
+        assert reg2.get_tools("canvas_check"), (
+            "second build must still resolve the bound tools (regression: stale "
+            "fold made list_tools_sync return nothing)"
+        )
+        assert folded_tool_names(client) == {"a", "b"}
