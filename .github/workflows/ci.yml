@@ -1,0 +1,81 @@
+name: CI
+
+# Pre-merge test gate. The deploy workflows (backend.yml, platform.yml,
+# frontend-deploy.yml) only run on push to develop/main — they run the
+# test jobs as a gate *before deploying*, so unit tests never ran on the
+# PR itself. This workflow runs the full test suites on every pull request
+# into develop/main, with no deploy/build/AWS steps, so regressions are
+# caught before merge. Deploys remain push-only.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+# Safe to cancel superseded runs: this workflow only runs tests (no CDK
+# deploy), so there is no CloudFormation rollback hazard. (Deploy workflows
+# keep cancel-in-progress: false — enforced by
+# tests/supply_chain/test_concurrency_config.py.)
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-backend:
+    name: Test backend (pytest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --extra agentcore --extra dev
+      - name: Run pytest
+        working-directory: backend
+        run: uv run pytest tests/ -v
+
+  test-frontend:
+    name: Test frontend (vitest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/ai.client/package-lock.json
+      - name: Install
+        working-directory: frontend/ai.client
+        run: npm ci --prefer-offline
+      - name: Run tests
+        working-directory: frontend/ai.client
+        run: npm run test:ci
+
+  test-infra:
+    name: Test infrastructure (jest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+      - name: Install
+        working-directory: infrastructure
+        run: npm ci --prefer-offline
+      - name: Run tests
+        working-directory: infrastructure
+        run: npx jest --maxWorkers=2
