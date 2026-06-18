@@ -11,7 +11,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "moto[dynamodb,s3,cognitoidp,ssm]==5.1.4",
-    "pytest==8.4.2",
+    "pytest==9.0.3",
 ]
 
 [tool.uv]

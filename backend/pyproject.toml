@@ -28,7 +28,7 @@ dependencies = [
     "pyjwt[crypto]==2.13.0",
 
     # OAuth provider management
-    "authlib==1.7.0",
+    "authlib==1.7.1",
     "cachetools==6.2.4",
 
     # Security: pin starlette to fix Dependabot alert (transitive via fastapi)
@@ -37,9 +37,10 @@ dependencies = [
     # Security: pin transitive deps to fix Dependabot alerts
     "pillow==12.2.0",
     "cryptography==48.0.1",
-    "python-multipart==0.0.30",
-    "aiohttp==3.13.5",
+    "python-multipart==0.0.31",
+    "aiohttp==3.14.1",
     "urllib3==2.7.0",
+    "idna==3.15",
 
     # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
     # Bundles PDFium (no system poppler/ghostscript needed).
