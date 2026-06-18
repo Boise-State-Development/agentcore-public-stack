@@ -16,3 +16,6 @@ dev = [
 
 [tool.uv]
 package = false
+
+# Security: constrain transitive cryptography to patched OpenSSL (GHSA-537c-gmf6-5ccf)
+constraint-dependencies = ["cryptography>=48.0.1"]
