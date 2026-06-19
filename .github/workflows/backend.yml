@@ -111,7 +111,10 @@ jobs:
   build-inference-api:
     name: Build inference-api image
     needs: test-backend
-    runs-on: ubuntu-24.04
+    # Native ARM64 runner — the AgentCore Runtime is arm64. Build
+    # natively here rather than emulating arm64 on amd64 via QEMU
+    # (matches the pre-refactor inference-api.yml on main).
+    runs-on: ubuntu-24.04-arm
     environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
 
     permissions:
@@ -137,7 +140,6 @@ jobs:
         id: build
         with:
           image-name: inference-api
-          platform: linux/arm64
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -146,7 +148,11 @@ jobs:
   build-rag-ingestion:
     name: Build rag-ingestion image
     needs: test-backend
-    runs-on: ubuntu-24.04
+    # Native ARM64 runner — the RAG ingestion Lambda is arm64. Building
+    # on amd64 (the previous runs-on) produced an amd64 image that the
+    # arm64 Lambda rejected at init with Runtime.InvalidEntrypoint.
+    # Matches the pre-refactor rag-ingestion.yml on main.
+    runs-on: ubuntu-24.04-arm
     environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
 
     permissions:
