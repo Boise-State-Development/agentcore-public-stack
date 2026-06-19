@@ -9,7 +9,7 @@
 #   • Backend  — Python 3.13 (managed by uv) + uv 0.7.12, pytest, ruff, mypy, black
 #   • Frontend — Node.js 22 LTS + npm 11.2.0 + Angular CLI (project-local), Vitest
 #   • E2E      — Playwright 1.59.x runtime libs for chromium (browsers installed at runtime)
-#   • Infra    — AWS CDK 2.1120.0 (global) + project-local aws-cdk-lib via npm ci
+#   • Infra    — AWS CDK 2.1128.0 (global) + project-local aws-cdk-lib via npm ci
 #   • Cloud    — AWS CLI v2.34.40 (PGP-verified) + Docker CLI 29.4.3 (static)
 #
 # Reproducibility posture (matches existing backend/Dockerfile.* conventions):
@@ -87,7 +87,7 @@ ARG PYTHON_VERSION=3.13
 # AWS CDK CLI — global install. Pinned to match
 # infrastructure/package.json devDependencies.aws-cdk so cdk synth/deploy
 # behaves identically to a fresh `npm ci` in infrastructure/.
-ARG CDK_VERSION=2.1120.0
+ARG CDK_VERSION=2.1128.0
 
 # Non-root developer user. UID/GID 1000 matches the default first user on
 # most Linux desktops, so bind-mounted files retain correct ownership.
