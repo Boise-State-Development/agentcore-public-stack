@@ -109,6 +109,14 @@ build_cdk_context_params() {
     if [ -n "${CDK_CERTIFICATE_ARN:-}" ]; then
         context_params="${context_params} --context certificateArn=\"${CDK_CERTIFICATE_ARN}\""
     fi
+
+    # Shared CloudFront certificate — fallback for the SPA, artifacts, and
+    # mcp-sandbox origins when their section-specific ARN is unset (config.ts
+    # resolves the precedence). A single us-east-1 wildcard ({domain}+*.{domain})
+    # set here covers all three CloudFront origins.
+    if [ -n "${CDK_CLOUDFRONT_CERTIFICATE_ARN:-}" ]; then
+        context_params="${context_params} --context cloudfrontCertificateArn=\"${CDK_CLOUDFRONT_CERTIFICATE_ARN}\""
+    fi
     
     if [ -n "${CDK_CORS_ORIGINS:-}" ]; then
         context_params="${context_params} --context corsOrigins=\"${CDK_CORS_ORIGINS}\""
@@ -161,6 +169,15 @@ build_cdk_context_params() {
     fi
     if [ -n "${CDK_ARTIFACTS_RETENTION_DAYS:-}" ]; then
         context_params="${context_params} --context artifacts.retentionDays=\"${CDK_ARTIFACTS_RETENTION_DAYS}\""
+    fi
+
+    # MCP sandbox optional parameters. (extraFrameAncestors is an array — it is
+    # NOT forwarded as a --context string here; supply it via the
+    # CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS env var, which config.ts splits, or
+    # as a real array in cdk.context.json. Same applies to the artifacts
+    # extraFrameAncestors above.)
+    if [ -n "${CDK_MCP_SANDBOX_CERTIFICATE_ARN:-}" ]; then
+        context_params="${context_params} --context mcpSandbox.certificateArn=\"${CDK_MCP_SANDBOX_CERTIFICATE_ARN}\""
     fi
 
     echo "${context_params}"
