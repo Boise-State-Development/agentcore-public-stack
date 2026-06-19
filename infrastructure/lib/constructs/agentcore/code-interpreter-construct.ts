@@ -34,11 +34,13 @@ export class AgentCoreCodeInterpreterConstruct extends Construct {
     const { config } = props;
 
     // ── IAM execution role ──
-    // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
-    // physical name. A fixed name collides ("already exists") on any redeploy
-    // where a prior role was orphaned (rolled-back/partial deploy), and buys
-    // nothing: every consumer references this role by .roleArn, never by name.
+    // IMPORTANT: keep an explicit, stable roleName. This role's ARN is
+    // consumed by the CodeInterpreterCustom `executionRoleArn`, a
+    // CREATE-ONLY property — renaming the role replaces it, which forces
+    // CodeInterpreterCustom replacement and a same-Name "already exists"
+    // collision on already-deployed stacks. See browser-construct.ts.
     this.executionRole = new iam.Role(this, 'CodeInterpreterExecutionRole', {
+      roleName: getResourceName(config, 'code-interpreter-role'),
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AgentCore Code Interpreter',
     });
