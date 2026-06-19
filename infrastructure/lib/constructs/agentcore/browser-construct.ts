@@ -34,11 +34,16 @@ export class AgentCoreBrowserConstruct extends Construct {
     const { config } = props;
 
     // ── IAM execution role ──
-    // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
-    // physical name. A fixed name collides ("already exists") on any redeploy
-    // where a prior role was orphaned (rolled-back/partial deploy), and buys
-    // nothing: every consumer references this role by .roleArn, never by name.
+    // IMPORTANT: keep an explicit, stable roleName. Do NOT switch to a
+    // CFN auto-generated name: this role's ARN is consumed by the
+    // BrowserCustom resource's `executionRoleArn`, which is a CREATE-ONLY
+    // property. Changing the role name on an already-deployed stack
+    // replaces the role (new ARN) → forces BrowserCustom replacement →
+    // CFN re-creates it with the same (create-only) Name → "already
+    // exists" collision → rollback. Orphaned-role collisions on a fresh
+    // deploy are handled by deleting the orphans, not by renaming.
     this.executionRole = new iam.Role(this, 'BrowserExecutionRole', {
+      roleName: getResourceName(config, 'browser-role'),
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AgentCore Browser',
     });

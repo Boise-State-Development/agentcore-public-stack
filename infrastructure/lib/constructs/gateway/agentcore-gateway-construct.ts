@@ -52,12 +52,12 @@ export class AgentCoreGatewayConstruct extends Construct {
     const { config } = props;
     const stack = cdk.Stack.of(this);
 
-    // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
-    // physical name. A fixed name collides ("already exists") on any redeploy
-    // where a prior role was orphaned (rolled-back/partial deploy), and buys
-    // nothing: the gateway references this role by .roleArn, and the backend
-    // resolves it at runtime via GetGateway (roleArn), never by name.
+    // IMPORTANT: keep an explicit, stable roleName. This role's ARN is
+    // consumed by the Gateway `roleArn` — renaming the role (auto-gen)
+    // replaces it and risks Gateway replacement on deployed stacks.
+    // See browser-construct.ts.
     this.gatewayRole = new iam.Role(this, 'GatewayExecutionRole', {
+      roleName: getResourceName(config, 'gateway-role'),
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AgentCore Gateway',
     });

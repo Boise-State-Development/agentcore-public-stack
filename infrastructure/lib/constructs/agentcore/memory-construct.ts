@@ -43,11 +43,12 @@ export class AgentCoreMemoryConstruct extends Construct {
     const { config } = props;
 
     // ── IAM execution role ──
-    // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
-    // physical name. A fixed name collides ("already exists") on any redeploy
-    // where a prior role was orphaned (rolled-back/partial deploy), and buys
-    // nothing: every consumer references this role by .roleArn, never by name.
+    // IMPORTANT: keep an explicit, stable roleName. This role's ARN is
+    // consumed by the Memory `memoryExecutionRoleArn` — renaming the role
+    // (auto-gen) replaces it, risking Memory replacement and loss of
+    // stored conversation history. See browser-construct.ts.
     this.executionRole = new iam.Role(this, 'MemoryExecutionRole', {
+      roleName: getResourceName(config, 'agentcore-memory-role'),
       assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
       description: 'Execution role for AgentCore Memory',
     });
