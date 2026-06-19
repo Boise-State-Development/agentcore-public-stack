@@ -96,7 +96,13 @@ case "$SERVICE" in
         # The requirements.lock lives inside the first source-dir
         # already, so it doesn't need a separate --manifest entry.
         MANIFESTS=("backend/src/apis/shared/__init__.py")
-        PLATFORM=""
+        # The RAG ingestion Lambda is arm64 (see the rag-ingestion CDK
+        # construct), and the Dockerfile installs arm64 torch wheels.
+        # Build for arm64 — an amd64 image fails the arm64 Lambda at
+        # init with Runtime.InvalidEntrypoint. The backend.yml
+        # build-rag-ingestion job runs on a native ubuntu-24.04-arm
+        # runner, so this is a native (non-emulated) build.
+        PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/rag-ingestion/image-tag"
         ;;
     *)
