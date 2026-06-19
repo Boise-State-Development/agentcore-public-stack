@@ -245,11 +245,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         'cognito-idp:AdminGetUser', 'cognito-idp:AdminUpdateUserAttributes',
         'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser',
         'cognito-idp:ListUsers', 'cognito-idp:AdminCreateUser',
+        // AdminDeleteUser backs the first-boot rollback path (delete_user)
+        // so a failed registration doesn't orphan a Cognito user and block
+        // retry with UsernameExistsException.
+        'cognito-idp:AdminDeleteUser',
         'cognito-idp:AdminSetUserPassword', 'cognito-idp:DescribeUserPool',
         'cognito-idp:UpdateUserPool', 'cognito-idp:ListIdentityProviders',
         'cognito-idp:CreateIdentityProvider', 'cognito-idp:UpdateIdentityProvider',
         'cognito-idp:DeleteIdentityProvider', 'cognito-idp:DescribeIdentityProvider',
         'cognito-idp:DescribeUserPoolClient', 'cognito-idp:UpdateUserPoolClient',
+        // Group management — required by the first-boot flow, which creates
+        // the `system_admin` group (CreateGroup) and adds the initial admin
+        // to it (AdminAddUserToGroup) so the role lands in the JWT
+        // `cognito:groups` claim. See app_api/system/cognito_service.py
+        // (add_user_to_group). Without these, first-boot fails with
+        // AccessDenied → "Failed to assign admin group" and rolls back.
+        'cognito-idp:CreateGroup', 'cognito-idp:AdminAddUserToGroup',
       ],
       resources: [props.refs.userPool.userPoolArn],
     }),

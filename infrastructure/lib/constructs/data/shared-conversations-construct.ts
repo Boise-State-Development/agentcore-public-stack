@@ -38,7 +38,7 @@ export class SharedConversationsConstruct extends Construct {
         type: dynamodb.AttributeType.STRING,
       },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });

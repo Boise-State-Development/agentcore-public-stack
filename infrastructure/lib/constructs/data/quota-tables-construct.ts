@@ -34,7 +34,7 @@ export class QuotaTablesConstruct extends Construct {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
@@ -87,7 +87,7 @@ export class QuotaTablesConstruct extends Construct {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });

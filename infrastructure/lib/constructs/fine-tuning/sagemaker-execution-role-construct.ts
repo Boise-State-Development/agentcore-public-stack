@@ -52,8 +52,12 @@ export class SageMakerExecutionRoleConstruct extends Construct {
     const { config, dataBucket, jobsTable, vpc, privateSubnetIdsString } =
       props;
 
+    // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
+    // physical name. A fixed name collides ("already exists") on any redeploy
+    // where a prior role was orphaned (rolled-back/partial deploy), and buys
+    // nothing: the role ARN is published to SSM (.../sagemaker-execution-role-arn)
+    // and passed to app-api as SAGEMAKER_EXECUTION_ROLE_ARN — never used by name.
     this.executionRole = new iam.Role(this, 'SageMakerExecutionRole', {
-      roleName: getResourceName(config, 'sagemaker-exec-role'),
       assumedBy: new iam.ServicePrincipal('sagemaker.amazonaws.com'),
       description:
         'Execution role assumed by SageMaker training and transform jobs',
