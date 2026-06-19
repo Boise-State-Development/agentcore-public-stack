@@ -100,6 +100,43 @@ read_asset_hash() {
 # pipeline will overwrite it again on the next real-image push.
 ECR_URI_REGEX='^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/([a-z0-9]+([._-][a-z0-9]+)*/)*[a-z0-9]+([._-][a-z0-9]+)*[:@][^[:space:]]+$'
 
+# Returns 0 iff the ECR image named by an ECR URI actually exists
+# (the repository is present AND the tag/digest resolves to an image).
+#
+# A URI-shaped SSM value is NOT proof the image is pullable. These
+# image-tag params are written out-of-band (build pipeline / this
+# script) and are NOT CloudFormation-managed, so teardown/destroy.sh
+# (delete-stack) never removes them. A stale project-repo URI from a
+# prior deployment can therefore outlive its ECR repo — and CFN then
+# rejects the AgentCore Runtime / ECS TaskDef with "repository ... does
+# not exist". This check lets the caller distinguish "live, build
+# pipeline owns it" from "stale, must re-seed bootstrap".
+ecr_image_exists() {
+    local uri="$1"
+    # Strip the "<acct>.dkr.ecr.<region>.amazonaws.com/" registry host.
+    local without_registry="${uri#*/}"
+    if [[ "$without_registry" == "$uri" ]]; then
+        return 1  # no '/', not a repo URI
+    fi
+    local repo image_id
+    if [[ "$without_registry" == *"@"* ]]; then
+        repo="${without_registry%@*}"
+        image_id="imageDigest=${without_registry##*@}"
+    elif [[ "$without_registry" == *":"* ]]; then
+        repo="${without_registry%:*}"
+        image_id="imageTag=${without_registry##*:}"
+    else
+        return 1  # no tag or digest
+    fi
+    # describe-images returns non-zero for RepositoryNotFound or
+    # ImageNotFound — exactly the cases we must NOT skip on.
+    aws ecr describe-images \
+        --repository-name "$repo" \
+        --image-ids "$image_id" \
+        --region "$CDK_AWS_REGION" \
+        >/dev/null 2>&1
+}
+
 seed_one() {
     local svc="$1"
     local output_marker="$2"
@@ -114,8 +151,15 @@ seed_one() {
         exists=1
     fi
 
-    if (( exists == 1 )) && [[ "$existing" =~ $ECR_URI_REGEX ]]; then
-        log_info "  ${svc}: SSM ${ssm_path} already holds a valid ECR URI — skipping seed (build pipeline owns it)"
+    # Skip only when the existing value is a well-formed ECR URI AND the
+    # image it names actually exists. A URI-shaped value alone is not
+    # enough: these params survive teardown (not CFN-managed) while their
+    # repo may not, so a stale project-repo URI would otherwise be trusted
+    # and break the deploy. See ecr_image_exists() above.
+    if (( exists == 1 )) \
+        && [[ "$existing" =~ $ECR_URI_REGEX ]] \
+        && ecr_image_exists "$existing"; then
+        log_info "  ${svc}: SSM ${ssm_path} points at an existing ECR image — skipping seed (build pipeline owns it)"
         return 0
     fi
 
@@ -124,11 +168,13 @@ seed_one() {
     uri="${REGISTRY}/${ASSETS_REPO}:${hash}"
 
     if (( exists == 1 )); then
-        # Non-URI legacy value — log it (truncated) so operators can
-        # see what was there. Tag-only legacy values from the pre-#396
-        # architecture are the typical case.
-        local preview="${existing:0:64}"
-        log_warn "  ${svc}: SSM ${ssm_path} held non-URI value '${preview}' — overwriting with bootstrap URI"
+        # The value is either a non-URI legacy string (pre-#396 tag-only
+        # value) OR a well-formed URI whose ECR image no longer exists
+        # (stale value orphaned by a teardown — see the skip-guard note).
+        # Either way the bootstrap URI is the safe replacement; the build
+        # pipeline overwrites it again on the next real-image push.
+        local preview="${existing:0:96}"
+        log_warn "  ${svc}: SSM ${ssm_path} holds a stale/unusable value '${preview}' (malformed URI or missing ECR image) — overwriting with bootstrap URI"
         aws ssm put-parameter \
             --name "$ssm_path" \
             --value "$uri" \
