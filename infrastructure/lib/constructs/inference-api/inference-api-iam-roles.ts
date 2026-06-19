@@ -10,7 +10,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
-import { AppConfig, getResourceName } from '../../config';
+import { AppConfig } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
 /**
@@ -22,8 +22,11 @@ export function createRuntimeExecutionRole(
   config: AppConfig,
   refs: PlatformComputeRefs,
 ): iam.Role {
+  // NOTE: no explicit roleName — let CloudFormation auto-generate a unique
+  // physical name. A fixed name collides ("already exists") on any redeploy
+  // where a prior role was orphaned (rolled-back/partial deploy), and buys
+  // nothing: the runtime references this role by .roleArn, never by name.
   const role = new iam.Role(scope, 'AgentCoreRuntimeExecutionRole', {
-    roleName: getResourceName(config, 'agentcore-runtime-role'),
     assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
       conditions: {
         StringEquals: { 'aws:SourceAccount': config.awsAccount },
