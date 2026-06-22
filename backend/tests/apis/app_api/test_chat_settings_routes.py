@@ -64,6 +64,9 @@ def repo() -> _InMemoryRepo:
 
 @pytest.fixture
 def client(repo: _InMemoryRepo, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # These tests exercise the policy surface as it behaves with the skills
+    # feature enabled; the disabled-feature override is covered separately.
+    monkeypatch.setenv("SKILLS_ENABLED", "true")
     service = ChatModeSettingsService(repository=repo, cache_ttl_seconds=0.0)
     monkeypatch.setattr(
         admin_settings_routes, "get_chat_mode_settings_service", lambda: service
@@ -128,9 +131,47 @@ class TestSystemChatSettings:
         response = client.get("/system/chat-settings")
         assert response.status_code == 200
         body = response.json()
-        assert body == {"defaultMode": "chat", "allowModeToggle": False}
+        assert body == {
+            "defaultMode": "chat",
+            "allowModeToggle": False,
+            "skillsEnabled": True,
+        }
 
     def test_defaults_when_unconfigured(self, client: TestClient):
         response = client.get("/system/chat-settings")
         assert response.status_code == 200
-        assert response.json() == {"defaultMode": "skill", "allowModeToggle": True}
+        assert response.json() == {
+            "defaultMode": "skill",
+            "allowModeToggle": True,
+            "skillsEnabled": True,
+        }
+
+
+class TestSystemChatSettingsSkillsDisabled:
+    """When SKILLS_ENABLED is off, the public read ignores any stored policy
+    and forces tools/chat mode so the SPA hides the skills surfaces."""
+
+    @pytest.fixture
+    def client_off(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("SKILLS_ENABLED", "false")
+        # A stored policy that *would* enable skills — the flag must win.
+        repo = _InMemoryRepo(
+            ChatModeSettings(default_mode="skill", allow_mode_toggle=True)
+        )
+        service = ChatModeSettingsService(repository=repo, cache_ttl_seconds=0.0)
+        monkeypatch.setattr(
+            system_routes, "get_chat_mode_settings_service", lambda: service
+        )
+        app = FastAPI()
+        app.include_router(system_routes.router)
+        app.dependency_overrides[get_current_user_from_session] = _user
+        return TestClient(app)
+
+    def test_forces_chat_and_reports_disabled(self, client_off: TestClient):
+        response = client_off.get("/system/chat-settings")
+        assert response.status_code == 200
+        assert response.json() == {
+            "defaultMode": "chat",
+            "allowModeToggle": False,
+            "skillsEnabled": False,
+        }

@@ -80,16 +80,21 @@ class ChatModeSettingsResponse(BaseModel):
 
 
 class ChatSettingsPublicResponse(BaseModel):
-    """User-facing view for the SPA — just the policy flags."""
+    """User-facing view for the SPA — the policy flags plus whether the
+    skills feature is enabled at all (drives the admin nav + mode toggle)."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     default_mode: ChatMode = Field(alias="defaultMode")
     allow_mode_toggle: bool = Field(alias="allowModeToggle")
+    skills_enabled: bool = Field(default=True, alias="skillsEnabled")
 
     @classmethod
-    def from_settings(cls, settings: ChatModeSettings) -> "ChatSettingsPublicResponse":
+    def from_settings(
+        cls, settings: ChatModeSettings, *, skills_enabled: bool = True
+    ) -> "ChatSettingsPublicResponse":
         return cls(
             default_mode=settings.default_mode,
             allow_mode_toggle=settings.allow_mode_toggle,
+            skills_enabled=skills_enabled,
         )

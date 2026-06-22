@@ -4,6 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideHttpClient } from '@angular/common/http';
 import { SkillService, UserSkill, SkillsResponse } from './skill.service';
 import { ConfigService } from '../config.service';
+import { ChatModeService } from '../chat-mode/chat-mode.service';
 import { signal } from '@angular/core';
 
 describe('SkillService', () => {
@@ -17,19 +18,25 @@ describe('SkillService', () => {
 
   const mockResponse: SkillsResponse = { skills: mockSkills, totalCount: 2 };
 
-  async function setup() {
+  function configure(skillsEnabled: boolean) {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         SkillService,
         { provide: ConfigService, useValue: { appApiUrl: signal('http://localhost:8000') } },
+        { provide: ChatModeService, useValue: { skillsEnabled: signal(skillsEnabled) } },
       ],
     });
 
     service = TestBed.inject(SkillService);
     httpMock = TestBed.inject(HttpTestingController);
+    // Flush the constructor effect that gates the auto-load on the policy.
+    TestBed.tick();
+  }
 
+  async function setup() {
+    configure(true);
     await vi.waitFor(() => {
       httpMock.expectOne('http://localhost:8000/skills/').flush(mockResponse);
     });
@@ -38,6 +45,16 @@ describe('SkillService', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     httpMock.match(() => true);
+  });
+
+  describe('auto-load gating', () => {
+    it('does not fetch skills when the feature is disabled', () => {
+      configure(false);
+      // No /skills/ request is issued; verify() in afterEach would fail on one.
+      httpMock.verify();
+      expect(service.initialized()).toBe(false);
+      expect(service.skills()).toEqual([]);
+    });
   });
 
   describe('loadSkills', () => {

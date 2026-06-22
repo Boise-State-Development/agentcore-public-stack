@@ -57,15 +57,23 @@ describe('ChatModeService', () => {
   });
 
   it('defaults to the admin default mode', async () => {
-    await setup({ defaultMode: 'skill', allowModeToggle: true });
+    await setup({ defaultMode: 'skill', allowModeToggle: true, skillsEnabled: true });
     expect(service.mode()).toBe('skill');
     expect(service.isSkillsMode()).toBe(true);
     expect(service.canToggle()).toBe(true);
+    expect(service.skillsEnabled()).toBe(true);
+  });
+
+  it('reflects skillsEnabled=false from the policy (deferred feature)', async () => {
+    await setup({ defaultMode: 'chat', allowModeToggle: false, skillsEnabled: false });
+    expect(service.skillsEnabled()).toBe(false);
+    expect(service.mode()).toBe('chat');
+    expect(service.canToggle()).toBe(false);
   });
 
   it('uses the user preferred mode when no local selection exists', async () => {
     await setup(
-      { defaultMode: 'skill', allowModeToggle: true },
+      { defaultMode: 'skill', allowModeToggle: true, skillsEnabled: true },
       { defaultModelId: null, preferredAgentMode: 'chat' },
     );
     expect(service.mode()).toBe('chat');
@@ -73,7 +81,7 @@ describe('ChatModeService', () => {
 
   it('policy wins when toggling is disallowed', async () => {
     await setup(
-      { defaultMode: 'skill', allowModeToggle: false },
+      { defaultMode: 'skill', allowModeToggle: false, skillsEnabled: true },
       { defaultModelId: null, preferredAgentMode: 'chat' },
     );
     expect(service.mode()).toBe('skill');
@@ -87,7 +95,7 @@ describe('ChatModeService', () => {
   });
 
   it('setMode flips the mode and persists user + session preferences', async () => {
-    await setup({ defaultMode: 'skill', allowModeToggle: true });
+    await setup({ defaultMode: 'skill', allowModeToggle: true, skillsEnabled: true });
 
     service.setMode('chat', 'sess-1');
 
@@ -98,7 +106,7 @@ describe('ChatModeService', () => {
   });
 
   it('setMode without a session persists only the user preference', async () => {
-    await setup({ defaultMode: 'skill', allowModeToggle: true });
+    await setup({ defaultMode: 'skill', allowModeToggle: true, skillsEnabled: true });
 
     service.setMode('chat');
 
@@ -108,7 +116,7 @@ describe('ChatModeService', () => {
   });
 
   it('hydrateFromSession restores a stored mode and ignores missing ones', async () => {
-    await setup({ defaultMode: 'skill', allowModeToggle: true });
+    await setup({ defaultMode: 'skill', allowModeToggle: true, skillsEnabled: true });
 
     service.hydrateFromSession('chat');
     expect(service.mode()).toBe('chat');
@@ -121,7 +129,7 @@ describe('ChatModeService', () => {
     expect(service.mode()).toBe('skill');
   });
 
-  it('falls back to compiled-in defaults when the policy endpoint fails', async () => {
+  it('falls back to the dark default (skills off) when the policy endpoint fails', async () => {
     userSettings = undefined;
     updateSettings.mockClear();
     updateSessionPreferences.mockClear();
@@ -147,7 +155,8 @@ describe('ChatModeService', () => {
     await vi.waitFor(() => {
       expect(service.policyLoaded()).toBe(true);
     });
-    expect(service.mode()).toBe('skill');
-    expect(service.canToggle()).toBe(true);
+    expect(service.mode()).toBe('chat');
+    expect(service.canToggle()).toBe(false);
+    expect(service.skillsEnabled()).toBe(false);
   });
 });
