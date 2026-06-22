@@ -1,7 +1,8 @@
-import { Injectable, inject, signal, computed } from '@angular/core';
+import { Injectable, inject, signal, computed, effect } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { ChatModeService } from '../chat-mode/chat-mode.service';
 
 /**
  * One skill the user's roles grant, as returned by GET /skills/.
@@ -37,8 +38,12 @@ export interface SkillsResponse {
 export class SkillService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  private chatMode = inject(ChatModeService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/skills`);
+
+  /** Guards the one-time auto-load so it fires at most once. */
+  private autoLoadTriggered = false;
 
   // Internal state signals
   private _skills = signal<UserSkill[]>([]);
@@ -53,8 +58,17 @@ export class SkillService {
   readonly initialized = this._initialized.asReadonly();
 
   constructor() {
-    this.loadSkills().catch(err => {
-      console.error('Failed to load skills on initialization:', err);
+    // Load the user's skills once the feature is known to be enabled. While
+    // skills are deferred (disabled) the /skills API is unmounted, so gating
+    // on the policy avoids a guaranteed 404 on every session; when enabled,
+    // the effect fires as soon as the chat-mode policy resolves.
+    effect(() => {
+      if (this.chatMode.skillsEnabled() && !this.autoLoadTriggered) {
+        this.autoLoadTriggered = true;
+        this.loadSkills().catch(err => {
+          console.error('Failed to load skills on initialization:', err);
+        });
+      }
     });
   }
 

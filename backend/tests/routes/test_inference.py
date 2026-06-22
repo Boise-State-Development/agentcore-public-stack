@@ -178,6 +178,13 @@ class TestInvocationsInvalid:
 class TestDefaultAgentTypeFlip:
     """When the client omits agent_type, the turn routes through SkillAgent."""
 
+    @pytest.fixture(autouse=True)
+    def _skills_enabled(self, monkeypatch):
+        # The skill-default behavior only applies when the feature is on; off
+        # by default, every turn is forced to chat (covered in
+        # tests/routes/test_agent_mode_policy.py).
+        monkeypatch.setenv("SKILLS_ENABLED", "true")
+
     def _mock_agent(self):
         agent = MagicMock()
 

@@ -29,6 +29,7 @@ from apis.shared.models.models import (
     ManagedModel,
 )
 from apis.shared.auth import User, require_admin
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.sessions.metadata import list_user_sessions, get_session_metadata
 from apis.shared.sessions.messages import get_messages
 from apis.shared.models.managed_models import (
@@ -848,10 +849,14 @@ from .tools.routes import router as tools_router
 
 router.include_router(tools_router)
 
-# ========== Include Skills Admin Subrouter ==========
-from .skills.routes import router as skills_router
+# ========== Include Skills Admin Subrouter (conditional) ==========
+# Skills feature deferred to a later release; off by default. While off the
+# admin catalog API is unmounted so the surface 404s, but the data and code
+# remain intact.
+if skills_enabled():
+    from .skills.routes import router as skills_router
 
-router.include_router(skills_router)
+    router.include_router(skills_router)
 
 # ========== Include OAuth Admin Subrouter ==========
 from .oauth.routes import router as oauth_admin_router
@@ -878,10 +883,13 @@ from .system_prompts.routes import router as system_prompts_admin_router
 
 router.include_router(system_prompts_admin_router)
 
-# ========== Include Platform Settings Admin Subrouter ==========
-from .settings.routes import router as settings_admin_router
+# ========== Include Platform Settings Admin Subrouter (conditional) ==========
+# Currently only hosts the chat-mode (skills vs. tools) policy, which is part
+# of the deferred skills feature. Mount it only when skills are enabled.
+if skills_enabled():
+    from .settings.routes import router as settings_admin_router
 
-router.include_router(settings_admin_router)
+    router.include_router(settings_admin_router)
 
 # ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

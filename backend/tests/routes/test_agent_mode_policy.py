@@ -45,6 +45,14 @@ def authed_client(app, trusted_user):
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _skills_enabled(monkeypatch):
+    """This module exercises skills-mode behavior, so run with the feature on.
+    The disabled-feature override (force chat) is covered by its own test that
+    flips this back off."""
+    monkeypatch.setenv("SKILLS_ENABLED", "true")
+
+
 class _StubSettingsService:
     def __init__(self, settings: ChatModeSettings):
         self._settings = settings
@@ -206,6 +214,44 @@ class TestInvocationsModePolicy:
         ):
             resp = authed_client.post(
                 "/invocations", json={"session_id": "sess-4", "message": "hi"}
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        resolve_mock.assert_not_awaited()
+        kwargs = get_agent_mock.call_args.kwargs
+        assert kwargs["agent_type"] == "chat"
+        assert kwargs["accessible_skill_ids"] is None
+
+    def test_skills_disabled_forces_chat_over_skill_request(
+        self, authed_client, monkeypatch
+    ):
+        # Feature off + client explicitly asks for skill + policy allows it:
+        # the turn must still route through the ChatAgent with no skills.
+        monkeypatch.setenv("SKILLS_ENABLED", "false")
+        get_agent_mock = MagicMock(return_value=_mock_agent())
+        resolve_mock = AsyncMock(return_value=["web_research"])
+        with patch(
+            "apis.inference_api.chat.routes.get_agent", get_agent_mock
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes._resolve_accessible_skill_ids",
+            resolve_mock,
+        ), patch(
+            "apis.inference_api.chat.routes.get_chat_mode_settings_service",
+            return_value=_StubSettingsService(
+                ChatModeSettings(default_mode="skill", allow_mode_toggle=True)
+            ),
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={
+                    "session_id": "sess-off",
+                    "message": "hi",
+                    "agent_type": "skill",
+                },
             )
             _ = resp.text
 

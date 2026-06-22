@@ -26,6 +26,7 @@ from apis.shared.errors import (
     ErrorCode,
     build_conversational_error_event,
 )
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
@@ -771,6 +772,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     effective_agent_type = _resolve_effective_agent_type(
         input_data.agent_type, chat_mode_settings
     )
+    # Skills feature deferred for this environment: never route a turn through
+    # the SkillAgent, regardless of the client's request or any stored policy.
+    # Only the skill mode is neutralized — voice and other agent types pass
+    # through untouched.
+    if not skills_enabled() and effective_agent_type == "skill":
+        effective_agent_type = "chat"
     # Resolve the user's *effective* skills once for the whole request — only
     # for the skill agent path: the RBAC-accessible set (admin/DB-backed),
     # narrowed by the client's per-turn enabled_skills selection. Threaded into
