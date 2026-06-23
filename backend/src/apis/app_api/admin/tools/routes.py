@@ -392,7 +392,27 @@ async def admin_discover_mcp_tools(
             "list the tool names manually.",
         )
 
-    client = create_external_mcp_client(config=request.to_config())
+    # Forward-auth servers (same-team MCP that validates a forwarded JWT, behind
+    # a Lambda Function URL with AuthType=NONE) are discovered by signing the
+    # request with the admin's *own* OIDC token — the same bearer the agent loop
+    # forwards for the end-user at runtime — instead of SigV4. The admin is
+    # already trusted to point discovery at an arbitrary URL (see the
+    # trust-boundary note above); forwarding their own session token to that URL
+    # is a strictly lower bar than the end-user token forwarding they're
+    # configuring for the tool.
+    oauth_token: Optional[str] = None
+    if request.forward_auth_token:
+        if not admin.raw_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Forward-auth discovery needs your session token, which "
+                "isn't available on this request. Re-authenticate and retry.",
+            )
+        oauth_token = admin.raw_token
+
+    client = create_external_mcp_client(
+        config=request.to_config(), oauth_token=oauth_token
+    )
     if client is None:
         raise HTTPException(
             status_code=400,
