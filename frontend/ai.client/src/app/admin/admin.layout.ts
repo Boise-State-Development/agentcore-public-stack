@@ -1,9 +1,11 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  computed,
   inject,
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { ChatModeService } from '../services/chat-mode/chat-mode.service';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -86,7 +88,7 @@ interface NavGroup {
                 class="block w-full rounded-sm border-gray-300 bg-white py-2 pl-3 pr-10 text-base text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 (change)="onMobileNavChange($event)"
               >
-                @for (group of navGroups; track group.label) {
+                @for (group of navGroups(); track group.label) {
                   <optgroup [label]="group.label">
                     @for (item of group.items; track item.route) {
                       <option [value]="item.route">{{ item.label }}</option>
@@ -99,7 +101,7 @@ interface NavGroup {
             <!-- Desktop sidebar -->
             <nav class="hidden lg:block" aria-label="Admin navigation">
               <div class="flex flex-col gap-6">
-                @for (group of navGroups; track group.label) {
+                @for (group of navGroups(); track group.label) {
                   <div>
                     <h2 class="px-3 text-xs/5 font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
                       {{ group.label }}
@@ -135,8 +137,9 @@ interface NavGroup {
 })
 export class AdminLayout {
   private router = inject(Router);
+  private chatMode = inject(ChatModeService);
 
-  readonly navGroups: NavGroup[] = [
+  private readonly allNavGroups: NavGroup[] = [
     {
       label: 'Usage & Spend',
       items: [
@@ -170,6 +173,19 @@ export class AdminLayout {
       ],
     },
   ];
+
+  /**
+   * Nav groups with the Skills entry hidden while the skills feature is
+   * disabled for this environment (deferred release). The pages stay routed
+   * but unlinked; the backend forces tools mode and 404s the skills APIs.
+   */
+  readonly navGroups = computed<NavGroup[]>(() => {
+    if (this.chatMode.skillsEnabled()) return this.allNavGroups;
+    return this.allNavGroups.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.route !== '/admin/skills'),
+    }));
+  });
 
   onMobileNavChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
