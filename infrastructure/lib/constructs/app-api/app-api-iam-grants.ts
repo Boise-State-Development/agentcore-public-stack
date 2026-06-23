@@ -204,6 +204,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // The admin auth-providers endpoints (POST/DELETE /admin/auth-providers)
+  // read AND write the JSON bag of provider client secrets: the repository
+  // rewrites the whole secret via PutSecretValue on both add and remove
+  // (see apis/shared/auth_providers/repository.py). GetSecretValue is
+  // granted above; PutSecretValue is scoped to just the auth-provider
+  // secret (no other secret is written by the app at runtime). The trailing
+  // wildcard matches the random 6-char suffix AWS appends to the ARN.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'AuthProviderSecretsWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['secretsmanager:PutSecretValue'],
+      resources: [`${props.refs.authProviderSecretsSecret.secretArn}*`],
+    }),
+  );
+
   // ── KMS (OAuth token encryption + BFF cookie signing) ──
   // Two separate statements because the access patterns differ:
   //
