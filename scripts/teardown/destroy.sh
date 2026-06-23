@@ -25,23 +25,25 @@ log_success() {
 # Destroy all stacks (parallel where possible)
 #
 # Dependency graph:
-#   All application stacks depend on InfrastructureStack.
-#   Application stacks are independent of each other.
+#   Legacy multi-stack: all application stacks depend on InfrastructureStack;
+#   application stacks are independent of each other.
+#   Current single-stack: everything lives in PlatformStack.
 #
 # Strategy:
-#   Phase 1: Destroy all application stacks in parallel
-#   Phase 2: Destroy InfrastructureStack (foundation)
+#   Phase 1: Destroy all (legacy) application stacks in parallel
+#   Phase 2: Destroy the foundation stack(s) last — InfrastructureStack
+#            (legacy) and/or PlatformStack (current single-stack)
 #
 # Implementation notes:
 #   - Uses `aws cloudformation delete-stack` directly instead of
 #     `cdk destroy`. The repo has been refactored from a 9-stack
-#     architecture to a 2-stack one, but legacy deployments still
-#     have the old CFN stacks. Those stack names are not present
-#     in the current CDK synth, so `cdk destroy <legacy-name>`
-#     silently no-ops (it exits 0 but never calls CloudFormation).
-#     `aws cloudformation delete-stack` deletes by the actual CFN
-#     stack name and works regardless of whether the stack is in
-#     the current CDK code.
+#     architecture to a 2-stack one and now to a single-stack
+#     (PlatformStack) one, but legacy deployments still have the old
+#     CFN stacks. Those stack names are not present in the current CDK
+#     synth, so `cdk destroy <legacy-name>` silently no-ops (it exits 0
+#     but never calls CloudFormation). `aws cloudformation delete-stack`
+#     deletes by the actual CFN stack name and works regardless of
+#     whether the stack is in the current CDK code.
 #   - Each stack delete is polled with `aws cloudformation wait
 #     stack-delete-complete`, so we know whether the stack is
 #     really gone before reporting success.
@@ -69,8 +71,17 @@ PARALLEL_STACKS=(
     "ArtifactsStack"
 )
 
-# Phase 2: Foundation stack (must be last)
-FOUNDATION_STACK="InfrastructureStack"
+# Phase 2: Foundation stack(s) (must be last). The legacy architecture's
+# foundation is InfrastructureStack (every legacy app stack depends on it);
+# the current architecture's single stack is PlatformStack (contains the VPC
+# and everything else). The two belong to different architectures and never
+# coexist in practice, but both are listed so this one script tears down
+# either layout. Each is guarded by stack_exists, so a non-existent
+# foundation is simply skipped.
+FOUNDATION_STACKS=(
+    "InfrastructureStack"
+    "PlatformStack"
+)
 
 log_info "============================================"
 log_info "  TEARDOWN: Destroying all CDK stacks"
@@ -191,13 +202,17 @@ done
 # Phase 2: Destroy foundation stack
 # ---------------------------------------------------------------
 log_info ""
-log_info "Phase 2: Destroying foundation stack..."
-FULL_STACK_NAME="${CDK_PROJECT_PREFIX}-${FOUNDATION_STACK}"
+log_info "Phase 2: Destroying foundation stack(s)..."
 
-if ! stack_exists "${FULL_STACK_NAME}"; then
-    log_info "  Skipping ${FULL_STACK_NAME} (does not exist in CloudFormation)"
-    SKIPPED_STACKS+=("${FULL_STACK_NAME}")
-else
+for FOUNDATION_STACK in "${FOUNDATION_STACKS[@]}"; do
+    FULL_STACK_NAME="${CDK_PROJECT_PREFIX}-${FOUNDATION_STACK}"
+
+    if ! stack_exists "${FULL_STACK_NAME}"; then
+        log_info "  Skipping ${FULL_STACK_NAME} (does not exist in CloudFormation)"
+        SKIPPED_STACKS+=("${FULL_STACK_NAME}")
+        continue
+    fi
+
     log_info "  Destroying ${FULL_STACK_NAME}..."
     FOUNDATION_LOG="${LOG_DIR}/${FOUNDATION_STACK}.log"
     if destroy_stack \
@@ -212,7 +227,7 @@ else
             tail -n 30 "${FOUNDATION_LOG}" | sed 's/^/    /'
         fi
     fi
-fi
+done
 
 # Cleanup
 rm -rf "${LOG_DIR}"

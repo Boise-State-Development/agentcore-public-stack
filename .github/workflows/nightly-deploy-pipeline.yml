@@ -1,119 +1,109 @@
-name: Nightly Deploy Pipeline
+# Reusable deploy pipeline for nightly builds (single-PlatformStack architecture).
+#
+# Called by nightly.yml up to 3 times: deploy track, MV base, MV overlay, and the
+# e2e track. Each call provides a ref, an EPHEMERAL project-prefix, an ALB
+# subdomain, and a label to differentiate. Every nightly deployment is torn down
+# at the end (always(), unless skip-teardown) so we never pay for idle resources.
+#
+# Architecture (post platform-as-bootstrap refactor):
+#   1. deploy-platform        — one CFN deploy of <prefix>-PlatformStack.
+#   2. build-*                — content-hash image builds → ECR.
+#   3. deploy-*-code          — API-driven code deploys (ECS / AgentCore Runtime
+#                               / Lambda) onto the freshly-deployed stack.
+#   4. deploy-frontend        — build SPA + S3 sync + CloudFront invalidation.
+#   5. smoke-test / e2e-tests — validate the deployment.
+#   6. teardown               — delete the ephemeral stack + buckets/secrets/logs.
+#
+# Ephemeral deploys run with NO custom domain (CDK_DOMAIN_NAME=""); the SPA,
+# artifacts and mcp-sandbox CloudFront distributions fall back to their default
+# *.cloudfront.net domains (cert vars left empty). CDK_COGNITO_DOMAIN_PREFIX is
+# intentionally left UNSET so it defaults to the unique project-prefix — this
+# keeps concurrent nightly stacks from colliding on the Cognito hosted domain.
+
+name: "Nightly Deploy Pipeline"
 
 on:
   workflow_call:
-  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch/tag) to check out'
+        required: true
+        type: string
+      project-prefix:
+        description: 'CDK project prefix (ephemeral, e.g. nightly-develop, nightly-mv)'
+        required: true
+        type: string
+      alb-subdomain:
+        description: 'ALB subdomain for this deployment'
+        required: true
+        type: string
+      skip-teardown:
+        description: 'Skip teardown (leave resources deployed)'
+        required: false
+        default: 'false'
+        type: string
+      label:
+        description: 'Display label for job names'
+        required: false
+        default: ''
+        type: string
+      source-project-prefix:
+        description: 'Reserved for ECR image promotion. Currently unused — the
+          content-hash build (scripts/build/build-one.sh) skips rebuilds when ECR
+          already has the hash, so promotion is unnecessary. Declared so existing
+          orchestrator calls remain valid.'
+        required: false
+        default: ''
+        type: string
+      run-e2e:
+        description: 'Run Playwright E2E tests after smoke test (requires Cognito test user secrets)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
 
 env:
   CDK_REQUIRE_APPROVAL: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   LOAD_ENV_QUIET: true
 
 jobs:
-  test-infra:
-    name: Test infrastructure (jest)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: infrastructure/package-lock.json
-      - name: Install
-        working-directory: infrastructure
-        run: npm ci --prefer-offline
-      - name: Run tests
-        working-directory: infrastructure
-        run: npx jest --maxWorkers=2
-
-  test-backend:
-    name: Test backend (pytest)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: '0.7.12'
-          enable-cache: true
-          cache-dependency-glob: 'backend/uv.lock'
-      - name: Sync deps
-        working-directory: backend
-        run: uv sync --extra agentcore --extra dev
-      - name: Run pytest
-        working-directory: backend
-        run: uv run pytest tests/ -v
-
-  test-frontend:
-    name: Test frontend (ng test)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: frontend/ai.client/package-lock.json
-      - name: Install
-        working-directory: frontend/ai.client
-        run: npm ci --prefer-offline
-      - name: Run tests
-        working-directory: frontend/ai.client
-        run: npm run test:ci
-
   deploy-platform:
-    name: Deploy PlatformStack
-    needs: test-infra
+    name: "[${{ inputs.label }}] Deploy PlatformStack"
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
-      CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      # Ephemeral nightly: no custom app domain. CloudFront surfaces (SPA,
+      # artifacts, mcp-sandbox) fall back to their default *.cloudfront.net
+      # domains; their cert vars are intentionally empty.
+      CDK_DOMAIN_NAME: ""
       CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
       CDK_VPC_CIDR: ${{ vars.CDK_VPC_CIDR }}
-      CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
+      CDK_ALB_SUBDOMAIN: ${{ inputs.alb-subdomain }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
-      # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
-      # SPA / artifacts / mcp-sandbox each fall back to this when their
-      # section-specific cert var is unset, so one wildcard satisfies all three.
-      CDK_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CDK_CLOUDFRONT_CERTIFICATE_ARN }}
+      CDK_CLOUDFRONT_CERTIFICATE_ARN: ""
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
-      CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
-      CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
-      CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
-      # Extra origins allowed to frame the artifacts iframe via CSP
-      # frame-ancestors (beyond the deployed SPA origin) — e.g.
-      # http://localhost:4200 for a local SPA pointed at this deployment.
-      # Empty on prod. Mirrors CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS below.
-      CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS }}
-      CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
-      # MCP Apps sandbox-proxy origin (mcp-sandbox.{domain}). Without the
-      # cert ARN the construct silently falls back to the CloudFront default
-      # domain and creates no Route53 ALIAS — the SPA then frames a
-      # nonexistent host and MCP Apps fail to load. Cert MUST be in us-east-1.
-      CDK_MCP_SANDBOX_CERTIFICATE_ARN: ${{ vars.CDK_MCP_SANDBOX_CERTIFICATE_ARN }}
-      CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS }}
+      CDK_RETAIN_DATA_ON_DELETE: false
+      CDK_ARTIFACTS_CERTIFICATE_ARN: ""
+      CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ""
+      CDK_FRONTEND_CERTIFICATE_ARN: ""
+      CDK_MCP_SANDBOX_CERTIFICATE_ARN: ""
+      CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS: ""
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      # Pin the toolchain the deploy uses (npm ci + cdk run inside
-      # scripts/platform/deploy.sh) to Node 22, consistent with every
-      # other job and the devcontainer; cache: npm warms the install.
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
@@ -122,6 +112,7 @@ jobs:
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-Platform
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -129,265 +120,390 @@ jobs:
         run: bash scripts/platform/deploy.sh
 
   build-app-api:
-    name: Build app-api image
-    needs: [deploy-platform, test-backend]
+    name: "[${{ inputs.label }}] Build app-api image"
+    needs: deploy-platform
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.build.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-BuildAppApi
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Build & push app-api
-        id: build
         run: bash scripts/build/build-one.sh app-api
 
   build-inference-api:
-    name: Build inference-api image
-    needs: [deploy-platform, test-backend]
+    name: "[${{ inputs.label }}] Build inference-api image"
+    needs: deploy-platform
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.build.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-BuildInferenceApi
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      # Inference API runs on AgentCore Runtime (linux/arm64). On the
-      # amd64 GitHub-hosted runner we need QEMU + buildx emulation so
+      # Inference API runs on AgentCore Runtime (linux/arm64). On the amd64
+      # GitHub-hosted runner we need QEMU + buildx emulation so
       # `docker build --platform linux/arm64` works.
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
         with:
           platforms: arm64
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
       - name: Build & push inference-api
-        id: build
         run: bash scripts/build/build-one.sh inference-api
 
   build-rag-ingestion:
-    name: Build rag-ingestion image
-    needs: [deploy-platform, test-backend]
+    name: "[${{ inputs.label }}] Build rag-ingestion image"
+    needs: deploy-platform
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.build.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-BuildRagIngestion
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # RAG ingestion Lambda is arm64; emulate on the amd64 runner.
+      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
       - name: Build & push rag-ingestion
-        id: build
         run: bash scripts/build/build-one.sh rag-ingestion
 
   deploy-artifact-render-code:
-    name: Deploy artifact-render Lambda code
-    needs: [deploy-platform, test-backend]
+    name: "[${{ inputs.label }}] Deploy artifact-render Lambda code"
+    needs: deploy-platform
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      code_hash: ${{ steps.deploy.outputs.code_hash }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-ArtifactRender
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Deploy artifact-render code
-        id: deploy
         run: bash scripts/build/deploy-zip-lambda-one.sh artifact-render
 
   deploy-rag-ingestion-code:
-    name: Deploy rag-ingestion Lambda image
-    needs: [build-rag-ingestion, test-backend]
+    name: "[${{ inputs.label }}] Deploy rag-ingestion Lambda image"
+    needs: build-rag-ingestion
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.deploy.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-RagIngestionCode
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Deploy rag-ingestion image
-        id: deploy
         run: bash scripts/build/deploy-image-lambda-one.sh rag-ingestion
 
   deploy-inference-api-code:
-    name: Deploy inference-api image to AgentCore Runtime
-    needs: [build-inference-api, test-backend]
+    name: "[${{ inputs.label }}] Deploy inference-api to AgentCore Runtime"
+    needs: build-inference-api
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.deploy.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-InferenceApiCode
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Deploy inference-api image
-        id: deploy
         run: bash scripts/build/deploy-runtime-image-one.sh inference-api
 
   deploy-app-api-code:
-    name: Deploy app-api image to ECS Fargate service
-    needs: [build-app-api, test-backend]
+    name: "[${{ inputs.label }}] Deploy app-api to ECS Fargate"
+    needs: build-app-api
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.CDK_AWS_ACCOUNT }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    outputs:
-      image_tag: ${{ steps.deploy.outputs.image_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-AppApiCode
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Deploy app-api image
-        id: deploy
         run: bash scripts/build/deploy-ecs-service-one.sh app-api
 
   deploy-frontend:
-    name: Deploy Frontend
-    # Phase 6 of the platform-as-bootstrap refactor removed the
-    # transitional CFN-deploy-backend job. The frontend deploy
-    # now waits on every backend code-deploy job individually
-    # (artifact-render Lambda, rag-ingestion Lambda image,
-    # inference-api Runtime image, app-api ECS service) and on
-    # test-frontend.
-    needs: [deploy-platform, deploy-artifact-render-code, deploy-rag-ingestion-code, deploy-inference-api-code, deploy-app-api-code, test-frontend]
+    name: "[${{ inputs.label }}] Deploy Frontend"
+    needs: [deploy-platform, deploy-artifact-render-code, deploy-rag-ingestion-code, deploy-inference-api-code, deploy-app-api-code]
     runs-on: ubuntu-24.04
-    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || 'development' }}
+    environment: development
     permissions:
       id-token: write
       contents: read
     env:
       CDK_AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
-      CDK_PROJECT_PREFIX: ${{ vars.CDK_PROJECT_PREFIX }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
       - uses: ./.github/actions/configure-aws-credentials
         with:
           aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-Frontend
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
       - name: Build SPA
         run: bash scripts/frontend/build.sh
-
       - name: Deploy to S3 + invalidate CloudFront
         run: bash scripts/frontend/deploy.sh
+
+  smoke-test:
+    name: "[${{ inputs.label }}] Smoke Test"
+    needs: [deploy-frontend, deploy-app-api-code, deploy-inference-api-code, deploy-rag-ingestion-code, deploy-artifact-render-code]
+    runs-on: ubuntu-24.04
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      CDK_ALB_SUBDOMAIN: ${{ inputs.alb-subdomain }}
+      CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-SmokeTest
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Run smoke tests
+        run: bash scripts/nightly/smoke-test.sh
+
+  e2e-tests:
+    name: "[${{ inputs.label }}] E2E Tests"
+    needs: smoke-test
+    if: ${{ inputs.run-e2e == 'true' && needs.smoke-test.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      CDK_AWS_ACCOUNT: ${{ vars.CDK_AWS_ACCOUNT }}
+      ADMIN_USERNAME: ${{ secrets.E2E_ADMIN_USERNAME }}
+      ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      USER_USERNAME: ${{ secrets.E2E_USER_USERNAME }}
+      USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/ai.client/package-lock.json
+      - name: Install frontend dependencies
+        run: |
+          cd frontend/ai.client
+          npm ci --prefer-offline
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-E2E
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Run E2E tests
+        run: bash scripts/nightly/e2e-test.sh
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ inputs.label }}
+          path: frontend/ai.client/playwright-report/
+          retention-days: 30
+
+  # ── Auto-teardown ──────────────────────────────────────────────────────────
+  # ALWAYS runs (unless skip-teardown), even if any deploy/test job above failed
+  # or was cancelled. A half-deployed ephemeral stack still incurs cost, so the
+  # safety net must fire regardless of upstream outcome. Tears down the ephemeral
+  # ${{ inputs.project-prefix }}-PlatformStack plus its buckets/secrets/logs.
+  teardown:
+    name: "[${{ inputs.label }}] Teardown"
+    needs:
+      - deploy-platform
+      - build-app-api
+      - build-inference-api
+      - build-rag-ingestion
+      - deploy-artifact-render-code
+      - deploy-rag-ingestion-code
+      - deploy-inference-api-code
+      - deploy-app-api-code
+      - deploy-frontend
+      - smoke-test
+      - e2e-tests
+    if: ${{ always() && inputs.skip-teardown != 'true' }}
+    runs-on: ubuntu-24.04
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      CDK_AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_PROJECT_PREFIX: ${{ inputs.project-prefix }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          role-session-name: GitHubActions-${{ inputs.label }}-Teardown
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Teardown ephemeral nightly stack
+        run: bash scripts/nightly/teardown.sh
