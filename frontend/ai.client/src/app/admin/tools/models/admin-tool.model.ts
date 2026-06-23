@@ -228,6 +228,12 @@ export interface MCPDiscoverRequest {
   awsRegion?: string | null;
   apiKeyHeader?: string | null;
   secretArn?: string | null;
+  /**
+   * When true, discovery is signed with the admin's own OIDC token (matching
+   * the catalog `forwardAuthToken` flag) instead of SigV4 — for same-team MCP
+   * servers that validate a forwarded JWT (Lambda Function URL AuthType=NONE).
+   */
+  forwardAuthToken?: boolean;
 }
 
 /**

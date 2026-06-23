@@ -1354,9 +1354,17 @@ class MCPDiscoverRequest(BaseModel):
     """Request body for POST /api/admin/tools/discover.
 
     Same fields as MCPServerConfigRequest minus the `tools` list — the
-    point of discovery is to populate that list. OAuth-gated and OIDC-
-    forwarded servers can't be discovered admin-side (no end-user token
-    available); the route returns a 400 in those cases."""
+    point of discovery is to populate that list. Provider-gated OAuth (3LO)
+    servers can't be discovered admin-side (no end-user provider token
+    available); the route returns a 400 in that case.
+
+    `forward_auth_token` mirrors the catalog flag of the same name: when set,
+    the route signs the discovery request with the *admin's own* OIDC token
+    instead of SigV4, matching how the agent loop forwards the end-user's
+    token at runtime. This lets a same-team MCP server that validates a
+    forwarded JWT (Lambda Function URL AuthType=NONE) be discovered without
+    any IAM invoke permission.
+    """
 
     server_url: str = Field(..., alias="serverUrl")
     transport: MCPTransport = Field(default=MCPTransport.STREAMABLE_HTTP)
@@ -1364,6 +1372,7 @@ class MCPDiscoverRequest(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
+    forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
