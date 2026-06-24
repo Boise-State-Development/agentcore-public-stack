@@ -6,12 +6,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [1.0.0] - 2026-06-24
 
-The **1.0.0 general-availability release** — the platform graduates from beta to a stable, single-stack architecture. The CDK app collapses from nine CloudFormation stacks into one `PlatformStack` with a platform-as-bootstrap code-deploy model; admin-managed Skills (RBAC + cross-protocol tool binding) land shipped-but-gated-off; admin-curated Conversation Modes, external file-source connectors and website crawling for assistant knowledge bases, self-service AgentCore Gateway MCP target registration, a curated model catalog with the new Amazon Bedrock Mantle provider, per-turn context attribution, a Starlight documentation site, and a full backup/restore DR toolchain all ship; plus a coordinated security-hardening sweep and remediation of all 22 HIGH Dependabot findings.
+The **1.0.0 general-availability release** — the platform graduates from beta to a stable, single-stack architecture. The CDK app collapses from nine CloudFormation stacks into one `PlatformStack` with a platform-as-bootstrap code-deploy model; admin-curated Conversation Modes, external file-source connectors and website crawling for assistant knowledge bases, self-service AgentCore Gateway MCP target registration, a curated model catalog with the new Amazon Bedrock Mantle provider, per-turn context attribution, a Starlight documentation site, and a full backup/restore DR toolchain all ship; plus a coordinated security-hardening sweep and remediation of all 22 HIGH Dependabot findings.
 
 ### 🚀 Added
 
-- **Admin-managed Skills** — DynamoDB-backed, admin-authored instruction bundles that bind a curated set of catalog tools across all protocols (local / Gateway-MCP / external-MCP / A2A) and are granted to roles via RBAC. Includes S3-backed content-addressed reference files, an `admin/skills/` authoring UI, `/admin/skills` CRUD + `/admin/skills/{id}/roles` + `/admin/skills/{id}/resources` endpoints, an `AppRole.granted_skills` RBAC extension + `SkillAccessService`, a user-facing `GET /skills/` + `PUT /skills/preferences` surface, and runtime per-agent tool folding with a `skills_hash` cache key. **Shipped gated off** behind `SKILLS_ENABLED` (default `false`) (#460, #461, #462, #463, #464, #465, #466, #467, #468, #469, #470, #474, #476, #486)
-- **Skills/Tools mode UX** — Skills/Tools segmented control + per-skill toggle section in the model-settings panel, `SkillService` + `ChatModeService`, and an admin chat-mode policy (`GET`/`PUT /admin/settings/chat`, SPA-facing `GET /system/chat-settings`) governing default mode and whether users may toggle (#473, #474, #476)
 - **Per-tool MCP enablement** — scoped tool ids (`toolId::name`) selecting a single tool of an MCP server, with live `POST /admin/tools/{id}/discover` and `POST /tools/{id}/discover` endpoints (#469)
 - **Conversation Modes** — admin-curated catalog of custom system prompts (e.g. "Guided Learning", "Concise") that users opt into per conversation; appended to the base system prompt at invocation. Admin CRUD `/admin/system-prompts` + user read `/system-prompts` (name/description only); new `system-prompts` DynamoDB table. Ships enabled (#411)
 - **File-source connectors** — import knowledge-base documents from external OAuth providers. Provider-agnostic `FileSourceAdapter` framework + registry with a shipped `GoogleDriveAdapter`; `GET /file-sources`, `GET /connectors/{id}/roots|browse|search`, `POST /assistants/{id}/documents/import` (202); admin connector→adapter mapping (`OAuthProvider.file_source_adapter_id`) + `GET /admin/file-source-adapters`; `Document` provenance fields; SPA `FileSourceBrowserDialogComponent` (#366, #367, #371, #372)
@@ -45,7 +43,6 @@ The **1.0.0 general-availability release** — the platform graduates from beta 
 - **Single-stack CDK architecture (breaking for multi-stack fork migrators).** The nine-stack CDK app collapses into one `${prefix}-PlatformStack`. All per-component CDK feature flags removed (`CDK_FRONTEND_ENABLED`, `CDK_APP_API_ENABLED`, `CDK_INFERENCE_API_ENABLED`, `CDK_GATEWAY_ENABLED`, `CDK_FILE_UPLOAD_ENABLED`, `CDK_ASSISTANTS_ENABLED`, `CDK_RAG_ENABLED`, `CDK_FINE_TUNING_ENABLED`, `CDK_ARTIFACTS_ENABLED`, `CDK_MCP_SANDBOX_ENABLED`) — deploy-everything-always. Backend code now ships out-of-band via AWS APIs, not CFN. Migration documented in `.github/docs/deploy/upgrade-from-multi-stack.md` (#396, #434)
 - **SSM `image-tag` contract (breaking for multi-stack fork migrators).** `/{prefix}/{app-api,inference-api,rag-ingestion}/image-tag` changed from a bare tag/short-SHA to a FULL ECR URI; a stale legacy value fails the first `PlatformStack` deploy on CFN pattern-validation. The seed script auto-repairs (#420)
 - **Assistant consumer chat is knowledge-base-grounded with zero external tools** — enforced at the inference-API chokepoint (`enabled_tools=[]`) plus a "## Knowledge Base Grounding" system-prompt section. Side effect: no MCP-App `ui_resource` events for assistant chats (#382)
-- **Default `agent_type` flipped from `"chat"` to `"skill"`** server-side (no-op at GA because Skills ships gated off; users with zero granted skills transparently degrade to `ChatAgent`) (#470)
 - `analyze_spreadsheet` hard-fails downloads over 25 MB (soft-warns at 10 MB), tunable via `ANALYZE_MAX_FILE_SIZE_BYTES` / `ANALYZE_WARN_FILE_SIZE_BYTES`; checked before S3 GetObject (#397)
 
 ### 🐛 Fixed
@@ -76,7 +73,6 @@ The **1.0.0 general-availability release** — the platform graduates from beta 
 - Profile-sync hardening: persisted email and roles bound exclusively to the validated session/JWT (`current_user.*`), no longer influenced by the request body (#12defcfc, #458)
 - Role-mapping validation (`jwt_role_mappings` regex `^[A-Za-z0-9_-]{2,64}$`, map-everyone tokens banned on `system_admin`) + a monotonic roles-version cache-invalidation counter (#cf613b15)
 - Admin error-path sanitization (no env-var-name or input echo on errors); viewer-facing CloudFront + ALB pinned to a TLS 1.2+ minimum baseline; dedicated SSRF and cursor-validation test suites added (#7cb9047c, #484)
-- OAuth consent and approval gating restored for skill-folded external MCP tools (folded tools previously ran tokenless / bypassed `needs_approval`) (#477, #478)
 
 ### ⚡ Performance
 
@@ -90,12 +86,12 @@ The **1.0.0 general-availability release** — the platform graduates from beta 
 - Shared CloudFront wildcard cert — new top-level `CDK_CLOUDFRONT_CERTIFICATE_ARN`; frontend / artifacts / mcp-sandbox fall back to it (section-specific wins); one `us-east-1` `{domain}` + `*.{domain}` cert with cert-missing guards (#491)
 - AgentCore runtime execution role granted `bedrock:CountTokens` (context-attribution foundation) (#428)
 - `/{prefix}/gateway/id` SSM publication + app-api Gateway-target IAM grants (`bedrock-agentcore:{Create,Get,Update,Delete,List}GatewayTarget` scoped to `gateway/*`) (#452)
-- New `system-prompts` DynamoDB table (Conversation Modes); chat-mode policy stored as a `SYSTEM_SETTINGS#chat-mode` sentinel (no CDK); new `skill-resources` S3 bucket + skills entries on the app-roles table behind `SKILLS_ENABLED` (#411, #465, #473)
+- New `system-prompts` DynamoDB table (Conversation Modes; app-api CRUD, inference-api `GetItem` only) (#411)
 - Restored ~22 SSM parameters (17 table, 4 bucket, `/inference-api/memory-id`) that the stack consolidation dropped and the restore tooling needs (#421)
 
 ### 📦 Dependencies
 
-- Backend: `cryptography` 47.0.0 → 48.0.1, `starlette` 1.0.0 → 1.3.1, `python-multipart` 0.0.27 → 0.0.31, `pyjwt[crypto]` 2.12.1 → 2.13.0, `urllib3` pinned 2.7.0, `aiohttp` 3.13.5 → 3.14.1, `authlib` 1.7.0 → 1.7.1, `idna` pinned 3.15; new `beautifulsoup4` 4.13.5, `trafilatura` 2.0.0 (web-sources) (#487, #488, #478)
+- Backend: `cryptography` 47.0.0 → 48.0.1, `starlette` 1.0.0 → 1.3.1, `python-multipart` 0.0.27 → 0.0.31, `pyjwt[crypto]` 2.12.1 → 2.13.0, `urllib3` pinned 2.7.0, `aiohttp` 3.13.5 → 3.14.1, `authlib` 1.7.0 → 1.7.1, `idna` pinned 3.15; new `beautifulsoup4` 4.13.5, `trafilatura` 2.0.0 (web-sources) (#487, #488, #378)
 - Frontend: `@angular/*` 21.2.11 → 21.2.17, `@angular/cdk` 21.2.9 → 21.2.14, `@angular/build`/`cli` 21.2.9 → 21.2.16, `mermaid` 11.14.0 → 11.15.0; overrides `hono` ≥4.12.25, `undici` ≥7.28.0, `vite` ≥8.0.16, `piscina` ≥5.2.0, `@babel/core` bounded 7.29.7 (#487, #488)
 - Infra: `aws-cdk-lib` 2.251.0 → 2.260.0, `aws-cdk` CLI 2.1120.0 → 2.1128.0 (#492)
 - Remediates all 22 HIGH Dependabot findings plus easy MEDIUM/LOW (same set merged across #487, #488, #489)

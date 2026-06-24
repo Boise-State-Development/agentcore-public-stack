@@ -9,9 +9,34 @@
 
 **This is 1.0.0 — the first general-availability release.** After 27 betas, the platform is stable, and the headline of this release is as much about the *foundation* as the features built on it: the entire CDK app collapses from nine CloudFormation stacks into a single `PlatformStack` with a platform-as-bootstrap code-deploy model, so day-to-day code changes ship in ~2 minutes via AWS APIs and `cdk deploy` runs only when infrastructure actually changes.
 
-On top of that foundation, 1.0.0 lands a large slate of product work: **admin-managed Skills** (RBAC-granted, cross-protocol tool bundles — shipped but gated off for GA), **Conversation Modes** (admin-curated system prompts users opt into), **file-source connectors and website crawling** that turn external systems and the open web into assistant knowledge bases, **self-service AgentCore Gateway MCP targets**, a **curated model catalog** with a new **Amazon Bedrock Mantle** provider, **per-turn context attribution**, and a public **Starlight documentation site**. It also delivers a complete **backup/restore disaster-recovery toolchain**, a coordinated **security-hardening sweep**, and remediation of **all 22 HIGH Dependabot findings**.
+On top of that foundation, 1.0.0 lands a large slate of product work: **Conversation Modes** (admin-curated system prompts users opt into), **file-source connectors and website crawling** that turn external systems and the open web into assistant knowledge bases, **self-service AgentCore Gateway MCP targets**, a **curated model catalog** with a new **Amazon Bedrock Mantle** provider, **per-turn context attribution**, and a public **Starlight documentation site**. It also delivers a complete **backup/restore disaster-recovery toolchain**, a coordinated **security-hardening sweep**, and remediation of **all 22 HIGH Dependabot findings**.
 
-**Action required for operators upgrading a multi-stack deployment:** the stack consolidation and the SSM `image-tag` contract change are breaking for forks still on the legacy multi-stack layout. Read the **Breaking changes** and **Deployment notes** sections below before deploying — there is a documented `upgrade-from-multi-stack.md` path. Fresh deployments and single-stack deployments need no special steps.
+**Action required for operators with an existing deployment.** Because 1.0.0 consolidates the old nine-stack architecture into a single `PlatformStack`, upgrading any prior (beta) deployment is a **destructive backup → teardown → redeploy → restore migration** — not an in-place `cdk deploy`. We've written step-by-step instructions to make it as painless as possible. **Do not deploy over an existing environment without reading the [Upgrading an existing deployment](#upgrading-an-existing-deployment) section below first.** Brand-new deployments need no special steps.
+
+---
+
+## Upgrading an existing deployment
+
+> **Read this before you deploy 1.0.0 over any existing environment.**
+
+1.0.0 replaces the previous nine-stack CloudFormation layout with a single `PlatformStack`. There is **no in-place upgrade path** from a beta deployment — the old stacks must be torn down and replaced. Your data is preserved through a backup/restore cycle, but the steps are **destructive and must run in order**. We've written and tested detailed, click-by-click instructions so you can work through it confidently.
+
+**Start here — the full step-by-step guides:**
+
+- 📖 **[Upgrading from Multi-Stack](https://boise-state-development.github.io/agentcore-public-stack/deployment/upgrade/)** (published docs site) — the complete walkthrough with screenshots-level detail, a timeline, rollback steps, and migration gotchas.
+- 📄 In-repo copy: [`.github/docs/deploy/upgrade-from-multi-stack.md`](.github/docs/deploy/upgrade-from-multi-stack.md)
+
+**The migration at a glance** (≈45–75 min total — see the guide for the exact inputs for each workflow):
+
+1. **Back up** — run the **Backup Data (Pre-Migration)** workflow. This is the most critical step; confirm `summary.failed` is zero and note the `{prefix}-backup-{timestamp}` bucket name. Do not proceed on a failed backup.
+2. **Tear down** — run the **Teardown All Infrastructure** workflow (`confirm: DESTROY`) to delete the old stacks. If your environment retained stateful resources (`CDK_RETAIN_DATA_ON_DELETE=true`), clear them — at minimum delete the legacy `/{prefix}/{app-api,inference-api}/image-tag` SSM parameters, which otherwise fail the first new deploy.
+3. **Redeploy** — run **Platform Stack** → **Backend Deploy** → **Frontend Deploy** → **Seed Bootstrap Data**.
+4. **Restore** — run the **Restore Data** workflow against your backup bucket with `dry_run: true` first, then `dry_run: false`.
+5. **Verify** — confirm login, chat history, file uploads, the admin dashboard, and RAG assistants.
+
+> ⚠️ **Two things to know going in:** the backup bucket is immutable and survives every teardown (it's your safety net and rollback source), and **Cognito passwords do not transfer** — native-password users must use "Forgot Password" on first login, while federated (OIDC/SAML) users are unaffected.
+
+Brand-new deployments skip all of this — see [Deployment notes](#-deployment-notes).
 
 ---
 
@@ -35,31 +60,9 @@ Carried forward from the refactor's stabilization: 7 policy-level assertions in 
 
 ---
 
-## Admin-managed Skills
-
-beta.27 shipped a file-based, local-tool-only, dark SkillAgent foundation. 1.0.0 turns Skills into a real (if still gated) product: admins author skills in the UI, bind catalog tools across all four protocols, and grant them to roles via RBAC — the "tool-hiding" thesis where a user states intent and the agent carries the right tools without anyone toggling a picker.
-
-> **Shipped gated off.** The entire Skills + skills-mode surface ships disabled behind `SKILLS_ENABLED` (default `false`, read per-call, mirroring `FINE_TUNING_ENABLED`). While off, app-api leaves the user + admin skills routers and the chat-mode-policy router unmounted (404), `GET /system/chat-settings` reports chat/no-toggle/`skillsEnabled:false`, and inference-api forces every turn through the plain `ChatAgent` (so the default-`agent_type` flip below is a no-op). No code or data is removed — set `SKILLS_ENABLED=true` on **both** app-api and inference-api to light it up.
-
-### Backend
-
-- New `apis/shared/skills/` domain mirrors the Tools catalog: `SkillDefinition` (`skill_id` regex `^[a-z][a-z0-9_]{2,49}$`, `instructions`, `bound_tool_ids`, `resources` manifest, `status`), a `SkillCatalogRepository` reusing the app-roles table (`PK=SKILL#{id}`, `SK=METADATA`), and a 10s-TTL freshness cache.
-- RBAC gains `AppRole.granted_skills`, `EffectivePermissions.skills`, `SKILL_GRANT#` reverse-lookup items, and a `SkillAccessService`. Admin API `app_api/admin/skills/routes.py` validates every bound tool against the live catalog.
-- Reference files live in a content-addressed S3 `skill-resources` bucket with only a manifest in DynamoDB. Runtime `make_skill_tools(registry)` builds **per-agent** dispatcher/executor closures (fixing a latent cross-user concurrency bug), and `_create_cache_key` gains a `skills_hash` over accessible ids + `updated_at`. PR-6b folds Gateway/external-MCP tools (`mcp_tool_folding.py`, `mcp_binding.py`), and scoped tool ids (`apis/shared/tools/scoped_ids.py`) plus live `discover` endpoints let a skill bind a single tool of a server.
-
-### Frontend
-
-- `admin/skills/` list + create/edit form with a bound-tool picker, role-grant dialog, S3 reference-file authoring, and `SKILL.md` import-prefill. A Skills/Tools segmented control + per-skill toggle section in the model-settings slide-over, backed by `SkillService` + `ChatModeService`.
-
-### Test coverage
-
-Skills ship with regression coverage across the new shared domain, RBAC extension, runtime folding, and the OAuth-consent / approval second-chance resolvers (#477, #478) and subset-scoped binding fix (#486).
-
----
-
 ## Conversation Modes
 
-Distinct from Skills and **shipped enabled**: admins curate a catalog of custom system prompts ("Guided Learning", "Concise", and so on) that users opt into per conversation.
+**Shipped enabled.** Admins curate a catalog of custom system prompts ("Guided Learning", "Concise", and so on) that users opt into per conversation.
 
 ### Backend
 
@@ -117,7 +120,7 @@ Separately, **Amazon Bedrock Mantle** is added as a first-class provider — AWS
 
 ## Per-turn context attribution
 
-A four-PR foundation answers "what is filling the context window?". The AgentCore runtime role is granted `bedrock:CountTokens`; `model_config.py` sets `use_native_token_count=True` with an inference-profile-aware `core/bedrock_count_tokens.py` so Bedrock returns authoritative counts instead of the chars/4 heuristic. A `ContextAttributionHook` (on `BeforeModelCallEvent`) splits the count into system / tools / messages partitions, and the stream coordinator attaches it to the turn's final `metadata` SSE event as `contextBreakdown`. The SPA renders a "Context: <total>" pill, modeled as an open-ended partition list so future skills/cache splits are additive and non-breaking, gated behind the existing show-token-count setting.
+A four-PR foundation answers "what is filling the context window?". The AgentCore runtime role is granted `bedrock:CountTokens`; `model_config.py` sets `use_native_token_count=True` with an inference-profile-aware `core/bedrock_count_tokens.py` so Bedrock returns authoritative counts instead of the chars/4 heuristic. A `ContextAttributionHook` (on `BeforeModelCallEvent`) splits the count into system / tools / messages partitions, and the stream coordinator attaches it to the turn's final `metadata` SSE event as `contextBreakdown`. The SPA renders a "Context: <total>" pill, modeled as an open-ended partition list so future partition splits are additive and non-breaking, gated behind the existing show-token-count setting.
 
 ---
 
@@ -150,7 +153,7 @@ A coordinated defense-in-depth pass, mostly as direct commits plus PRs #443/#458
 - `ownership` helpers (`require_session_owner` / `require_memory_owner` / `require_file_owner`) whose handler maps `OwnershipError` → HTTP **404, not 403**, erasing the not-found-vs-forbidden enumeration oracle.
 - AWS `ClientError` / validation handlers registered in both API apps that collapse upstream detail to generic 400/502/422 bodies.
 
-Adopted across the surface: `fetch_url_content` runs every URL — including each manual redirect hop (`follow_redirects=False`, ≤3 hops) — through the validator; outbound MCP SigV4 signing only attaches task IAM credentials to recognized AWS hosts and refuses otherwise; Code Interpreter inputs from `generate_diagram_and_validate` and `analyze_spreadsheet` are walked by a static AST policy against a plotting/dataframe allowlist that bans subprocess/os/sys/socket/eval/exec/dunder access. Identity is pinned to the validated session, not request bodies (`POST /users/me/sync` derives email and roles from `current_user.*`); system prompts are wrapped in a non-escapable `PLATFORM_SAFETY_FLOOR`; session-metadata `PUT` rejects cross-owner ids; `jwt_role_mappings` are regex-validated with map-everyone tokens banned on `system_admin`; admin read paths were sanitized and CloudFront/ALB pinned to a TLS 1.2+ minimum baseline. OAuth consent and approval gating were also restored for skill-folded external MCP tools (#477, #478). Each item ships regression tests under `backend/tests/security/`, `tests/rbac/`, and `tests/routes/`.
+Adopted across the surface: `fetch_url_content` runs every URL — including each manual redirect hop (`follow_redirects=False`, ≤3 hops) — through the validator; outbound MCP SigV4 signing only attaches task IAM credentials to recognized AWS hosts and refuses otherwise; Code Interpreter inputs from `generate_diagram_and_validate` and `analyze_spreadsheet` are walked by a static AST policy against a plotting/dataframe allowlist that bans subprocess/os/sys/socket/eval/exec/dunder access. Identity is pinned to the validated session, not request bodies (`POST /users/me/sync` derives email and roles from `current_user.*`); system prompts are wrapped in a non-escapable `PLATFORM_SAFETY_FLOOR`; session-metadata `PUT` rejects cross-owner ids; `jwt_role_mappings` are regex-validated with map-everyone tokens banned on `system_admin`; admin read paths were sanitized and CloudFront/ALB pinned to a TLS 1.2+ minimum baseline. Each item ships regression tests under `backend/tests/security/`, `tests/rbac/`, and `tests/routes/`.
 
 ---
 
@@ -173,7 +176,7 @@ These are breaking only for forks still on the legacy multi-stack layout. Fresh 
 ## 🏗️ Infrastructure
 
 - **Shared CloudFront wildcard cert.** New top-level `CDK_CLOUDFRONT_CERTIFICATE_ARN`; the SPA / artifacts / mcp-sandbox origins fall back to it (a section-specific cert still wins), so a single `us-east-1` `{domain}` + `*.{domain}` cert covers all edge origins, with cert-missing guards (#491).
-- **New tables / buckets.** `system-prompts` DynamoDB table (Conversation Modes); `skill-resources` S3 bucket + skills entries on the app-roles table (behind `SKILLS_ENABLED`); chat-mode policy stored as a `SYSTEM_SETTINGS#chat-mode` sentinel (no CDK).
+- **New tables.** `system-prompts` DynamoDB table (Conversation Modes; app-api CRUD, inference-api `GetItem` only), with name + ARN published to SSM.
 - **Restored SSM contracts.** ~22 parameters (17 table, 4 bucket, `/inference-api/memory-id`) that the consolidation dropped and the restore tooling reads were republished (#421).
 - **Context attribution.** AgentCore runtime execution role granted `bedrock:CountTokens` (#428).
 
@@ -239,11 +242,10 @@ Remediates all 22 HIGH Dependabot findings plus easy MEDIUM/LOW (the same set me
 
 ## 🚀 Deployment notes
 
-- **Fresh deployments / single-stack deployments:** no special steps. Deploy `platform.yml` (CDK), then `backend.yml` and `frontend-deploy.yml`.
-- **Upgrading a legacy multi-stack deployment:** follow `.github/docs/deploy/upgrade-from-multi-stack.md`. The `image-tag` SSM parameters must hold full ECR URIs (the seed step repairs stale legacy values); after the single `PlatformStack` is healthy, tear down the old per-component stacks with `teardown.yml`.
-- **Skills are off by default.** To enable the Skills surface, set `SKILLS_ENABLED=true` on **both** the app-api and inference-api task environments. Conversation Modes ship enabled and need no flag.
+- **Fresh deployments:** no special steps. Deploy `platform.yml` (CDK), then `backend.yml`, `frontend-deploy.yml`, and the **Seed Bootstrap Data** workflow.
+- **Upgrading an existing deployment:** this is a destructive backup → teardown → redeploy → restore migration — see the [Upgrading an existing deployment](#upgrading-an-existing-deployment) section above for the full walkthrough and links. The `image-tag` SSM parameters must hold full ECR URIs (the seed step repairs stale legacy values).
 - **New certificate option.** If you want one wildcard cert across all edge origins, set `CDK_CLOUDFRONT_CERTIFICATE_ARN` (must be in `us-east-1`); section-specific cert ARNs still take precedence.
-- **Disaster recovery.** The new `restore-data.yml` workflow can replay a `backup-data.yml` snapshot into a freshly deployed `PlatformStack`; run it with `dry_run` first.
+- **Disaster recovery.** The `Backup Data (Pre-Migration)` and `Restore Data` workflows snapshot and replay all application data (DynamoDB, S3, S3 Vectors, Cognito) into a deployed `PlatformStack`; always run `Restore Data` with `dry_run: true` first.
 
 ---
 
