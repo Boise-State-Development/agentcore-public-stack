@@ -2,15 +2,19 @@ name: Platform Stack
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop, main]
-    paths:
-      - 'infrastructure/lib/platform-stack.ts'
-      - 'infrastructure/lib/constructs/**'
-      - 'infrastructure/lib/config.ts'
-      - 'infrastructure/bin/infrastructure.ts'
-      - 'infrastructure/bootstrap-assets/**'
-      - 'scripts/platform/**'
+  # Push-triggered deploys are disabled for the v1.0.0 release so that
+  # forking/syncing the codebase never auto-deploys infrastructure into a
+  # user's AWS account. Deploy intentionally via the Actions tab. Re-enable
+  # by uncommenting the block below.
+  # push:
+  #   branches: [develop, main]
+  #   paths:
+  #     - 'infrastructure/lib/platform-stack.ts'
+  #     - 'infrastructure/lib/constructs/**'
+  #     - 'infrastructure/lib/config.ts'
+  #     - 'infrastructure/bin/infrastructure.ts'
+  #     - 'infrastructure/bootstrap-assets/**'
+  #     - 'scripts/platform/**'
 
 permissions:
   contents: read

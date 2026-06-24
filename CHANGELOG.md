@@ -98,10 +98,11 @@ The **1.0.0 general-availability release** — the platform graduates from beta 
 
 ### 🔧 CI/CD
 
+- Deploy workflows (`platform.yml`, `backend.yml`, `frontend-deploy.yml`) gated to `workflow_dispatch`-only for the v1.0.0 release — `push:` triggers commented out so syncing/forking the codebase never auto-deploys into a user's AWS account; re-enable by uncommenting
 - New `platform.yml` (CDK), `backend.yml` (build → API deploy), and `frontend-deploy.yml` workflows; `nightly-deploy-pipeline` rewritten platform → backend → frontend; legacy per-stack workflows/scripts/tests deleted (#396)
-- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys stay push-only (#490)
+- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys never run on PRs (#490)
 - New `docs-deploy.yml` builds the Starlight site and publishes to GitHub Pages (#432)
-- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); push triggers re-enabled on deploy workflows (#190f9c7b); `Backend Stack` workflow renamed to `Backend Deploy` (#423); stale `6.` prefix dropped from the Seed Bootstrap Data workflow
+- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); `Backend Stack` workflow renamed to `Backend Deploy` (#423); stale `6.` prefix dropped from the Seed Bootstrap Data workflow
 - `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` plumbed through platform/nightly deploy workflows (#485)
 
 ### 📚 Docs

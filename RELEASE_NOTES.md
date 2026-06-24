@@ -44,6 +44,8 @@ Brand-new deployments skip all of this — see [Deployment notes](#-deployment-n
 
 The biggest structural change in the project's history: the CDK app that used to be nine CloudFormation stacks is now one `PlatformStack`.
 
+**Why this overhaul.** The multi-stack layout treated the platform like a fleet of independently deployable microservices — but the application is, by definition, a **monolith**: one cohesive product whose pieces are released together, version-locked, and only ever deployed as a unit. Splitting it across nine stacks bought none of the benefits of microservices and all of their operational cost. Cross-stack `Fn::ImportValue` references created brittle deploy-ordering requirements; a change in one stack routinely forced careful, manual sequencing of the others; and the seams between stacks were a constant source of deployment issues and gotchas — exported-value locks that blocked updates, drift between stacks that had to be reconciled by hand, and first-deploy chicken-and-egg problems. Consolidating into a single `PlatformStack` removes that entire class of failure: there are no cross-stack references to order, no inter-stack drift to reconcile, and one `cdk deploy` either succeeds or rolls back as a whole. Treating the monolith as a monolith from a DevOps standpoint is simpler to reason about, faster to deploy, and dramatically less error-prone.
+
 ### Infrastructure
 
 - `infrastructure/lib/platform-stack.ts` composes ~39 single-responsibility constructs under `lib/constructs/` (network, identity, data, rag, artifacts, mcp-sandbox, agentcore, inference-api, app-api, fine-tuning, spa, zones). It is built in two phases — the constructor (data + edge + Cognito + AgentCore Memory/Code-Interpreter/Browser/Gateway) and `wireCompute()` (Inference Runtime + SageMaker + App API Fargate) — which eliminates every cross-stack `Fn::ImportValue` and all deploy-ordering between stacks. `npx cdk list` now returns exactly `${prefix}-PlatformStack`.
@@ -184,10 +186,11 @@ These are breaking only for forks still on the legacy multi-stack layout. Fresh 
 
 ## 🔧 CI/CD improvements
 
+- **Deploy workflows are `workflow_dispatch`-only for this release.** `platform.yml`, `backend.yml`, and `frontend-deploy.yml` no longer run on `push` — their push triggers are commented out so that forking or syncing the codebase never auto-deploys infrastructure or code into your AWS account. Deploy intentionally from the **Actions** tab. Re-enable later by uncommenting the `push:` block in each workflow.
 - New `platform.yml`, `backend.yml`, and `frontend-deploy.yml` workflows; `nightly-deploy-pipeline` rewritten platform → backend → frontend; legacy per-stack workflows deleted (#396).
-- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys stay push-only (#490).
+- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys never run on PRs (#490).
 - New `docs-deploy.yml` publishes the Starlight site to GitHub Pages (#432).
-- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); push triggers re-enabled on deploy workflows; `Backend Stack` renamed to `Backend Deploy` (#423); and the stale `6.` prefix was dropped from the Seed Bootstrap Data workflow.
+- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); `Backend Stack` renamed to `Backend Deploy` (#423); and the stale `6.` prefix was dropped from the Seed Bootstrap Data workflow.
 
 ### GitHub Actions upgrades
 
@@ -242,7 +245,7 @@ Remediates all 22 HIGH Dependabot findings plus easy MEDIUM/LOW (the same set me
 
 ## 🚀 Deployment notes
 
-- **Fresh deployments:** no special steps. Deploy `platform.yml` (CDK), then `backend.yml`, `frontend-deploy.yml`, and the **Seed Bootstrap Data** workflow.
+- **Fresh deployments:** no special steps. Trigger each workflow from the **Actions** tab (deploys are manual `workflow_dispatch` this release): **Platform Stack** (CDK), then **Backend Deploy**, **Frontend Deploy**, and **Seed Bootstrap Data**.
 - **Upgrading an existing deployment:** this is a destructive backup → teardown → redeploy → restore migration — see the [Upgrading an existing deployment](#upgrading-an-existing-deployment) section above for the full walkthrough and links. The `image-tag` SSM parameters must hold full ECR URIs (the seed step repairs stale legacy values).
 - **New certificate option.** If you want one wildcard cert across all edge origins, set `CDK_CLOUDFRONT_CERTIFICATE_ARN` (must be in `us-east-1`); section-specific cert ARNs still take precedence.
 - **Disaster recovery.** The `Backup Data (Pre-Migration)` and `Restore Data` workflows snapshot and replay all application data (DynamoDB, S3, S3 Vectors, Cognito) into a deployed `PlatformStack`; always run `Restore Data` with `dry_run: true` first.
