@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
@@ -700,6 +701,51 @@ def ensure_ui_extension_session_patch() -> None:
 # UI-capable MCP client
 # =============================================================================
 
+# Transport-level error type names worth retrying on a fresh connection — a TLS
+# handshake blip (`SSLV3_ALERT_HANDSHAKE_FAILURE` from a middlebox), a reset, or
+# a connect timeout. Matched by class name so we don't hard-import
+# httpx/httpcore/ssl just to classify an exception.
+_TRANSIENT_CONNECT_ERROR_NAMES = frozenset(
+    {
+        "ConnectError",
+        "ConnectTimeout",
+        "ConnectionError",
+        "ConnectionResetError",
+        "ReadTimeout",
+        "PoolTimeout",
+        "SSLError",
+        "SSLEOFError",
+    }
+)
+
+#: MCP client start() retry policy (transient transport failures only).
+_MCP_START_MAX_ATTEMPTS = 3
+_MCP_START_BACKOFF_BASE_S = 0.5
+
+
+def _is_transient_connect_error(exc: BaseException) -> bool:
+    """True if `exc` — or anything in its cause/context/ExceptionGroup chain —
+    is a transport-level connection error worth retrying on a new connection.
+
+    Strands wraps the real failure as `MCPClientInitializationError` whose
+    `__cause__` is an anyio `ExceptionGroup` containing the `httpx.ConnectError`
+    (often itself caused by an `ssl.SSLError`), so we walk the whole tree.
+    """
+    seen: set[int] = set()
+    stack: List[BaseException] = [exc]
+    while stack:
+        e = stack.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        if type(e).__name__ in _TRANSIENT_CONNECT_ERROR_NAMES:
+            return True
+        for nxt in (e.__cause__, e.__context__):
+            if nxt is not None:
+                stack.append(nxt)
+        stack.extend(getattr(e, "exceptions", ()) or ())  # ExceptionGroup
+    return False
+
 
 class UICapableMCPClient(MCPClient):
     """`MCPClient` that records `_meta.ui` and hides app-only tools.
@@ -722,6 +768,46 @@ class UICapableMCPClient(MCPClient):
         self.server_url = server_url
         ensure_ui_extension_session_patch()
         super().__init__(*args, **kwargs)
+
+    def start(self, *args: Any, **kwargs: Any) -> "UICapableMCPClient":
+        """Start the MCP session, retrying transient transport failures.
+
+        A single TLS handshake blip or connection reset at startup otherwise
+        fails the whole agent build: Strands' `start()` raises
+        `MCPClientInitializationError`, the tool fails to load, and agent
+        creation errors out for the user. External MCP endpoints — Lambda
+        Function URLs, third-party servers behind TLS-inspecting middleboxes —
+        hit these intermittently, so retry a few times with exponential backoff
+        before giving up. Non-transient failures (bad URL, auth, protocol
+        mismatch) are re-raised on the first attempt. Strands resets its init
+        future + background thread on failure (via `stop()`), so re-invoking
+        `start()` is safe.
+        """
+        last_exc: Optional[BaseException] = None
+        delay = _MCP_START_BACKOFF_BASE_S
+        for attempt in range(1, _MCP_START_MAX_ATTEMPTS + 1):
+            try:
+                super().start(*args, **kwargs)
+                return self
+            except Exception as exc:  # noqa: BLE001 - classify, then retry/raise
+                last_exc = exc
+                if attempt >= _MCP_START_MAX_ATTEMPTS or not _is_transient_connect_error(
+                    exc
+                ):
+                    raise
+                logger.warning(
+                    "MCP client start failed (attempt %d/%d) with a transient "
+                    "transport error; retrying in %.1fs: %s",
+                    attempt,
+                    _MCP_START_MAX_ATTEMPTS,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+                delay *= 2
+        # Unreachable: the loop returns on success or raises on the last attempt.
+        assert last_exc is not None
+        raise last_exc
 
     def list_tools_sync(self, *args: Any, **kwargs: Any) -> PaginatedList:
         result = super().list_tools_sync(*args, **kwargs)
