@@ -9,6 +9,13 @@ export class ChatStateService {
     private readonly chatLoading = signal(false);
     readonly isChatLoading: Signal<boolean> = this.chatLoading.asReadonly();
 
+    // Bumped to ask the message list to scroll the latest user message to the
+    // top of the viewport. Lets non-composer submit paths (e.g. an MCP App
+    // widget's ui/message) get the same scroll affordance the composer
+    // triggers in ChatContainerComponent.onMessageSubmitted.
+    private readonly scrollToLastUserSignal = signal(0);
+    readonly scrollToLastUserTick: Signal<number> = this.scrollToLastUserSignal.asReadonly();
+
     private readonly stopReason = signal<string | null>(null);
     readonly currentStopReason: Signal<string | null> = this.stopReason.asReadonly();
 
@@ -46,6 +53,15 @@ export class ChatStateService {
      */
     setChatLoading(loading: boolean): void {
         this.chatLoading.set(loading);
+    }
+
+    /**
+     * Request that the message list scroll the latest user message to the top
+     * of the viewport (e.g. after a programmatic, non-composer user turn such
+     * as an MCP App widget relaying a `ui/message`).
+     */
+    requestScrollToLastUser(): void {
+        this.scrollToLastUserSignal.update(n => n + 1);
     }
 
     /**
