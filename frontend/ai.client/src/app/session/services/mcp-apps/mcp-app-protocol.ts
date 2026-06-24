@@ -145,10 +145,14 @@ export interface RequestDisplayModeParams {
   mode: DisplayMode;
 }
 
-/** Spec shape of `ui/message` params (View → host). */
+/**
+ * Spec shape of `ui/message` params (View → host). Per SEP-1865 / the
+ * ext-apps SDK, `content` is an ARRAY of content blocks (the View sends
+ * `content: [{ type: 'text', text }]`), not a single block.
+ */
 export interface MessageParams {
   role: 'user';
-  content: { type: 'text'; text: string };
+  content: Array<{ type: string; text?: string }>;
 }
 
 /** Spec shape of `ui/update-model-context` params (View → host). */
