@@ -163,10 +163,11 @@ class TestExportTargetRegistry:
         assert reg.adapters_for_provider_type(OAuthProviderType.GOOGLE)
         assert reg.adapters_for_provider_type(OAuthProviderType.SLACK) == []
 
-    def test_default_registry_is_empty_until_an_adapter_ships(self):
-        # The Drive export adapter is registered in a later PR; today the
-        # shipped registry is intentionally empty.
-        assert registry.all() == []
+    def test_default_registry_includes_google_drive(self):
+        # The shipped registry now carries the Google Drive export adapter.
+        drive = registry.get("google-drive")
+        assert drive is not None
+        assert drive.metadata.compatible_provider_types == (OAuthProviderType.GOOGLE,)
 
 
 class TestValidateExportTargetAdapter:
@@ -209,7 +210,14 @@ class TestListExportTargetAdaptersEndpoint:
         assert stub["requiredScopes"] == [_STUB_SCOPE]
         assert stub["supportedFormats"] == ["google_doc", "markdown"]
 
-    def test_empty_when_no_adapters_registered(self, client: TestClient):
+    def test_lists_shipped_google_drive_adapter(self, client: TestClient):
         response = client.get("/export-target-adapters/")
         assert response.status_code == 200
-        assert response.json()["adapters"] == []
+        adapters = {a["key"]: a for a in response.json()["adapters"]}
+        assert "google-drive" in adapters
+        drive = adapters["google-drive"]
+        assert drive["displayName"] == "Google Drive"
+        assert drive["requiredScopes"] == [
+            "https://www.googleapis.com/auth/drive.file"
+        ]
+        assert drive["supportedFormats"] == ["google_doc", "markdown"]
