@@ -55,13 +55,14 @@ class ExportTargetRegistry:
 
 
 def _build_default_registry() -> ExportTargetRegistry:
-    """Construct the registry with every export-target adapter in this release.
+    """Construct the registry with every export-target adapter in this release."""
+    from apis.app_api.export_targets.adapters.google_drive import (
+        GoogleDriveExportAdapter,
+    )
 
-    Empty for now — the Google Drive export adapter is registered here in the
-    following PR. The registry, admin endpoint, and connector validation ship
-    first so the mapping field has somewhere to resolve against.
-    """
-    return ExportTargetRegistry()
+    reg = ExportTargetRegistry()
+    reg.register(GoogleDriveExportAdapter())
+    return reg
 
 
 # Process-wide singleton, populated at import time.

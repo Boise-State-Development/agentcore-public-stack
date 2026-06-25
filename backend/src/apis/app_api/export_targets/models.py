@@ -30,6 +30,27 @@ class ExportFormat(str, Enum):
     PDF = "pdf"
 
 
+class ExportInclude(BaseModel):
+    """Which conversation elements to include in an exported transcript.
+
+    Surfaced as a checkbox group in the SPA's "Save to…" dialog. The two
+    message flags are always on (the transcript itself); they exist so the
+    contract is explicit and a future "redacted" mode has a place to live.
+    Defaults match the dialog's default selection so the common case needs
+    no body.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_messages: bool = Field(True, alias="userMessages")
+    assistant_messages: bool = Field(True, alias="assistantMessages")
+    tool_calls: bool = Field(True, alias="toolCalls")
+    images: bool = Field(True)
+    citations: bool = Field(True)
+    reasoning: bool = Field(False)
+    timestamps: bool = Field(False)
+
+
 class ExportDestination(BaseModel):
     """A top-level write location a destination exposes (e.g. My Drive).
 
