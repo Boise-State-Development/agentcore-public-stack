@@ -158,6 +158,10 @@ class OAuthProviderRepository:
             # Empty string (`""`) clears the file-source mapping; a populated
             # adapter key sets it. `None` leaves the existing value alone.
             existing.file_source_adapter_id = updates.file_source_adapter_id or None
+        if updates.export_target_adapter_id is not None:
+            # Empty string (`""`) clears the export-target mapping; a populated
+            # adapter key sets it. `None` leaves the existing value alone.
+            existing.export_target_adapter_id = updates.export_target_adapter_id or None
 
         existing.updated_at = datetime.now(timezone.utc).isoformat() + "Z"
         self._table.put_item(Item=existing.to_dynamo_item())

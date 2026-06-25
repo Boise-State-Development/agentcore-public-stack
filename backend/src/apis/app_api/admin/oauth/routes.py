@@ -16,6 +16,7 @@ from typing import Optional
 import boto3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from apis.app_api.export_targets.registry import registry as export_target_registry
 from apis.app_api.file_sources.registry import registry
 from apis.shared.auth import User, require_admin
 from apis.shared.oauth.agentcore_registrar import (
@@ -191,9 +192,13 @@ async def create_provider(
             detail=f"Provider '{provider_data.provider_id}' already exists",
         )
 
-    # Fail fast on a bad file-source mapping, before any AgentCore side-effect.
+    # Fail fast on a bad file-source / export-target mapping, before any
+    # AgentCore side-effect.
     _validate_file_source_adapter(
         provider_data.file_source_adapter_id, provider_data.provider_type
+    )
+    _validate_export_target_adapter(
+        provider_data.export_target_adapter_id, provider_data.provider_type
     )
 
     try:
@@ -269,6 +274,9 @@ async def update_provider(
     # empty string (clear the mapping) and None (unchanged) skip validation.
     _validate_file_source_adapter(
         updates.file_source_adapter_id, existing.provider_type
+    )
+    _validate_export_target_adapter(
+        updates.export_target_adapter_id, existing.provider_type
     )
 
     rotating_credentials = bool(updates.client_id and updates.client_secret)
@@ -394,6 +402,35 @@ def _validate_file_source_adapter(
         )
 
 
+def _validate_export_target_adapter(
+    adapter_id: Optional[str], provider_type: OAuthProviderType
+) -> None:
+    """Reject an export-target adapter mapping the registry cannot honor.
+
+    An empty/None value is a no-op — the connector simply isn't an export
+    target. A populated value must name an adapter shipped in the registry
+    whose `compatible_provider_types` includes this connector's type.
+    Raises `HTTPException` 400 on a bad mapping. Mirrors
+    `_validate_file_source_adapter` for the write direction.
+    """
+    if not adapter_id:
+        return
+    adapter = export_target_registry.get(adapter_id)
+    if adapter is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown export-target adapter '{adapter_id}'",
+        )
+    if provider_type not in adapter.metadata.compatible_provider_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Export-target adapter '{adapter_id}' is not compatible with "
+                f"provider type '{provider_type.value}'"
+            ),
+        )
+
+
 def _build_provider_from_create(
     data: OAuthProviderCreate, credential_info: CredentialProviderInfo
 ) -> OAuthProvider:
@@ -419,6 +456,8 @@ def _build_provider_from_create(
         custom_parameters=data.custom_parameters or None,
         # `""` from the form means "not a file source" — store as None.
         file_source_adapter_id=data.file_source_adapter_id or None,
+        # `""` from the form means "not an export target" — store as None.
+        export_target_adapter_id=data.export_target_adapter_id or None,
         created_at=now,
         updated_at=now,
     )

@@ -868,6 +868,11 @@ from .file_sources.routes import router as file_sources_admin_router
 
 router.include_router(file_sources_admin_router)
 
+# ========== Include Export-Target Adapters Admin Subrouter ==========
+from .export_targets.routes import router as export_targets_admin_router
+
+router.include_router(export_targets_admin_router)
+
 # ========== Include Auth Providers Admin Subrouter ==========
 from .auth_providers.routes import router as auth_providers_router
 
