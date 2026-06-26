@@ -16,7 +16,7 @@ from typing import Iterable, List, Optional, Tuple, Any, Dict
 from decimal import Decimal
 
 # Relative imports from shared sessions module
-from .models import MessageMetadata, PausedTurnSnapshot, PendingInterrupt, SessionMetadata, SessionPreferences
+from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingInterrupt, SessionMetadata, SessionPreferences
 
 # Import preview session helper
 from agents.main_agent.session.preview_session_manager import is_preview_session
@@ -1903,6 +1903,62 @@ async def add_pending_interrupt(
         # Persistence failure must not break the live SSE flow — the in-memory
         # consent on the live tab still works; refresh-resume just won't.
         logger.error("Failed to persist pending_interrupt: %s", e, exc_info=True)
+
+
+async def add_export_receipt(
+    session_id: str,
+    user_id: str,
+    receipt: ExportReceipt,
+) -> None:
+    """Append an export receipt to the session record.
+
+    Called after a conversation is successfully saved out to a connected app
+    (e.g. Google Drive) so the SPA can restore a "Saved · Open" affordance
+    after a reload. Uses ``list_append`` with ``if_not_exists`` so it can run
+    concurrently with the full-row ``store_session_metadata`` merge and other
+    targeted writers without a read-modify-write window — the same idiom as
+    ``add_pending_interrupt``.
+
+    Best-effort: a persistence failure is logged and swallowed. The export
+    itself already succeeded and the endpoint returns the receipt in its
+    response, so the live tab still shows the link — only reload-survival is
+    lost. No-op when the session metadata row is missing.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping export receipt persistence")
+        return
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info("Skipping export receipt add — session %s not found", session_id)
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning("Session %s has no SK; cannot persist export receipt", session_id)
+            return
+
+        new_entry = receipt.model_dump(by_alias=True, exclude_none=True)
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET #er = list_append(if_not_exists(#er, :empty), :new)",
+            ExpressionAttributeNames={"#er": "exportReceipts"},
+            ExpressionAttributeValues={":empty": [], ":new": [new_entry]},
+        )
+        logger.info(
+            "Persisted export receipt (connector=%s, file=%s) for session %s",
+            receipt.connector_id, receipt.file_id, session_id,
+        )
+    except Exception as e:
+        logger.error("Failed to persist export receipt: %s", e, exc_info=True)
 
 
 async def remove_pending_interrupts(

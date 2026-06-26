@@ -162,6 +162,28 @@ class SessionPreferences(BaseModel):
     )
 
 
+class ExportReceipt(BaseModel):
+    """Record of a successful conversation export to a connected app.
+
+    Persisted on the session (and appended, one per export) so the SPA can
+    show a "Saved to <app> · Open" affordance that survives a page reload.
+    The write-direction mirror of `DocumentProvenance`: it records which
+    connector/adapter produced the file, the remote file's identity and
+    viewer link, and when the export happened. Generic across destinations —
+    Google Drive is the first, OneDrive/Dropbox/Box reuse it unchanged.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    connector_id: str = Field(..., alias="connectorId", description="OAuth connector the conversation was saved to")
+    adapter_key: str = Field(..., alias="adapterKey", description="Export-target adapter that created the file")
+    format: str = Field(..., description="Export format produced (e.g. 'google_doc', 'markdown')")
+    file_id: str = Field(..., alias="fileId", description="Provider-side identifier of the created file")
+    file_name: str = Field(..., alias="fileName", description="Name the file was created with")
+    web_view_link: Optional[str] = Field(None, alias="webViewLink", description="Viewer URL surfaced as 'Open in <app>'; None if the provider returns none")
+    exported_at: str = Field(..., alias="exportedAt", description="ISO 8601 timestamp of the export")
+
+
 class SessionMetadata(BaseModel):
     """Complete session metadata
 
@@ -237,6 +259,15 @@ class SessionMetadata(BaseModel):
         description="Cumulative count of turns rolled into a compaction summary in this session",
     )
 
+    # Receipts for conversation exports to connected apps (e.g. Google Drive),
+    # appended one per successful "Save to…" so the UI can show a "Saved · Open"
+    # affordance that survives a reload. Written race-free via add_export_receipt.
+    export_receipts: Optional[List[ExportReceipt]] = Field(
+        default=None,
+        alias="exportReceipts",
+        description="Receipts for conversation exports to connected apps, newest appended last",
+    )
+
 
 class UpdateSessionMetadataRequest(BaseModel):
     """Request body for updating session metadata"""
@@ -294,6 +325,11 @@ class SessionMetadataResponse(BaseModel):
         default=None,
         alias="lastTurnContinuable",
         description="True when the last turn ended in a recoverable max_tokens truncation, so the client can re-show the 'Continue' affordance after a refresh",
+    )
+    export_receipts: Optional[List[ExportReceipt]] = Field(
+        default=None,
+        alias="exportReceipts",
+        description="Receipts for conversation exports to connected apps, newest appended last; lets the UI restore a 'Saved · Open' affordance after a reload",
     )
 
 
