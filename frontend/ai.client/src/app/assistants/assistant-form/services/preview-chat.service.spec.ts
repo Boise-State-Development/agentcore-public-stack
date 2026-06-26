@@ -4,6 +4,7 @@ import { signal } from '@angular/core';
 import { FETCH_EVENT_SOURCE, PreviewChatService } from './preview-chat.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
+import { ToolService } from '../../../services/tool/tool.service';
 
 describe('PreviewChatService', () => {
   let service: PreviewChatService;
@@ -32,12 +33,17 @@ describe('PreviewChatService', () => {
       appApiUrl: signal('http://localhost:8000'),
     };
 
+    const toolServiceMock = {
+      getEnabledToolIds: vi.fn().mockReturnValue(['tool1', 'tool2']),
+    };
+
     TestBed.configureTestingModule({
       providers: [
         PreviewChatService,
         { provide: FETCH_EVENT_SOURCE, useValue: mockFetch },
         { provide: BffSessionService, useValue: bffSessionMock },
         { provide: ConfigService, useValue: configServiceMock },
+        { provide: ToolService, useValue: toolServiceMock },
       ],
     });
 
@@ -106,6 +112,16 @@ describe('PreviewChatService', () => {
     expect(service.messages()).toEqual([]);
     expect(service.sessionId()).not.toBe(oldSessionId);
     expect(service.sessionId()).toMatch(/^preview-/);
+  });
+
+  it('forwards the owner enabled tools so the preview can use tools', async () => {
+    await service.sendMessage('Hello', 'assistant-1', 'Test instructions');
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const init = mockFetch.mock.calls[0][1]!;
+    const body = JSON.parse(init.body as string);
+    expect(body.enabled_tools).toEqual(['tool1', 'tool2']);
+    expect(body.rag_assistant_id).toBe('assistant-1');
   });
 
   it('attaches the CSRF header from the BFF SessionService when present', async () => {
