@@ -4,12 +4,20 @@ import { fetchEventSource } from '@microsoft/fetch-event-source';
 import type { EventSourceMessage, FetchEventSourceInit } from '@microsoft/fetch-event-source';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ConfigService } from '../../../services/config.service';
-import { Message } from '../../../session/services/models/message.model';
+import { ToolService } from '../../../services/tool/tool.service';
+import {
+  Message,
+  type ContentBlock,
+  type ToolUseData,
+  type ToolResultContent,
+} from '../../../session/services/models/message.model';
 import { PREVIEW_SESSION_PREFIX } from '../../../shared/constants/session.constants';
 import {
   processStreamEvent,
   type StreamParserCallbacks,
   type ContentBlockDeltaEvent,
+  type ToolUseEvent,
+  type ToolResultEventData,
 } from '../../../shared/utils/stream-parser';
 
 /**
@@ -39,14 +47,16 @@ export const FETCH_EVENT_SOURCE = new InjectionToken<FetchEventSource>('FETCH_EV
  * Preview sessions use the `preview-{uuid}` session ID format which the backend recognizes
  * and skips persistence for.
  *
- * For preview, we only need basic text streaming - tool use, citations, and other advanced
- * features are not critical for testing assistant instructions.
+ * The preview streams text and tool use so owners can test the assistant exactly as a
+ * consumer would experience it (assistants can use the owner's enabled tools). Citations
+ * and other advanced features remain out of scope for the preview.
  */
 @Injectable()
 export class PreviewChatService {
   private bffSession = inject(BffSessionService);
   private config = inject(ConfigService);
   private fetchEventSource = inject(FETCH_EVENT_SOURCE);
+  private toolService = inject(ToolService);
 
   // Local state signals (isolated from global ChatStateService)
   private readonly messagesSignal = signal<Message[]>([]);
@@ -57,7 +67,14 @@ export class PreviewChatService {
 
   // Abort controller for cancellation
   private abortController: AbortController | null = null;
-  private currentMessageBuilder: { id: string; content: string } | null = null;
+  // Builds the streaming assistant message as an ordered list of content blocks
+  // (text interleaved with tool use), mirroring the main chat so the shared
+  // message-list renders tool cards in the preview. `activeTextIndex` points at
+  // the text block currently accumulating deltas, or -1 when the next text delta
+  // should open a fresh block (e.g. right after a tool block).
+  private currentMessageBuilder:
+    | { id: string; blocks: ContentBlock[]; activeTextIndex: number }
+    | null = null;
 
   // Public readonly signals
   readonly messages = this.messagesSignal.asReadonly();
@@ -80,9 +97,9 @@ export class PreviewChatService {
       },
 
       onContentBlockDelta: (data: ContentBlockDeltaEvent) => {
-        // Only handle text deltas
+        // Only handle text deltas; tool input arrives whole via onToolUse.
         if (data.text && this.currentMessageBuilder) {
-          this.currentMessageBuilder.content += data.text;
+          this.appendText(data.text);
           this.updateCurrentMessage();
         }
       },
@@ -106,19 +123,13 @@ export class PreviewChatService {
               (data as { message?: string; error?: string })?.error ||
               'An error occurred';
 
-        if (this.currentMessageBuilder) {
-          this.currentMessageBuilder.content = `Error: ${errorMessage}`;
-          this.updateCurrentMessage();
-        }
+        this.setErrorMessage(errorMessage);
         this.loadingSignal.set(false);
         this.streamingMessageIdSignal.set(null);
       },
 
       onStreamError: (data) => {
-        if (this.currentMessageBuilder) {
-          this.currentMessageBuilder.content = `Error: ${data.message}`;
-          this.updateCurrentMessage();
-        }
+        this.setErrorMessage(data.message);
         this.loadingSignal.set(false);
         this.streamingMessageIdSignal.set(null);
       },
@@ -127,11 +138,19 @@ export class PreviewChatService {
         console.warn('Preview chat parse error:', message);
       },
 
+      onToolUse: (data: ToolUseEvent) => {
+        this.appendToolUse(data);
+        this.updateCurrentMessage();
+      },
+
+      onToolResult: (data: ToolResultEventData) => {
+        this.applyToolResult(data);
+        this.updateCurrentMessage();
+      },
+
       // Unused callbacks for preview - just ignore these events
       onContentBlockStart: () => {},
       onContentBlockStop: () => {},
-      onToolUse: () => {},
-      onToolResult: () => {},
       onToolProgress: () => {},
       onMetadata: () => {},
       onReasoning: () => {},
@@ -171,7 +190,7 @@ export class PreviewChatService {
 
     // Create placeholder for assistant response
     const assistantMessageId = `msg-${this.sessionIdSignal()}-${this.messagesSignal().length}`;
-    this.currentMessageBuilder = { id: assistantMessageId, content: '' };
+    this.currentMessageBuilder = { id: assistantMessageId, blocks: [], activeTextIndex: -1 };
     const assistantMsg: Message = {
       id: assistantMessageId,
       role: 'assistant',
@@ -210,7 +229,9 @@ export class PreviewChatService {
         rag_assistant_id: assistantId,
         system_prompt: liveInstructions || null, // Send live form instructions for preview
         model_id: null, // Use default model
-        enabled_tools: [], // No tools in preview
+        // Forward the owner's enabled tools so the preview exercises tools the
+        // same way a consumer chat does.
+        enabled_tools: this.toolService.getEnabledToolIds(),
       };
       if (fileUploadIds && fileUploadIds.length > 0) {
         requestBody['file_upload_ids'] = fileUploadIds;
@@ -274,26 +295,120 @@ export class PreviewChatService {
   }
 
   /**
-   * Update the current assistant message in the messages array
+   * Append streamed text to the active text block, opening a new one if the
+   * previous block was a tool use (so text and tools render in order).
+   */
+  private appendText(text: string): void {
+    const builder = this.currentMessageBuilder;
+    if (!builder) {
+      return;
+    }
+    if (builder.activeTextIndex < 0) {
+      builder.blocks.push({ type: 'text', text: '' });
+      builder.activeTextIndex = builder.blocks.length - 1;
+    }
+    const block = builder.blocks[builder.activeTextIndex];
+    block.text = (block.text ?? '') + text;
+  }
+
+  /**
+   * Append a tool-use content block. Subsequent text deltas start a fresh text
+   * block so the tool card renders between the surrounding prose.
+   */
+  private appendToolUse(data: ToolUseEvent): void {
+    const builder = this.currentMessageBuilder;
+    if (!builder) {
+      return;
+    }
+    const toolUse = data.tool_use;
+    let input: Record<string, unknown> = {};
+    try {
+      input = toolUse.input ? JSON.parse(toolUse.input) : {};
+    } catch {
+      // Tool input JSON may be malformed mid-stream; fall back to empty object.
+      input = {};
+    }
+    const toolUseData: ToolUseData = {
+      toolUseId: toolUse.tool_use_id,
+      name: toolUse.name,
+      input,
+      status: 'pending',
+    };
+    builder.blocks.push({ type: 'toolUse', toolUse: toolUseData });
+    builder.activeTextIndex = -1;
+  }
+
+  /**
+   * Attach a tool result to its matching tool-use block. Replaces the block
+   * (new object references) so OnPush message rendering picks up the change.
+   */
+  private applyToolResult(data: ToolResultEventData): void {
+    const builder = this.currentMessageBuilder;
+    if (!builder) {
+      return;
+    }
+    const result = data.tool_result;
+    const index = builder.blocks.findIndex(
+      (block) =>
+        block.type === 'toolUse' &&
+        (block.toolUse as ToolUseData | undefined)?.toolUseId === result.toolUseId,
+    );
+    if (index < 0) {
+      return;
+    }
+    const existing = builder.blocks[index].toolUse as ToolUseData;
+    const status = result.status === 'error' ? 'error' : 'success';
+    builder.blocks[index] = {
+      type: 'toolUse',
+      toolUse: {
+        ...existing,
+        result: {
+          content: (result.content ?? []) as unknown as ToolResultContent[],
+          status,
+        },
+        status: status === 'error' ? 'error' : 'complete',
+      },
+    };
+  }
+
+  /**
+   * Update the current assistant message in the messages array. Rebuilds the
+   * content blocks with fresh object references so OnPush change detection in
+   * the shared message-list re-renders streaming text and tool cards.
    */
   private updateCurrentMessage(): void {
     if (!this.currentMessageBuilder) {
       return;
     }
 
-    const { id, content } = this.currentMessageBuilder;
+    const { id, blocks } = this.currentMessageBuilder;
+    const content: ContentBlock[] =
+      blocks.length > 0 ? blocks.map((block) => ({ ...block })) : [{ type: 'text', text: '' }];
     this.messagesSignal.update((msgs) => {
       const index = msgs.findIndex((m) => m.id === id);
       if (index >= 0) {
         const updated = [...msgs];
         updated[index] = {
           ...updated[index],
-          content: [{ type: 'text', text: content }],
+          content,
         };
         return updated;
       }
       return msgs;
     });
+  }
+
+  /**
+   * Replace the in-flight assistant message with an error notice.
+   */
+  private setErrorMessage(message: string): void {
+    const builder = this.currentMessageBuilder;
+    if (!builder) {
+      return;
+    }
+    builder.blocks = [{ type: 'text', text: `Error: ${message}` }];
+    builder.activeTextIndex = 0;
+    this.updateCurrentMessage();
   }
 
   /**
@@ -305,8 +420,7 @@ export class PreviewChatService {
     this.streamingMessageIdSignal.set(null);
 
     if (this.currentMessageBuilder) {
-      this.currentMessageBuilder.content = `Error: ${error.message}`;
-      this.updateCurrentMessage();
+      this.setErrorMessage(error.message);
       this.currentMessageBuilder = null;
     }
   }

@@ -117,7 +117,9 @@ describe('ChatRequestService', () => {
     const sent = mockChatHttpService.sendChatRequest.mock.calls[0][0];
     expect('agent_type' in sent).toBe(false);
     expect('enabled_skills' in sent).toBe(false);
-    expect(sent['enabled_tools']).toEqual([]);
+    // Assistants forward the user's tool selection (skills mode is excluded for
+    // assistant turns), so the raw tool picker selection rides along.
+    expect(sent['enabled_tools']).toEqual(['tool1', 'tool2']);
   });
 
   it('should include assistant ID in request', async () => {
@@ -130,13 +132,13 @@ describe('ChatRequestService', () => {
     );
   });
 
-  it('overrides enabled_tools to [] when an assistant ID is set (KB-only consumer chat)', async () => {
+  it('forwards the user tool selection when an assistant ID is set (assistants can use tools)', async () => {
     await service.submitChatRequest('Hello', 'session1', undefined, 'assistant1');
 
     expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         rag_assistant_id: 'assistant1',
-        enabled_tools: [],
+        enabled_tools: ['tool1', 'tool2'],
       })
     );
   });
