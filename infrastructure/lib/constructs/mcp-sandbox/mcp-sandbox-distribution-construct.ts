@@ -256,7 +256,7 @@ export class McpSandboxDistributionConstruct extends Construct {
       distributionProps,
     );
 
-    if (useCustomDomain) {
+    if (useCustomDomain && config.manageDnsRecords) {
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
         domainName: config.infrastructureHostedZoneDomain!,
       });
@@ -269,6 +269,24 @@ export class McpSandboxDistributionConstruct extends Construct {
         ),
         comment:
           'MCP Apps sandbox-proxy origin — proxies to CloudFront → S3 shell',
+      });
+    }
+
+    // When DNS is managed out-of-band (e.g. cross-account hosted zone), emit
+    // the record name + alias target so an operator can create the record by
+    // hand. The distribution still carries the custom domain + cert above.
+    if (useCustomDomain && !config.manageDnsRecords) {
+      new cdk.CfnOutput(this, 'McpSandboxDnsRecordName', {
+        value: proxySubdomain!,
+        description:
+          'Manual DNS: record name to create (MCP Apps sandbox proxy origin). Create an ALIAS (or CNAME) to the target below.',
+        exportName: `${config.projectPrefix}-mcp-sandbox-dns-record-name`,
+      });
+      new cdk.CfnOutput(this, 'McpSandboxDnsAliasTarget', {
+        value: this.distribution.distributionDomainName,
+        description:
+          'Manual DNS: ALIAS/CNAME target (CloudFront domain) for the mcp-sandbox record',
+        exportName: `${config.projectPrefix}-mcp-sandbox-dns-alias-target`,
       });
     }
 

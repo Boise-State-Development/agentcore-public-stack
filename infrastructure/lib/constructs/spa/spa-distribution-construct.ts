@@ -288,7 +288,14 @@ function handler(event) {
     this.distributionDomainName = this.distribution.distributionDomainName;
 
     // Optional Route53 ALIAS for the apex (or sub) custom domain.
-    if (config.domainName) {
+    //
+    // Only created when `manageDnsRecords` is true. When false (e.g. the
+    // hosted zone lives in another AWS account), we skip the in-account
+    // lookup/record — which would otherwise fail — and instead emit the
+    // record name + alias target as CfnOutputs so an operator can wire the
+    // record by hand. The custom domain + cert stay attached to the
+    // distribution either way, so it serves `config.domainName` over TLS.
+    if (config.domainName && config.manageDnsRecords) {
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
         domainName: config.domainName,
       });
@@ -299,6 +306,21 @@ function handler(event) {
         target: route53.RecordTarget.fromAlias(
           new targets.CloudFrontTarget(this.distribution),
         ),
+      });
+    }
+
+    if (config.domainName && !config.manageDnsRecords) {
+      new cdk.CfnOutput(this, 'FrontendDnsRecordName', {
+        value: config.domainName,
+        description:
+          'Manual DNS: record name to create (SPA / apex custom domain). Create an ALIAS (or CNAME) to the target below.',
+        exportName: `${config.projectPrefix}-frontend-dns-record-name`,
+      });
+      new cdk.CfnOutput(this, 'FrontendDnsAliasTarget', {
+        value: this.distributionDomainName,
+        description:
+          'Manual DNS: ALIAS/CNAME target (CloudFront domain) for the SPA record',
+        exportName: `${config.projectPrefix}-frontend-dns-alias-target`,
       });
     }
 

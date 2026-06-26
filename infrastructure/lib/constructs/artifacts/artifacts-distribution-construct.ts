@@ -171,7 +171,7 @@ export class ArtifactsDistributionConstruct extends Construct {
       },
     );
 
-    if (useCustomDomain) {
+    if (useCustomDomain && config.manageDnsRecords) {
       const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
         domainName: config.infrastructureHostedZoneDomain!,
       });
@@ -184,6 +184,24 @@ export class ArtifactsDistributionConstruct extends Construct {
         ),
         comment:
           'Artifact iframe origin — proxies to CloudFront → render Lambda',
+      });
+    }
+
+    // When DNS is managed out-of-band (e.g. cross-account hosted zone), emit
+    // the record name + alias target so an operator can create the record by
+    // hand. The distribution still carries the custom domain + cert above.
+    if (useCustomDomain && !config.manageDnsRecords) {
+      new cdk.CfnOutput(this, 'ArtifactsDnsRecordName', {
+        value: artifactsSubdomain!,
+        description:
+          'Manual DNS: record name to create (artifacts iframe origin). Create an ALIAS (or CNAME) to the target below.',
+        exportName: `${config.projectPrefix}-artifacts-dns-record-name`,
+      });
+      new cdk.CfnOutput(this, 'ArtifactsDnsAliasTarget', {
+        value: this.distribution.distributionDomainName,
+        description:
+          'Manual DNS: ALIAS/CNAME target (CloudFront domain) for the artifacts record',
+        exportName: `${config.projectPrefix}-artifacts-dns-alias-target`,
       });
     }
 

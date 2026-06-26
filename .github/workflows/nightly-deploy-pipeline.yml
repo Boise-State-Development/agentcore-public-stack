@@ -161,6 +161,9 @@ jobs:
       CDK_CLOUDFRONT_CERTIFICATE_ARN: ""
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
       CDK_RETAIN_DATA_ON_DELETE: false
+      # Ephemeral nightly deploys in-account, so manage DNS records in-account.
+      # See platform.yml — set "false" for cross-account hosted zones. Defaults true.
+      CDK_MANAGE_DNS_RECORDS: true
       CDK_ARTIFACTS_CERTIFICATE_ARN: ""
       CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS: ""
       CDK_FRONTEND_CERTIFICATE_ARN: ""
