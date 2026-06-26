@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ExportDialogComponent } from './export-dialog.component';
@@ -17,10 +18,15 @@ const CONNECTED: ExportTargetConnector = {
   iconName: 'heroCloud',
   connected: true,
   supportedFormats: ['google_doc', 'markdown'],
+  browsable: false,
 };
 const NOT_CONNECTED: ExportTargetConnector = { ...CONNECTED, connected: false };
+const BROWSABLE: ExportTargetConnector = { ...CONNECTED, browsable: true };
 
-function setup(exportOverrides: Partial<Record<string, unknown>> = {}) {
+function setup(
+  exportOverrides: Partial<Record<string, unknown>> = {},
+  dialogOverride?: Partial<Record<string, unknown>>,
+) {
   const exportService = {
     listExportTargets: vi.fn().mockResolvedValue([CONNECTED]),
     exportSession: vi.fn().mockResolvedValue({
@@ -49,6 +55,13 @@ function setup(exportOverrides: Partial<Record<string, unknown>> = {}) {
     acknowledgeCompletion: vi.fn(),
   };
   const toast = { error: vi.fn(), success: vi.fn() };
+  // CDK Dialog used to open the folder picker; closes with a FolderSelection.
+  const dialog = {
+    open: vi.fn().mockReturnValue({
+      closed: of({ folderId: 'folder-9', folderName: 'Reports' }),
+    }),
+    ...dialogOverride,
+  };
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -57,6 +70,7 @@ function setup(exportOverrides: Partial<Record<string, unknown>> = {}) {
       provideHttpClientTesting(),
       { provide: DIALOG_DATA, useValue: { sessionId: 'sess-1', title: 'My Chat' } },
       { provide: DialogRef, useValue: dialogRef },
+      { provide: Dialog, useValue: dialog },
       { provide: ExportService, useValue: exportService },
       { provide: UserConnectorsService, useValue: connectorsService },
       { provide: OAuthConsentService, useValue: consentService },
@@ -67,7 +81,7 @@ function setup(exportOverrides: Partial<Record<string, unknown>> = {}) {
   const fixture = TestBed.createComponent(ExportDialogComponent);
   fixture.detectChanges();
   const component = fixture.componentInstance as unknown as Record<string, never>;
-  return { fixture, component, exportService, dialogRef, connectorsService, consentService, toast };
+  return { fixture, component, exportService, dialogRef, dialog, connectorsService, consentService, toast };
 }
 
 describe('ExportDialogComponent', () => {
@@ -152,6 +166,66 @@ describe('ExportDialogComponent', () => {
       );
     });
     expect(consentService.acknowledgeCompletion).toHaveBeenCalled();
+  });
+
+  it('offers the folder picker only for a browsable destination', async () => {
+    const { component } = setup({
+      listExportTargets: vi.fn().mockResolvedValue([BROWSABLE]),
+    });
+    await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
+    expect((component['canChooseFolder'] as () => boolean)()).toBe(true);
+    // Default destination is the app folder until a folder is chosen.
+    expect((component['destinationLabel'] as () => string)()).toBe('App folder');
+  });
+
+  it('hides the folder picker for a non-browsable destination', async () => {
+    const { component } = setup();
+    await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
+    expect((component['canChooseFolder'] as () => boolean)()).toBe(false);
+  });
+
+  it('passes the chosen folder as parentId on save', async () => {
+    const { component, dialog, exportService } = setup({
+      listExportTargets: vi.fn().mockResolvedValue([BROWSABLE]),
+    });
+    await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
+
+    await (component['chooseFolder'] as () => Promise<void>)();
+    expect(dialog.open).toHaveBeenCalled();
+    expect((component['destinationLabel'] as () => string)()).toBe('Reports');
+
+    await (component['save'] as () => Promise<void>)();
+    expect(exportService.exportSession).toHaveBeenCalledWith(
+      'sess-1',
+      expect.objectContaining({ connectorId: 'gdrive', parentId: 'folder-9' }),
+    );
+  });
+
+  it('saves to the app folder (no parentId) when no folder is chosen', async () => {
+    const { component, exportService } = setup({
+      listExportTargets: vi.fn().mockResolvedValue([BROWSABLE]),
+    });
+    await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
+
+    await (component['save'] as () => Promise<void>)();
+    expect(exportService.exportSession).toHaveBeenCalledWith(
+      'sess-1',
+      expect.objectContaining({ connectorId: 'gdrive', parentId: undefined }),
+    );
+  });
+
+  it('resets the chosen folder when the destination changes', async () => {
+    const { component } = setup({
+      listExportTargets: vi.fn().mockResolvedValue([BROWSABLE]),
+    });
+    await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
+
+    await (component['chooseFolder'] as () => Promise<void>)();
+    expect((component['destinationLabel'] as () => string)()).toBe('Reports');
+
+    (component['selectConnector'] as (t: ExportTargetConnector) => void)(BROWSABLE);
+    expect((component['destinationLabel'] as () => string)()).toBe('App folder');
+    expect((component['parentId'] as () => string | null)()).toBeNull();
   });
 
   it('cancel closes with the result (undefined before any save)', async () => {

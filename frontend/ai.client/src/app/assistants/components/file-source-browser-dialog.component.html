@@ -16,7 +16,9 @@
   >
     <div class="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
       <h2 id="fsb-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
-        @if (view() === 'browser' && connector(); as conn) {
+        @if (isPicker) {
+          Choose a destination folder
+        } @else if (view() === 'browser' && connector(); as conn) {
           {{ conn.displayName }}
         } @else {
           Import from a connector
@@ -182,7 +184,7 @@
             } @else {
               <button
                 type="button"
-                (click)="openFolder(crumb.id)"
+                (click)="openFolder(crumb.id, crumb.name)"
                 class="rounded-2xl px-1 hover:text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:text-white"
               >
                 {{ crumb.name }}
@@ -229,12 +231,23 @@
         } @else if (displayedEntries().length === 0) {
           <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
             <p class="text-sm/6 text-gray-500 dark:text-gray-400">
-              @if (activeSearch()) {
+              @if (isPicker) {
+                @if (activeSearch()) {
+                  No folders match your search.
+                } @else {
+                  This folder has no subfolders.
+                }
+              } @else if (activeSearch()) {
                 No files match your search.
               } @else {
                 This folder is empty.
               }
             </p>
+            @if (isPicker && currentFolderId() !== null) {
+              <p class="mt-1 text-xs/5 text-gray-400 dark:text-gray-500">
+                You can still save here, or open a subfolder.
+              </p>
+            }
           </div>
         } @else {
           <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
@@ -296,30 +309,59 @@
 
       <!-- Footer -->
       <div class="flex items-center justify-between gap-4 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
-        <span class="text-sm/6 text-gray-500 dark:text-gray-400">{{ selectedCount() }} selected</span>
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            (click)="cancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            (click)="importSelected()"
-            [disabled]="selectedCount() === 0 || importing()"
-            class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
-          >
-            @if (importing()) {
-              <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
-              Importing…
+        @if (isPicker) {
+          <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-500 dark:text-gray-400">
+            @if (currentFolderId() !== null) {
+              Save to
+              <span class="font-medium text-gray-700 dark:text-gray-200">{{ currentFolderName() || 'this folder' }}</span>
             } @else {
-              <ng-icon name="heroArrowDownTray" class="size-4" />
-              Import {{ selectedCount() > 0 ? selectedCount() : '' }}
+              Open a folder to choose it
             }
-          </button>
-        </div>
+          </span>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              (click)="cancel()"
+              class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              (click)="pickCurrentFolder()"
+              [disabled]="!canPickCurrentFolder()"
+              class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              <ng-icon name="heroFolder" class="size-4" />
+              Use this folder
+            </button>
+          </div>
+        } @else {
+          <span class="text-sm/6 text-gray-500 dark:text-gray-400">{{ selectedCount() }} selected</span>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              (click)="cancel()"
+              class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              (click)="importSelected()"
+              [disabled]="selectedCount() === 0 || importing()"
+              class="inline-flex items-center gap-1.5 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              @if (importing()) {
+                <div class="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white"></div>
+                Importing…
+              } @else {
+                <ng-icon name="heroArrowDownTray" class="size-4" />
+                Import {{ selectedCount() > 0 ? selectedCount() : '' }}
+              }
+            </button>
+          </div>
+        }
       </div>
     }
   </div>

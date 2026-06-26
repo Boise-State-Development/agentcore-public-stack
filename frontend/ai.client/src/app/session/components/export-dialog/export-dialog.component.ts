@@ -7,7 +7,8 @@ import {
   OnInit,
   signal,
 } from '@angular/core';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowPath,
@@ -15,6 +16,7 @@ import {
   heroCheckCircle,
   heroCloudArrowUp,
   heroExclamationTriangle,
+  heroFolder,
   heroLink,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
@@ -29,6 +31,13 @@ import {
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../../services/toast/toast.service';
+import {
+  FileSourceBrowserDialogComponent,
+  FileSourceBrowserDialogData,
+  FileSourceBrowserDialogResult,
+  FolderSelection,
+} from '../../../assistants/components/file-source-browser-dialog.component';
+import { FileSourceConnector } from '../../../assistants/models/file-source.model';
 
 /** Data passed in when the session list opens the export dialog. */
 export interface ExportDialogData {
@@ -74,6 +83,7 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
       heroCheckCircle,
       heroCloudArrowUp,
       heroExclamationTriangle,
+      heroFolder,
       heroLink,
       heroXMark,
     }),
@@ -211,6 +221,33 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
               </div>
             }
 
+            <!-- ─────────────── Folder ─────────────── -->
+            @if (canChooseFolder()) {
+              <div class="mt-4">
+                <span class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Folder</span>
+                <div class="flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700">
+                  <ng-icon name="heroFolder" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+                  <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ destinationLabel() }}</span>
+                  @if (destinationFolderName()) {
+                    <button
+                      type="button"
+                      (click)="resetDestinationFolder()"
+                      class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:bg-gray-600 dark:hover:text-gray-200"
+                    >
+                      Default
+                    </button>
+                  }
+                  <button
+                    type="button"
+                    (click)="chooseFolder()"
+                    class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-blue-600 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-500/10"
+                  >
+                    Choose…
+                  </button>
+                </div>
+              </div>
+            }
+
             <!-- ─────────────── Include ─────────────── -->
             <fieldset class="mt-4">
               <legend class="mb-1.5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Include</legend>
@@ -296,6 +333,7 @@ export class ExportDialogComponent implements OnInit {
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
+  private readonly dialog = inject(Dialog);
 
   protected readonly targets = signal<ExportTargetConnector[]>([]);
   protected readonly loading = signal<boolean>(true);
@@ -304,6 +342,14 @@ export class ExportDialogComponent implements OnInit {
   protected readonly selectedConnectorId = signal<string | null>(null);
   protected readonly selectedFormat = signal<ExportFormat | null>(null);
   protected readonly include = signal<ExportInclude>({ ...DEFAULT_EXPORT_INCLUDE });
+
+  /**
+   * Chosen destination folder for a browsable target. `null` means the
+   * adapter's default app folder — the common case, so no picker interaction
+   * is required to save.
+   */
+  protected readonly parentId = signal<string | null>(null);
+  protected readonly destinationFolderName = signal<string | null>(null);
 
   protected readonly submitting = signal<boolean>(false);
   protected readonly error = signal<string | null>(null);
@@ -331,6 +377,16 @@ export class ExportDialogComponent implements OnInit {
 
   protected readonly availableFormats = computed<ExportFormat[]>(
     () => this.selectedTarget()?.supportedFormats ?? [],
+  );
+
+  /** A folder picker is offered only for combined-scope (browsable) targets. */
+  protected readonly canChooseFolder = computed<boolean>(
+    () => this.selectedTarget()?.browsable ?? false,
+  );
+
+  /** Folder shown in the destination row; the app default until one is picked. */
+  protected readonly destinationLabel = computed<string>(
+    () => this.destinationFolderName() ?? 'App folder',
   );
 
   /** True while either the save request or a consent popup is in flight. */
@@ -414,12 +470,58 @@ export class ExportDialogComponent implements OnInit {
   protected selectConnector(target: ExportTargetConnector): void {
     this.selectedConnectorId.set(target.providerId);
     this.error.set(null);
+    // A folder is destination-specific; reset to the app default when the
+    // destination changes.
+    this.resetDestinationFolder();
     // Prefer a native Google Doc when offered, else the first supported format.
     const formats = target.supportedFormats;
     const preferred: ExportFormat | null = formats.includes('google_doc')
       ? 'google_doc'
       : (formats[0] ?? null);
     this.selectedFormat.set(preferred);
+  }
+
+  /** Clear any chosen folder, falling back to the adapter's app folder. */
+  protected resetDestinationFolder(): void {
+    this.parentId.set(null);
+    this.destinationFolderName.set(null);
+  }
+
+  /**
+   * Open the import browse dialog in folder-pick mode to choose a destination
+   * folder. Only offered for browsable (combined-scope) targets, where the
+   * file-source browse endpoints resolve. A successful pick implies the
+   * connector is authorized, so we reconcile the connected flag too.
+   */
+  protected async chooseFolder(): Promise<void> {
+    const target = this.selectedTarget();
+    if (!target || !target.browsable) {
+      return;
+    }
+    const connector: FileSourceConnector = {
+      providerId: target.providerId,
+      displayName: target.displayName,
+      iconName: target.iconName,
+      iconData: target.iconData,
+      connected: target.connected,
+    };
+    const ref = this.dialog.open<
+      FileSourceBrowserDialogResult,
+      FileSourceBrowserDialogData
+    >(FileSourceBrowserDialogComponent, {
+      data: { connector, mode: 'pick-folder' },
+      hasBackdrop: false,
+    });
+    const result = await firstValueFrom(ref.closed);
+    // Cancelled, or closed in import mode (never happens here) — leave as-is.
+    if (!result || Array.isArray(result)) {
+      return;
+    }
+    const selection: FolderSelection = result;
+    this.parentId.set(selection.folderId);
+    this.destinationFolderName.set(selection.folderName);
+    // Browsing succeeded, so the token is good — keep local state honest.
+    this.markConnected(target.providerId);
   }
 
   protected onFormatChange(event: Event): void {
@@ -454,6 +556,7 @@ export class ExportDialogComponent implements OnInit {
       const response = await this.exportService.exportSession(this.data.sessionId, {
         connectorId: target.providerId,
         format,
+        parentId: this.parentId() ?? undefined,
         include: this.include(),
       });
       this.result.set(response);
