@@ -5,10 +5,11 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ShareModalComponent, ShareModalData } from '../../../../session/components/share-modal';
+import { ExportDialogComponent, ExportDialogData } from '../../../../session/components/export-dialog';
 import { UserService } from '../../../../auth/user.service';
 import { SessionMetadata } from '../../../../session/services/models/session-metadata.model';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
@@ -18,7 +19,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -319,6 +320,25 @@ export class SessionList {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
       } as ShareModalData,
+    });
+  }
+
+  /**
+   * Opens the "Save to…" export dialog for a session, letting the user save
+   * the conversation transcript to a connected app (e.g. Google Drive).
+   *
+   * @param event - Click event (stopped to prevent navigation)
+   * @param session - The session to export
+   */
+  protected onExportClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    this.dialog.open(ExportDialogComponent, {
+      data: {
+        sessionId: session.sessionId,
+        title: session.title,
+      } as ExportDialogData,
     });
   }
 

@@ -196,29 +196,56 @@ delete_vector_buckets() {
     log_success "All S3 Vector Buckets deleted"
 }
 
-# Destroy CDK stacks in reverse dependency order
+# Destroy the PlatformStack (single-stack architecture)
 destroy_stacks() {
-    log_info "Destroying CDK stacks in reverse order..."
+    # Single-stack architecture: every resource for a nightly deployment
+    # lives in ${CDK_PROJECT_PREFIX}-PlatformStack. Delete it via
+    # `aws cloudformation delete-stack` (not `cdk destroy`) so teardown
+    # works without a CDK synth and deletes by the real CFN stack name —
+    # `cdk destroy <name>` silently no-ops when the name isn't in the
+    # current synth. Legacy multi-stack deployments are handled by
+    # scripts/teardown/destroy.sh, not here.
+    local stack_name="${CDK_PROJECT_PREFIX}-PlatformStack"
 
-    cd "${PROJECT_ROOT}/infrastructure"
+    log_info "Destroying ${stack_name} via CloudFormation..."
 
-    local stacks=(
-        "FrontendStack"
-        "GatewayStack"
-        "AppApiStack"
-        "InferenceApiStack"
-        "RagIngestionStack"
-        "InfrastructureStack"
-    )
+    if ! aws cloudformation describe-stacks \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query 'Stacks[0].StackName' --output text >/dev/null 2>&1; then
+        log_warn "Stack ${stack_name} does not exist, skipping"
+        return 0
+    fi
 
-    for stack in "${stacks[@]}"; do
-        log_info "Destroying ${stack}..."
-        npx cdk destroy "${stack}" --force 2>/dev/null && \
-            log_success "${stack} destroyed" || \
-            log_warn "${stack} not found or already destroyed, skipping"
-    done
+    if ! aws cloudformation delete-stack \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}"; then
+        log_error "delete-stack API call failed for ${stack_name}"
+        return 1
+    fi
 
-    log_success "All CDK stacks destroyed"
+    log_info "Waiting for ${stack_name} to reach DELETE_COMPLETE..."
+    if aws cloudformation wait stack-delete-complete \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}"; then
+        log_success "${stack_name} destroyed"
+        return 0
+    fi
+
+    # DELETE_FAILED (or wait timeout) — surface why so the run is debuggable.
+    log_error "Failed to delete ${stack_name}. Current status:"
+    aws cloudformation describe-stacks \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query 'Stacks[0].[StackStatus,StackStatusReason]' \
+        --output text 2>&1 || true
+    log_error "Resources that refused to delete:"
+    aws cloudformation describe-stack-events \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query 'StackEvents[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType,ResourceStatusReason]' \
+        --output table 2>&1 || true
+    return 1
 }
 
 main() {

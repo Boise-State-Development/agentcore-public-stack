@@ -111,9 +111,11 @@ export interface McpSandboxDistributionConstructProps {
  * lets the construct still synthesize on the CloudFront default domain
  * for unit/synth tests and domain-less local stacks.
  *
- * SSM publication: `/{prefix}/mcp-sandbox/origin` →
- * `https://mcp-sandbox.{domainName}` (or the CloudFront default domain
- * fallback when no custom domain is configured).
+ * Origin exposure: the resolved origin (`https://mcp-sandbox.{domainName}`,
+ * or the CloudFront default domain when no custom domain is configured) is
+ * surfaced as `proxyOrigin` and threaded through `PlatformComputeRefs`
+ * directly into inference-api's `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` env var.
+ * It is no longer published to SSM (pre-#396 the standalone stack did).
  */
 export class McpSandboxDistributionConstruct extends Construct {
   public readonly distribution: cloudfront.Distribution;

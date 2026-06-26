@@ -747,3 +747,87 @@ class TestServedManifestIcon:
         )
         assert name == "Excalidraw"
         assert icon == "data:image/png;base64,QUJD"
+
+
+class TestStartRetry:
+    """`UICapableMCPClient.start` retries transient transport failures so a
+    single TLS-handshake blip doesn't fail the whole agent build."""
+
+    @staticmethod
+    def _transient_error() -> BaseException:
+        """Mimic Strands' real failure: MCPClientInitializationError whose
+        __cause__ is an ExceptionGroup wrapping an httpx ConnectError."""
+        import httpx
+        from strands.types.exceptions import MCPClientInitializationError
+
+        err = MCPClientInitializationError("the client initialization failed")
+        err.__cause__ = ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [httpx.ConnectError("[SSL: SSLV3_ALERT_HANDSHAKE_FAILURE]")],
+        )
+        return err
+
+    def test_is_transient_detects_connect_error_in_group(self):
+        assert mcp_apps._is_transient_connect_error(self._transient_error()) is True
+
+    def test_is_transient_false_for_non_connect_error(self):
+        from strands.types.exceptions import MCPClientInitializationError
+
+        err = MCPClientInitializationError("bad config")
+        err.__cause__ = ValueError("nope")
+        assert mcp_apps._is_transient_connect_error(err) is False
+
+    def test_start_retries_transient_then_succeeds(self, mcp_apps_clean):
+        client = UICapableMCPClient(lambda: None)
+        calls = {"n": 0}
+
+        def fake_start(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise TestStartRetry._transient_error()
+            return self
+
+        with patch.object(
+            strands_mcp_client_mod.MCPClient, "start", fake_start
+        ), patch(
+            "agents.main_agent.integrations.mcp_apps.time.sleep"
+        ) as sleep:
+            assert client.start() is client
+        assert calls["n"] == 3
+        assert sleep.call_count == 2  # backed off before attempts 2 and 3
+
+    def test_start_does_not_retry_non_transient(self, mcp_apps_clean):
+        from strands.types.exceptions import MCPClientInitializationError
+
+        client = UICapableMCPClient(lambda: None)
+        calls = {"n": 0}
+
+        def fake_start(self, *a, **k):
+            calls["n"] += 1
+            err = MCPClientInitializationError("auth failed")
+            err.__cause__ = ValueError("401")
+            raise err
+
+        with patch.object(
+            strands_mcp_client_mod.MCPClient, "start", fake_start
+        ), patch("agents.main_agent.integrations.mcp_apps.time.sleep"):
+            with pytest.raises(MCPClientInitializationError):
+                client.start()
+        assert calls["n"] == 1  # raised on first attempt, no retry
+
+    def test_start_raises_after_max_transient_attempts(self, mcp_apps_clean):
+        from strands.types.exceptions import MCPClientInitializationError
+
+        client = UICapableMCPClient(lambda: None)
+        calls = {"n": 0}
+
+        def fake_start(self, *a, **k):
+            calls["n"] += 1
+            raise TestStartRetry._transient_error()
+
+        with patch.object(
+            strands_mcp_client_mod.MCPClient, "start", fake_start
+        ), patch("agents.main_agent.integrations.mcp_apps.time.sleep"):
+            with pytest.raises(MCPClientInitializationError):
+                client.start()
+        assert calls["n"] == mcp_apps._MCP_START_MAX_ATTEMPTS

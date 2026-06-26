@@ -9,6 +9,8 @@ import {
   ConnectorUpdateRequest,
   FileSourceAdapter,
   FileSourceAdapterListResponse,
+  ExportTargetAdapter,
+  ExportTargetAdapterListResponse,
 } from '../models/connector.model';
 
 function toSnakeCase(obj: Record<string, any>): Record<string, any> {
@@ -50,6 +52,10 @@ export class ConnectorsService {
     () => `${this.config.appApiUrl()}/admin/file-source-adapters`
   );
 
+  private readonly exportTargetAdaptersUrl = computed(
+    () => `${this.config.appApiUrl()}/admin/export-target-adapters`
+  );
+
   readonly connectorsResource = resource({
     loader: async () => {
       await Promise.resolve();
@@ -66,6 +72,19 @@ export class ConnectorsService {
     loader: async () => {
       await Promise.resolve();
       return this.fetchFileSourceAdapters();
+    }
+  });
+
+  /**
+   * The export-target adapter registry. Read-only and rarely changes — adapters
+   * ship in releases — so a single eager load when the admin service is first
+   * injected is sufficient. The write-direction mirror of
+   * {@link fileSourceAdaptersResource}.
+   */
+  readonly exportTargetAdaptersResource = resource({
+    loader: async () => {
+      await Promise.resolve();
+      return this.fetchExportTargetAdapters();
     }
   });
 
@@ -102,6 +121,20 @@ export class ConnectorsService {
   async fetchFileSourceAdapters(): Promise<FileSourceAdapterListResponse> {
     return firstValueFrom(
       this.http.get<FileSourceAdapterListResponse>(`${this.fileSourceAdaptersUrl()}/`)
+    );
+  }
+
+  getExportTargetAdapters(): ExportTargetAdapter[] {
+    return this.exportTargetAdaptersResource.value()?.adapters ?? [];
+  }
+
+  /**
+   * Fetch the export-target adapter registry. Like the file-source endpoint
+   * it serializes camelCase already, so no key translation is applied.
+   */
+  async fetchExportTargetAdapters(): Promise<ExportTargetAdapterListResponse> {
+    return firstValueFrom(
+      this.http.get<ExportTargetAdapterListResponse>(`${this.exportTargetAdaptersUrl()}/`)
     );
   }
 

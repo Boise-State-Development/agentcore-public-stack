@@ -35,29 +35,60 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 
-/** Data passed in when the assistant editor opens the browser. */
+/**
+ * What the dialog is for. `import` (default) multi-selects files to ingest
+ * into an assistant; `pick-folder` walks the same folder tree but selects a
+ * single destination folder (the conversation-export folder picker) and never
+ * imports anything.
+ */
+export type FileSourceBrowserMode = 'import' | 'pick-folder';
+
+/** Data passed in when a caller opens the browser. */
 export interface FileSourceBrowserDialogData {
-  assistantId: string;
+  /** Required in `import` mode — the assistant the files are imported into. */
+  assistantId?: string;
   /**
    * When set, the dialog opens straight into this connector — its folder
    * browser if already connected, or an inline Connect prompt if not — and
    * hides the source picker. The assistant editor surfaces each connector as
    * its own button, so the in-modal source list is redundant when targeted.
+   * `pick-folder` mode always targets a connector this way.
    */
   connector?: FileSourceConnector;
+  /** Defaults to `import`. */
+  mode?: FileSourceBrowserMode;
 }
+
+/** A destination folder chosen in `pick-folder` mode. */
+export interface FolderSelection {
+  /** Provider folder id to write into; a provider root id is valid too. */
+  folderId: string;
+  /** Human-readable name of the chosen folder, for display. */
+  folderName: string;
+}
+
+/**
+ * Closed value: the imported {@link Document} records in `import` mode, a
+ * {@link FolderSelection} in `pick-folder` mode, or `undefined` if cancelled.
+ */
+export type FileSourceBrowserDialogResult = Document[] | FolderSelection;
 
 type DialogView = 'sources' | 'browser';
 type ConnectPhase = 'initiating' | 'awaiting';
 
 /**
- * Modal that lets a user import files from a connected file source into an
- * assistant's RAG index.
+ * Modal that walks a connected file source's folder tree.
+ *
+ * In `import` mode (default) the user multi-selects files to ingest into an
+ * assistant's RAG index. In `pick-folder` mode the same browser is reused to
+ * choose a single destination folder — the conversation-export folder picker —
+ * and nothing is imported.
  *
  * Flow: pick a file source (connecting it via the OAuth consent popup if
- * needed) → browse the provider's folder tree or search → multi-select
- * files → import. Closes with the created {@link Document} records, or
- * `undefined` if cancelled.
+ * needed) → browse the provider's folder tree or search → either multi-select
+ * files and import, or select the current folder. Closes with the created
+ * {@link Document} records, a {@link FolderSelection}, or `undefined` if
+ * cancelled.
  */
 @Component({
   selector: 'app-file-source-browser-dialog',
@@ -119,12 +150,18 @@ type ConnectPhase = 'initiating' | 'awaiting';
   `,
 })
 export class FileSourceBrowserDialogComponent {
-  private readonly dialogRef = inject<DialogRef<Document[]>>(DialogRef);
+  private readonly dialogRef =
+    inject<DialogRef<FileSourceBrowserDialogResult>>(DialogRef);
   private readonly data = inject<FileSourceBrowserDialogData>(DIALOG_DATA);
   private readonly fileSourceService = inject(FileSourceService);
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   private readonly toast = inject(ToastService);
+
+  /** `import` (default) or `pick-folder` for the export destination picker. */
+  protected readonly mode: FileSourceBrowserMode = this.data.mode ?? 'import';
+  /** True when choosing a destination folder rather than importing files. */
+  protected readonly isPicker = this.mode === 'pick-folder';
 
   /** True when the dialog was opened targeting a single connector. */
   protected readonly lockedToConnector = !!this.data.connector;
@@ -146,6 +183,12 @@ export class FileSourceBrowserDialogComponent {
   protected readonly roots = signal<SourceRoot[]>([]);
   /** Current folder id; `null` means the top-level roots list is shown. */
   protected readonly currentFolderId = signal<string | null>(null);
+  /**
+   * Name of the current folder, tracked client-side as the user navigates (the
+   * adapter returns a flat page, not a path). Drives the `pick-folder`
+   * selection label; empty at the roots list.
+   */
+  protected readonly currentFolderName = signal<string>('');
   protected readonly breadcrumbs = signal<Breadcrumb[]>([]);
   protected readonly entries = signal<FileEntry[]>([]);
   protected readonly nextCursor = signal<string | null>(null);
@@ -183,10 +226,19 @@ export class FileSourceBrowserDialogComponent {
         selectable: false,
       }));
     }
+    // The folder picker navigates folders only; files would just be noise.
+    if (this.isPicker) {
+      return this.entries().filter((entry) => entry.type === 'folder');
+    }
     return this.entries();
   });
 
   protected readonly selectedCount = computed(() => this.selected().size);
+
+  /** True once the user has drilled into a folder/root they can select. */
+  protected readonly canPickCurrentFolder = computed(
+    () => this.currentFolderId() !== null && !this.browserLoading(),
+  );
 
   constructor() {
     const preselected = this.data.connector;
@@ -312,7 +364,7 @@ export class FileSourceBrowserDialogComponent {
       this.roots.set(roots);
       // A single root is an implementation detail — drop the user straight in.
       if (roots.length === 1) {
-        await this.openFolder(roots[0].id);
+        await this.openFolder(roots[0].id, roots[0].name);
       } else {
         this.browserLoading.set(false);
       }
@@ -333,7 +385,7 @@ export class FileSourceBrowserDialogComponent {
     }
   }
 
-  protected async openFolder(folderId: string): Promise<void> {
+  protected async openFolder(folderId: string, folderName = ''): Promise<void> {
     const connector = this.connector();
     if (!connector) {
       return;
@@ -341,6 +393,7 @@ export class FileSourceBrowserDialogComponent {
     this.activeSearch.set(null);
     this.searchTerm.set('');
     this.currentFolderId.set(folderId);
+    this.currentFolderName.set(folderName);
     this.entries.set([]);
     this.breadcrumbs.set([]);
     this.nextCursor.set(null);
@@ -364,6 +417,7 @@ export class FileSourceBrowserDialogComponent {
     this.activeSearch.set(null);
     this.searchTerm.set('');
     this.currentFolderId.set(null);
+    this.currentFolderName.set('');
     this.entries.set([]);
     this.breadcrumbs.set([]);
     this.nextCursor.set(null);
@@ -373,10 +427,22 @@ export class FileSourceBrowserDialogComponent {
 
   protected onEntryActivate(entry: FileEntry): void {
     if (entry.type === 'folder') {
-      void this.openFolder(entry.id);
+      void this.openFolder(entry.id, entry.name);
     } else {
       this.toggleSelect(entry);
     }
+  }
+
+  /** Close with the current folder as the chosen export destination. */
+  protected pickCurrentFolder(): void {
+    const folderId = this.currentFolderId();
+    if (folderId === null) {
+      return;
+    }
+    this.dialogRef.close({
+      folderId,
+      folderName: this.currentFolderName() || 'Selected folder',
+    });
   }
 
   protected toggleSelect(entry: FileEntry): void {
@@ -466,14 +532,15 @@ export class FileSourceBrowserDialogComponent {
 
   protected async importSelected(): Promise<void> {
     const connector = this.connector();
+    const assistantId = this.data.assistantId;
     const files = [...this.selected().values()];
-    if (!connector || files.length === 0 || this.importing()) {
+    if (!connector || !assistantId || files.length === 0 || this.importing()) {
       return;
     }
     this.importing.set(true);
     try {
       const response = await this.fileSourceService.importDocuments(
-        this.data.assistantId,
+        assistantId,
         connector.providerId,
         files,
       );
@@ -501,6 +568,7 @@ export class FileSourceBrowserDialogComponent {
   private resetBrowserState(): void {
     this.roots.set([]);
     this.currentFolderId.set(null);
+    this.currentFolderName.set('');
     this.breadcrumbs.set([]);
     this.entries.set([]);
     this.nextCursor.set(null);

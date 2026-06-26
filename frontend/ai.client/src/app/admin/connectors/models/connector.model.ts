@@ -58,6 +58,13 @@ export interface Connector {
    * assistant editor. Null/absent means it is not a file source.
    */
   fileSourceAdapterId?: string | null;
+  /**
+   * Export-target adapter key (e.g. `google-drive`) mapping this connector to
+   * a destination. When set, the connector appears in the "Save to…" dialog
+   * as a place to save a conversation. Null/absent means it is not an export
+   * target. The write-direction mirror of `fileSourceAdapterId`.
+   */
+  exportTargetAdapterId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -96,6 +103,8 @@ export interface ConnectorCreateRequest {
   customParameters?: Record<string, string>;
   /** File-source adapter key; omit when the connector is not a file source. */
   fileSourceAdapterId?: string;
+  /** Export-target adapter key; omit when the connector is not an export target. */
+  exportTargetAdapterId?: string;
 }
 
 /**
@@ -123,6 +132,11 @@ export interface ConnectorUpdateRequest {
    * source); a populated adapter key sets it; `undefined` leaves it alone.
    */
   fileSourceAdapterId?: string;
+  /**
+   * `""` clears the export-target mapping (the connector stops being an export
+   * target); a populated adapter key sets it; `undefined` leaves it alone.
+   */
+  exportTargetAdapterId?: string;
 }
 
 /**
@@ -142,6 +156,28 @@ export interface FileSourceAdapter {
 
 export interface FileSourceAdapterListResponse {
   adapters: FileSourceAdapter[];
+}
+
+/**
+ * An export-target adapter shipped in the backend registry, as returned by
+ * `GET /admin/export-target-adapters`. Read-only — adapters are code, not
+ * config; an admin can only map a connector to an existing one. The
+ * write-direction mirror of {@link FileSourceAdapter}.
+ */
+export interface ExportTargetAdapter {
+  key: string;
+  displayName: string;
+  icon: string;
+  /** OAuth provider types this adapter may be mapped to. */
+  compatibleProviderTypes: ConnectorType[];
+  /** OAuth scopes the connector must grant for the adapter to work. */
+  requiredScopes: string[];
+  /** Output formats this destination can produce (e.g. `google_doc`). */
+  supportedFormats: string[];
+}
+
+export interface ExportTargetAdapterListResponse {
+  adapters: ExportTargetAdapter[];
 }
 
 /**

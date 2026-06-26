@@ -54,6 +54,16 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('requestScrollToLastUser', () => {
+    it('starts at 0 and increments the tick on each request', () => {
+      expect(service.scrollToLastUserTick()).toBe(0);
+      service.requestScrollToLastUser();
+      expect(service.scrollToLastUserTick()).toBe(1);
+      service.requestScrollToLastUser();
+      expect(service.scrollToLastUserTick()).toBe(2);
+    });
+  });
+
   describe('resetState', () => {
     it('should reset all state to initial values', () => {
       service.setChatLoading(true);

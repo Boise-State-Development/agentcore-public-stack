@@ -128,6 +128,14 @@ class OAuthProvider:
     # Adapter existence / provider-type compatibility is validated in the
     # admin route — `apis.shared` cannot import the app_api registry.
     file_source_adapter_id: Optional[str] = None
+    # Maps this connector to an export-target adapter (e.g. "google-drive"),
+    # making it a destination users can save conversations to. Mirrors
+    # `file_source_adapter_id` but for the write direction; the value is an
+    # adapter key from the export-target registry. None means the connector
+    # is not an export target. A single connector may be both a file source
+    # and an export target (e.g. a combined-scope Drive connector). Validated
+    # in the admin route for the same reason as above.
+    export_target_adapter_id: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
 
@@ -156,6 +164,7 @@ class OAuthProvider:
             "authorizationServerMetadata": self.authorization_server_metadata,
             "customParameters": self.custom_parameters,
             "fileSourceAdapterId": self.file_source_adapter_id,
+            "exportTargetAdapterId": self.export_target_adapter_id,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -177,6 +186,7 @@ class OAuthProvider:
             authorization_server_metadata=item.get("authorizationServerMetadata"),
             custom_parameters=item.get("customParameters"),
             file_source_adapter_id=item.get("fileSourceAdapterId"),
+            export_target_adapter_id=item.get("exportTargetAdapterId"),
             created_at=item.get("createdAt", datetime.now(timezone.utc).isoformat() + "Z"),
             updated_at=item.get("updatedAt", datetime.now(timezone.utc).isoformat() + "Z"),
         )
@@ -215,6 +225,10 @@ class OAuthProviderCreate(BaseModel):
     # Adapter key that makes this connector a file source. Validated against
     # the adapter registry in the admin route.
     file_source_adapter_id: Optional[str] = None
+    # Adapter key that makes this connector an export target (a destination
+    # users can save conversations to). Validated against the export-target
+    # registry in the admin route.
+    export_target_adapter_id: Optional[str] = None
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -272,6 +286,10 @@ class OAuthProviderUpdate(BaseModel):
     # `""` clears the file-source mapping (the connector stops being a file
     # source); a populated adapter key sets it; `None` leaves it unchanged.
     file_source_adapter_id: Optional[str] = None
+    # `""` clears the export-target mapping (the connector stops being an
+    # export target); a populated adapter key sets it; `None` leaves it
+    # unchanged.
+    export_target_adapter_id: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_credential_pair(self) -> "OAuthProviderUpdate":
@@ -305,6 +323,7 @@ class OAuthProviderResponse(BaseModel):
     authorization_server_metadata: Optional[Dict[str, Any]] = None
     custom_parameters: Optional[Dict[str, str]] = None
     file_source_adapter_id: Optional[str] = None
+    export_target_adapter_id: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -325,6 +344,7 @@ class OAuthProviderResponse(BaseModel):
             authorization_server_metadata=provider.authorization_server_metadata,
             custom_parameters=provider.custom_parameters,
             file_source_adapter_id=provider.file_source_adapter_id,
+            export_target_adapter_id=provider.export_target_adapter_id,
             created_at=provider.created_at,
             updated_at=provider.updated_at,
         )

@@ -27,6 +27,7 @@ import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-a
 import { JsonSyntaxHighlightPipe } from '../json-syntax-highlight.pipe';
 import type { DisplayMode } from '../../../../../services/mcp-apps/mcp-app-protocol';
 import { ChatRequestService } from '../../../../../services/chat/chat-request.service';
+import { ChatStateService } from '../../../../../services/chat/chat-state.service';
 import { SessionService } from '../../../../../services/session/session.service';
 
 /**
@@ -375,6 +376,7 @@ export class McpAppFrameComponent implements ToolResultRenderer {
   private readonly mcpAppMessage = inject(McpAppMessageService);
   private readonly mcpAppConsent = inject(McpAppConsentService);
   private readonly chatRequest = inject(ChatRequestService);
+  private readonly chatState = inject(ChatStateService);
   private readonly conversation = inject(SessionService);
   private readonly streamParser = inject(StreamParserService);
   private readonly theme = inject(ThemeService);
@@ -829,11 +831,20 @@ export class McpAppFrameComponent implements ToolResultRenderer {
           toolName,
           args,
         ),
-      sendMessage: (text) =>
-        this.chatRequest.submitChatRequest(
+      sendMessage: (text) => {
+        // Mirror the composer's user-turn affordances that a direct
+        // submitChatRequest() would otherwise skip: show the loading indicator
+        // and scroll the new user message to the top. The user message is
+        // added synchronously inside submitChatRequest, so requesting the
+        // scroll right after means it already exists in the list.
+        this.chatState.setChatLoading(true);
+        const result = this.chatRequest.submitChatRequest(
           text,
           this.conversation.currentSession().sessionId || null,
-        ),
+        );
+        this.chatState.requestScrollToLastUser();
+        return result;
+      },
       updateModelContext: (payload) =>
         this.mcpAppMessage.updateModelContext(res.resourceUri, payload),
       requestConsent: (req) => {

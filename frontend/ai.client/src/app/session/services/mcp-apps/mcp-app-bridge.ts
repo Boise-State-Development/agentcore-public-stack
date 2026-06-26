@@ -411,11 +411,17 @@ export class McpAppBridge {
           return;
         }
         const p = msg.params as Partial<MessageParams> | undefined;
+        // `content` is an ARRAY of content blocks per SEP-1865 / the ext-apps
+        // SDK; concatenate the text blocks into the relayed user turn (mirrors
+        // the ui/update-model-context handler's array handling below).
+        const blocks = Array.isArray(p?.content) ? p!.content : [];
         const text =
-          p?.role === 'user' &&
-          p?.content?.type === 'text' &&
-          typeof p.content.text === 'string'
-            ? p.content.text.trim()
+          p?.role === 'user'
+            ? blocks
+                .filter((b) => b?.type === 'text' && typeof b?.text === 'string')
+                .map((b) => b!.text as string)
+                .join('\n')
+                .trim()
             : '';
         if (!text) {
           this.respondError(

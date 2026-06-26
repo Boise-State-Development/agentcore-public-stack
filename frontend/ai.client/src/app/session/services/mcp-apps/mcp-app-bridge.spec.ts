@@ -378,7 +378,7 @@ describe('McpAppBridge', () => {
           id: 'm1',
           method: 'ui/message',
           nonce: NONCE,
-          params: { role: 'user', content: { type: 'text', text: '  hi  ' } },
+          params: { role: 'user', content: [{ type: 'text', text: '  hi  ' }] },
         },
         p.proxy,
       );
@@ -386,6 +386,29 @@ describe('McpAppBridge', () => {
       await Promise.resolve();
       expect(p.sendMessage).toHaveBeenCalledWith('hi');
       expect(p.proxy.byId('m1').result).toEqual({});
+    });
+
+    it('ui/message concatenates multiple text blocks in the array', async () => {
+      p.host.deliver(
+        {
+          jsonrpc: '2.0',
+          id: 'm1b',
+          method: 'ui/message',
+          nonce: NONCE,
+          params: {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'line one' },
+              { type: 'text', text: 'line two' },
+            ],
+          },
+        },
+        p.proxy,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(p.sendMessage).toHaveBeenCalledWith('line one\nline two');
+      expect(p.proxy.byId('m1b').result).toEqual({});
     });
 
     it('ui/message with bad params is invalid-params (-32000), not relayed', () => {
@@ -485,7 +508,7 @@ describe('McpAppBridge', () => {
           id: 'm3',
           method: 'ui/message',
           nonce: NONCE,
-          params: { role: 'user', content: { type: 'text', text: 'go' } },
+          params: { role: 'user', content: [{ type: 'text', text: 'go' }] },
         },
         p.proxy,
       );

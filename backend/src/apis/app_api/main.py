@@ -115,6 +115,7 @@ from apis.shared.security import (
     register_aws_client_error_handler,
     register_validation_error_handler,
 )
+from apis.shared.feature_flags import skills_enabled
 register_aws_client_error_handler(app)
 register_validation_error_handler(app)
 logger.info("Registered AWS ClientError handler")
@@ -184,7 +185,6 @@ from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.tools.routes import router as tools_router
-from apis.app_api.skills.routes import router as user_skills_router
 from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.documents.routes import router as documents_router
@@ -192,6 +192,7 @@ from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
 from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.file_sources.routes import router as file_sources_router
+from apis.app_api.export_targets.routes import router as export_targets_router
 from apis.app_api.web_sources.routes import router as web_sources_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
@@ -218,10 +219,10 @@ app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Pha
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
-app.include_router(user_skills_router)  # User-facing skill list + per-skill preferences
 app.include_router(files_router)  # File upload via pre-signed URLs
 app.include_router(connectors_router)  # User-facing connector catalog + consent flows
 app.include_router(file_sources_router)  # File-source catalog + browse/search over connectors
+app.include_router(export_targets_router)  # Export-target catalog + save-a-conversation to a connector
 app.include_router(web_sources_router)  # Web-crawl ingestion: URL -> documents via BFS + S3 staging
 app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
@@ -236,6 +237,13 @@ if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
     from apis.app_api.fine_tuning.routes import router as fine_tuning_router
     app.include_router(fine_tuning_router)
     logger.info("Fine-tuning routes enabled")
+
+# Conditionally register the user-facing skills surface (skill list +
+# per-skill preferences). Deferred to a later release; off by default.
+if skills_enabled():
+    from apis.app_api.skills.routes import router as user_skills_router
+    app.include_router(user_skills_router)
+    logger.info("Skills routes enabled")
 
 # Conditionally register artifact render-token routes. Infra only sets
 # the secret ARN when the artifacts feature is enabled for the

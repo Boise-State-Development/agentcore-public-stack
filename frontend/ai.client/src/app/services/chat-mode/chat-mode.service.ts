@@ -11,10 +11,24 @@ export type ChatMode = 'skill' | 'chat';
 export interface ChatModePolicy {
   defaultMode: ChatMode;
   allowModeToggle: boolean;
+  /**
+   * Whether the skills feature is enabled for this environment at all. When
+   * false the backend forces tools/chat mode; the SPA also hides the admin
+   * skills nav entry. Deferred features report this false.
+   */
+  skillsEnabled: boolean;
 }
 
-/** Mirrors the backend's compiled-in defaults (apis.shared.platform_settings). */
-const DEFAULT_POLICY: ChatModePolicy = { defaultMode: 'skill', allowModeToggle: true };
+/**
+ * Pre-load fallback. Defaults skills off so deferred-feature environments
+ * never flash the skills surfaces before the policy loads; the server is the
+ * source of truth and overrides this on fetch.
+ */
+const DEFAULT_POLICY: ChatModePolicy = {
+  defaultMode: 'chat',
+  allowModeToggle: false,
+  skillsEnabled: false,
+};
 
 /**
  * Holds the user's current agent mode — skills mode (SkillAgent, capabilities
@@ -49,6 +63,9 @@ export class ChatModeService {
   readonly policyLoaded = this._policyLoaded.asReadonly();
 
   readonly canToggle = computed(() => this._policy().allowModeToggle);
+
+  /** Whether the skills feature is enabled at all (gates the admin nav entry). */
+  readonly skillsEnabled = computed(() => this._policy().skillsEnabled);
 
   readonly mode = computed<ChatMode>(() => {
     const policy = this._policy();

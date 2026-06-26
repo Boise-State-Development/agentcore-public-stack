@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.platform_settings.models import ChatSettingsPublicResponse
 from apis.shared.platform_settings.service import get_chat_mode_settings_service
 from apis.shared.users.models import UserProfile, UserStatus
@@ -40,10 +41,19 @@ async def get_system_status() -> SystemStatusResponse:
 async def get_chat_settings(
     current_user: User = Depends(get_current_user_from_session),
 ) -> ChatSettingsPublicResponse:
-    """Chat-mode policy for the SPA: default agent mode + whether the user may toggle."""
+    """Chat-mode policy for the SPA: default agent mode + whether the user may toggle.
+
+    When the skills feature is disabled for this environment, ignore any stored
+    policy and report tools/chat mode with toggling off, so the SPA hides the
+    mode toggle, the skills picker, and the admin skills nav entry.
+    """
+    if not skills_enabled():
+        return ChatSettingsPublicResponse(
+            default_mode="chat", allow_mode_toggle=False, skills_enabled=False
+        )
     service = get_chat_mode_settings_service()
     settings = await service.get_settings()
-    return ChatSettingsPublicResponse.from_settings(settings)
+    return ChatSettingsPublicResponse.from_settings(settings, skills_enabled=True)
 
 
 @router.post("/first-boot", status_code=200)

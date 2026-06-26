@@ -1097,6 +1097,7 @@ export class ToolFormPage implements OnInit {
         awsRegion: formValue.mcpAwsRegion || null,
         apiKeyHeader: formValue.mcpApiKeyHeader || null,
         secretArn: formValue.mcpSecretArn || null,
+        forwardAuthToken: formValue.forwardAuthToken || false,
       });
 
       // Merge: keep existing rows (and their needsApproval flag), append any
