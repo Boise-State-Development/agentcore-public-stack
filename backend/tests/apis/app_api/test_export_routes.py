@@ -117,6 +117,7 @@ def _make_provider(
     enabled: bool = True,
     allowed_roles: Optional[list] = None,
     export_target_adapter_id: Optional[str] = ADAPTER_KEY,
+    file_source_adapter_id: Optional[str] = None,
 ) -> OAuthProvider:
     now = datetime.now(timezone.utc).isoformat() + "Z"
     return OAuthProvider(
@@ -130,6 +131,7 @@ def _make_provider(
         created_at=now,
         updated_at=now,
         export_target_adapter_id=export_target_adapter_id,
+        file_source_adapter_id=file_source_adapter_id,
     )
 
 
@@ -285,6 +287,31 @@ class TestListExportTargets:
         assert [t["providerId"] for t in targets] == ["gdrive"]
         assert targets[0]["connected"] is True
         assert targets[0]["supportedFormats"] == ["google_doc", "markdown"]
+        # Export-only connector (no file_source_adapter_id) → no folder picker.
+        assert targets[0]["browsable"] is False
+
+    def test_browsable_true_for_combined_scope_connector(self, app_with_deps):
+        # A connector also mapped to a shipped file-source adapter backs the
+        # destination folder picker via the reused import browse endpoints.
+        ctx = app_with_deps(
+            providers=[_make_provider("gdrive", file_source_adapter_id="google-drive")],
+        )
+        response = TestClient(ctx.app).get("/export-targets")
+
+        assert response.status_code == 200
+        targets = response.json()["exportTargets"]
+        assert targets[0]["browsable"] is True
+
+    def test_browsable_false_for_unshipped_file_source_adapter(self, app_with_deps):
+        # An admin can map a file_source_adapter_id that no longer ships; the
+        # picker would 404, so the catalog reports it as not browsable.
+        ctx = app_with_deps(
+            providers=[_make_provider("gdrive", file_source_adapter_id="ghost")],
+        )
+        response = TestClient(ctx.app).get("/export-targets")
+
+        assert response.status_code == 200
+        assert response.json()["exportTargets"][0]["browsable"] is False
 
     def test_includes_role_gated_connector_when_user_has_role(self, app_with_deps):
         ctx = app_with_deps(

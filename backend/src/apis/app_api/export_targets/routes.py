@@ -51,6 +51,7 @@ from apis.app_api.export_targets.models import (
     ExportTargetError,
 )
 from apis.app_api.export_targets.registry import registry
+from apis.app_api.file_sources.registry import registry as file_source_registry
 from apis.app_api.export_targets.render import render_transcript
 from apis.app_api.export_targets.service import (
     connector_visible_to_user,
@@ -91,6 +92,12 @@ class ExportTargetConnector(BaseModel):
     # The output formats this destination accepts, so the dialog's format
     # picker offers only what the adapter can actually produce.
     supported_formats: List[str] = Field(..., alias="supportedFormats")
+    # True when this connector is also mapped as a file source, so the SPA can
+    # reuse the import browse dialog to pick a destination folder. Only the
+    # combined-scope Drive connector (drive.readonly + drive.file) qualifies —
+    # `drive.file` alone cannot list folders. False means the export lands in
+    # the adapter's default app folder and the SPA hides the folder picker.
+    browsable: bool
 
 
 class ExportTargetListResponse(BaseModel):
@@ -165,6 +172,18 @@ async def _is_connected(
         )
         return False
     return not result.requires_consent
+
+
+def _is_browsable(provider: OAuthProvider) -> bool:
+    """True when the connector can also back the import browse dialog.
+
+    The destination folder picker reuses the file-source `roots`/`browse`
+    endpoints, which only resolve when the connector is mapped to a shipped
+    file-source adapter (the combined-scope Drive connector). An export-only
+    connector has no folder picker; its exports land in the app folder.
+    """
+    adapter_id = provider.file_source_adapter_id
+    return bool(adapter_id) and file_source_registry.get(adapter_id) is not None
 
 
 async def _collect_transcript(session_id: str, user_id: str) -> List[MessageResponse]:
@@ -253,6 +272,7 @@ async def list_export_targets(
                 supported_formats=[
                     fmt.value for fmt in adapter.metadata.supported_formats
                 ],
+                browsable=_is_browsable(provider),
             )
             for (provider, adapter), connected in zip(candidates, connected_flags)
         ]

@@ -23,7 +23,10 @@ function fileEntry(over: Partial<FileEntry>): FileEntry {
   return { id: 'f1', name: 'a.txt', type: 'file', selectable: true, ...over };
 }
 
-function setup(fileSourceOverrides: Partial<Record<string, unknown>> = {}) {
+function setup(
+  fileSourceOverrides: Partial<Record<string, unknown>> = {},
+  dialogData: Record<string, unknown> = { assistantId: 'AST-1' },
+) {
   const fileSourceService = {
     listFileSources: vi.fn().mockResolvedValue([CONNECTED]),
     listRoots: vi.fn().mockResolvedValue([{ id: 'root', name: 'My Drive' }]),
@@ -48,7 +51,7 @@ function setup(fileSourceOverrides: Partial<Record<string, unknown>> = {}) {
     providers: [
       provideHttpClient(),
       provideHttpClientTesting(),
-      { provide: DIALOG_DATA, useValue: { assistantId: 'AST-1' } },
+      { provide: DIALOG_DATA, useValue: dialogData },
       { provide: DialogRef, useValue: dialogRef },
       { provide: FileSourceService, useValue: fileSourceService },
       { provide: UserConnectorsService, useValue: connectorsService },
@@ -135,5 +138,65 @@ describe('FileSourceBrowserDialogComponent', () => {
       { fileId: 'f1', name: 'a.txt' },
     ]);
     expect(dialogRef.close).toHaveBeenCalledWith([{ documentId: 'DOC-1' }]);
+  });
+
+  describe('pick-folder mode', () => {
+    it('opens straight into the targeted connector and loads roots', async () => {
+      const { component, fileSourceService } = setup(
+        // Two roots so it stays on the roots list rather than auto-drilling in.
+        {
+          listRoots: vi.fn().mockResolvedValue([
+            { id: 'root', name: 'My Drive' },
+            { id: 'shared', name: 'Shared with me' },
+          ]),
+        },
+        { connector: CONNECTED, mode: 'pick-folder' },
+      );
+
+      await vi.waitFor(() => {
+        expect(fileSourceService.listRoots).toHaveBeenCalledWith('google');
+        expect((component['view'] as () => string)()).toBe('browser');
+      });
+      expect((component['isPicker'] as boolean)).toBe(true);
+      // Nothing selectable until the user drills into a folder.
+      expect((component['canPickCurrentFolder'] as () => boolean)()).toBe(false);
+    });
+
+    it('shows only folders, not files, while browsing', async () => {
+      const { component } = setup(
+        {
+          browse: vi.fn().mockResolvedValue({
+            entries: [
+              fileEntry({ id: 'sub', name: 'Subfolder', type: 'folder', selectable: false }),
+              fileEntry({ id: 'doc', name: 'notes.txt', type: 'file', selectable: true }),
+            ],
+            breadcrumbs: [],
+            nextCursor: null,
+          }),
+        },
+        { connector: CONNECTED, mode: 'pick-folder' },
+      );
+      // Single root auto-drills into the folder, populating entries.
+      await vi.waitFor(() =>
+        expect((component['currentFolderId'] as () => string | null)()).toBe('root'),
+      );
+
+      const shown = (component['displayedEntries'] as () => FileEntry[])();
+      expect(shown.map((e) => e.id)).toEqual(['sub']);
+    });
+
+    it('closes with the current folder as the selection', async () => {
+      const { component, dialogRef } = setup(
+        { browse: vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [], nextCursor: null }) },
+        { connector: CONNECTED, mode: 'pick-folder' },
+      );
+      await vi.waitFor(() =>
+        expect((component['currentFolderId'] as () => string | null)()).toBe('root'),
+      );
+
+      expect((component['canPickCurrentFolder'] as () => boolean)()).toBe(true);
+      (component['pickCurrentFolder'] as () => void)();
+      expect(dialogRef.close).toHaveBeenCalledWith({ folderId: 'root', folderName: 'My Drive' });
+    });
   });
 });

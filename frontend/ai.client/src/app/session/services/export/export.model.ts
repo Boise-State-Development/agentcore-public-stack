@@ -24,6 +24,12 @@ export interface ExportTargetConnector {
   connected: boolean;
   /** Output formats this destination accepts, driving the format picker. */
   supportedFormats: ExportFormat[];
+  /**
+   * True when this connector is also a file source, so the SPA can reuse the
+   * import browse dialog to pick a destination folder. False means exports land
+   * in the adapter's default app folder and the folder picker is hidden.
+   */
+  browsable: boolean;
 }
 
 export interface ExportTargetListResponse {
