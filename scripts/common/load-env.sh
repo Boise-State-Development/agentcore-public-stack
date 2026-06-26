@@ -231,6 +231,7 @@ export CDK_CERTIFICATE_ARN="${CDK_CERTIFICATE_ARN:-$(get_json_value "certificate
 
 # Behavior flags — env var > context file (no hardcoded defaults)
 export CDK_RETAIN_DATA_ON_DELETE="${CDK_RETAIN_DATA_ON_DELETE:-$(get_json_value "retainDataOnDelete" "${CONTEXT_FILE}")}"
+export CDK_MANAGE_DNS_RECORDS="${CDK_MANAGE_DNS_RECORDS:-$(get_json_value "manageDnsRecords" "${CONTEXT_FILE}")}"
 
 # Shared CORS origins — env var > context file (no hardcoded defaults)
 export CDK_CORS_ORIGINS="${CDK_CORS_ORIGINS:-$(get_json_value "corsOrigins" "${CONTEXT_FILE}")}"
@@ -285,6 +286,12 @@ validate_config() {
         errors=$((errors + 1))
     fi
     
+    if [ -n "${CDK_MANAGE_DNS_RECORDS}" ] && ! [[ "${CDK_MANAGE_DNS_RECORDS}" =~ ^(true|false|1|0)$ ]]; then
+        log_error "Invalid CDK_MANAGE_DNS_RECORDS value: '${CDK_MANAGE_DNS_RECORDS}'"
+        log_error "  Expected 'true', 'false', '1', or '0'"
+        errors=$((errors + 1))
+    fi
+    
     if [ $errors -gt 0 ]; then
         log_error "Configuration validation failed with ${errors} error(s)"
         return 1
@@ -308,6 +315,7 @@ if [ "${LOAD_ENV_QUIET:-false}" != "true" ]; then
     log_config "  Production:     ${CDK_PRODUCTION:-true}"
     log_config "  VPC CIDR:       ${CDK_VPC_CIDR:-<not set>}"
     log_config "  Retain Data:    ${CDK_RETAIN_DATA_ON_DELETE}"
+    log_config "  Manage DNS:     ${CDK_MANAGE_DNS_RECORDS:-true}"
     log_config "  CORS Origins:   ${CDK_CORS_ORIGINS}"
 
     if [ -n "${CDK_HOSTED_ZONE_DOMAIN:-}" ]; then

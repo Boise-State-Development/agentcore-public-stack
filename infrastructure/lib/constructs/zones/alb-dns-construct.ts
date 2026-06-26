@@ -41,23 +41,40 @@ export class AlbDnsConstruct extends Construct {
       config.infrastructureHostedZoneDomain &&
       config.infrastructureHostedZoneDomain.trim() !== ''
     ) {
-      const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
-        domainName: config.infrastructureHostedZoneDomain,
-      });
-
-
-
       if (config.albSubdomain) {
         const albRecordName = `${config.albSubdomain}.${config.infrastructureHostedZoneDomain}`;
 
-        new route53.ARecord(this, 'AlbARecord', {
-          zone: hostedZone,
-          recordName: config.albSubdomain,
-          target: route53.RecordTarget.fromAlias(
-            new route53Targets.LoadBalancerTarget(alb),
-          ),
-          comment: `A record for ALB - points ${albRecordName} to load balancer`,
-        });
+        // Create the A record only when DNS is managed in-account. When the
+        // hosted zone lives in another account (manageDnsRecords=false), skip
+        // the lookup/record — which would fail cross-account — and emit the
+        // alias target below so an operator can create the record by hand.
+        if (config.manageDnsRecords) {
+          const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
+            domainName: config.infrastructureHostedZoneDomain,
+          });
+
+          new route53.ARecord(this, 'AlbARecord', {
+            zone: hostedZone,
+            recordName: config.albSubdomain,
+            target: route53.RecordTarget.fromAlias(
+              new route53Targets.LoadBalancerTarget(alb),
+            ),
+            comment: `A record for ALB - points ${albRecordName} to load balancer`,
+          });
+        } else {
+          new cdk.CfnOutput(this, 'AlbDnsRecordName', {
+            value: albRecordName,
+            description:
+              'Manual DNS: record name to create (ALB custom domain). Create an ALIAS (or CNAME) to the target below.',
+            exportName: `${config.projectPrefix}-alb-dns-record-name`,
+          });
+          new cdk.CfnOutput(this, 'AlbDnsAliasTarget', {
+            value: alb.loadBalancerDnsName,
+            description:
+              'Manual DNS: ALIAS/CNAME target (ALB DNS name) for the ALB record',
+            exportName: `${config.projectPrefix}-alb-dns-alias-target`,
+          });
+        }
 
         if (config.certificateArn) {
           new cdk.CfnOutput(this, 'AlbUrlHttps', {

@@ -22,6 +22,15 @@ export interface AppConfig {
   corsOrigins: string; // Top-level shared CORS origins (comma-separated), used as default for all sections
   domainName?: string; // Primary domain name for the application (used for frontend, CORS, etc.)
   infrastructureHostedZoneDomain?: string;
+  // Whether CDK should create the Route53 ALIAS/A records for the SPA, ALB,
+  // artifacts, and mcp-sandbox origins. Defaults to `true`. Set to `false`
+  // when the hosted zone for `domainName` lives in a different AWS account
+  // (or is otherwise managed out-of-band): the stack still attaches the
+  // custom domain + ACM cert to every origin, but skips the in-account
+  // `HostedZone.fromLookup` + record creation that would fail cross-account.
+  // In that mode the deploy emits CfnOutputs with the record name + alias
+  // target for each origin so an operator can create the records by hand.
+  manageDnsRecords: boolean;
   albSubdomain?: string; // Subdomain for ALB (e.g., 'api' for api.yourdomain.com)
   certificateArn?: string; // ACM certificate ARN for HTTPS on the ALB (MUST be in the stack's own region)
   // Shared ACM certificate ARN for ALL CloudFront origins (SPA / artifacts /
@@ -195,6 +204,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
     corsOrigins,
     domainName,
     infrastructureHostedZoneDomain: process.env.CDK_HOSTED_ZONE_DOMAIN || scope.node.tryGetContext('infrastructureHostedZoneDomain'),
+    manageDnsRecords: parseBooleanEnv(process.env.CDK_MANAGE_DNS_RECORDS)
+      ?? scope.node.tryGetContext('manageDnsRecords')
+      ?? true,
     albSubdomain: process.env.CDK_ALB_SUBDOMAIN || scope.node.tryGetContext('albSubdomain'),
     certificateArn: process.env.CDK_CERTIFICATE_ARN || scope.node.tryGetContext('certificateArn'),
     cloudfrontCertificateArn: process.env.CDK_CLOUDFRONT_CERTIFICATE_ARN || scope.node.tryGetContext('cloudfrontCertificateArn'),
@@ -286,6 +298,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(`   AWS Region: ${config.awsRegion}`);
   console.log(`   Production: ${config.production}`);
   console.log(`   Retain Data on Delete: ${config.retainDataOnDelete}`);
+  console.log(`   Manage DNS Records: ${config.manageDnsRecords}`);
   console.log(`   App Version: ${config.appVersion}`);
 
   // Validate configuration

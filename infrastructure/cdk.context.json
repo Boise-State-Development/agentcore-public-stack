@@ -11,6 +11,7 @@
   "corsOrigins": "",
   "domainName": "",
   "infrastructureHostedZoneDomain": "",
+  "manageDnsRecords": true,
   "albSubdomain": "",
   "certificateArn": "",
   "frontend": {

@@ -92,6 +92,8 @@ jobs:
       CDK_CLOUDFRONT_CERTIFICATE_ARN: ${{ vars.CDK_CLOUDFRONT_CERTIFICATE_ARN }}
       CDK_HOSTED_ZONE_DOMAIN: ${{ vars.CDK_HOSTED_ZONE_DOMAIN }}
       CDK_RETAIN_DATA_ON_DELETE: ${{ vars.CDK_RETAIN_DATA_ON_DELETE }}
+      # See platform.yml — set "false" for cross-account hosted zones. Defaults true.
+      CDK_MANAGE_DNS_RECORDS: ${{ vars.CDK_MANAGE_DNS_RECORDS }}
       CDK_COGNITO_DOMAIN_PREFIX: ${{ vars.CDK_COGNITO_DOMAIN_PREFIX }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
       # Extra origins allowed to frame the artifacts iframe via CSP

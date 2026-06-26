@@ -24,6 +24,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     awsRegion: MOCK_REGION,
     production: false,
     retainDataOnDelete: false,
+    manageDnsRecords: true,
     vpcCidr: '10.0.0.0/16',
     corsOrigins: 'http://localhost:4200',
     appVersion: '1.0.0-test',
