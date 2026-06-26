@@ -73,6 +73,11 @@ interface ConnectorFormGroup {
    * source. On update, sending `''` clears an existing mapping.
    */
   fileSourceAdapterId: FormControl<string>;
+  /**
+   * Export-target adapter key, or `''` when the connector is not an export
+   * target. On update, sending `''` clears an existing mapping.
+   */
+  exportTargetAdapterId: FormControl<string>;
 }
 
 const ICON_DATA_MAX_BYTES = 100 * 1024;
@@ -577,6 +582,47 @@ const ICON_ACCEPTED_MIME_TYPES = [
               }
             </div>
 
+            <div class="rounded-sm border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+              <h2 class="mb-2 text-xl/8 font-semibold text-gray-900 dark:text-white">Export Target</h2>
+              <p class="mb-6 text-sm/6 text-gray-600 dark:text-gray-400">
+                Optionally map this connector to an export-target adapter so users can
+                save a conversation to it from the chat "Save to…" dialog.
+              </p>
+              @if (compatibleExportAdapters().length > 0) {
+                <div>
+                  <label for="exportTargetAdapterId" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Export-target adapter
+                  </label>
+                  <select
+                    id="exportTargetAdapterId"
+                    formControlName="exportTargetAdapterId"
+                    class="block w-full rounded-sm border border-gray-300 bg-white px-3 py-2.5 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-hidden focus:ring-3 focus:ring-blue-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="">Not an export target</option>
+                    @for (adapter of compatibleExportAdapters(); track adapter.key) {
+                      <option [value]="adapter.key">{{ adapter.displayName }}</option>
+                    }
+                  </select>
+                  <p class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                    When set, this connector appears as a destination in the "Save to…"
+                    dialog for any user allowed to use it.
+                  </p>
+                  @if (exportScopeCoverageWarning(); as warning) {
+                    <div class="mt-3 rounded-sm border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                      <div class="flex gap-2">
+                        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+                        <p class="text-sm/6 text-amber-700 dark:text-amber-300">{{ warning }}</p>
+                      </div>
+                    </div>
+                  }
+                </div>
+              } @else {
+                <p class="text-sm/6 text-gray-500 dark:text-gray-400">
+                  No export-target adapter is available for this connector type.
+                </p>
+              }
+            </div>
+
             @if (isEditMode()) {
               <div class="rounded-sm border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
                 <div class="flex gap-3">
@@ -675,6 +721,7 @@ export class ConnectorFormPage implements OnInit {
     iconData: this.fb.control('', { nonNullable: true }),
     customParameters: this.fb.control('', { nonNullable: true }),
     fileSourceAdapterId: this.fb.control('', { nonNullable: true }),
+    exportTargetAdapterId: this.fb.control('', { nonNullable: true }),
   });
 
   readonly pageTitle = computed(() => (this.isEditMode() ? 'Edit Connector' : 'Add Connector'));
@@ -716,12 +763,16 @@ export class ConnectorFormPage implements OnInit {
   // section reacts to. Updated from valueChanges in ngOnInit.
   private readonly scopesSignal = signal<string>('');
   private readonly fileSourceAdapterIdSignal = signal<string>('');
+  private readonly exportTargetAdapterIdSignal = signal<string>('');
 
   /**
    * The file-source adapter mapping loaded from the server, so update can
    * tell a real change (send it, possibly `''` to clear) from a no-op.
    */
   private readonly adapterLoadedFromServer = signal<string>('');
+
+  /** Same tri-state tracking for the export-target mapping. */
+  private readonly exportAdapterLoadedFromServer = signal<string>('');
 
   /** Every file-source adapter shipped in the backend registry. */
   readonly fileSourceAdapters = computed(() =>
@@ -764,6 +815,48 @@ export class ConnectorFormPage implements OnInit {
     );
   });
 
+  /** Every export-target adapter shipped in the backend registry. */
+  readonly exportTargetAdapters = computed(() =>
+    this.connectorsService.getExportTargetAdapters()
+  );
+
+  /** Adapters that may be mapped to the currently-selected provider type. */
+  readonly compatibleExportAdapters = computed(() =>
+    this.exportTargetAdapters().filter(a =>
+      a.compatibleProviderTypes.includes(this.providerTypeSignal())
+    )
+  );
+
+  /** The export-target adapter currently chosen in the dropdown, if any. */
+  readonly selectedExportAdapter = computed(() => {
+    const key = this.exportTargetAdapterIdSignal();
+    if (!key) return null;
+    return this.exportTargetAdapters().find(a => a.key === key) ?? null;
+  });
+
+  /**
+   * Warns when the connector's scopes don't cover the write scope the
+   * selected export target needs — caught here at config time rather than as
+   * a failed save later.
+   */
+  readonly exportScopeCoverageWarning = computed<string | null>(() => {
+    const adapter = this.selectedExportAdapter();
+    if (!adapter) return null;
+    const granted = new Set(
+      this.scopesSignal()
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    );
+    const missing = adapter.requiredScopes.filter(s => !granted.has(s));
+    if (missing.length === 0) return null;
+    return (
+      `This connector's scopes are missing ${missing.join(', ')}, which ` +
+      `${adapter.displayName} needs to save files. Add them above or ` +
+      `saving will fail.`
+    );
+  });
+
   /**
    * Returns a user-facing error string when clientId and clientSecret are
    * inconsistent. Rotation requires both or neither.
@@ -802,6 +895,9 @@ export class ConnectorFormPage implements OnInit {
     this.connectorForm.controls.fileSourceAdapterId.valueChanges.subscribe((value) => {
       this.fileSourceAdapterIdSignal.set(value);
     });
+    this.connectorForm.controls.exportTargetAdapterId.valueChanges.subscribe((value) => {
+      this.exportTargetAdapterIdSignal.set(value);
+    });
   }
 
   /**
@@ -810,16 +906,26 @@ export class ConnectorFormPage implements OnInit {
    * connector to Slack). Keeps the form from submitting an invalid mapping.
    */
   private clearIncompatibleAdapter(): void {
-    const current = this.connectorForm.controls.fileSourceAdapterId.value;
-    if (!current) return;
-    const adapter = this.connectorsService
-      .getFileSourceAdapters()
-      .find(a => a.key === current);
-    const stillCompatible = adapter?.compatibleProviderTypes.includes(
-      this.connectorForm.controls.providerType.value
-    );
-    if (!stillCompatible) {
-      this.connectorForm.controls.fileSourceAdapterId.setValue('');
+    const providerType = this.connectorForm.controls.providerType.value;
+
+    const currentFileSource = this.connectorForm.controls.fileSourceAdapterId.value;
+    if (currentFileSource) {
+      const adapter = this.connectorsService
+        .getFileSourceAdapters()
+        .find(a => a.key === currentFileSource);
+      if (!adapter?.compatibleProviderTypes.includes(providerType)) {
+        this.connectorForm.controls.fileSourceAdapterId.setValue('');
+      }
+    }
+
+    const currentExport = this.connectorForm.controls.exportTargetAdapterId.value;
+    if (currentExport) {
+      const adapter = this.connectorsService
+        .getExportTargetAdapters()
+        .find(a => a.key === currentExport);
+      if (!adapter?.compatibleProviderTypes.includes(providerType)) {
+        this.connectorForm.controls.exportTargetAdapterId.setValue('');
+      }
     }
   }
 
@@ -857,9 +963,11 @@ export class ConnectorFormPage implements OnInit {
         iconData: connector.iconData ?? '',
         customParameters: this.serializeCustomParameters(connector.customParameters ?? null),
         fileSourceAdapterId: connector.fileSourceAdapterId ?? '',
+        exportTargetAdapterId: connector.exportTargetAdapterId ?? '',
       });
       this.iconLoadedFromServer.set(connector.iconData ?? null);
       this.adapterLoadedFromServer.set(connector.fileSourceAdapterId ?? '');
+      this.exportAdapterLoadedFromServer.set(connector.exportTargetAdapterId ?? '');
       this.selectedRoles.set(connector.allowedRoles.length > 0 ? connector.allowedRoles : ['*']);
       this.applyDiscoveryValidator();
     } catch (error) {
@@ -999,6 +1107,11 @@ export class ConnectorFormPage implements OnInit {
         if (currentAdapter !== this.adapterLoadedFromServer()) {
           updates.fileSourceAdapterId = currentAdapter;
         }
+        // Same tri-state for the export-target mapping.
+        const currentExportAdapter = formValue.exportTargetAdapterId || '';
+        if (currentExportAdapter !== this.exportAdapterLoadedFromServer()) {
+          updates.exportTargetAdapterId = currentExportAdapter;
+        }
         if (formValue.clientId && formValue.clientSecret) {
           updates.clientId = formValue.clientId;
           updates.clientSecret = formValue.clientSecret;
@@ -1031,6 +1144,9 @@ export class ConnectorFormPage implements OnInit {
         }
         if (formValue.fileSourceAdapterId) {
           createData.fileSourceAdapterId = formValue.fileSourceAdapterId;
+        }
+        if (formValue.exportTargetAdapterId) {
+          createData.exportTargetAdapterId = formValue.exportTargetAdapterId;
         }
         const created = await this.connectorsService.createConnector(createData);
         this.createdConnector.set(created);
