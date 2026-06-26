@@ -2,11 +2,15 @@ name: Frontend Deploy
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop, main]
-    paths:
-      - 'frontend/**'
-      - 'scripts/frontend/**'
+  # Push-triggered deploys are disabled for the v1.0.0 release so that
+  # forking/syncing the codebase never auto-deploys the SPA into a user's
+  # AWS account. Deploy intentionally via the Actions tab. Re-enable by
+  # uncommenting the block below.
+  # push:
+  #   branches: [develop, main]
+  #   paths:
+  #     - 'frontend/**'
+  #     - 'scripts/frontend/**'
 
 permissions:
   contents: read

@@ -1,31 +1,254 @@
-# Release Notes — Unreleased
+# Release Notes — v1.0.0
 
-**Status:** in flight on `main`. Will be cut as v1.0.0-beta.28 once the platform-as-bootstrap refactor + the cross-pool sub-remap restore changes settle.
+**Release Date:** June 24, 2026
+**Previous Release:** v1.0.0-beta.27 (May 20, 2026)
 
-## ⚠️ Migration notes for existing deployers
+---
 
-- **Unconditional provisioning of Artifacts, MCP Sandbox, and SageMaker fine-tuning.** The `CDK_ARTIFACTS_ENABLED`, `CDK_MCP_SANDBOX_ENABLED`, and `CDK_FINE_TUNING_ENABLED` config flags were removed. These three feature surfaces are now always provisioned by `PlatformStack`. On your next `cdk deploy`, the following resources will be created if they don't already exist: the `artifacts.{domain}` and `mcp-sandbox.{domain}` CloudFront distributions and S3 origins, the artifact-content / artifact-metadata DDB + S3 stack, the artifact-render Lambda, and the SageMaker fine-tuning IAM role + security group + DDB tables. Cost impact when idle is negligible (CloudFront: zero requests, S3: ~empty, DDB: PAY_PER_REQUEST), but the resources will appear in your account.
-- **Compute image URIs now read from SSM at deploy time.** The app-api ECS task definition's `Image` and the AgentCore Runtime's `containerUri` are now read from `/<prefix>/app-api/image-tag` and `/<prefix>/inference-api/image-tag` at CFN deploy time rather than being baked into the synthesized template. Closes a trap where any task-def or Runtime property change in CDK (env var, CPU, role) would CFN-revert the live service to the bootstrap stub. The build pipeline owns those SSM parameters; subsequent CFN re-registrations always pick up the latest live image.
-- **First-deploy seed step.** `scripts/platform/deploy.sh` now runs `cdk synth → cdk-assets publish → seed-image-tags.sh → cdk deploy`. The seed step writes the bootstrap image URI to `/<prefix>/<svc>/image-tag` only if the parameter doesn't already exist (idempotent — no-op after the build pipeline has run). Required because `AWS::SSM::Parameter::Value<String>` template parameters need the SSM path to exist before CFN starts resolving template parameters.
+## Highlights
 
-## 🔒 Security regressions fixed
+**This is 1.0.0 — the first general-availability release.** After 27 betas, the platform is stable, and the headline of this release is as much about the *foundation* as the features built on it: the entire CDK app collapses from nine CloudFormation stacks into a single `PlatformStack` with a platform-as-bootstrap code-deploy model, so day-to-day code changes ship in ~2 minutes via AWS APIs and `cdk deploy` runs only when infrastructure actually changes.
 
-- **BFF cookie-signing KMS key:** the app-api task role was being granted `kms:Encrypt` and `kms:GenerateDataKey` on the BFF cookie key in addition to `kms:Decrypt`. The cookie codec never calls KMS directly — Secrets Manager handles transparent decryption of the data-key secret on the role's behalf — so the only action the role actually needs is `kms:Decrypt`. Split the OAuth-token-encryption KMS grant from the BFF cookie KMS grant; BFF cookie now Decrypt-only. Now exercised by `test/security-policy.test.ts`.
-- **`enforceSSL` missing on `RagDocumentsBucket` and the SPA `FrontendBucket`.** Both buckets now have an explicit Deny on `aws:SecureTransport=false` via `enforceSSL: true`. Asserted by the same security test suite, plus a third assertion that no policy has the dangerous `Action:* + Resource:*` combination.
-- **OAuth / connector IAM grants** that were dropped during the app-api / inference-api decomposition restored. App-api gains `bedrock-agentcore:GetResourceOauth2Token`, `CompleteResourceTokenAuth`, `Create/Update/Delete/Get/ListOauth2CredentialProvider`, plus full SecretsManager lifecycle on `bedrock-agentcore-identity!default/oauth2/*`. Inference-api gains `GetResourceOauth2Token`. Without these `/connectors/*` and external-MCP OAuth would 503 at runtime.
+On top of that foundation, 1.0.0 lands a large slate of product work: **Conversation Modes** (admin-curated system prompts users opt into), **file-source connectors and website crawling** that turn external systems and the open web into assistant knowledge bases, **self-service AgentCore Gateway MCP targets**, a **curated model catalog** with a new **Amazon Bedrock Mantle** provider, **per-turn context attribution**, and a public **Starlight documentation site**. It also delivers a complete **backup/restore disaster-recovery toolchain**, a coordinated **security-hardening sweep**, and remediation of **all 22 HIGH Dependabot findings**.
 
-## 🧪 Test coverage restored
+**Action required for operators with an existing deployment.** Because 1.0.0 consolidates the old nine-stack architecture into a single `PlatformStack`, upgrading any prior (beta) deployment is a **destructive backup → teardown → redeploy → restore migration** — not an in-place `cdk deploy`. We've written step-by-step instructions to make it as painless as possible. **Do not deploy over an existing environment without reading the [Upgrading an existing deployment](#upgrading-an-existing-deployment) section below first.** Brand-new deployments need no special steps.
 
-- 7 new policy-level assertions in `infrastructure/test/security-policy.test.ts` covering the new `app-api-iam-grants.ts` and `inference-api-iam-roles.ts` files: Action:* + Resource:* prohibition, BFF cookie key Decrypt-only, every bucket has SSE + public-access-block + enforceSSL, every DDB table has SSE.
-- 5 new assertions in `infrastructure/test/compute-image-resolution.test.ts` locking in the SSM-resolved image shape.
-- 2 new assertions in `infrastructure/test/ssm-safety.test.ts` catching the same-stack `valueForStringParameter` deadlock at synth time.
-- 1 new reflection test in `tests/supply_chain/test_env_var_contract.py` that walks the CDK env-block and the Python `os.environ.get(...)` call sites and fails on any orphan CDK env var.
+---
 
-## 🏗️ Other notable changes
+## Upgrading an existing deployment
 
-- Single CDK stack (`PlatformStack`) absorbed the prior nine-stack architecture. Compute construct refs flow through a typed `PlatformComputeRefs` interface, not SSM (which would deadlock on first deploy).
-- Workflow trigger gating: `backend.yml`, `platform.yml`, and `frontend-deploy.yml` are workflow_dispatch-only while downstream forks absorb the platform-as-bootstrap refactor + the cross-pool Cognito sub-remap restore changes. Re-enable by uncommenting the `push:` blocks.
-- Restore tool: full Cognito sub remapping for cross-pool migrations + AgentCore Memory event replay with deterministic `clientToken` for idempotency.
+> **Read this before you deploy 1.0.0 over any existing environment.**
+
+1.0.0 replaces the previous nine-stack CloudFormation layout with a single `PlatformStack`. There is **no in-place upgrade path** from a beta deployment — the old stacks must be torn down and replaced. Your data is preserved through a backup/restore cycle, but the steps are **destructive and must run in order**. We've written and tested detailed, click-by-click instructions so you can work through it confidently.
+
+**Start here — the full step-by-step guides:**
+
+- 📖 **[Upgrading from Multi-Stack](https://boise-state-development.github.io/agentcore-public-stack/deployment/upgrade/)** (published docs site) — the complete walkthrough with screenshots-level detail, a timeline, rollback steps, and migration gotchas.
+- 📄 In-repo copy: [`.github/docs/deploy/upgrade-from-multi-stack.md`](.github/docs/deploy/upgrade-from-multi-stack.md)
+
+**The migration at a glance** (≈45–75 min total — see the guide for the exact inputs for each workflow):
+
+1. **Back up** — run the **Backup Data (Pre-Migration)** workflow. This is the most critical step; confirm `summary.failed` is zero and note the `{prefix}-backup-{timestamp}` bucket name. Do not proceed on a failed backup.
+2. **Tear down** — run the **Teardown All Infrastructure** workflow (`confirm: DESTROY`) to delete the old stacks. If your environment retained stateful resources (`CDK_RETAIN_DATA_ON_DELETE=true`), clear them — at minimum delete the legacy `/{prefix}/{app-api,inference-api}/image-tag` SSM parameters, which otherwise fail the first new deploy.
+3. **Redeploy** — run **Platform Stack** → **Backend Deploy** → **Frontend Deploy** → **Seed Bootstrap Data**.
+4. **Restore** — run the **Restore Data** workflow against your backup bucket with `dry_run: true` first, then `dry_run: false`.
+5. **Verify** — confirm login, chat history, file uploads, the admin dashboard, and RAG assistants.
+
+> ⚠️ **Two things to know going in:** the backup bucket is immutable and survives every teardown (it's your safety net and rollback source), and **Cognito passwords do not transfer** — native-password users must use "Forgot Password" on first login, while federated (OIDC/SAML) users are unaffected.
+
+Brand-new deployments skip all of this — see [Deployment notes](#-deployment-notes).
+
+---
+
+## Single-stack platform-as-bootstrap architecture
+
+The biggest structural change in the project's history: the CDK app that used to be nine CloudFormation stacks is now one `PlatformStack`.
+
+**Why this overhaul.** The multi-stack layout treated the platform like a fleet of independently deployable microservices — but the application is, by definition, a **monolith**: one cohesive product whose pieces are released together, version-locked, and only ever deployed as a unit. Splitting it across nine stacks bought none of the benefits of microservices and all of their operational cost. Cross-stack `Fn::ImportValue` references created brittle deploy-ordering requirements; a change in one stack routinely forced careful, manual sequencing of the others; and the seams between stacks were a constant source of deployment issues and gotchas — exported-value locks that blocked updates, drift between stacks that had to be reconciled by hand, and first-deploy chicken-and-egg problems. Consolidating into a single `PlatformStack` removes that entire class of failure: there are no cross-stack references to order, no inter-stack drift to reconcile, and one `cdk deploy` either succeeds or rolls back as a whole. Treating the monolith as a monolith from a DevOps standpoint is simpler to reason about, faster to deploy, and dramatically less error-prone.
+
+### Infrastructure
+
+- `infrastructure/lib/platform-stack.ts` composes ~39 single-responsibility constructs under `lib/constructs/` (network, identity, data, rag, artifacts, mcp-sandbox, agentcore, inference-api, app-api, fine-tuning, spa, zones). It is built in two phases — the constructor (data + edge + Cognito + AgentCore Memory/Code-Interpreter/Browser/Gateway) and `wireCompute()` (Inference Runtime + SageMaker + App API Fargate) — which eliminates every cross-stack `Fn::ImportValue` and all deploy-ordering between stacks. `npx cdk list` now returns exactly `${prefix}-PlatformStack`.
+- **Platform-as-bootstrap.** CDK ships small, byte-stable placeholder assets from `infrastructure/bootstrap-assets/{app-api,inference-api,rag-ingestion,artifact-render}/` (stdlib HTTP servers / 503 handlers). The real code ships out-of-band via AWS control-plane APIs: `aws ecs register-task-definition` + `update-service` (app-api Fargate), `aws bedrock-agentcore-control update-agent-runtime` (inference-api Runtime), and `aws lambda update-function-code` (rag-ingestion image Lambda + artifact-render zip Lambda). Because CFN tracks each `Code`/`image` property from its own constant model, subsequent Platform deploys leave the out-of-band-deployed real code untouched.
+- All per-component CDK feature flags were removed (`CDK_FRONTEND_ENABLED`, `CDK_APP_API_ENABLED`, `CDK_INFERENCE_API_ENABLED`, `CDK_GATEWAY_ENABLED`, `CDK_FILE_UPLOAD_ENABLED`, `CDK_ASSISTANTS_ENABLED`, `CDK_RAG_ENABLED`, `CDK_FINE_TUNING_ENABLED`, `CDK_ARTIFACTS_ENABLED`, `CDK_MCP_SANDBOX_ENABLED`). The platform now deploys everything, always.
+
+### CI/CD
+
+- New `platform.yml` (CDK), `backend.yml` (build → API-driven code deploy), and `frontend-deploy.yml` workflows replace the legacy per-stack workflows, which were deleted along with their scripts and tests. A content-hash Docker build pipeline under `scripts/build/` skips a rebuild when the computed hash already exists as an ECR tag. Day-to-day backend code deploys in ~2 minutes without touching CloudFormation; `cdk deploy` runs only on real infrastructure changes.
+
+### Test coverage
+
+Carried forward from the refactor's stabilization: 7 policy-level assertions in `infrastructure/test/security-policy.test.ts` (Action:\* + Resource:\* prohibition, BFF-cookie-key Decrypt-only, every bucket SSE + public-access-block + `enforceSSL`, every DDB table SSE), 5 in `compute-image-resolution.test.ts` (SSM-resolved image shape), 2 in `ssm-safety.test.ts` (same-stack `valueForStringParameter` deadlock at synth), and a `tests/supply_chain/test_env_var_contract.py` reflection test that fails on any orphan CDK env var.
+
+---
+
+## Conversation Modes
+
+**Shipped enabled.** Admins curate a catalog of custom system prompts ("Guided Learning", "Concise", and so on) that users opt into per conversation.
+
+### Backend
+
+- New `apis.shared.system_prompts` module (models / repository / service) with optimistic-concurrency updates so a concurrent delete+edit can't resurrect a deleted prompt. Admin CRUD `/admin/system-prompts` (full `prompt_text`) and a user read `/system-prompts` (name + description only — prompt text stays server-side). Inference resolves the active prompt via `chat/system_prompt_resolver.py` and appends it to the base prompt; gating skips resume, continuation, preview, and assistant-attached turns. Selection precedence is request-body-first (so the first turn of a new session works without a metadata round-trip), with session preferences as fallback.
+
+### Infrastructure
+
+- New `SystemPromptsTable` DynamoDB construct (env `DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME`; app-api CRUD, inference-api `GetItem` only); name + ARN published to SSM.
+
+### Frontend
+
+- Lazy `SystemPromptsService`, admin list/form pages, and a per-conversation chip + radio group in the settings panel.
+
+---
+
+## Knowledge bases: file-source connectors and website crawling
+
+Two complementary ways to fill an assistant's knowledge base from outside a manual upload.
+
+### File-source connectors
+
+A four-PR arc turns OAuth connectors into RAG document sources. A provider-agnostic backend (`FileSourceAdapter` ABC + shipped-code-only registry, normalized `FileEntry`/`BrowseResult`/`SourceRoot`/`DownloadedFile` contract) ships with a `GoogleDriveAdapter` (Drive v3 browse/search/download including native-doc export). The `Document` model gains provenance (`sourceConnectorId`/`sourceAdapterKey`/`sourceFileId`/`sourceEtag`/`importedByUserId`). Admins opt a connector in by mapping it to an adapter (`OAuthProvider.file_source_adapter_id`, validated against `compatible_provider_types`); users browse via `GET /file-sources`, `GET /connectors/{id}/roots|browse|search`, and import via `POST /assistants/{id}/documents/import` (202), which creates provenance-bearing `Document` rows then stages downloads to the documents S3 bucket where the existing ingestion Lambda chunks and embeds them. The SPA adds a `FileSourceBrowserDialogComponent` (CDK modal). Two correctness fixes followed: sending the `OAuth2CallbackUrl` header (#373) and consent-matched `customParameters` (#374).
+
+### Website crawling
+
+A new `apis/app_api/web_sources/` package adds an "Add web content" flow (`POST /assistants/{id}/web-sources/crawl` + crawl-status endpoints). The bounded-BFS crawler is robots.txt-respecting, same-domain, SSRF-guarded, with per-host jitter, bounded concurrency, a 5 MB/page cap, and a 15-minute budget; extraction is trafilatura→markdown (BeautifulSoup fallback) written to the documents bucket for the existing S3-event ingestion. `CrawlJob` rows persist in the existing assistants table via the adjacency-list pattern with a 30-day TTL on terminal rows and a self-heal that auto-finalizes stuck `running` rows. The SPA adds a `WebSourceDialogComponent` with depth/max-pages/concurrency sliders and a 5s active-crawl poller that merges discovered pages incrementally. New deps: `beautifulsoup4` 4.13.5, `trafilatura` 2.0.0.
+
+---
+
+## Assistants: collaboration and editor UX
+
+- **Viewer/editor share permissions.** Per-user permission levels on shared assistants: `AssistantSharesResponse.sharedWith` becomes `ShareEntry[]`, a `PATCH /assistants/{id}/shares` endpoint lands, and editors can edit settings/docs/test-chat but cannot delete, change visibility, or manage shares — gated across the assistants/documents/inference routes (no new table). The UI adds per-row "Can view / Can edit" selects, "Editor" badges, and an owner-only Share button.
+- **Knowledge-base grounding.** Consumer chat with an assistant (`rag_assistant_id`) now runs with **zero external tools**, grounded in the knowledge base only — enforced at the inference-API chokepoint (`enabled_tools=[]`) plus a "## Knowledge Base Grounding" system-prompt section.
+- **Editor redesign.** The editor adopts the `rounded-2xl` list/form language; connectors surface as buttons above the drop zone (opening the browser dialog targeted at that connector), the three "add knowledge" groups collapse into a single inline action row with skeleton chips, OAuth consent starts in place from the connector button, `complete` documents are downloadable, and the preview hides voice/settings while exposing file attachments via `file_upload_ids`.
+
+---
+
+## Gateway MCP self-service targets
+
+Admins can register an externally deployed MCP server as a target on the shared AgentCore Gateway directly from the admin Tools form — no infrastructure change. A `MCPGatewayConfig` model (listing-mode / credential-type / grant-type enums mirroring `bedrock-agentcore-control`, per-tool `MCPToolEntry` flags, AWS-assigned `target_id`/`gateway_arn`) is serialized under `mcpGatewayConfig`; a `GatewayTargetService` drives the lifecycle (create-AWS-first, update-reconcile, hard/soft delete with 409/502 mapping) and `GET /admin/tools/{tool_id}/gateway-status`. The form supports Discover-from-server and OAuth co-gating, a new `NONE` (public-endpoint) credential type as the default, correct `iamCredentialProvider{service,region?}` for `GATEWAY_IAM_ROLE` targets, and a per-target `lambda:InvokeFunctionUrl` grant/revoke (`gateway_lambda_grant.py`) that replaces the prior standing `mcp-*` wildcard. A shared `gateway_identity.resolve_gateway_id` unifies how the agent and the service resolve the gateway — fixing a bug where the agent read a different hardcoded gateway than the admin form wrote to — and the runtime expands catalog tools to `gateway_<target>___<tool>` ids.
+
+### Infrastructure
+
+- `AgentCoreGatewayConstruct` publishes `/{prefix}/gateway/id` to SSM (read at runtime, never at CFN deploy time). app-api gains `ssm:GetParameter` on it plus `bedrock-agentcore:{Create,Get,Update,Delete,List}GatewayTarget` scoped to `gateway/*`.
+
+---
+
+## Curated model catalog and the Amazon Bedrock Mantle provider
+
+Model administration moves from hand-entry to a curated catalog: `model-catalog.page.ts` + `models/curated-models.ts` define fully-specified Bedrock entries (Claude Haiku/Sonnet/Opus 4.x) with pricing, modalities, and per-param specs; an add dialog collects role IDs before POST while "Preview & customize" hands a template to the model form; each card shows a light/dark provider logo. A same-session follow-up fixed the float-`thinking.default` validation bug that ghosted stored models from the list, and added a delete-confirmation modal and loading state.
+
+Separately, **Amazon Bedrock Mantle** is added as a first-class provider — AWS's OpenAI-compatible surface for open-weight models (qwen, gpt-oss, gemma, deepseek). A new `apis/shared/bedrock/bearer_token.py` mints a SigV4-presigned short-lived token so the OpenAI SDK can drive the Mantle endpoint, and `GET /admin/mantle/models` browses the live regional roster to seed the form.
+
+---
+
+## Per-turn context attribution
+
+A four-PR foundation answers "what is filling the context window?". The AgentCore runtime role is granted `bedrock:CountTokens`; `model_config.py` sets `use_native_token_count=True` with an inference-profile-aware `core/bedrock_count_tokens.py` so Bedrock returns authoritative counts instead of the chars/4 heuristic. A `ContextAttributionHook` (on `BeforeModelCallEvent`) splits the count into system / tools / messages partitions, and the stream coordinator attaches it to the turn's final `metadata` SSE event as `contextBreakdown`. The SPA renders a "Context: <total>" pill, modeled as an open-ended partition list so future partition splits are additive and non-breaking, gated behind the existing show-token-count setting.
+
+---
+
+## MCP Apps host-renderer
+
+Building on the beta.27 foundation, this release made the host-renderer production-solid.
+
+- **Progressive rendering (SEP-1865).** The App frame mounts early at the tool's `content_block_start` and streams `ui/notifications/tool-input-partial`, so Apps that animate from streaming arguments (e.g. Excalidraw camera tours) work end-to-end (`integrations/mcp_apps.py`, `streaming/stream_coordinator.py`, `apis/shared/mcp_apps/partial_json.py`).
+- **Refresh survival.** Model-initiated UI resources persist as gzipped HTML in the sessions-metadata table (`ui_resource_store.py`, SK `UIRES#<toolUseId>`, 90-day TTL, ownership re-check) and replay through the messages response.
+- **Rendering and robustness fixes.** The 150px iframe collapse (CSSOM 100%-height chain), the fullscreen overlay stacking/sizing (`z-index:9999` fixed iframe; entry-animation transform no longer traps it), the `<meta>`-vs-header CSP mismatch that blocked `eval` Apps, spec-array `ui/message` content, transient-TLS retry on MCP client start, and a fullscreen title-bar with reachable consent.
+
+---
+
+## 🐛 Bug fixes
+
+- **Managed-models list ghosting** — stored models with a whole-number float `thinking.default` (DynamoDB Decimal roundtrip) failed validation on read and were silently skipped from the list while create still saw them ("already exists" + invisible row). The validator now accepts whole-number floats; adds a delete-confirmation modal and loading state (#394).
+- **File-upload duplicate-name misclassified as "file too large"** — narrowed the size classifier to require explicit size markers and added a dedicated duplicate-name branch (#403).
+- **Gateway IAM targets rejected** — an HTTP-endpoint `mcpServer` target requires an explicit `iamCredentialProvider`; the agent Gateway client was also repointed from a hardcoded SSM param to the CDK `/{prefix}/gateway/id` so admin-registered targets reach the agent (#457).
+- **arm64 image mismatch** — `rag-ingestion` was built amd64 against an arm64 Lambda (`Runtime.InvalidEntrypoint`, uploads stuck with no embeddings); now built on native ARM runners (#496).
+- **Artifact-render drift** — re-deploys the render Lambda code when the live function drifts from what we shipped, so the CDK bootstrap 503 stub stops serving `artifacts.{domain}` (#438).
+- **MCP-sandbox cert regression** — restored the deploy var lost in the stack consolidation (NXDOMAIN → App `postMessage` origin mismatch) with a synth-time guard (#434).
+
+---
+
+## 🔒 Security
+
+A coordinated defense-in-depth pass, mostly as direct commits plus PRs #443/#458/#484. Its keystone is a new `backend/src/apis/shared/security/` package (#443):
+
+- `url_validator.validate_external_url` — a DNS-rebinding-safe SSRF guard that rejects loopback, link-local (incl. 169.254 cloud-metadata), RFC1918/ULA, multicast, reserved, unspecified, and CGNAT targets, resolving every DNS answer before allowing a request.
+- `ownership` helpers (`require_session_owner` / `require_memory_owner` / `require_file_owner`) whose handler maps `OwnershipError` → HTTP **404, not 403**, erasing the not-found-vs-forbidden enumeration oracle.
+- AWS `ClientError` / validation handlers registered in both API apps that collapse upstream detail to generic 400/502/422 bodies.
+
+Adopted across the surface: `fetch_url_content` runs every URL — including each manual redirect hop (`follow_redirects=False`, ≤3 hops) — through the validator; outbound MCP SigV4 signing only attaches task IAM credentials to recognized AWS hosts and refuses otherwise; Code Interpreter inputs from `generate_diagram_and_validate` and `analyze_spreadsheet` are walked by a static AST policy against a plotting/dataframe allowlist that bans subprocess/os/sys/socket/eval/exec/dunder access. Identity is pinned to the validated session, not request bodies (`POST /users/me/sync` derives email and roles from `current_user.*`); system prompts are wrapped in a non-escapable `PLATFORM_SAFETY_FLOOR`; session-metadata `PUT` rejects cross-owner ids; `jwt_role_mappings` are regex-validated with map-everyone tokens banned on `system_admin`; admin read paths were sanitized and CloudFront/ALB pinned to a TLS 1.2+ minimum baseline. Each item ships regression tests under `backend/tests/security/`, `tests/rbac/`, and `tests/routes/`.
+
+---
+
+## ⚡ Performance
+
+- **Re-enabled Strands Bedrock auto prompt caching** — `ModelConfig.to_bedrock_config()` emits `CacheConfig(strategy="auto")` again, now safe after the upstream cachePoint/document-attachment collision was resolved in strands-agents 1.39.0 (#471).
+
+---
+
+## ⚠️ Breaking changes
+
+These are breaking only for forks still on the legacy multi-stack layout. Fresh and single-stack deployments are unaffected.
+
+- **Nine-stack → single `PlatformStack`.** Every legacy stack (Infrastructure / Frontend / AppApi / InferenceApi / Gateway / Artifacts / McpSandbox / RagIngestion / SageMakerFineTuning) is removed; `bin/infrastructure.ts` instantiates only `${prefix}-PlatformStack`. All per-component CDK feature flags were removed. Migration path: `.github/docs/deploy/upgrade-from-multi-stack.md` (legacy SSM cleanup + teardown of the old stacks). (#396)
+- **SSM `image-tag` contract.** `/{prefix}/{app-api,inference-api,rag-ingestion}/image-tag` changed from a bare tag/short-SHA to a FULL ECR URI. A stale legacy value will fail the first `PlatformStack` deploy on CFN pattern-validation; the seed script auto-repairs it. (#420)
+- **Assistant consumer chat runs tool-free.** Chatting with an assistant is now knowledge-base-grounded with `enabled_tools=[]`; a side effect is that MCP-App `ui_resource` events no longer fire for assistant chats. No migration needed. (#382)
+
+---
+
+## 🏗️ Infrastructure
+
+- **Shared CloudFront wildcard cert.** New top-level `CDK_CLOUDFRONT_CERTIFICATE_ARN`; the SPA / artifacts / mcp-sandbox origins fall back to it (a section-specific cert still wins), so a single `us-east-1` `{domain}` + `*.{domain}` cert covers all edge origins, with cert-missing guards (#491).
+- **New tables.** `system-prompts` DynamoDB table (Conversation Modes; app-api CRUD, inference-api `GetItem` only), with name + ARN published to SSM.
+- **Restored SSM contracts.** ~22 parameters (17 table, 4 bucket, `/inference-api/memory-id`) that the consolidation dropped and the restore tooling reads were republished (#421).
+- **Context attribution.** AgentCore runtime execution role granted `bedrock:CountTokens` (#428).
+
+---
+
+## 🔧 CI/CD improvements
+
+- **Deploy workflows are `workflow_dispatch`-only for this release.** `platform.yml`, `backend.yml`, and `frontend-deploy.yml` no longer run on `push` — their push triggers are commented out so that forking or syncing the codebase never auto-deploys infrastructure or code into your AWS account. Deploy intentionally from the **Actions** tab. Re-enable later by uncommenting the `push:` block in each workflow.
+- New `platform.yml`, `backend.yml`, and `frontend-deploy.yml` workflows; `nightly-deploy-pipeline` rewritten platform → backend → frontend; legacy per-stack workflows deleted (#396).
+- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys never run on PRs (#490).
+- New `docs-deploy.yml` publishes the Starlight site to GitHub Pages (#432).
+- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); `Backend Stack` renamed to `Backend Deploy` (#423); and the stale `6.` prefix was dropped from the Seed Bootstrap Data workflow.
+
+### GitHub Actions upgrades
+
+| Action / Tool | From | To |
+|---|---|---|
+| `aws-cdk` (CLI) | 2.1120.0 | 2.1128.0 |
+| `aws-cdk-lib` | 2.251.0 | 2.260.0 |
+
+---
+
+## 📦 Dependency upgrades
+
+Remediates all 22 HIGH Dependabot findings plus easy MEDIUM/LOW (the same set merged across #487, #488, #489).
+
+### Backend
+
+| Package | From | To |
+|---|---|---|
+| `cryptography` | 47.0.0 | 48.0.1 |
+| `starlette` | 1.0.0 | 1.3.1 |
+| `python-multipart` | 0.0.27 | 0.0.31 |
+| `pyjwt[crypto]` | 2.12.1 | 2.13.0 |
+| `urllib3` | (range) | pinned 2.7.0 |
+| `aiohttp` | 3.13.5 | 3.14.1 |
+| `authlib` | 1.7.0 | 1.7.1 |
+| `idna` | (range) | pinned 3.15 |
+| `beautifulsoup4` | — | 4.13.5 (new) |
+| `trafilatura` | — | 2.0.0 (new) |
+
+### Frontend
+
+| Package | From | To |
+|---|---|---|
+| `@angular/*` | 21.2.11 | 21.2.17 |
+| `@angular/cdk` | 21.2.9 | 21.2.14 |
+| `@angular/build`, `@angular/cli` | 21.2.9 | 21.2.16 |
+| `mermaid` | 11.14.0 | 11.15.0 |
+| `hono` (override) | ≥4.12.14 | ≥4.12.25 |
+| `undici` (override) | ≥7.25.0 | ≥7.28.0 |
+| `vite` (override) | ≥7.3.2 | ≥8.0.16 |
+| `piscina` (override) | — | ≥5.2.0 (new) |
+| `@babel/core` (override) | — | bounded 7.29.7 |
+
+### Infrastructure
+
+| Package | From | To |
+|---|---|---|
+| `aws-cdk-lib` | 2.251.0 | 2.260.0 |
+| `aws-cdk` (CLI) | 2.1120.0 | 2.1128.0 |
+
+---
+
+## 🚀 Deployment notes
+
+- **Fresh deployments:** no special steps. Trigger each workflow from the **Actions** tab (deploys are manual `workflow_dispatch` this release): **Platform Stack** (CDK), then **Backend Deploy**, **Frontend Deploy**, and **Seed Bootstrap Data**.
+- **Upgrading an existing deployment:** this is a destructive backup → teardown → redeploy → restore migration — see the [Upgrading an existing deployment](#upgrading-an-existing-deployment) section above for the full walkthrough and links. The `image-tag` SSM parameters must hold full ECR URIs (the seed step repairs stale legacy values).
+- **New certificate option.** If you want one wildcard cert across all edge origins, set `CDK_CLOUDFRONT_CERTIFICATE_ARN` (must be in `us-east-1`); section-specific cert ARNs still take precedence.
+- **Disaster recovery.** The `Backup Data (Pre-Migration)` and `Restore Data` workflows snapshot and replay all application data (DynamoDB, S3, S3 Vectors, Cognito) into a deployed `PlatformStack`; always run `Restore Data` with `dry_run: true` first.
 
 ---
 

@@ -4,6 +4,111 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.0.0] - 2026-06-24
+
+The **1.0.0 general-availability release** — the platform graduates from beta to a stable, single-stack architecture. The CDK app collapses from nine CloudFormation stacks into one `PlatformStack` with a platform-as-bootstrap code-deploy model; admin-curated Conversation Modes, external file-source connectors and website crawling for assistant knowledge bases, self-service AgentCore Gateway MCP target registration, a curated model catalog with the new Amazon Bedrock Mantle provider, per-turn context attribution, a Starlight documentation site, and a full backup/restore DR toolchain all ship; plus a coordinated security-hardening sweep and remediation of all 22 HIGH Dependabot findings.
+
+### 🚀 Added
+
+- **Per-tool MCP enablement** — scoped tool ids (`toolId::name`) selecting a single tool of an MCP server, with live `POST /admin/tools/{id}/discover` and `POST /tools/{id}/discover` endpoints (#469)
+- **Conversation Modes** — admin-curated catalog of custom system prompts (e.g. "Guided Learning", "Concise") that users opt into per conversation; appended to the base system prompt at invocation. Admin CRUD `/admin/system-prompts` + user read `/system-prompts` (name/description only); new `system-prompts` DynamoDB table. Ships enabled (#411)
+- **File-source connectors** — import knowledge-base documents from external OAuth providers. Provider-agnostic `FileSourceAdapter` framework + registry with a shipped `GoogleDriveAdapter`; `GET /file-sources`, `GET /connectors/{id}/roots|browse|search`, `POST /assistants/{id}/documents/import` (202); admin connector→adapter mapping (`OAuthProvider.file_source_adapter_id`) + `GET /admin/file-source-adapters`; `Document` provenance fields; SPA `FileSourceBrowserDialogComponent` (#366, #367, #371, #372)
+- **Web-sources crawling** — crawl websites into an assistant's knowledge base via `POST /assistants/{id}/web-sources/crawl` + crawl-status endpoints. Robots-respecting, SSRF-guarded, same-domain bounded-BFS crawler (5 MB/page, 15-min budget) with trafilatura→markdown extraction into the documents bucket for the existing ingestion Lambda; `WebSourceDialogComponent` with live discovery polling (#378)
+- **Assistant viewer/editor share permissions** — per-user permission levels on shared assistants (editors can edit settings/docs/test-chat but not delete, change visibility, or manage shares); `AssistantSharesResponse.sharedWith` becomes `ShareEntry[]`; `PATCH /assistants/{id}/shares`; per-row "Can view / Can edit" UI + "Editor" badges (#113, #383, #384)
+- **Download uploaded assistant documents** from the editor for `complete` docs (#380)
+- **Gateway MCP self-service targets** — admins register an externally deployed MCP server as a target on the shared AgentCore Gateway from the admin Tools form: `MCPGatewayConfig` model, `GatewayTargetService` + admin route lifecycle (create-AWS-first / update-reconcile / delete with 409/502 mapping), `GET /admin/tools/{tool_id}/gateway-status`, `protocol=mcp` admin form with Discover-from-server, a `NONE` (public-endpoint) credential type, per-target `lambda:InvokeFunctionUrl` grant/revoke, and runtime catalog-tool expansion to `gateway_<target>___<tool>` ids (#419, #450, #452, #453, #455, #456, #457)
+- **Curated model catalog** — one-click add of fully-configured Bedrock models (Claude Haiku/Sonnet/Opus 4.x) with pricing, modalities, per-param specs, role-picker dialog, "Preview & customize" prefill, and per-card light/dark provider logos (#393)
+- **Amazon Bedrock Mantle provider** — AWS's OpenAI-compatible surface for open-weight models (qwen, gpt-oss, gemma, deepseek) via a SigV4-presigned bearer token over the OpenAI wire protocol; `GET /admin/mantle/models` browse endpoint (#479)
+- **Per-turn context attribution** — native Bedrock `CountTokens` decomposes aggregate `inputTokens` into system / tools / messages partitions, streamed over SSE as `contextBreakdown` and rendered as a "Context: <total>" badge on assistant messages (#428, #430, #431, #433)
+- **MCP Apps: refresh-survival** — model-initiated UI resources persist as gzipped HTML in the sessions-metadata table and replay into the messages response so `<mcp-app-frame>` survives a page refresh (#413)
+- **MCP Apps: progressive rendering (SEP-1865)** — the App frame mounts early at `content_block_start` and forwards `ui/notifications/tool-input-partial`, so Apps that animate from streaming arguments work end-to-end (#417)
+- **MCP Apps: fullscreen display mode** with a promoted title-bar header and reachable consent (#409, #410, #418)
+- **Backup/restore DR toolchain** — `scripts/restore-data/` + `restore-data.yml` replay a `manifest.json` snapshot (DynamoDB exports, S3 sync, Cognito IdPs/users/groups, S3 Vectors index) into a deployed `PlatformStack`; SSM-resolved targets, idempotent, `--dry-run`, `skip_cognito_users` (#396, #421, #422, #423, #425, #481)
+- **Reproducible dev container** — `.devcontainer/Dockerfile` with every toolchain pinned by sha256/PGP (Python 3.13 / uv 0.7.12, Node 22 / npm 11.2.0, AWS CLI 2.34.40, Docker CLI 29.4.3, CDK CLI, Playwright chromium) (#391)
+- **Teardown workflow** — guarded (`DESTROY` confirmation, `workflow_dispatch`-only) full-environment teardown via `cloudformation delete-stack` covering single-stack and legacy multi-stack deployments (#392)
+- **Starlight documentation site** under `docs-site/`, deployed to GitHub Pages: Introduction, Local Development, full Deployment section, Architecture Overview with an AWS diagram, Configuration, Features, and an Admin section mirroring the SPA console + an API Keys page; frosted-glass brand theme; standalone `/maintenance` splash (#432, #440, #441, #442, #444, #445, #459, #482, #483)
+- **Forward admin OIDC token on MCP tool discovery** via a `forward_auth_token` flag for same-team `AuthType=NONE` Lambda-URL MCP servers (#498)
+- **Time-of-message info on hover** over user messages (#5a7180c6)
+
+### ✨ Improved
+
+- Assistant editor + file-connector UX redesigned to the `rounded-2xl` list/form language; connectors surfaced as buttons above the drop zone; knowledge-base "add" groups collapsed into a single inline action row with skeleton chips; OAuth consent started in place from the connector button (#377, #379, #06ef6673)
+- Assistant-editor preview tailors chat-input controls (hides voice/settings, exposes file attachments via `file_upload_ids`) (#381)
+- `GET /tools/` surfaces each MCP server's individual tools via `UserToolAccess.serverTools` with effective per-tool enabled state (#469)
+- Model-settings slide-over and model create/edit form restyled to the canonical admin list/form design tokens, with an edit-mode loading spinner instead of an empty-form flash (#387, #395)
+- MCP Apps widget-initiated `ui/message` turns now get the loading indicator and scroll-to-last-user affordances the composer path already had (#505)
+
+### ⚠️ Changed
+
+- **Single-stack CDK architecture (breaking for multi-stack fork migrators).** The nine-stack CDK app collapses into one `${prefix}-PlatformStack`. All per-component CDK feature flags removed (`CDK_FRONTEND_ENABLED`, `CDK_APP_API_ENABLED`, `CDK_INFERENCE_API_ENABLED`, `CDK_GATEWAY_ENABLED`, `CDK_FILE_UPLOAD_ENABLED`, `CDK_ASSISTANTS_ENABLED`, `CDK_RAG_ENABLED`, `CDK_FINE_TUNING_ENABLED`, `CDK_ARTIFACTS_ENABLED`, `CDK_MCP_SANDBOX_ENABLED`) — deploy-everything-always. Backend code now ships out-of-band via AWS APIs, not CFN. Migration documented in `.github/docs/deploy/upgrade-from-multi-stack.md` (#396, #434)
+- **SSM `image-tag` contract (breaking for multi-stack fork migrators).** `/{prefix}/{app-api,inference-api,rag-ingestion}/image-tag` changed from a bare tag/short-SHA to a FULL ECR URI; a stale legacy value fails the first `PlatformStack` deploy on CFN pattern-validation. The seed script auto-repairs (#420)
+- **Assistant consumer chat is knowledge-base-grounded with zero external tools** — enforced at the inference-API chokepoint (`enabled_tools=[]`) plus a "## Knowledge Base Grounding" system-prompt section. Side effect: no MCP-App `ui_resource` events for assistant chats (#382)
+- `analyze_spreadsheet` hard-fails downloads over 25 MB (soft-warns at 10 MB), tunable via `ANALYZE_MAX_FILE_SIZE_BYTES` / `ANALYZE_WARN_FILE_SIZE_BYTES`; checked before S3 GetObject (#397)
+
+### 🐛 Fixed
+
+- File-source calls send the `OAuth2CallbackUrl` header, fixing `CallbackUrlUnavailableError` (503) immediately after a successful connect (#373)
+- File-source token resolution uses consent-matched `customParameters` (`force_authentication=True`), fixing spurious 409 "not connected" for connected connectors (#374)
+- Gateway `mcpServer` IAM targets require an explicit `iamCredentialProvider`; bare `GATEWAY_IAM_ROLE` was rejected. Agent Gateway client repointed from a hardcoded SSM param to the CDK `/{prefix}/gateway/id` so admin-registered targets reach the agent (#457)
+- Managed-models list "ghosting" — stored models with a whole-number float `thinking.default` (DynamoDB Decimal roundtrip) failed validation on read and were silently skipped; validator now accepts them; adds a delete-confirmation modal + list loading state (#394)
+- MCP Apps: inner iframe collapsed to the 150px replaced-element default (CSSOM 100%-height chain); fullscreen overlay rendered behind chrome / mis-sized (`z-index:9999` fixed iframe; entry-animation `transform` no longer traps the fixed overlay); `<meta>`-vs-header CSP mismatch blocked `eval` Apps; `ui/message` rejected spec-compliant content arrays; a single transient TLS blip on MCP client start failed the whole agent build (now retried 3×) (#409, #410, #412, #414, #503, #504)
+- File-upload duplicate-document-name error misclassified as a "file too large" error (#403)
+- Restore: base64-decode `B`/`BS` (and nested `L`/`M`) attribute values before `TypeDeserializer` (crashed at sessions-metadata); cross-pool federated-user migration uses deterministic `migrated-<sub>` usernames + re-attaches restored IdPs to the BFF client; `boto3` `max_pool_connections` 10→32 for the 16-worker pool; S3 Vectors index included so restored knowledge bases retrieve hits (#422, #425, #423, #481)
+- Build arm64 images on native ARM runners — `rag-ingestion` was built amd64 against an arm64 Lambda (`Runtime.InvalidEntrypoint`, uploads stuck with no embeddings) (#496)
+- Restore stable IAM role names for AgentCore execution roles — auto-generated names force-replaced the create-only `executionRoleArn` into `UPDATE_ROLLBACK` (#495)
+- Re-deploy artifact-render code when the live Lambda drifts from what we shipped (CDK bootstrap 503 stub was serving `artifacts.{domain}`) (#438)
+- Restore the MCP-sandbox cert deploy var lost in the stack consolidation (NXDOMAIN → App `postMessage` origin mismatch) + synth-time guard (#434)
+- Nightly/teardown reconciled with single-stack (delete `${prefix}-PlatformStack` via `delete-stack`; `always()` ephemeral auto-teardown so failed deploys never leak billable resources) (#499, #500)
+- App-api granted `secretsmanager:PutSecretValue` (scoped to the auth-provider secret) so auth-provider config stops failing `AccessDenied`; Cognito `CreateGroup`/`AdminAddUserToGroup`/`AdminDeleteUser` for first-boot + rollback (#501, #494)
+- Admin MCP tool discovery forwards the admin OIDC token (task role lacks `lambda:InvokeFunctionUrl`, so SigV4 discovery 403→502 for `AuthType=NONE` Lambda-URL servers) (#498)
+
+### 🔒 Security
+
+- New shared `apis.shared.security` package adopted app-wide: `url_validator.validate_external_url` (DNS-rebinding-safe SSRF guard rejecting loopback / link-local / RFC1918 / ULA / multicast / reserved / CGNAT + cloud-metadata), `ownership` helpers (404-not-403 to remove the enumeration oracle), and AWS-client error-mapping handlers (#443)
+- `fetch_url_content` routed through the URL validator with manual redirect-chain validation (`follow_redirects=False`, ≤3 hops, each `Location` re-validated) (#f1cb0ae2)
+- Outbound MCP SigV4 signing scoped to recognized AWS endpoints only — unrecognized hosts are refused instead of receiving task IAM credentials (#8819aefe)
+- Static AST policy gates user-supplied diagram/analysis code sent to Code Interpreter to a plotting/data-analysis allowlist (bans subprocess/os/sys/socket/eval/exec/dunder) (#0e043730)
+- Session-metadata `PUT` rejects (404) when the session id is owned by another user, closing a create-on-not-found enumeration oracle (#a4784556)
+- User-supplied system prompts wrapped in a `PLATFORM_SAFETY_FLOOR` inside non-escapable `<user_instructions>` tags (#b089d564)
+- Profile-sync hardening: persisted email and roles bound exclusively to the validated session/JWT (`current_user.*`), no longer influenced by the request body (#12defcfc, #458)
+- Role-mapping validation (`jwt_role_mappings` regex `^[A-Za-z0-9_-]{2,64}$`, map-everyone tokens banned on `system_admin`) + a monotonic roles-version cache-invalidation counter (#cf613b15)
+- Admin error-path sanitization (no env-var-name or input echo on errors); viewer-facing CloudFront + ALB pinned to a TLS 1.2+ minimum baseline; dedicated SSRF and cursor-validation test suites added (#7cb9047c, #484)
+
+### ⚡ Performance
+
+- Re-enabled Strands Bedrock auto prompt caching (`CacheConfig(strategy="auto")`), now safe after the upstream cachePoint/document-attachment collision was resolved in strands-agents 1.39.0 (#471)
+
+### 🏗️ Infrastructure
+
+- `PlatformStack` composes ~39 single-responsibility constructs under `infrastructure/lib/constructs/`; built in two phases (constructor + `wireCompute()`), eliminating every cross-stack `Fn::ImportValue` and deploy-ordering dependency (#396)
+- Platform-as-bootstrap: CDK ships byte-stable placeholder assets from `infrastructure/bootstrap-assets/{app-api,inference-api,rag-ingestion,artifact-render}/`; real code ships via `aws ecs register-task-definition`+`update-service`, `aws bedrock-agentcore-control update-agent-runtime`, and `aws lambda update-function-code` (#396)
+- Content-hash Docker build pipeline under `scripts/build/` (ECR-tag hit ⇒ skip rebuild) (#396)
+- Shared CloudFront wildcard cert — new top-level `CDK_CLOUDFRONT_CERTIFICATE_ARN`; frontend / artifacts / mcp-sandbox fall back to it (section-specific wins); one `us-east-1` `{domain}` + `*.{domain}` cert with cert-missing guards (#491)
+- AgentCore runtime execution role granted `bedrock:CountTokens` (context-attribution foundation) (#428)
+- `/{prefix}/gateway/id` SSM publication + app-api Gateway-target IAM grants (`bedrock-agentcore:{Create,Get,Update,Delete,List}GatewayTarget` scoped to `gateway/*`) (#452)
+- New `system-prompts` DynamoDB table (Conversation Modes; app-api CRUD, inference-api `GetItem` only) (#411)
+- Restored ~22 SSM parameters (17 table, 4 bucket, `/inference-api/memory-id`) that the stack consolidation dropped and the restore tooling needs (#421)
+
+### 📦 Dependencies
+
+- Backend: `cryptography` 47.0.0 → 48.0.1, `starlette` 1.0.0 → 1.3.1, `python-multipart` 0.0.27 → 0.0.31, `pyjwt[crypto]` 2.12.1 → 2.13.0, `urllib3` pinned 2.7.0, `aiohttp` 3.13.5 → 3.14.1, `authlib` 1.7.0 → 1.7.1, `idna` pinned 3.15; new `beautifulsoup4` 4.13.5, `trafilatura` 2.0.0 (web-sources) (#487, #488, #378)
+- Frontend: `@angular/*` 21.2.11 → 21.2.17, `@angular/cdk` 21.2.9 → 21.2.14, `@angular/build`/`cli` 21.2.9 → 21.2.16, `mermaid` 11.14.0 → 11.15.0; overrides `hono` ≥4.12.25, `undici` ≥7.28.0, `vite` ≥8.0.16, `piscina` ≥5.2.0, `@babel/core` bounded 7.29.7 (#487, #488)
+- Infra: `aws-cdk-lib` 2.251.0 → 2.260.0, `aws-cdk` CLI 2.1120.0 → 2.1128.0 (#492)
+- Remediates all 22 HIGH Dependabot findings plus easy MEDIUM/LOW (same set merged across #487, #488, #489)
+
+### 🔧 CI/CD
+
+- Deploy workflows (`platform.yml`, `backend.yml`, `frontend-deploy.yml`) gated to `workflow_dispatch`-only for the v1.0.0 release — `push:` triggers commented out so syncing/forking the codebase never auto-deploys into a user's AWS account; re-enable by uncommenting
+- New `platform.yml` (CDK), `backend.yml` (build → API deploy), and `frontend-deploy.yml` workflows; `nightly-deploy-pipeline` rewritten platform → backend → frontend; legacy per-stack workflows/scripts/tests deleted (#396)
+- New `ci.yml` pull-request test gate (backend pytest / frontend vitest / infra jest) on PRs into `develop`/`main`; deploys never run on PRs (#490)
+- New `docs-deploy.yml` builds the Starlight site and publishes to GitHub Pages (#432)
+- `aws-cdk` CLI pinned 2.1128.0 + Node 22 pinned in deploy jobs (#492); `Backend Stack` workflow renamed to `Backend Deploy` (#423); stale `6.` prefix dropped from the Seed Bootstrap Data workflow
+- `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS` plumbed through platform/nightly deploy workflows (#485)
+
+### 📚 Docs
+
+- New `.github/docs/deploy/upgrade-from-multi-stack.md` (legacy SSM cleanup, teardown); `ACTIONS-REFERENCE.md` config table reflects the single `PlatformStack`; deploy guides document `CDK_MCP_SANDBOX_CERTIFICATE_ARN`; corrected a stale SSM comment on mcp-sandbox origin wiring; devcontainer docker-GID gotcha documented in `dev-environment.md` (#396, #436, #437, #502, #391)
+
 ## [1.0.0-beta.27] - 2026-05-20
 
 The largest release since the BFF cutover. Two new user-facing surfaces (Artifacts and MCP Apps host-renderer) each backed by a new CDK stack, an admin shell redesign that replaces the 15-card grid with a persistent grouped sidebar, recoverable `max_tokens` truncation with a Continue affordance, model-aware adaptive thinking for Opus 4.7, an inference-API `/ping` reaper fix, and a pre-migration backup tool. `bedrock-agentcore` 1.6.4 → 1.9.1, `boto3` 1.42.96 → 1.43.9, `strands-agents` 1.39.0 → 1.40.0.
