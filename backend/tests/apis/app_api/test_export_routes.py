@@ -20,18 +20,20 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.app_api.export_targets import routes, service
-from apis.app_api.export_targets.adapter import (
+from apis.shared.export_targets import service as shared_export_service
+from apis.shared.export_targets import transcript as shared_transcript
+from apis.shared.export_targets.adapter import (
     ExportTargetAdapter,
     ExportTargetMetadata,
 )
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.models import (
     CreatedFile,
     ExportFormat,
     ExportTargetAuthError,
     ExportTargetError,
     ExportTargetNotFoundError,
 )
-from apis.app_api.export_targets.registry import ExportTargetRegistry
+from apis.shared.export_targets.registry import ExportTargetRegistry
 from apis.shared.auth.models import User
 from apis.shared.oauth.agentcore_identity import (
     TokenResult,
@@ -223,7 +225,10 @@ def app_with_deps(monkeypatch):
             identity.get_token_for_user = AsyncMock(
                 return_value=identity_result or TokenResult(access_token="vault-token"),
             )
-        monkeypatch.setattr(service, "get_agentcore_identity_client", lambda: identity)
+        # The identity call now lives in the shared service core; patch it there.
+        monkeypatch.setattr(
+            shared_export_service, "get_agentcore_identity_client", lambda: identity
+        )
 
         the_adapter = adapter if adapter is not None else _StubExportAdapter()
         reg = ExportTargetRegistry()
@@ -246,7 +251,10 @@ def app_with_deps(monkeypatch):
             nxt = str(idx + 1) if idx + 1 < len(pages) else None
             return MessagesListResponse(messages=page, next_token=nxt)
 
-        monkeypatch.setattr(routes, "get_messages", fake_get_messages)
+        # Transcript paging now lives in the shared transcript module.
+        monkeypatch.setattr(
+            shared_transcript, "get_messages", fake_get_messages
+        )
 
         receipts: list = []
 

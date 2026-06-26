@@ -25,11 +25,11 @@ import httpx
 
 from apis.shared.oauth.models import OAuthProviderType
 
-from apis.app_api.export_targets.adapter import (
+from apis.shared.export_targets.adapter import (
     ExportTargetAdapter,
     ExportTargetMetadata,
 )
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.models import (
     CreatedFile,
     ExportDestination,
     ExportFormat,

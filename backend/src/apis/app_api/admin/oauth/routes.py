@@ -16,7 +16,7 @@ from typing import Optional
 import boto3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from apis.app_api.export_targets.registry import registry as export_target_registry
+from apis.shared.export_targets.registry import registry as export_target_registry
 from apis.app_api.file_sources.registry import registry
 from apis.shared.auth import User, require_admin
 from apis.shared.oauth.agentcore_registrar import (

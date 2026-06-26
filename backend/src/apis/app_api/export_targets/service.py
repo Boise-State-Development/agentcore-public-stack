@@ -1,54 +1,50 @@
-"""Helpers shared by the export-target endpoints.
+"""FastAPI helpers for the export-target endpoints.
 
 A connector becomes an *export target* only when an admin maps it to an
-export-target adapter. These helpers centralize the "resolve a connector to a
-usable adapter + token" steps so the export flow stays consistent with the
-connector status/consent routes — the write-side mirror of
+export-target adapter. These helpers wrap the boundary-free core
+(`apis.shared.export_targets.service`) with the FastAPI `HTTPException` mapping
+the route layer returns directly — the write-side mirror of
 `file_sources.service`.
+
+`connector_visible_to_user` and `resolve_export_target_token` are re-exported
+from the shared core so existing imports of this module keep working; the
+agent-side `save_conversation` tool imports them from `apis.shared` instead.
 """
 
 import logging
-from typing import List, Tuple
 
 from fastapi import HTTPException, status
 
 from apis.shared.auth import User
 from apis.shared.oauth.agentcore_identity import (
     CallbackUrlUnavailableError,
-    TokenResult,
     WorkloadTokenUnavailableError,
-    custom_parameters_for,
-    get_agentcore_identity_client,
 )
 from apis.shared.oauth.models import OAuthProvider
 from apis.shared.oauth.provider_repository import OAuthProviderRepository
 from apis.shared.rbac.service import AppRoleService
-
-from apis.app_api.export_targets.adapter import ExportTargetAdapter
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.adapter import ExportTargetAdapter
+from apis.shared.export_targets.models import (
     ExportTargetAuthError,
     ExportTargetError,
     ExportTargetNotFoundError,
 )
-from apis.app_api.export_targets.registry import registry
+from apis.shared.export_targets.registry import registry
+from apis.shared.export_targets.service import (
+    connector_visible_to_user,
+    resolve_export_target_token,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def connector_visible_to_user(
-    provider: OAuthProvider, user_role_ids: List[str]
-) -> bool:
-    """True when an enabled connector is usable by a user with these roles.
-
-    An empty `allowed_roles` list means unrestricted access; a non-empty list
-    grants access to users who share at least one AppRole id. Mirrors the
-    connector catalog's visibility rule.
-    """
-    if not provider.enabled:
-        return False
-    if not provider.allowed_roles:
-        return True
-    return bool(set(provider.allowed_roles) & set(user_role_ids))
+__all__ = [
+    "connector_visible_to_user",
+    "resolve_export_target_token",
+    "resolve_export_target",
+    "require_export_target_token",
+    "http_error_for_export_target_error",
+    "registry",
+]
 
 
 async def resolve_export_target(
@@ -56,7 +52,7 @@ async def resolve_export_target(
     current_user: User,
     provider_repo: OAuthProviderRepository,
     role_service: AppRoleService,
-) -> Tuple[OAuthProvider, ExportTargetAdapter]:
+) -> tuple[OAuthProvider, ExportTargetAdapter]:
     """Resolve a connector id to its provider record and export-target adapter.
 
     Raises `HTTPException` (404/403) when the connector is missing, disabled,
@@ -97,33 +93,6 @@ async def resolve_export_target(
             detail=f"Connector '{connector_id}' is not configured as an export target",
         )
     return provider, adapter
-
-
-async def resolve_export_target_token(
-    provider: OAuthProvider, user_id: str
-) -> TokenResult:
-    """Fetch the user's OAuth token for an export-target connector.
-
-    Returns a `TokenResult`: `access_token` is populated when the vault has a
-    usable token, `authorization_url` when the user still needs to consent.
-
-    `custom_parameters` is built with `force_authentication=True` so it matches
-    the consent flow — AgentCore factors `customParameters` into whether
-    `get_resource_oauth2_token` short-circuits to a vaulted token (see the
-    file-source service for the full rationale). Pure read; `force_authentication`
-    stays False on `get_token_for_user` itself.
-    """
-    identity = get_agentcore_identity_client()
-    return await identity.get_token_for_user(
-        provider_name=provider.provider_id,
-        scopes=provider.scopes,
-        user_id=user_id,
-        custom_parameters=custom_parameters_for(
-            provider.provider_type.value,
-            provider.custom_parameters,
-            force_authentication=True,
-        ),
-    )
 
 
 async def require_export_target_token(provider: OAuthProvider, user_id: str) -> str:

@@ -63,6 +63,7 @@ class BaseAgent(ABC):
         mantle_endpoint_path: Optional[str] = None,
         skip_persistence: bool = False,
         extra_tools: Optional[List[Any]] = None,
+        oauth_tool_providers: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize base agent with shared infrastructure.
@@ -89,6 +90,10 @@ class BaseAgent(ABC):
         self.auth_token = auth_token
         self.enabled_tools = enabled_tools
         self.extra_tools = extra_tools or []
+        # Maps a context-bound tool's name -> the OAuth connector it writes to,
+        # so the consent hook can gate a direct (non-MCP) tool like
+        # `save_conversation`. See `_build_tool_use_provider_lookup`.
+        self.oauth_tool_providers = oauth_tool_providers or {}
         self.agent = None
 
         # Merge legacy temperature/max_tokens into the canonical dict. Explicit
@@ -405,12 +410,26 @@ class BaseAgent(ABC):
         )
 
     def _build_tool_use_provider_lookup(self) -> Optional[Callable[[dict], Optional[str]]]:
-        """OAuth provider resolution from a raw `tool_use` dict, for agents
-        that dispatch tools indirectly (SkillAgent's meta-tools). The base
-        agent has no such indirection, so the consent hook gets None and
-        relies on `provider_lookup` alone.
+        """OAuth provider resolution from a raw `tool_use` dict.
+
+        Covers two cases the MCP `provider_lookup` can't: tools dispatched
+        indirectly (SkillAgent's meta-tools, handled by subclass overrides) and
+        direct context-bound tools that write to an OAuth connector (e.g.
+        `save_conversation`). The latter is keyed by tool name via
+        `oauth_tool_providers`, populated at agent-build time.
         """
-        return None
+        # getattr-guarded so a subclass or partially-constructed agent that
+        # never ran BaseAgent.__init__ degrades to "no direct-tool gating"
+        # rather than raising.
+        tool_providers = getattr(self, "oauth_tool_providers", None)
+        if not tool_providers:
+            return None
+
+        def lookup(tool_use: dict) -> Optional[str]:
+            name = tool_use.get("name") if isinstance(tool_use, dict) else None
+            return tool_providers.get(name) if name else None
+
+        return lookup
 
     def _expand_gateway_tool_ids(self, gateway_tool_ids: List[str]) -> List[str]:
         """Expand #419 catalog gateway tools into the gateway's runtime per-tool

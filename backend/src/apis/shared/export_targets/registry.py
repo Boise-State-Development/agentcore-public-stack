@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from apis.shared.oauth.models import OAuthProviderType
 
-from apis.app_api.export_targets.adapter import ExportTargetAdapter
+from apis.shared.export_targets.adapter import ExportTargetAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class ExportTargetRegistry:
 
 def _build_default_registry() -> ExportTargetRegistry:
     """Construct the registry with every export-target adapter in this release."""
-    from apis.app_api.export_targets.adapters.google_drive import (
+    from apis.shared.export_targets.adapters.google_drive import (
         GoogleDriveExportAdapter,
     )
 

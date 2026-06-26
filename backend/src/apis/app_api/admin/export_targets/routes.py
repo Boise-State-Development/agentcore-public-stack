@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth import User, require_admin
 
-from apis.app_api.export_targets.registry import registry
+from apis.shared.export_targets.registry import registry
 
 logger = logging.getLogger(__name__)
 

@@ -41,18 +41,18 @@ from apis.shared.oauth.provider_repository import (
     get_provider_repository,
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
-from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import add_export_receipt, get_session_metadata
-from apis.shared.sessions.models import ExportReceipt, MessageResponse
+from apis.shared.sessions.models import ExportReceipt
 
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.models import (
     ExportFormat,
     ExportInclude,
     ExportTargetError,
 )
-from apis.app_api.export_targets.registry import registry
+from apis.shared.export_targets.registry import registry
 from apis.app_api.file_sources.registry import registry as file_source_registry
-from apis.app_api.export_targets.render import render_transcript
+from apis.shared.export_targets.render import render_transcript
+from apis.shared.export_targets.transcript import collect_transcript
 from apis.app_api.export_targets.service import (
     connector_visible_to_user,
     http_error_for_export_target_error,
@@ -64,12 +64,6 @@ from apis.app_api.export_targets.service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["export-targets"])
-
-# Page the transcript out in chunks rather than one unbounded read. The cap is
-# a runaway guard, not a product limit; if a conversation is somehow longer we
-# log and export what we have rather than silently truncating without a trace.
-_EXPORT_PAGE_SIZE = 200
-_MAX_EXPORT_PAGES = 100
 
 
 # ---------------------------------------------------------------------------
@@ -186,33 +180,6 @@ def _is_browsable(provider: OAuthProvider) -> bool:
     return bool(adapter_id) and file_source_registry.get(adapter_id) is not None
 
 
-async def _collect_transcript(session_id: str, user_id: str) -> List[MessageResponse]:
-    """Page the whole conversation into a single chronological list.
-
-    Pages are sequence-ordered and returned oldest-first, so concatenating
-    them preserves chronology. Stops at the runaway-guard page cap.
-    """
-    messages: List[MessageResponse] = []
-    next_token: Optional[str] = None
-    for _ in range(_MAX_EXPORT_PAGES):
-        page = await get_messages(
-            session_id=session_id,
-            user_id=user_id,
-            limit=_EXPORT_PAGE_SIZE,
-            next_token=next_token,
-        )
-        messages.extend(page.messages)
-        next_token = page.next_token
-        if not next_token:
-            return messages
-    logger.warning(
-        "Export for session %s hit the %d-page cap; transcript may be truncated",
-        session_id,
-        _MAX_EXPORT_PAGES,
-    )
-    return messages
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -324,7 +291,7 @@ async def export_session(
     # retry hooks on the 409.
     access_token = await require_export_target_token(provider, user_id)
 
-    messages = await _collect_transcript(session_id, user_id)
+    messages = await collect_transcript(session_id, user_id)
 
     try:
         rendered = render_transcript(

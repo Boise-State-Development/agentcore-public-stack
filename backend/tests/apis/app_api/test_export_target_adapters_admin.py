@@ -24,16 +24,16 @@ from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 
 from apis.app_api.admin.export_targets import routes as adapter_routes
 from apis.app_api.admin.oauth.routes import _validate_export_target_adapter
-from apis.app_api.export_targets.adapter import (
+from apis.shared.export_targets.adapter import (
     ExportTargetAdapter,
     ExportTargetMetadata,
 )
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.models import (
     CreatedFile,
     ExportDestination,
     ExportFormat,
 )
-from apis.app_api.export_targets.registry import ExportTargetRegistry, registry
+from apis.shared.export_targets.registry import ExportTargetRegistry, registry
 
 _STUB_KEY = "test-export-target"
 _STUB_SCOPE = "https://www.googleapis.com/auth/drive.file"

@@ -8,8 +8,8 @@ import pytest
 
 from apis.shared.sessions.models import Citation, MessageContent, MessageResponse
 
-from apis.app_api.export_targets.models import ExportFormat, ExportInclude
-from apis.app_api.export_targets.render import render_transcript
+from apis.shared.export_targets.models import ExportFormat, ExportInclude
+from apis.shared.export_targets.render import render_transcript
 
 
 def _msg(role: str, blocks: List[MessageContent], created_at: str = "") -> MessageResponse:

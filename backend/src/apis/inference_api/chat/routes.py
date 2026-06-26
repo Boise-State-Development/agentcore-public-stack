@@ -399,6 +399,64 @@ def _build_artifact_tools(
 
 
 # ============================================================
+# Save-Conversation Tool Injection (export targets, PR-6)
+# ============================================================
+
+SAVE_CONVERSATION_TOOL_ID = "save_conversation"
+
+
+async def _build_save_conversation_tool(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+    current_user,
+) -> tuple[list, dict]:
+    """Create the context-bound `save_conversation` tool, if applicable.
+
+    Returns ``(tools, oauth_tool_providers)``: the tool list to extend
+    ``extra_tools`` with, and the ``tool_name -> provider_id`` map the agent's
+    consent hook uses to gate the (direct, non-MCP) tool. Both are empty when
+    the tool isn't enabled or no export-target connector is available — the
+    same self-gating the export endpoint uses.
+    """
+    if not enabled_tools or SAVE_CONVERSATION_TOOL_ID not in enabled_tools:
+        return [], {}
+
+    from apis.shared.oauth.provider_repository import get_provider_repository
+    from apis.shared.export_targets.registry import registry as export_registry
+    from apis.shared.export_targets.service import connector_visible_to_user
+    from agents.builtin_tools.save_conversation import make_save_conversation_tool
+
+    providers = await get_provider_repository().list_providers(enabled_only=True)
+    permissions = await get_app_role_service().resolve_user_permissions(current_user)
+
+    candidates = []
+    for provider in providers:
+        if not provider.export_target_adapter_id:
+            continue
+        if not connector_visible_to_user(provider, permissions.app_roles):
+            continue
+        adapter = export_registry.get(provider.export_target_adapter_id)
+        if adapter is None:
+            continue
+        candidates.append((provider, adapter))
+
+    if not candidates:
+        return [], {}
+    if len(candidates) > 1:
+        # v1 saves to a single destination; a multi-target picker is a future
+        # follow-up. Pick the first deterministically and surface the choice.
+        logger.warning(
+            "Multiple export-target connectors visible; save_conversation uses '%s'",
+            candidates[0][0].provider_id,
+        )
+
+    provider, adapter = candidates[0]
+    tool = make_save_conversation_tool(session_id, user_id, provider, adapter)
+    return [tool], {SAVE_CONVERSATION_TOOL_ID: provider.provider_id}
+
+
+# ============================================================
 # Attachment Partitioning (#206)
 # ============================================================
 
@@ -1383,6 +1441,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     resume_inference_params["temperature"] = snapshot.temperature
                 if snapshot.max_tokens is not None:
                     resume_inference_params["max_tokens"] = snapshot.max_tokens
+            # Rebuild the context-bound save_conversation tool so a turn that
+            # paused on its OAuth consent can finish: resume rebuilds a fresh
+            # agent (extra_tools agents aren't cached) and the SDK restores the
+            # paused tool call from Memory — the tool must be registered for it
+            # to execute. Keyed off the snapshot's enabled_tools, same as the
+            # original turn.
+            save_tools, oauth_tool_providers = await _build_save_conversation_tool(
+                enabled_tools=snapshot.enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                current_user=current_user,
+            )
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -1395,6 +1465,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 inference_params=resume_inference_params,
                 mantle_endpoint_path=snapshot.mantle_endpoint_path,
                 agent_type=snapshot.agent_type,
+                extra_tools=save_tools,
+                oauth_tool_providers=oauth_tool_providers,
                 is_resume=True,
                 # Resume must rebuild the SAME cache key the original turn used,
                 # or the paused agent is orphaned. The original turn's
@@ -1482,6 +1554,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
             )
+            save_tools, oauth_tool_providers = await _build_save_conversation_tool(
+                enabled_tools=input_data.enabled_tools,
+                session_id=input_data.session_id,
+                user_id=user_id,
+                current_user=current_user,
+            )
+            extra_tools = extra_tools + save_tools
 
             agent = await get_agent(
                 session_id=input_data.session_id,
@@ -1496,6 +1575,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 mantle_endpoint_path=mantle_endpoint_path,
                 agent_type=effective_agent_type,
                 extra_tools=extra_tools,
+                oauth_tool_providers=oauth_tool_providers,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
             )

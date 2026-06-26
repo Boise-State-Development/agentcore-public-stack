@@ -128,6 +128,7 @@ async def get_agent(
     max_tokens: Optional[int] = None,
     agent_type: Optional[str] = None,
     extra_tools: Optional[list] = None,
+    oauth_tool_providers: Optional[Dict[str, str]] = None,
     inference_params: Optional[Dict[str, Any]] = None,
     mantle_endpoint_path: Optional[str] = None,
     is_resume: bool = False,
@@ -236,6 +237,7 @@ async def get_agent(
         provider=provider,
         max_tokens=max_tokens,
         extra_tools=extra_tools,
+        oauth_tool_providers=oauth_tool_providers,
         inference_params=merged_params,
         mantle_endpoint_path=mantle_endpoint_path,
     )

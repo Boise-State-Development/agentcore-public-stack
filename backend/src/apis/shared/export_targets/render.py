@@ -22,7 +22,7 @@ from markdown_it import MarkdownIt
 
 from apis.shared.sessions.models import Citation, MessageContent, MessageResponse
 
-from apis.app_api.export_targets.models import ExportFormat, ExportInclude
+from apis.shared.export_targets.models import ExportFormat, ExportInclude
 
 _ROLE_LABELS = {"user": "User", "assistant": "Assistant", "system": "System"}
 

@@ -8,8 +8,8 @@ from typing import Dict, List, Tuple
 import httpx
 import pytest
 
-from apis.app_api.export_targets.adapters.google_drive import GoogleDriveExportAdapter
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.adapters.google_drive import GoogleDriveExportAdapter
+from apis.shared.export_targets.models import (
     ExportFormat,
     ExportTargetAuthError,
 )

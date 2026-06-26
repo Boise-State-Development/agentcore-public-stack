@@ -314,6 +314,10 @@ class SkillAgent(ChatAgent):
         the folded tool's owning client back to its OAuth provider, so an
         unauthorized call pauses the turn with ``oauth_required`` exactly
         like a directly-enabled tool would.
+
+        Composes with the base lookup so direct context-bound tools
+        (``save_conversation``) still gate under skill mode — the fold lookup
+        is tried first, then the base name→provider map.
         """
         from agents.main_agent.integrations.external_mcp_client import (
             get_external_mcp_integration,
@@ -323,9 +327,17 @@ class SkillAgent(ChatAgent):
         )
 
         integration = get_external_mcp_integration()
-        return make_folded_tool_provider_lookup(
+        folded_lookup = make_folded_tool_provider_lookup(
             self._registry, integration.provider_for_client
         )
+        base_lookup = super()._build_tool_use_provider_lookup()
+
+        def lookup(tool_use: dict):
+            return folded_lookup(tool_use) or (
+                base_lookup(tool_use) if base_lookup else None
+            )
+
+        return lookup
 
     def _build_tool_use_approval_lookup(self):
         """See through the skill fold for the per-tool approval gate.

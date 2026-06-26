@@ -100,6 +100,15 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         icon="table-cells",
     ),
 
+    # --- Built-in Tools (Export Targets) ---
+    "save_conversation": ToolMetadata(
+        tool_id="save_conversation",
+        name="Save Conversation",
+        description="Save the current conversation to a connected app (e.g. Google Drive) as a document. Only works when an administrator has connected an export destination.",
+        category=ToolCategory.UTILITIES,
+        icon="cloud-arrow-up",
+    ),
+
     # --- Gateway/MCP Tools ---
     # These are loaded dynamically from the gateway but we define metadata here
     # for the admin UI. Actual tool availability depends on gateway configuration.

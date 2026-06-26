@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 
 from apis.shared.oauth.models import OAuthProviderType
 
-from apis.app_api.export_targets.models import (
+from apis.shared.export_targets.models import (
     CreatedFile,
     ExportDestination,
     ExportFormat,
