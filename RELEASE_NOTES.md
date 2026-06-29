@@ -1,3 +1,64 @@
+# Release Notes — v1.0.1
+
+**Release Date:** June 26, 2026
+**Previous Release:** v1.0.0 (June 24, 2026)
+
+---
+
+> ⚠️ **Coming from a pre-1.0.0 (beta) deployment? Read the 1.0.0 release notes first.** 1.0.1 lands just two days after 1.0.0, so most operators haven't deployed 1.0.0 yet. There is **no special upgrade path for 1.0.1 itself** — if you're already on 1.0.0 you upgrade in place with no migration. But 1.0.0 was the single-stack consolidation, and upgrading **from any beta** to 1.0.0 (and therefore to 1.0.1) is a **destructive backup → teardown → redeploy → restore migration**, not an in-place `cdk deploy`. If you haven't already worked through it, do that before deploying 1.0.1: see [**Upgrading an existing deployment** (1.0.0 notes)](#upgrading-an-existing-deployment) below, or the published guide at <https://boise-state-development.github.io/agentcore-public-stack/deployment/upgrade/>. **Brand-new deployments need none of this.**
+
+---
+
+## Highlights
+
+v1.0.1 is the first patch on top of the 1.0.0 general-availability release, and it ships two operator- and user-facing additions. **Save conversations to connected apps** ("Save to…") extends the existing connector/adapter pattern in the write direction: a user can push a full conversation transcript out to an app they've connected — Google Drive is the reference destination — as a native Google Doc, Markdown, or plain-text file, reusing the same OAuth consent, RBAC visibility, and AgentCore Identity token flow as document import. **External (cross-account) Route53 hosted zones** lets deployments whose DNS zone lives in a different AWS account (or is managed out-of-band) stand up the full platform without the deploy failing on an in-account hosted-zone lookup. No action is required for existing 1.0.0 deployments; both features are additive.
+
+---
+
+## Save conversations to connected apps ("Save to…")
+
+The platform already lets a user connect an app and pull documents **into** an assistant's knowledge base. v1.0.1 adds the opposite direction: save a conversation transcript **out** to a connected app. The architectural move is to split the existing connector pattern into a direction-agnostic **auth layer** (`OAuthProvider` + AgentCore Identity + consent UX, reused as-is) and a direction-specific **capability layer** — a new `ExportTargetAdapter` registry mirroring the read-side `FileSourceAdapter` registry. Google Drive is the first export target; adding OneDrive / SharePoint / Dropbox later is "write one adapter class, register it, and have an admin map a connector." (#507, #508, #509, #510, #511)
+
+### Backend
+
+- New `apis.app_api.export_targets` package: an `ExportTargetAdapter` contract (`adapter.py`), a code-shipped `registry`, the reference `adapters/google_drive.py` (creates a Drive file via the user's own token), a `render.py` transcript renderer (native Google Doc / Markdown / plain text), `models.py` (`ExportFormat`, `ExportInclude`, `ExportTargetError`), and `service.py` (connector resolution, RBAC visibility gate, AgentCore Identity token mint with consent/`503` handling).
+- User-facing routes (`export_targets/routes.py`, on **app-api** — the inference-API boundary only proxies `/invocations` + `/ping`): `GET /export-targets` returns the catalog the "Save to…" dialog reads (per-connector `connected` state, `supportedFormats`, and a `browsable` flag for the folder picker), and `POST /sessions/{id}/export` renders the full transcript (paged, with a runaway guard) and creates the document via the resolved adapter. A `409` signals the user must complete OAuth consent; a `503` signals workload/callback misconfiguration.
+- Admin mapping: new `GET /admin/export-target-adapters` plus an `OAuthProvider.export_target_adapter_id` field — a connector becomes an export target only once an admin maps it to a shipped adapter. Export receipts are persisted to session metadata (`ExportReceipt` on `sessions/models.py`, written best-effort by `add_export_receipt`) so the SPA can reflect "saved" state.
+
+### Frontend
+
+- New `ExportDialogComponent` (the "Save to…" dialog: connector picker, format picker driven by `supportedFormats`, optional destination-folder picker reusing the file-source browse dialog) and an `ExportService` (`session/services/export/`). A "Save to…" action is added to the conversation list (`session-list`). Admin connector form gains an export-target-adapter mapping dropdown.
+
+### Test coverage
+
+1,400+ lines of new tests: `test_export_routes.py`, `test_export_target_service.py`, `test_export_google_drive.py`, `test_export_render.py`, and `test_export_target_adapters_admin.py` on the backend; `export-dialog.component.spec.ts` and `export.service.spec.ts` on the frontend.
+
+## External (cross-account) Route53 hosted zones
+
+Deployments where the Route53 hosted zone for `domainName` lives in a **different AWS account** — or is otherwise managed out-of-band — previously failed: the stack's in-account `HostedZone.fromLookup` + ALIAS/A record creation cannot reach a zone it doesn't own. v1.0.1 makes DNS record management optional so these deployments succeed, with the platform emitting the records an operator needs to create by hand. (#512)
+
+### Infrastructure
+
+- New `manageDnsRecords` config flag (env `CDK_MANAGE_DNS_RECORDS`, context `manageDnsRecords`; **defaults to `true`**, so existing single-account deployments are unaffected). Loaded in `infrastructure/lib/config.ts` and threaded into the four custom-domain origins.
+- When `manageDnsRecords=false`, the SPA, ALB, artifacts, and mcp-sandbox constructs still attach the custom domain + ACM certificate to each origin but **skip** the in-account `HostedZone.fromLookup` and ALIAS/A record creation. Instead each origin emits `CfnOutput`s with the **record name** and **alias target** (e.g. `AlbDnsRecordName`/`AlbDnsAliasTarget`, `FrontendDnsRecordName`, `ArtifactsDnsRecordName`/`ArtifactsDnsAliasTarget`, `McpSandboxDnsRecordName`/`McpSandboxDnsAliasTarget`) so an operator can create the records manually in the owning account.
+
+### CI/CD
+
+- `CDK_MANAGE_DNS_RECORDS` plumbed end-to-end: exported and passed as a `--context` flag in `scripts/common/load-env.sh`, and added to the job-level `env:` of the `platform.yml`, `teardown.yml`, and `nightly-deploy-pipeline.yml` workflows. The nightly smoke test reads it as well.
+
+### Docs
+
+- Deployment docs updated for the cross-account workflow — `docs-site` (environments, platform-cdk, troubleshooting) and `.github/docs/deploy/` (GitHub config, troubleshooting) plus `.github/ACTIONS-REFERENCE.md`.
+
+## 🚀 Deployment notes
+
+v1.0.1 is a patch release on the single-stack `PlatformStack` architecture introduced in 1.0.0. Operators already on 1.0.0 upgrade in place — there is **no migration**. Both features are additive and off by default until configured.
+
+- **Save to… (export targets):** opt-in. An admin maps an existing connector (e.g. the Google Drive connector) to the `google-drive` export-target adapter from the admin connector form; until a connector is mapped, the "Save to…" dialog shows no destinations. No new infrastructure or env vars.
+- **Cross-account DNS:** if your hosted zone is in the **same** AWS account as the deployment (the default), no action is required — `manageDnsRecords` defaults to `true` and behavior is unchanged. If your zone lives in a **different** account (or you manage DNS out-of-band), set `CDK_MANAGE_DNS_RECORDS=false` (GitHub Actions Variable), then after the deploy read the `*DnsRecordName` / `*DnsAliasTarget` CloudFormation outputs and create the matching ALIAS/A records in the owning account for the SPA, ALB, artifacts, and mcp-sandbox origins.
+
+---
+
 # Release Notes — v1.0.0
 
 **Release Date:** June 24, 2026

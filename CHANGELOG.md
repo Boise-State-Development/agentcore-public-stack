@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.0.1] - 2026-06-26
+
+First patch on top of the 1.0.0 general-availability release. Adds the ability to **save a conversation to a connected app** ("Save to…", with Google Drive as the reference export target) and **support for external (cross-account) Route53 hosted zones**. Both additions are additive and off by default until configured; existing 1.0.0 deployments upgrade in place with no migration.
+
+### 🚀 Added
+
+- **Save conversations to connected apps ("Save to…")** — push a full conversation transcript out to a connected app as a native Google Doc, Markdown, or plain-text file. New `apis.app_api.export_targets` package: `ExportTargetAdapter` contract + code-shipped registry mirroring the read-side `FileSourceAdapter` pattern, a `GoogleDriveAdapter` reference target, and a transcript renderer. User routes `GET /export-targets` (catalog with per-connector `connected`/`supportedFormats`/`browsable`) and `POST /sessions/{id}/export` (renders + creates the document via the user's own AgentCore Identity token; `409`→consent, `503`→workload misconfig). Admin `GET /admin/export-target-adapters` + new `OAuthProvider.export_target_adapter_id` mapping; `ExportReceipt` persisted to session metadata. SPA `ExportDialogComponent` + `ExportService`, a "Save to…" action on the conversation list, and an admin connector-form adapter dropdown (#507, #508, #509, #510, #511)
+- **External (cross-account) Route53 hosted zones** — new optional `manageDnsRecords` flag (env `CDK_MANAGE_DNS_RECORDS`, context `manageDnsRecords`; defaults to `true`). When `false`, the SPA, ALB, artifacts, and mcp-sandbox origins still attach their custom domain + ACM cert but skip the in-account `HostedZone.fromLookup` + ALIAS/A record creation (which fails when the zone is in another account), emitting `CfnOutput` record-name/alias-target pairs per origin so an operator can create the records by hand. Plumbed through `load-env.sh`, the `platform.yml`/`teardown.yml`/`nightly-deploy-pipeline.yml` workflows, and the deployment docs (#512)
+
+### 🧪 Test coverage
+
+- 1,400+ lines of new export-target tests: `test_export_routes.py`, `test_export_target_service.py`, `test_export_google_drive.py`, `test_export_render.py`, `test_export_target_adapters_admin.py` (backend); `export-dialog.component.spec.ts`, `export.service.spec.ts` (frontend)
+
 ## [1.0.0] - 2026-06-24
 
 The **1.0.0 general-availability release** — the platform graduates from beta to a stable, single-stack architecture. The CDK app collapses from nine CloudFormation stacks into one `PlatformStack` with a platform-as-bootstrap code-deploy model; admin-curated Conversation Modes, external file-source connectors and website crawling for assistant knowledge bases, self-service AgentCore Gateway MCP target registration, a curated model catalog with the new Amazon Bedrock Mantle provider, per-turn context attribution, a Starlight documentation site, and a full backup/restore DR toolchain all ship; plus a coordinated security-hardening sweep and remediation of all 22 HIGH Dependabot findings.
