@@ -403,10 +403,33 @@ export const TOOL_STATUSES: { value: ToolStatus; label: string }[] = [
  * fill) rather than defaulting to `'lambda'` — the backend's last-resort
  * default is only appropriate at signing time.
  */
+/**
+ * Lowercased hostname of `url`, or `''` if it can't be parsed.
+ *
+ * AWS-endpoint detection must match the *host* only. Testing an unanchored
+ * regex against the whole URL string (CodeQL js/regex/missing-regexp-anchor)
+ * lets a marker in a path/query — e.g.
+ * `https://evil.example/?x=.execute-api.us-east-1.amazonaws.com` — masquerade
+ * as an AWS host, which at signing time would attach SigV4 IAM credentials to
+ * a request bound for a non-AWS host. Parsing the host and anchoring the
+ * suffix (`$`) prevents that.
+ */
+function awsHostname(url: string): string {
+  for (const candidate of [url, `https://${url}`]) {
+    try {
+      return new URL(candidate).hostname.toLowerCase();
+    } catch {
+      // try the next candidate (handles scheme-less inputs)
+    }
+  }
+  return '';
+}
+
 export function detectAwsServiceFromUrl(url: string): string {
-  if (/\.lambda-url\.[a-z0-9-]+\.on\.aws/.test(url)) return 'lambda';
-  if (/\.execute-api\.[a-z0-9-]+\.amazonaws\.com/.test(url)) return 'execute-api';
-  if (/\.bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com/.test(url)) return 'bedrock-agentcore';
+  const host = awsHostname(url);
+  if (/\.lambda-url\.[a-z0-9-]+\.on\.aws$/.test(host)) return 'lambda';
+  if (/\.execute-api\.[a-z0-9-]+\.amazonaws\.com$/.test(host)) return 'execute-api';
+  if (/\.bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com$/.test(host)) return 'bedrock-agentcore';
   return '';
 }
 
@@ -415,9 +438,10 @@ export function detectAwsServiceFromUrl(url: string): string {
  * doesn't encode one. Mirrors the backend `extract_region_from_url`.
  */
 export function extractAwsRegionFromUrl(url: string): string {
+  const host = awsHostname(url);
   const match =
-    url.match(/\.lambda-url\.([a-z0-9-]+)\.on\.aws/) ??
-    url.match(/\.execute-api\.([a-z0-9-]+)\.amazonaws\.com/) ??
-    url.match(/\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com/);
+    host.match(/\.lambda-url\.([a-z0-9-]+)\.on\.aws$/) ??
+    host.match(/\.execute-api\.([a-z0-9-]+)\.amazonaws\.com$/) ??
+    host.match(/\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com$/);
   return match ? match[1] : '';
 }

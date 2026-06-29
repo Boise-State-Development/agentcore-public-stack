@@ -36,6 +36,8 @@ from .service import (
 )
 from .thumbnails import ThumbnailRenderError, ThumbnailUnsupportedError
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -219,7 +221,7 @@ async def get_thumbnail(
             detail=str(e),
         )
     except ThumbnailRenderError as e:
-        logger.warning(f"Thumbnail render failed for {upload_id}: {e}")
+        logger.warning(f"Thumbnail render failed for {scrub_log(upload_id)}: {scrub_log(e)}")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not render a thumbnail for this file",

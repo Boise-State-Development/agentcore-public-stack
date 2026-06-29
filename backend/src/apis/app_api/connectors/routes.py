@@ -50,6 +50,8 @@ from apis.shared.oauth.provider_repository import (
 )
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -382,8 +384,8 @@ async def complete_consent(
         logger.error(
             "CompleteResourceTokenAuth failed for user=%s provider=%s: %s",
             current_user.user_id,
-            body.provider_id,
-            err,
+            scrub_log(body.provider_id),
+            scrub_log(err),
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -401,7 +403,7 @@ async def complete_consent(
     logger.info(
         "Completed OAuth consent for user=%s provider=%s",
         current_user.user_id,
-        body.provider_id,
+        scrub_log(body.provider_id),
     )
     return CompleteConsentResponse(ok=True)
 

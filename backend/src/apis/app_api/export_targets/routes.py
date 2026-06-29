@@ -61,6 +61,8 @@ from apis.app_api.export_targets.service import (
     resolve_export_target_token,
 )
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["export-targets"])
@@ -207,7 +209,7 @@ async def _collect_transcript(session_id: str, user_id: str) -> List[MessageResp
             return messages
     logger.warning(
         "Export for session %s hit the %d-page cap; transcript may be truncated",
-        session_id,
+        scrub_log(session_id),
         _MAX_EXPORT_PAGES,
     )
     return messages
@@ -348,7 +350,7 @@ async def export_session(
         )
     except ExportTargetError as err:
         logger.warning(
-            "create_document failed for connector %s: %s", request.connector_id, err
+            "create_document failed for connector %s: %s", scrub_log(request.connector_id), scrub_log(err)
         )
         raise http_error_for_export_target_error(err)
 

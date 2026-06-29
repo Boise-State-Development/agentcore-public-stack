@@ -29,6 +29,8 @@ from typing import Any, List, Tuple
 from strands.types.content import Message
 from strands.types.session import SessionMessage
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +79,7 @@ def persist_synthetic_messages(
     )
     if target_manager is None:
         logger.error(
-            f"Cannot persist messages to session {session_id}: "
+            f"Cannot persist messages to session {scrub_log(session_id)}: "
             f"session manager {type(session_manager).__name__} has no create_message method"
         )
         return False
@@ -88,6 +90,6 @@ def persist_synthetic_messages(
         target_manager.create_message(session_id, agent_id, session_msg)
 
     logger.info(
-        f"💾 Persisted {len(messages)} synthetic message(s) to session {session_id}"
+        f"💾 Persisted {len(messages)} synthetic message(s) to session {scrub_log(session_id)}"
     )
     return True

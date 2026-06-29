@@ -14,6 +14,8 @@ from strands import tool
 
 from apis.shared.files.models import is_tabular_file
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +123,7 @@ async def _get_kb_files(assistant_id: str) -> List[Dict[str, Any]]:
         return files
 
     except Exception as e:
-        logger.error(f"Error querying KB files for assistant {assistant_id}: {e}")
+        logger.error(f"Error querying KB files for assistant {scrub_log(assistant_id)}: {scrub_log(e)}")
         return []
 
 
@@ -154,5 +156,5 @@ async def _get_session_files(session_id: str) -> List[Dict[str, Any]]:
         return files
 
     except Exception as e:
-        logger.error(f"Error querying session files for {session_id}: {e}")
+        logger.error(f"Error querying session files for {scrub_log(session_id)}: {scrub_log(e)}")
         return []

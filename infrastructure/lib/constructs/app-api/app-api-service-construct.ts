@@ -9,7 +9,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
-import { AppConfig, getResourceName, buildCorsOrigins } from '../../config';
+import { AppConfig, getResourceName } from '../../config';
 import { resolveAppApiParams, buildAppApiEnvironment } from './app-api-environment';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import { grantAppApiPermissions } from './app-api-iam-grants';
@@ -195,7 +195,7 @@ export class AppApiServiceConstruct extends Construct {
     environment['SAGEMAKER_SUBNET_IDS'] = props.sagemakerPrivateSubnetIds;
 
     // ── Container definition ──
-    const container = taskDefinition.addContainer('AppApiContainer', {
+    taskDefinition.addContainer('AppApiContainer', {
       containerName: 'app-api',
       image: ecs.ContainerImage.fromRegistry(appApiImageUri),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'app-api', logGroup }),

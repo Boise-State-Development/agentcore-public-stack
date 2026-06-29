@@ -45,6 +45,8 @@ from apis.app_api.file_sources.service import (
     resolve_file_source_token,
 )
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["file-sources"])
@@ -174,7 +176,7 @@ async def list_file_source_roots(
     try:
         roots = await adapter.list_roots(access_token)
     except FileSourceError as err:
-        logger.warning("list_roots failed for connector %s: %s", provider_id, err)
+        logger.warning("list_roots failed for connector %s: %s", scrub_log(provider_id), scrub_log(err))
         raise http_error_for_file_source_error(err)
     return SourceRootsResponse(roots=roots)
 
@@ -201,7 +203,7 @@ async def browse_file_source(
     try:
         return await adapter.browse(access_token, folder_id, cursor)
     except FileSourceError as err:
-        logger.warning("browse failed for connector %s: %s", provider_id, err)
+        logger.warning("browse failed for connector %s: %s", scrub_log(provider_id), scrub_log(err))
         raise http_error_for_file_source_error(err)
 
 
@@ -225,5 +227,5 @@ async def search_file_source(
     try:
         return await adapter.search(access_token, query, cursor)
     except FileSourceError as err:
-        logger.warning("search failed for connector %s: %s", provider_id, err)
+        logger.warning("search failed for connector %s: %s", scrub_log(provider_id), scrub_log(err))
         raise http_error_for_file_source_error(err)

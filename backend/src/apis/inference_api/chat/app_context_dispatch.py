@@ -39,6 +39,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 # Top-level Strands `agent.state` key that holds all MCP Apps host state.
@@ -120,7 +122,7 @@ def dispatch_app_context_update(
 
     logger.info(
         "mcp-apps: stored model context (resource=%s, pending=%d)",
-        resource_uri,
+        scrub_log(resource_uri),
         len(ctx),
     )
     return {"resourceUri": resource_uri, "status": "stored", "pending": len(ctx)}

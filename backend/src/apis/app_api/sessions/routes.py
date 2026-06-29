@@ -32,6 +32,8 @@ from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.system_prompts.service import get_system_prompts_service
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -218,7 +220,7 @@ async def update_session_metadata_endpoint(
             ):
                 logger.warning(
                     "PUT /sessions/%s/metadata: session id is taken under a different user; refusing",
-                    session_id,
+                    scrub_log(session_id),
                 )
                 raise HTTPException(
                     status_code=404,

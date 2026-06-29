@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional
 
 from apis.shared.mcp_apps.broker import get_app_tool_event_broker
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -141,9 +143,9 @@ async def dispatch_app_tool_call(
     except Exception as exc:  # noqa: BLE001 - surfaced to the App as an error
         logger.warning(
             "app tools/call dispatch failed (tool=%s session=%s): %s",
-            tool_name,
-            session_id,
-            exc,
+            scrub_log(tool_name),
+            scrub_log(session_id),
+            scrub_log(exc),
         )
         raise AppToolCallError(
             f"Tool '{tool_name}' failed to execute", code=502

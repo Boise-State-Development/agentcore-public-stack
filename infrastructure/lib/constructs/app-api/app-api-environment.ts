@@ -8,7 +8,6 @@
  */
 
 import * as ssm from 'aws-cdk-lib/aws-ssm';
-import { Construct } from 'constructs';
 
 import { AppConfig, buildCorsOrigins } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';

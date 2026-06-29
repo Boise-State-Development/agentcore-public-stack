@@ -25,7 +25,7 @@ Two ways to obtain the tools:
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from strands import tool
 
@@ -137,6 +137,7 @@ def _execute(registry: Any, skill_name: str, tool_name: str, tool_input: Any = N
         try:
             tool_input = json.loads(tool_input)
         except (json.JSONDecodeError, TypeError):
+            # Not JSON — leave tool_input as its original value.
             pass
 
     if tool_input is None:

@@ -58,6 +58,8 @@ from .system_prompt_resolver import (
     should_resolve_custom_prompt,
 )
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 # Router with no prefix - endpoints will be at root level
@@ -359,7 +361,7 @@ def _build_spreadsheet_tools(
     if "analyze_spreadsheet" in requested:
         tools.append(make_analyze_tool(assistant_id, session_id, user_id))
 
-    logger.info(f"Created {len(tools)} spreadsheet analysis tools (assistant={assistant_id})")
+    logger.info(f"Created {len(tools)} spreadsheet analysis tools (assistant={scrub_log(assistant_id)})")
     return tools
 
 
@@ -1357,7 +1359,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     detail="Paused turn expired; restart the turn.",
                 )
 
-            caching_enabled = snapshot.caching_enabled
             # Snapshot wins on resume so an authorized turn finishes against the
             # exact param shape it was authorized for, even if admin defaults
             # have since changed. Fall back to the legacy fields for snapshots

@@ -50,6 +50,8 @@ from apis.app_api.web_sources.url_utils import (
 from apis.shared.assistants.service import get_assistant
 from apis.shared.auth import User, get_current_user_from_session
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -136,10 +138,10 @@ async def start_crawl(
     task.add_done_callback(_BACKGROUND_CRAWLS.discard)
     logger.info(
         "Kicked off crawl %s for assistant %s (root_document=%s url=%s)",
-        job.crawl_id,
-        assistant_id,
-        document_id,
-        normalized,
+        scrub_log(job.crawl_id),
+        scrub_log(assistant_id),
+        scrub_log(document_id),
+        scrub_log(normalized),
     )
 
     return StartCrawlResponse(

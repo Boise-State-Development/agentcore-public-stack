@@ -1,6 +1,5 @@
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';

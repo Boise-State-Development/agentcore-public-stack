@@ -119,6 +119,7 @@ def _parse_sheet_inventory(bootstrap_stdout: str) -> Dict[str, Any]:
                 if isinstance(names, list):
                     result["skipped_preview"] = [str(n) for n in names]
             except (ValueError, SyntaxError):
+                # Best-effort parse — ignore malformed preview metadata.
                 pass
         elif stripped.startswith("sheet|"):
             parts = stripped.split("|")
