@@ -269,7 +269,7 @@ jobs:
 
       - name: Install frontend dependencies
         if: steps.cache-frontend.outputs.cache-hit != 'true'
-        run: bash scripts/stack-frontend/install.sh
+        run: bash scripts/frontend/install.sh
 
       - name: Save frontend node_modules cache
         if: steps.cache-frontend.outputs.cache-hit != 'true'
@@ -307,7 +307,7 @@ jobs:
 
       - name: Run backend tests with coverage
         id: run-tests
-        run: bash scripts/stack-app-api/test.sh
+        run: bash scripts/backend/test.sh
 
       - name: Upload backend coverage artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -348,7 +348,7 @@ jobs:
 
       - name: Run frontend tests with coverage
         id: run-tests
-        run: bash scripts/stack-frontend/test.sh
+        run: bash scripts/frontend/test.sh
 
       - name: Upload frontend coverage artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
