@@ -77,6 +77,63 @@ class TestDetectAwsServiceFromUrl:
         assert detect_aws_service_from_url(url) is None
 
 
+class TestAwsUrlHostSanitization:
+    """Regression tests for CodeQL py/incomplete-url-substring-sanitization
+    (alert #695): AWS-endpoint markers must only be honored when they appear
+    in the URL *host*, not anywhere in the string. Otherwise an attacker can
+    smuggle the marker into a path/query and trick the caller into attaching
+    SigV4 IAM credentials to a request bound for a non-AWS host."""
+
+    # (description, malicious_url) — every one of these must NOT be treated as AWS.
+    SPOOFED_URLS = [
+        (
+            "marker in query string",
+            "https://evil.example/?x=.execute-api.us-east-1.amazonaws.com",
+        ),
+        (
+            "marker in path",
+            "https://evil.example/.lambda-url.us-east-1.on.aws/mcp",
+        ),
+        (
+            "real AWS suffix as a non-terminal label of an attacker domain",
+            "https://x.execute-api.us-east-1.amazonaws.com.evil.example/mcp",
+        ),
+        (
+            "marker in userinfo",
+            "https://.execute-api.us-east-1.amazonaws.com@evil.example/mcp",
+        ),
+        (
+            "agentcore marker in fragment",
+            "https://evil.example/#.bedrock-agentcore.us-east-1.amazonaws.com",
+        ),
+    ]
+
+    @pytest.mark.parametrize("desc,url", SPOOFED_URLS)
+    def test_detect_service_rejects_spoofed_url(self, desc, url):
+        assert detect_aws_service_from_url(url) is None, desc
+
+    @pytest.mark.parametrize("desc,url", SPOOFED_URLS)
+    def test_extract_region_rejects_spoofed_url(self, desc, url):
+        assert extract_region_from_url(url) is None, desc
+
+    def test_unparseable_url_is_not_aws(self):
+        assert detect_aws_service_from_url("not a url") is None
+        assert extract_region_from_url("not a url") is None
+
+    def test_legitimate_hosts_still_detected(self):
+        """The hardening must not regress genuine AWS endpoints (incl. paths/ports)."""
+        assert (
+            detect_aws_service_from_url(
+                "https://x.execute-api.us-east-1.amazonaws.com:443/prod"
+            )
+            == "execute-api"
+        )
+        assert (
+            extract_region_from_url("https://x.lambda-url.eu-west-1.on.aws/")
+            == "eu-west-1"
+        )
+
+
 class TestProviderForClient:
     """The integration's MCPClient -> provider_id map is what
     `OAuthConsentHook.provider_lookup` consults."""

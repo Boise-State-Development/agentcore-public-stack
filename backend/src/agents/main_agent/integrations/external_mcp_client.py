@@ -16,6 +16,7 @@ OAuth Support:
 import logging
 import re
 from typing import Any, Callable, Optional, List, Set
+from urllib.parse import urlparse
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
@@ -38,6 +39,22 @@ from agents.main_agent.integrations.oauth_auth import (
 logger = logging.getLogger(__name__)
 
 
+def _aws_hostname(url: str) -> str:
+    """Return the lowercased hostname of ``url``, or ``""`` if it can't be parsed.
+
+    AWS-endpoint detection must match against the *host* only. Substring-matching
+    the whole URL (e.g. ``".amazonaws.com" in url``) is unsafe: an attacker can
+    place the marker in a path or query component
+    (``https://evil.example/?x=.execute-api.us-east-1.amazonaws.com``) and trick
+    the caller into SigV4-signing a request to a non-AWS host, leaking the task's
+    IAM credentials. Parsing the host and anchoring the suffix prevents that.
+    """
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
 def extract_region_from_url(url: str) -> Optional[str]:
     """
     Extract AWS region from Lambda Function URL or API Gateway URL.
@@ -52,14 +69,15 @@ def extract_region_from_url(url: str) -> Optional[str]:
     Returns:
         AWS region or None if not extractable
     """
+    host = _aws_hostname(url)
     patterns = [
-        r"\.lambda-url\.([a-z0-9-]+)\.on\.aws",
-        r"\.execute-api\.([a-z0-9-]+)\.amazonaws\.com",
-        r"\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com",
+        r"\.lambda-url\.([a-z0-9-]+)\.on\.aws$",
+        r"\.execute-api\.([a-z0-9-]+)\.amazonaws\.com$",
+        r"\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com$",
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, url)
+        match = re.search(pattern, host)
         if match:
             return match.group(1)
 
@@ -88,11 +106,12 @@ def detect_aws_service_from_url(url: str) -> Optional[str]:
         AWS service name for SigV4 signing, or None if the URL doesn't match
         a known AWS service.
     """
-    if ".lambda-url." in url and ".on.aws" in url:
+    host = _aws_hostname(url)
+    if host.endswith(".on.aws") and ".lambda-url." in host:
         return "lambda"
-    elif ".execute-api." in url and ".amazonaws.com" in url:
+    elif host.endswith(".amazonaws.com") and ".execute-api." in host:
         return "execute-api"
-    elif ".bedrock-agentcore." in url and ".amazonaws.com" in url:
+    elif host.endswith(".amazonaws.com") and ".bedrock-agentcore." in host:
         return "bedrock-agentcore"
     else:
         logger.debug(

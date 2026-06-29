@@ -11,8 +11,6 @@ stays in sync with the infrastructure as new resources are added.
 Run with: pytest tests/supply_chain/test_backup_coverage.py -v
 """
 
-import ast
-import os
 import re
 from pathlib import Path
 

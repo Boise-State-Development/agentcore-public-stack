@@ -10,6 +10,8 @@ from typing import Optional, List
 
 from agents.main_agent.base_agent import BaseAgent
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +49,7 @@ def create_agent(agent_type: str = "chat", **kwargs) -> BaseAgent:
         available = ", ".join(sorted(_AGENT_TYPES.keys()))
         raise ValueError(f"Unknown agent_type '{agent_type}'. Available: {available}")
 
-    logger.info(f"Creating {agent_type} agent ({agent_class.__name__})")
+    logger.info(f"Creating {scrub_log(agent_type)} agent ({agent_class.__name__})")
     return agent_class(**kwargs)
 
 

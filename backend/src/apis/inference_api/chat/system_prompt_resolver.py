@@ -36,6 +36,8 @@ from apis.shared.sessions.metadata import (
 )
 from apis.shared.system_prompts.service import get_system_prompts_service
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,7 +117,7 @@ async def resolve_active_prompt_text(
         custom_prompt = await get_system_prompts_service().get_enabled_prompt(active_prompt_id)
         if not custom_prompt:
             logger.info(
-                f"Custom prompt {active_prompt_id!r} not found or disabled — skipping"
+                f"Custom prompt {scrub_log(active_prompt_id)!r} not found or disabled — skipping"
             )
             return None
 

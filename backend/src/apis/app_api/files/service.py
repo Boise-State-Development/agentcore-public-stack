@@ -15,6 +15,8 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from apis.shared.security.log_sanitize import scrub_log
+
 from apis.shared.files.models import (
     FileMetadata,
     FileStatus,
@@ -437,7 +439,7 @@ class FileUploadService:
             )
             body = response["Body"].read()
         except ClientError as e:
-            logger.warning(f"Failed to read snippet for {upload_id}: {e}")
+            logger.warning(f"Failed to read snippet for {scrub_log(upload_id)}: {scrub_log(e)}")
             return TextSnippetResponse(
                 upload_id=upload_id,
                 snippet="",

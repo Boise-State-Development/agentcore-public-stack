@@ -130,6 +130,7 @@ def heal_partial_json(raw: Optional[str]) -> Optional[Dict[str, Any]]:
                 if isinstance(parsed, dict):
                     return parsed
             except (ValueError, TypeError):
+                # Candidate isn't valid JSON yet — keep shrinking the window.
                 pass
         end -= 1
     return None

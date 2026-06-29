@@ -15,7 +15,6 @@ task only and is never logged.
 
 import asyncio
 import logging
-import os
 from typing import List, Tuple
 
 import boto3

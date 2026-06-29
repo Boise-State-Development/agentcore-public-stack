@@ -9,7 +9,7 @@ since the data is global / single-tenant. When per-org scoping is needed, the
 PK becomes ``USER_MENU_LINKS#<org_id>`` without touching the SK shape.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 

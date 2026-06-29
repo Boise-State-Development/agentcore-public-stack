@@ -178,7 +178,6 @@ class BaseAgent(ABC):
     @abstractmethod
     def _create_agent(self) -> None:
         """Create the specific agent type. Subclasses must implement."""
-        ...
 
     @abstractmethod
     async def stream_async(
@@ -204,7 +203,6 @@ class BaseAgent(ABC):
         assistant message already in restored history (assistant-prefill),
         rather than answering a fresh instruction.
         """
-        ...
 
     def _register_external_mcp_tools(self) -> None:
         """

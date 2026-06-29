@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 from threading import Lock as _ThreadLock
-from typing import Dict
 from weakref import WeakValueDictionary
 
 # We use a WeakValueDictionary so locks don't leak indefinitely as session

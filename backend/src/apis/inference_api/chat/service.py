@@ -16,6 +16,8 @@ from agents.main_agent.agent_types import create_agent
 from agents.main_agent.base_agent import BaseAgent
 from apis.shared.sessions.metadata import update_session_title
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -210,7 +212,7 @@ async def get_agent(
             logger.warning(
                 "Cached agent is paused on an interrupt but request is not a resume; "
                 "evicting and rebuilding (session=%s user=%s)",
-                session_id, user_id,
+                scrub_log(session_id), scrub_log(user_id),
             )
             del _agent_cache[cache_key]
         else:

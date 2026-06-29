@@ -48,6 +48,7 @@ def _is_likely_header(row: tuple, next_row: tuple = None) -> bool:
                 float(stripped.replace(",", ""))
                 continue  # It's a number in string form
             except ValueError:
+                # Not a numeric string — fall through and count it as text.
                 pass
             text_count += 1
         # Non-string types (int, float, datetime) are not header-like
@@ -67,6 +68,7 @@ def _is_likely_header(row: tuple, next_row: tuple = None) -> bool:
                     float(cell.strip().replace(",", ""))
                     numeric_count += 1
                 except ValueError:
+                    # Not numeric — leave numeric_count unchanged.
                     pass
         # Data row should have at least some numbers
         if next_non_empty and numeric_count > 0:

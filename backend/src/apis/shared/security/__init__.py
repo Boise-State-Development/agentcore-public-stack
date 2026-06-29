@@ -25,6 +25,7 @@ from apis.shared.security.python_ast_policy import (
     PolicyError,
     validate_diagram_code,
 )
+from apis.shared.security.log_sanitize import scrub_log
 
 __all__ = [
     "UrlValidationError",
@@ -39,4 +40,5 @@ __all__ = [
     "register_validation_error_handler",
     "PolicyError",
     "validate_diagram_code",
+    "scrub_log",
 ]

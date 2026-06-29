@@ -74,6 +74,7 @@ def _is_forbidden_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -
             if addr in cgnat:
                 return True
     except ValueError:
+        # Not an IP literal — fall through to the metadata-hostname check.
         pass
     if str(addr) in _METADATA_ADDRESSES:
         return True

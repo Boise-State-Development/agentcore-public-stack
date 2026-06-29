@@ -1,6 +1,4 @@
-import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
@@ -65,17 +63,5 @@ export class NetworkConstruct extends Construct {
 
     // Export VPC CIDR to SSM
 
-    // Export Private Subnet IDs to SSM
-    const privateSubnetIds = this.vpc.privateSubnets
-      .map((subnet) => subnet.subnetId)
-      .join(',');
-
-    // Export Public Subnet IDs to SSM
-    const publicSubnetIds = this.vpc.publicSubnets
-      .map((subnet) => subnet.subnetId)
-      .join(',');
-
-    // Export Availability Zones to SSM
-    const availabilityZones = this.vpc.availabilityZones.join(',');
   }
 }

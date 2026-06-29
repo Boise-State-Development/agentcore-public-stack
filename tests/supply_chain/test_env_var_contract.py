@@ -88,7 +88,7 @@ ENV_DICT_KEY_RE = re.compile(
 
 PY_ENV_RE = re.compile(
     r"""
-    os\.(?:environ\.get|getenv|environ\[) # os.environ.get / os.getenv / os.environ[
+    os\.(?:environ\.get|getenv|environ\[) # os.environ.get / os.getenv / os.environ subscript
     \s*\(?\s*                              # optional whitespace + optional (
     ['"]                                   # opening quote
     ([A-Z][A-Z0-9_]+)                      # NAME
@@ -97,10 +97,9 @@ PY_ENV_RE = re.compile(
     re.VERBOSE,
 )
 
-# The EnvVars class in constants.py defines indirected env var
-# references like:
-#   class EnvVars:
-#       DYNAMODB_QUOTA_EVENTS_TABLE = "DYNAMODB_QUOTA_EVENTS_TABLE"
+# The EnvVars class in constants.py defines indirected env var references:
+# each attribute is named identically to the string literal it holds (for
+# example, the DYNAMODB_QUOTA_EVENTS_TABLE attribute maps to that same name).
 ENV_VARS_CLASS_RE = re.compile(
     r"""
     ^                                   # line start (in MULTILINE)

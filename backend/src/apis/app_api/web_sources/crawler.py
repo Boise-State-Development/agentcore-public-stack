@@ -24,7 +24,6 @@ import re
 import time
 from collections import defaultdict
 from typing import Awaitable, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
 
 import httpx

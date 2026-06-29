@@ -36,7 +36,6 @@ from apis.shared.assistants.service import (
     create_assistant,
     create_assistant_draft,
     delete_assistant,
-    get_assistant,
     get_assistant_with_access_check,
     list_assistant_shares,
     list_shared_with_user,

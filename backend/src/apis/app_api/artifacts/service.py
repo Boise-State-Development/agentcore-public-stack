@@ -24,6 +24,8 @@ import jwt
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from apis.shared.security.log_sanitize import scrub_log
+
 logger = logging.getLogger(__name__)
 
 # Frozen contract — must match the render Lambda's _verify_token.
@@ -223,8 +225,8 @@ class RenderTokenService:
         logger.info(
             "minted render token user=%s artifact=%s v=%s",
             user_id,
-            artifact_id,
-            version,
+            scrub_log(artifact_id),
+            scrub_log(version),
         )
         return f"{origin}/?t={token}", exp
 

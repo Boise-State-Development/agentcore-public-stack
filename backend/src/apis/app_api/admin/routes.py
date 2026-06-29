@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import boto3
-from botocore.exceptions import ClientError, BotoCoreError
+from botocore.exceptions import BotoCoreError
 
 from .models import (
     BedrockModelsResponse,
@@ -30,8 +30,6 @@ from apis.shared.models.models import (
 )
 from apis.shared.auth import User, require_admin
 from apis.shared.feature_flags import skills_enabled
-from apis.shared.sessions.metadata import list_user_sessions, get_session_metadata
-from apis.shared.sessions.messages import get_messages
 from apis.shared.models.managed_models import (
     create_managed_model,
     get_managed_model,
