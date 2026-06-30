@@ -26,11 +26,6 @@ on:
         required: false
         default: false
         type: boolean
-      label:
-        description: 'Optional prefix for job display names (e.g. a nightly track label)'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -38,7 +33,7 @@ permissions:
 jobs:
   test-backend:
     if: ${{ inputs.run_backend }}
-    name: "${{ inputs.label != '' && format('[{0}] ', inputs.label) || '' }}Test backend (pytest)"
+    name: Test backend (pytest)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -61,7 +56,7 @@ jobs:
 
   test-frontend:
     if: ${{ inputs.run_frontend }}
-    name: "${{ inputs.label != '' && format('[{0}] ', inputs.label) || '' }}Test frontend"
+    name: Test frontend
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -84,7 +79,7 @@ jobs:
 
   test-infra:
     if: ${{ inputs.run_infra }}
-    name: "${{ inputs.label != '' && format('[{0}] ', inputs.label) || '' }}Test infrastructure (jest)"
+    name: Test infrastructure (jest)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
