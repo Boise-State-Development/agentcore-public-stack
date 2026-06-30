@@ -6,7 +6,7 @@ New agent types register here as they're implemented.
 """
 
 import logging
-from typing import Optional, List
+from typing import List
 
 from agents.main_agent.base_agent import BaseAgent
 
