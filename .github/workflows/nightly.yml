@@ -6,19 +6,16 @@
 #   test-frontend-<branch>             Run frontend tests against <branch>
 #   deploy-<branch>                    Deploy full stack from <branch>
 #   e2e-<branch>                       Deploy full stack, run Playwright E2E tests, teardown
-#   merge-validation:<base>:<overlay>  Deploy <base>, then overlay <overlay>
 #   scan-images-<branch>               Scan Docker images from <branch> for vulnerabilities
 #   all                                Run all tracks with default branches
-#                                      (tests + deploy + e2e on develop, MV main→develop)
+#                                      (tests + deploy + e2e on develop)
 #
 # Examples:
 #   test-backend-develop
 #   test-frontend-main,test-backend-main
 #   deploy-develop
 #   deploy-main,deploy-develop
-#   merge-validation:main:develop
-#   merge-validation:main:feature/my-branch
-#   test-backend-develop,deploy-develop,merge-validation:main:develop
+#   test-backend-develop,deploy-develop,e2e-develop
 #   all
 #
 # Fork safety: If NIGHTLY_TRACKS is not set (empty), NO tracks run.
@@ -75,9 +72,6 @@ jobs:
       test_frontend_ref: ${{ steps.resolve.outputs.test_frontend_ref }}
       run_deploy: ${{ steps.resolve.outputs.run_deploy }}
       deploy_ref: ${{ steps.resolve.outputs.deploy_ref }}
-      run_mv: ${{ steps.resolve.outputs.run_mv }}
-      mv_base_ref: ${{ steps.resolve.outputs.mv_base_ref }}
-      mv_overlay_ref: ${{ steps.resolve.outputs.mv_overlay_ref }}
       run_scan_images: ${{ steps.resolve.outputs.run_scan_images }}
       scan_images_ref: ${{ steps.resolve.outputs.scan_images_ref }}
       run_e2e: ${{ steps.resolve.outputs.run_e2e }}
@@ -101,9 +95,6 @@ jobs:
           test_frontend_ref=""
           run_deploy=false
           deploy_ref=""
-          run_mv=false
-          mv_base_ref=""
-          mv_overlay_ref=""
           run_scan_images=false
           scan_images_ref=""
           run_e2e=false
@@ -125,9 +116,6 @@ jobs:
                   test_frontend_ref="develop"
                   run_deploy=true
                   deploy_ref="develop"
-                  run_mv=true
-                  mv_base_ref="main"
-                  mv_overlay_ref="develop"
                   run_scan_images=true
                   scan_images_ref="develop"
                   run_e2e=true
@@ -144,11 +132,6 @@ jobs:
                 deploy-*)
                   run_deploy=true
                   deploy_ref="${token#deploy-}"
-                  ;;
-                merge-validation:*:*)
-                  run_mv=true
-                  mv_base_ref="$(echo "$token" | cut -d: -f2)"
-                  mv_overlay_ref="$(echo "$token" | cut -d: -f3)"
                   ;;
                 scan-images-*)
                   run_scan_images=true
@@ -168,7 +151,7 @@ jobs:
           # Determine if any track is enabled
           any_track=false
           if [ "$run_test_backend" = "true" ] || [ "$run_test_frontend" = "true" ] || \
-             [ "$run_deploy" = "true" ] || [ "$run_mv" = "true" ] || \
+             [ "$run_deploy" = "true" ] || \
              [ "$run_scan_images" = "true" ] || [ "$run_e2e" = "true" ]; then
             any_track=true
           fi
@@ -181,9 +164,6 @@ jobs:
             echo "test_frontend_ref=$test_frontend_ref"
             echo "run_deploy=$run_deploy"
             echo "deploy_ref=$deploy_ref"
-            echo "run_mv=$run_mv"
-            echo "mv_base_ref=$mv_base_ref"
-            echo "mv_overlay_ref=$mv_overlay_ref"
             echo "run_scan_images=$run_scan_images"
             echo "scan_images_ref=$scan_images_ref"
             echo "run_e2e=$run_e2e"
@@ -196,7 +176,6 @@ jobs:
           echo "  test-backend:  $run_test_backend (ref: $test_backend_ref)"
           echo "  test-frontend: $run_test_frontend (ref: $test_frontend_ref)"
           echo "  deploy:        $run_deploy (ref: $deploy_ref)"
-          echo "  mv:            $run_mv (base: $mv_base_ref, overlay: $mv_overlay_ref)"
           echo "  scan-images:   $run_scan_images (ref: $scan_images_ref)"
           echo "  e2e:           $run_e2e (ref: $e2e_ref)"
           echo "  any_track:     $any_track"
@@ -424,50 +403,6 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
           echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
 
-  ai-coverage-analysis:
-    name: AI Coverage Gap Analysis
-    runs-on: ubuntu-24.04
-    needs: [resolve-tracks, analyze-coverage]
-    if: >-
-      always() && needs.analyze-coverage.result == 'success'
-    outputs:
-      status: ${{ steps.summary.outputs.status }}
-      duration: ${{ steps.summary.outputs.duration }}
-    permissions:
-      issues: write
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.test_frontend_ref }}
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.13'
-
-      - name: Download coverage comparison report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: coverage-comparison
-          path: .
-
-      - name: Run AI coverage analysis
-        id: run-ai-analysis
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 scripts/nightly/ai-coverage-analysis.py
-
-      - name: Generate summary
-        id: summary
-        if: always()
-        run: |
-          if [ "${{ steps.run-ai-analysis.outcome }}" = "success" ]; then STATUS="success"; else STATUS="failure"; fi
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          echo "duration=$SECONDS" >> "$GITHUB_OUTPUT"
-
   # ── Deploy Track ──────────────────────────────────────────────────────────
 
   deploy:
@@ -504,41 +439,6 @@ jobs:
       skip-teardown: ${{ github.event.inputs.skip_teardown || 'false' }}
       label: e2e-${{ needs.resolve-tracks.outputs.e2e_ref }}
       run-e2e: 'true'
-    secrets: inherit
-
-  # ── Merge Validation Track ────────────────────────────────────────────────
-  # Deploys base branch first, then overlays the overlay branch on top —
-  # simulating a real merge to catch CDK/infra incompatibilities.
-
-  mv-base:
-    needs: resolve-tracks
-    if: needs.resolve-tracks.outputs.run_mv == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/nightly-deploy-pipeline.yml
-    with:
-      ref: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
-      project-prefix: nightly-mv
-      alb-subdomain: nightly-mv-api
-      skip-teardown: 'true'
-      label: MV-base-${{ needs.resolve-tracks.outputs.mv_base_ref }}
-      source-project-prefix: dev-boisestateai-v2
-    secrets: inherit
-
-  mv-overlay:
-    needs: [resolve-tracks, mv-base]
-    if: needs.resolve-tracks.outputs.run_mv == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/nightly-deploy-pipeline.yml
-    with:
-      ref: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
-      project-prefix: nightly-mv
-      alb-subdomain: nightly-mv-api
-      skip-teardown: ${{ github.event.inputs.skip_teardown || 'false' }}
-      label: MV-overlay-${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
     secrets: inherit
 
   # ── Image Scanning Track ──────────────────────────────────────────────────
@@ -628,13 +528,13 @@ jobs:
   summary:
     name: Nightly Summary
     runs-on: ubuntu-24.04
-    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, ai-coverage-analysis, deploy, e2e, mv-base, mv-overlay, scan-images]
+    needs: [resolve-tracks, test-backend, test-frontend, analyze-coverage, deploy, e2e, scan-images]
     if: always() && needs.resolve-tracks.outputs.any_track == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.mv_overlay_ref || 'develop' }}
+          ref: ${{ needs.resolve-tracks.outputs.test_backend_ref || needs.resolve-tracks.outputs.deploy_ref || needs.resolve-tracks.outputs.e2e_ref || 'develop' }}
 
       - name: Generate nightly summary
         env:
@@ -642,12 +542,9 @@ jobs:
           RUN_TEST_FRONTEND: ${{ needs.resolve-tracks.outputs.run_test_frontend }}
           RUN_DEPLOY: ${{ needs.resolve-tracks.outputs.run_deploy }}
           RUN_E2E: ${{ needs.resolve-tracks.outputs.run_e2e }}
-          RUN_MV: ${{ needs.resolve-tracks.outputs.run_mv }}
           RUN_SCAN_IMAGES: ${{ needs.resolve-tracks.outputs.run_scan_images }}
           DEPLOY_REF: ${{ needs.resolve-tracks.outputs.deploy_ref }}
           E2E_REF: ${{ needs.resolve-tracks.outputs.e2e_ref }}
-          MV_BASE_REF: ${{ needs.resolve-tracks.outputs.mv_base_ref }}
-          MV_OVERLAY_REF: ${{ needs.resolve-tracks.outputs.mv_overlay_ref }}
         run: |
           source scripts/common/summary.sh
 
@@ -681,10 +578,6 @@ jobs:
             status="$(map_status "${{ needs.analyze-coverage.result }}")"
             ROWS+=("Coverage Analysis|${status}|${{ needs.analyze-coverage.outputs.duration || '0' }}")
             [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
-
-            status="$(map_status "${{ needs.ai-coverage-analysis.result }}")"
-            ROWS+=("AI Coverage Analysis|${status}|${{ needs.ai-coverage-analysis.outputs.duration || '0' }}")
-            [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
           fi
 
           # Deploy track (reusable workflow — single aggregate result)
@@ -699,17 +592,6 @@ jobs:
             status="$(map_status "${{ needs.e2e.result }}")"
             ROWS+=("E2E Tests (${E2E_REF})|${status}|0")
             [ "$status" = "failure" ] && [ "$AGGREGATE" != "failure" ] && AGGREGATE="partial"
-          fi
-
-          # MV tracks
-          if [ "$RUN_MV" = "true" ]; then
-            status="$(map_status "${{ needs.mv-base.result }}")"
-            ROWS+=("[MV] Base (${MV_BASE_REF})|${status}|0")
-            [ "$status" = "failure" ] && AGGREGATE="failure"
-
-            status="$(map_status "${{ needs.mv-overlay.result }}")"
-            ROWS+=("[MV] Overlay (${MV_OVERLAY_REF})|${status}|0")
-            [ "$status" = "failure" ] && AGGREGATE="failure"
           fi
 
           # Image scan track
