@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.0.3] - 2026-06-30
+
+Maintenance patch: CI/CD pipeline cleanup, re-enabled path-scoped auto-deploys, and a dependency/CodeQL sweep. No application code or user-facing behavior changes; upgrade in place.
+
+### 🔒 Security
+
+- Removed unused imports flagged by CodeQL: `Optional` in `agents/main_agent/agent_types.py`, `ssm` in `app-api/app-api-environment.ts` (#526)
+
+### 📦 Dependencies
+
+- **backend:** `joserfc` 1.6.3 → 1.7.2 (`backend/uv.lock`) and 1.6.5 → 1.7.2 (`scripts/backup-data/uv.lock`); remediates Dependabot GHSA-wphv-vfrh-23q5 / CVE-2026-48990 (#526)
+
+### 🔧 CI/CD
+
+- Serialize `platform.yml` and `backend.yml` under one repo-global concurrency group (`deploy-<ref>`) so a CloudFormation deploy and the API-driven backend code deploys can't run concurrently and stomp the same ECS service / AgentCore Runtime / Lambda; frontend stays independent, `cancel-in-progress` stays false (#525)
+- Re-enabled push-triggered, path-scoped deploys for platform, backend, and frontend (develop → development env, main → production) after being `workflow_dispatch`-only since v1.0.0; each trigger is scoped to its own surface (#524)
+- Extracted duplicated test gates into a reusable `tests.yml`, wired into `ci`, `platform`, `backend`, `frontend-deploy`, and `nightly-deploy-pipeline`; render the reusable test-gate job names statically so skipped single-suite callers no longer show raw `${{ }}` expressions as labels (#524, #526)
+- Pruned dead nightly tracks (AI coverage analysis, merge-validation) and orphaned scripts (`ai-coverage-analysis.py`, `promote-ecr-image.sh`); removed the dead `source-project-prefix` input (#524)
+- `docs-deploy` now publishes from `main` (was `develop`); fork-gated `docs-deploy` and `release` so forks syncing `main` don't auto-publish or auto-create releases (#524)
+
 ## [1.0.2] - 2026-06-29
 
 Second patch on the 1.0.0 single-stack architecture. Headlined by **restoring tool use in assistant chats** (reverting the 1.0.0 knowledge-base-only change), plus a CodeQL security-hardening sweep, remediation of 6 Dependabot alerts, and a nightly-pipeline fix. No migration; upgrade in place.

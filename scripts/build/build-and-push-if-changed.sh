@@ -87,8 +87,8 @@ log "Content hash: $TAG"
 
 # 2. Ensure the ECR repository exists. CDK only IMPORTS these repos
 # (via ecr.Repository.fromRepositoryName), so they must be provisioned
-# out-of-band. We follow the same pattern as scripts/common/promote-ecr-image.sh:
-# describe-then-create with scanOnPush, AES256, and the standard tags.
+# out-of-band with a describe-then-create using scanOnPush, AES256, and
+# the standard tags.
 if ! aws ecr describe-repositories \
         --region "$AWS_REGION" \
         --repository-names "$REPO_NAME" \

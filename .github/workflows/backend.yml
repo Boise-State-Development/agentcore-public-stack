@@ -2,16 +2,13 @@ name: Backend Deploy
 
 on:
   workflow_dispatch:
-  # Push-triggered deploys are disabled for the v1.0.0 release so that
-  # forking/syncing the codebase never auto-deploys backend code into a
-  # user's AWS account. Deploy intentionally via the Actions tab. Re-enable
-  # by uncommenting the block below.
-  # push:
-  #   branches: [develop, main]
-  #   paths:
-  #     - 'backend/**'
-  #     - 'scripts/build/**'
-  #     - '.github/workflows/backend.yml'
+  # Deploy on pushes to backend code or its build plumbing.
+  push:
+    branches: [develop, main]
+    paths:
+      - 'backend/**'
+      - 'scripts/build/**'
+      - '.github/workflows/backend.yml'
 
 permissions:
   contents: read
@@ -20,8 +17,11 @@ env:
   CDK_REQUIRE_APPROVAL: never
   LOAD_ENV_QUIET: true
 
+# Shared "deploy-<ref>" group with platform.yml so a CFN deploy and these
+# API-driven code deploys never mutate the same ECS service / AgentCore
+# Runtime / Lambda concurrently — they queue instead.
 concurrency:
-  group: backend-${{ github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 # ------------------------------------------------------------
@@ -42,41 +42,19 @@ concurrency:
 jobs:
   test-infra:
     name: Test infrastructure (jest)
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: infrastructure/package-lock.json
-      - name: Install
-        working-directory: infrastructure
-        run: npm ci --prefer-offline
-      - name: Run tests
-        working-directory: infrastructure
-        run: npx jest --maxWorkers=2
+    uses: ./.github/workflows/tests.yml
+    with:
+      run_infra: true
 
   test-backend:
     name: Test backend (pytest)
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: '0.7.12'
-          enable-cache: true
-          cache-dependency-glob: 'backend/uv.lock'
-      - name: Sync deps
-        working-directory: backend
-        run: uv sync --extra agentcore --extra dev
-      - name: Run pytest
-        working-directory: backend
-        run: uv run pytest tests/ -v
+    uses: ./.github/workflows/tests.yml
+    with:
+      run_backend: true
 
   build-app-api:
     name: Build app-api image

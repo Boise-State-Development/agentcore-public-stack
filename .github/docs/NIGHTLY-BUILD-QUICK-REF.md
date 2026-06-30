@@ -19,14 +19,15 @@ Go to: **Actions** → **Nightly Build & Test** → **Run workflow**
 | `test-backend-<branch>` | Backend tests + coverage against `<branch>` |
 | `test-frontend-<branch>` | Frontend tests + coverage against `<branch>` |
 | `deploy-<branch>` | Full stack deploy from `<branch>` + smoke test + teardown |
-| `merge-validation:<base>:<overlay>` | Deploy `<base>`, overlay `<overlay>`, teardown |
-| `all` | All of the above with defaults (`develop` for tests/deploy, `main`→`develop` for MV) |
+| `e2e-<branch>` | Full stack deploy from `<branch>` + Playwright E2E tests + teardown |
+| `scan-images-<branch>` | Build + Trivy-scan Docker images from `<branch>` |
+| `all` | All of the above with defaults (`develop` for tests/deploy/e2e) |
 
 ### Examples
 ```
 test-backend-develop
 deploy-main,test-frontend-main
-merge-validation:main:feature/my-branch
+e2e-develop
 all
 ```
 
@@ -42,13 +43,12 @@ Set `NIGHTLY_TRACKS` in **Settings → Secrets and variables → Actions → Var
 ### Test Tracks
 1. ✅ Install dependencies + run tests with coverage
 2. 📊 Compare coverage against previous baseline
-3. 🤖 AI analysis creates GitHub issues for coverage gaps (`test-coverage` + `nightly-build` labels)
 
 ### Deploy Track
-Full pipeline: infra → rag → inference → app → frontend + gateway → smoke test → teardown
+Full pipeline: platform → backend code deploys → frontend → smoke test → teardown
 
-### Merge Validation
-Deploys base branch, then overlays another branch on top — catches CDK/infra incompatibilities before merging.
+### E2E Track
+Deploys a full stack and runs Playwright E2E tests against it, then tears down.
 
 ## Debugging Failed Runs
 
@@ -57,7 +57,6 @@ Deploys base branch, then overlays another branch on top — catches CDK/infra i
 | Nothing runs on schedule | Set `NIGHTLY_TRACKS` repo variable |
 | Deploy fails | Check AWS credentials + CDK variables in development environment |
 | Teardown fails | Manually empty S3 buckets + `npx cdk destroy --all --force` |
-| MV overlay fails | Intended — overlay branch has infra incompatibilities with base |
 | Coverage analysis fails | Check that test jobs uploaded artifacts |
 
 ## Cost Considerations

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The nightly workflow validates the AgentCore Public Stack through configurable tracks — backend tests, frontend tests, full-stack deploys, and merge validation. It runs every night at 2 AM Mountain Time (9 AM UTC) and can be triggered manually.
+The nightly workflow validates the AgentCore Public Stack through configurable tracks — backend tests, frontend tests, full-stack deploys, E2E tests, and image scanning. It runs every night at 2 AM Mountain Time (9 AM UTC) and can be triggered manually.
 
 **Fork safety**: If the `NIGHTLY_TRACKS` repository variable is not set, no tracks run. Forked repos are safe by default.
 
@@ -18,8 +18,8 @@ Tracks are specified as a comma-separated string in the `NIGHTLY_TRACKS` repo va
 | `test-frontend-<branch>` | Run frontend tests against `<branch>` |
 | `deploy-<branch>` | Deploy full stack from `<branch>` with automatic teardown |
 | `e2e-<branch>` | Deploy full stack from `<branch>`, run Playwright E2E tests, then teardown |
-| `merge-validation:<base>:<overlay>` | Deploy `<base>`, then overlay `<overlay>` on top (colons delimit to avoid branch name ambiguity) |
-| `all` | Run all tracks with defaults: tests + deploy + e2e on `develop`, MV `main`→`develop` |
+| `scan-images-<branch>` | Build Docker images from `<branch>` and scan them with Trivy |
+| `all` | Run all tracks with defaults: tests + deploy + e2e on `develop` |
 
 ### Examples
 
@@ -29,9 +29,7 @@ test-frontend-main,test-backend-main
 deploy-develop
 deploy-main,deploy-develop
 e2e-develop
-merge-validation:main:develop
-merge-validation:main:feature/my-branch
-test-backend-develop,deploy-develop,e2e-develop,merge-validation:main:develop
+test-backend-develop,deploy-develop,e2e-develop
 all
 ```
 
@@ -46,7 +44,7 @@ The `resolve-tracks` job parses the tracks string into boolean flags and branch 
 ## Workflow Jobs
 
 ### resolve-tracks
-Parses the tracks string and outputs boolean flags (`run_test_backend`, `run_test_frontend`, `run_deploy`, `run_e2e`, `run_mv`) and branch refs for each enabled track.
+Parses the tracks string and outputs boolean flags (`run_test_backend`, `run_test_frontend`, `run_deploy`, `run_e2e`, `run_scan_images`) and branch refs for each enabled track.
 
 ### Test Tracks
 
@@ -55,7 +53,6 @@ When `test-backend-<branch>` or `test-frontend-<branch>` is specified:
 1. **install-backend / install-frontend**: Install and cache dependencies
 2. **test-backend / test-frontend**: Run test suites with coverage, upload artifacts
 3. **analyze-coverage**: Compare coverage against previous baseline (runs if any test succeeded)
-4. **ai-coverage-analysis**: Uses GitHub Models API (GPT-4o) to analyze coverage gaps and create/update GitHub issues labeled `test-coverage` + `nightly-build`
 
 ### Deploy Track
 
@@ -82,15 +79,6 @@ E2E test failures are **informational** — they mark the nightly summary as "pa
 - `E2E_ADMIN_USERNAME` / `E2E_ADMIN_PASSWORD` — Cognito admin test account
 - `E2E_USER_USERNAME` / `E2E_USER_PASSWORD` — Cognito regular user test account
 
-### Merge Validation Track
-
-When `merge-validation:<base>:<overlay>` is specified:
-
-1. **mv-base**: Deploys `<base>` branch with `nightly-mv` prefix, `skip-teardown: true`. Uses `source-project-prefix: dev-boisestateai-v2` for Docker image promotion (promote-or-build pattern).
-2. **mv-overlay**: Deploys `<overlay>` branch on top of the same `nightly-mv` stack, then tears down.
-
-This simulates a real merge to catch CDK/infra incompatibilities between branches.
-
 ### Summary
 
 Generates a GitHub Actions job summary table showing the status of all enabled tracks.
@@ -108,12 +96,7 @@ Reusable workflow (`workflow_call`) containing the full deploy pipeline.
 | `alb-subdomain` | yes | ALB subdomain for the deployment |
 | `skip-teardown` | no | Skip teardown (default: `false`) |
 | `label` | no | Label for job names |
-| `source-project-prefix` | no | If set, Docker jobs try ECR image promotion before building |
 | `run-e2e` | no | Run Playwright E2E tests after smoke test (default: `false`) |
-
-### Promote-or-Build Pattern
-
-When `source-project-prefix` is provided, Docker jobs (rag-ingestion, inference-api, app-api) attempt to promote existing images from the source ECR before falling back to a full build. This avoids unnecessary Docker builds when images haven't changed.
 
 ## Manual Triggers
 
@@ -138,7 +121,7 @@ Example values:
 
 ### Environment
 
-Deploy and MV tracks use the `development` GitHub environment with overrides:
+Deploy and E2E tracks use the `development` GitHub environment with overrides:
 - `CDK_RETAIN_DATA_ON_DELETE=false` (enables clean teardown)
 - Minimal resource sizing
 
@@ -178,9 +161,6 @@ Check that `NIGHTLY_TRACKS` is set as a repository variable (not a secret). Empt
 ### Coverage analysis fails
 - Ensure test jobs uploaded coverage artifacts
 - Check Python script logs for errors
-
-### Merge validation fails on overlay
-This is the intended signal — it means the overlay branch has CDK/infra incompatibilities with the base branch that need to be resolved before merging.
 
 ### E2E tests fail
 - Download the `playwright-report-<label>` artifact for screenshots and traces

@@ -16,6 +16,27 @@ Both files are updated in the **same release pass** from the same source of comm
 
 ---
 
+## Match Depth to Release Size
+
+Release depth scales with what actually shipped — not every release earns a long writeup. We expect to cut patches frequently (potentially several per day), so a small patch must stay **short and digestible**, while a feature or minor release earns the full narrative treatment described later in this doc.
+
+Decide the tier first, then write to it:
+
+| Release type | SemVer | What's in it | `RELEASE_NOTES.md` depth | `CHANGELOG.md` depth |
+|---|---|---|---|---|
+| **Patch** | `x.y.Z` | Bug fixes, security/dep bumps, CI/CD, docs, internal refactors — no new user-facing capability | **Brief.** A 2-4 sentence Highlights paragraph + compact per-category bullets + a one-paragraph deployment note. **No** feature spotlights, **no** per-layer (backend/frontend/infra) subsections, **no** test-coverage section. Aim for a screen or less. | One-line bullets per change, grouped by category. A one-sentence lead paragraph is enough. |
+| **Minor / feature** | `x.Y.0` | New features, endpoints, pages, or capabilities | **Deep.** Full treatment: Highlights, one feature spotlight per major feature with backend/frontend/infrastructure/test-coverage subsections, then per-category bullets. | Spotlight-worthy items get a richer bullet; everything else one line. Narrative stays in `RELEASE_NOTES.md`. |
+| **Major** | `X.0.0` | Breaking changes, architecture shifts, migrations | **Deepest.** Everything above plus a prominent migration/upgrade section and breaking-change callouts. | Breaking changes prefixed `**Breaking:**` with migration pointers. |
+
+Rules of thumb:
+
+- **Don't pad a patch.** If the release is three CI/CD commits and a dependency bump, the notes should be a screen or less. Resist inventing spotlights or test-coverage line counts that don't matter.
+- **Don't starve a feature.** A new capability still gets a spotlight with the what/why/how and the file/endpoint/class detail this audience expects — brevity-for-patches is not license to thin out feature notes.
+- **The category bullets (🔒 / 📦 / 🔧 / 🐛 / …) are the same in both tiers.** The difference is whether they're preceded by narrative spotlights (feature) or stand alone (patch).
+- **When in doubt, size the notes to the largest single change in the release.** One real feature among ten chores makes it a feature release for write-up purposes.
+
+---
+
 ## Branch Model & Why This Is Hard
 
 This repo uses a squash-merge workflow: `develop` accumulates feature branches via merge commits, and when a release is cut, `develop` is squash-merged into `main`. This means `main` and `develop` have **divergent git histories** — you cannot do a simple `git log main..develop` to get a clean diff. Commit SHAs on `main` don't correspond to anything on `develop`.
@@ -112,6 +133,8 @@ When drafting `RELEASE_NOTES.md`, lead with the outcome, then explain the mechan
 ## `RELEASE_NOTES.md` Format
 
 The new release goes at the **top** of the file. Do not modify previous release sections.
+
+> **Patch releases use the short form.** The full section order and feature-spotlight template below describe a **feature / minor or major** release. For a patch (see *Match Depth to Release Size*), keep only the **Header**, a short **Highlights** paragraph, the relevant **per-category bullets**, and **Deployment notes** — omit feature spotlights, per-layer subsections, and the test-coverage section.
 
 ### Header
 
