@@ -1,14 +1,5 @@
-# Reusable test suites (pytest / vitest / jest).
-#
-# Single source of truth for the unit-test gates that the deploy workflows
-# (platform.yml, backend.yml, frontend-deploy.yml), the PR gate (ci.yml), and
-# the nightly deploy pipeline all share. Each caller selects which suites to
-# run via the run_* booleans; unselected jobs are skipped (if:).
-#
-# This is a reusable workflow (workflow_call) — it inherits concurrency from
-# its caller and is therefore exempt from the cancel-in-progress rule enforced
-# by tests/supply_chain/test_concurrency_config.py. It touches no AWS and needs
-# no secrets.
+# Reusable test gates (pytest / vitest / jest). Callers pick suites via the
+# run_* inputs; unselected jobs are skipped.
 
 name: Tests
 

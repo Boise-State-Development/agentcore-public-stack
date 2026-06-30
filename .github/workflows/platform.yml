@@ -2,12 +2,7 @@ name: Platform Stack
 
 on:
   workflow_dispatch:
-  # Auto-deploy on pushes that touch the CDK stack or its deploy plumbing.
-  # In a fork this only deploys if the fork configured its own AWS
-  # secrets/environment; without them the credential step fails safely and
-  # never deploys into an unconfigured account. Forks can also deploy on
-  # demand via the Actions tab. Scoped to the infra surface so backend- or
-  # frontend-only changes don't trigger a (rare, slow) CloudFormation deploy.
+  # Deploy on pushes to the CDK stack or its deploy plumbing.
   push:
     branches: [develop, main]
     paths:

@@ -67,8 +67,6 @@ jobs:
   # green. Required by infrastructure/test/repo-shape.test.ts, which encodes
   # the Phase-6 pipeline shape (build-*/code-deploy-* gate on test-backend,
   # deploy-frontend gates on test-frontend, deploy-platform gates on test-infra).
-  # The suites themselves live in the reusable tests.yml; we pass the deploy
-  # ref + nightly track label through to it.
   test-infra:
     permissions:
       contents: read
