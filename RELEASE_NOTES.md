@@ -1,3 +1,73 @@
+# Release Notes — v1.0.2
+
+**Release Date:** June 29, 2026
+**Previous Release:** v1.0.1 (June 26, 2026)
+
+---
+
+> ⚠️ **Coming from a pre-1.0.0 (beta) deployment? Read the 1.0.0 release notes first.** There is **no special upgrade path for 1.0.2 itself** — if you're already on 1.0.0 or 1.0.1 you upgrade in place with no migration. But 1.0.0 was the single-stack consolidation, and upgrading **from any beta** to 1.0.0 (and therefore to 1.0.2) is a **destructive backup → teardown → redeploy → restore migration**, not an in-place `cdk deploy`. If you haven't already worked through it, do that before deploying 1.0.2: see [**Upgrading an existing deployment** (1.0.0 notes)](#upgrading-an-existing-deployment) below, or the published guide at <https://boise-state-development.github.io/agentcore-public-stack/deployment/upgrade/>. **Brand-new deployments need none of this.**
+
+---
+
+## Highlights
+
+v1.0.2 is a small, security-focused patch on the 1.0.0 single-stack architecture with one notable behavior change. The headline is that **assistants can use tools again**: 1.0.0 had locked assistant chats to a knowledge-base-only, tool-free mode (#382), and this release reverts that so an assistant can once more leverage the user's selected MCP and built-in tools. Alongside it, this release lands a **CodeQL security-hardening sweep** (two HIGH findings around URL/host validation, a log-injection pass across 24 call sites, and a hardened CI checkout), remediates **6 Dependabot alerts** (Astro XSS/SSRF, esbuild dev-server file read, pydantic-settings path traversal), and fixes the **nightly coverage pipeline** that broke when the single-stack refactor moved its scripts. There is **no migration** — operators on 1.0.0 or 1.0.1 upgrade in place.
+
+---
+
+## Assistants can use tools again
+
+1.0.0 introduced a deliberate restriction: assistant ("RAG") chats ran knowledge-base-grounded with **zero external tools** — the inference API forced `enabled_tools=[]` on assistant turns and the system prompt told the model it had no external tools (#382). That made assistants safe and predictable but also meant they couldn't search the web, hit an MCP server, or run code even when the user had those tools enabled. v1.0.2 reverts the restriction so assistants behave like a normal chat with the assistant's knowledge and instructions layered on top.
+
+What stays the same: knowledge-base context is still pre-stuffed into the user message, and the assistant's custom instructions still apply. What changes: the user's tool-picker selection now flows through to the agent on assistant turns, and assistant chats once again emit tool-use and MCP-App events.
+
+### Backend
+
+- `inference_api/chat/routes.py` — dropped the `enabled_tools=[]` override in the `rag_assistant_id` branch so the client's tool selection reaches the agent, and removed the "Knowledge Base Grounding / no external tools" directive from both the with-instructions and no-instructions system-prompt paths (restoring the pre-#382 prompt composition).
+
+### Frontend
+
+- `chat-request.service.ts` — no longer force-sends `enabled_tools=[]` on assistant turns; the user's tool-picker selection rides along (skills mode stays gated on non-assistant turns).
+- `preview-chat.service.ts` — the editor preview now forwards the owner's enabled tools instead of `[]`, and builds the streaming assistant message as ordered content blocks (text interleaved with tool use) wired to `onToolUse`/`onToolResult`, so the shared message-list renders tool cards in the preview exactly like a consumer chat.
+
+### Test coverage
+
+Specs updated to assert tools are forwarded on both assistant and preview turns (`chat-request.service.spec.ts`, `preview-chat.service.spec.ts`).
+
+## 🐛 Bug fixes
+
+- **Nightly coverage pipeline was failing.** The single-stack refactor removed `scripts/stack-app-api/` and `scripts/stack-frontend/`, but `nightly.yml`'s `test-backend`, `test-frontend`, and `install-frontend` jobs still called them, so they died with "No such file or directory." The three scripts were ported to the sanctioned post-refactor layout — `scripts/backend/test.sh`, `scripts/frontend/install.sh`, and `scripts/frontend/test.sh` — with behavior preserved 1:1 (uv install/sync + `pytest --cov`; `npm ci` for frontend and infra; `ng test --no-watch --coverage`). (#518)
+
+## 🔒 Security
+
+This release closes a CodeQL sweep (#521) and 6 Dependabot alerts (#520), each with regression tests where applicable.
+
+**CodeQL code findings (#521):**
+
+- **HIGH `py/incomplete-url-substring-sanitization`** — `external_mcp_client` previously substring-checked the whole URL for an AWS marker before deciding to SigV4-sign. A crafted URL with the marker in a path, query, or userinfo segment could trick it into attaching IAM credentials to a non-AWS host. It now parses the host with `urlparse` and matches an **anchored suffix**. Covered by `TestAwsUrlHostSanitization` (adversarial URLs).
+- **HIGH `js/regex/missing-regexp-anchor`** — `admin-tool.model` now parses the host via `new URL` and **anchors** the AWS-endpoint regexes (`$`) so a spoofed host can't satisfy the match. Covered by `admin-tool.model.spec.ts` (13 cases including spoofed hosts).
+- **MEDIUM `py/log-injection`** (24 sites across 16 files) — a new `apis.shared.security.scrub_log()` helper neutralizes CR/LF and control characters; every flagged user-controlled log value is now wrapped. Covered by `test_log_sanitize.py`.
+- **MEDIUM `actions/untrusted-checkout`** — all `inputs.ref` checkouts in `nightly-deploy-pipeline.yml` now set `persist-credentials: false`.
+- **WARNING `py/regex/duplicate-in-character-class`** — removed a stray `[` from a `re.VERBOSE` comment that the regex parser misread as a character class.
+
+**Dependency CVE remediation (#520):**
+
+| Component | Package | From | To | Fix |
+|---|---|---|---|---|
+| docs-site | `astro` | 6.3.1 | 6.4.8 | Reflected XSS via slot name, host-header SSRF in prerendered error page, spread-attribute XSS |
+| docs-site | `esbuild` | — | 0.28.1 (override) | Dev-server arbitrary file read (GHSA-g7r4-m6w7-qqqr) |
+| frontend | `esbuild` | — | 0.28.1 (override) | Dev-server arbitrary file read (transitive via `@angular/build` 21.2.16) |
+| backend | `pydantic-settings` | 2.13.1 | 2.14.2 | `NestedSecretsSettingsSource` symlink traversal / local file read (GHSA-4xgf-cpjx-pc3j) |
+
+## 🚀 Deployment notes
+
+v1.0.2 is a patch on the single-stack `PlatformStack` architecture. Operators on 1.0.0 or 1.0.1 upgrade in place — **no migration, no new infrastructure, no new env vars.**
+
+- **Behavior change to be aware of:** after deploying, assistant chats will once again use whatever tools the user has enabled (web search, MCP servers, code interpreter, etc.) rather than running knowledge-base-only. If your deployment relied on assistants being tool-free, note that this 1.0.0 restriction has been intentionally reverted.
+- The security and dependency fixes require no operator action beyond deploying the new images/SPA build.
+
+---
+
 # Release Notes — v1.0.1
 
 **Release Date:** June 26, 2026

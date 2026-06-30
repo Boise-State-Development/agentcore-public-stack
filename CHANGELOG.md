@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.0.2] - 2026-06-29
+
+Second patch on the 1.0.0 single-stack architecture. Headlined by **restoring tool use in assistant chats** (reverting the 1.0.0 knowledge-base-only change), plus a CodeQL security-hardening sweep, remediation of 6 Dependabot alerts, and a nightly-pipeline fix. No migration; upgrade in place.
+
+### ✨ Improved
+
+- **Assistants can use tools again** — reverts the 1.0.0 knowledge-base-only restriction (#382). The inference API no longer forces `enabled_tools=[]` on assistant turns and the "Knowledge Base Grounding / no external tools" directive is removed from the system prompt, so the user's selected MCP/tools flow through to assistant chats again. KB context is still pre-stuffed into the user message and assistant instructions still apply. The editor preview now forwards the owner's enabled tools and renders tool-use cards, matching consumer chat. Assistant chats emit tool-use (and MCP-App) events again (#517)
+
+### 🐛 Fixed
+
+- Nightly coverage pipeline: `test-backend`, `test-frontend`, and `install-frontend` jobs failed with "No such file or directory" after the single-stack refactor removed `scripts/stack-app-api/` and `scripts/stack-frontend/`; repointed `nightly.yml` to the sanctioned `scripts/backend/test.sh`, `scripts/frontend/install.sh`, and `scripts/frontend/test.sh` (behavior preserved 1:1) (#518)
+
+### 🔒 Security
+
+- **HIGH `py/incomplete-url-substring-sanitization`** — `external_mcp_client` now parses the URL host (`urlparse`) and matches an anchored suffix instead of substring-checking the whole URL, so an AWS marker in a path/query/userinfo can no longer trick SigV4 signing into attaching IAM credentials to a non-AWS host (#521)
+- **HIGH `js/regex/missing-regexp-anchor`** — `admin-tool.model` parses the host (`new URL`) and anchors the AWS-endpoint regexes (`$`), preventing spoofed-host matches (#521)
+- **MEDIUM `py/log-injection`** (24 sites across 16 files) — new `apis.shared.security.scrub_log()` neutralizes CR/LF/control characters; applied to every flagged user-controlled log value (#521)
+- **MEDIUM `actions/untrusted-checkout`** — added `persist-credentials: false` to all `inputs.ref` checkouts in `nightly-deploy-pipeline.yml` (#521)
+- **WARNING `py/regex/duplicate-in-character-class`** — removed a stray `[` from a `re.VERBOSE` comment that the parser misread as a character class (#521)
+- Added regression tests: `TestAwsUrlHostSanitization`, `admin-tool.model.spec.ts` (13 cases), `test_log_sanitize.py` (#521)
+
+### 📦 Dependencies
+
+- **docs-site:** `astro` 6.3.1 → 6.4.8 (reflected XSS via slot name GHSA-8hv8-536x-4wqp, host-header SSRF GHSA-2pvr-wf23-7pc7, spread-attribute XSS GHSA-jrpj-wcv7-9fh9); `esbuild` → 0.28.1 via overrides (dev-server arbitrary file read GHSA-g7r4-m6w7-qqqr)
+- **frontend:** `esbuild` → 0.28.1 via overrides (transitive through `@angular/build` 21.2.16; GHSA-g7r4-m6w7-qqqr)
+- **backend:** `pydantic-settings` 2.13.1 → 2.14.2 (transitive; `NestedSecretsSettingsSource` symlink traversal / local file read GHSA-4xgf-cpjx-pc3j) (#520)
+
 ## [1.0.1] - 2026-06-26
 
 First patch on top of the 1.0.0 general-availability release. Adds the ability to **save a conversation to a connected app** ("Save to…", with Google Drive as the reference export target) and **support for external (cross-account) Route53 hosted zones**. Both additions are additive and off by default until configured; existing 1.0.0 deployments upgrade in place with no migration.
