@@ -21,11 +21,14 @@ env:
   CDK_REQUIRE_APPROVAL: never
   LOAD_ENV_QUIET: true
 
-# cancel-in-progress: false to avoid leaving CloudFormation in
-# ROLLBACK_IN_PROGRESS / UPDATE_ROLLBACK_FAILED after a mid-deploy
-# cancel. Enforced by tests/supply_chain/test_concurrency_config.py.
+# Shared "deploy-<ref>" group with backend.yml so a CFN deploy and the
+# API-driven backend code deploys never mutate the same ECS service /
+# AgentCore Runtime / Lambda concurrently — they queue instead.
+# cancel-in-progress: false avoids leaving CloudFormation in
+# ROLLBACK_IN_PROGRESS / UPDATE_ROLLBACK_FAILED after a mid-deploy cancel.
+# Enforced by tests/supply_chain/test_concurrency_config.py.
 concurrency:
-  group: platform-${{ github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

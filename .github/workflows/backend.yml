@@ -17,8 +17,11 @@ env:
   CDK_REQUIRE_APPROVAL: never
   LOAD_ENV_QUIET: true
 
+# Shared "deploy-<ref>" group with platform.yml so a CFN deploy and these
+# API-driven code deploys never mutate the same ECS service / AgentCore
+# Runtime / Lambda concurrently — they queue instead.
 concurrency:
-  group: backend-${{ github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 # ------------------------------------------------------------
