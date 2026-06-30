@@ -3,7 +3,10 @@ name: Docs Deploy
 on:
   workflow_dispatch:
   push:
-    branches: [develop, main]
+    # Publish from main (the release branch). The github-pages environment's
+    # deployment-branch policy must allow main — see Settings → Environments →
+    # github-pages → Deployment branches. Use workflow_dispatch to publish on demand.
+    branches: [main]
     paths:
       - 'docs-site/**'
       - '.github/workflows/docs-deploy.yml'
@@ -20,6 +23,9 @@ concurrency:
 jobs:
   build:
     name: Build Starlight site
+    # Fork-safe: only auto-publish from the canonical repo. Forks can still
+    # publish to their OWN GitHub Pages via a manual workflow_dispatch run.
+    if: ${{ github.repository == 'Boise-State-Development/agentcore-public-stack' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -44,6 +50,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
+    if: ${{ github.repository == 'Boise-State-Development/agentcore-public-stack' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     permissions:
       pages: write

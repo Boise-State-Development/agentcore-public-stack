@@ -14,6 +14,8 @@ env:
 jobs:
   release:
     name: Create Release
+    # Fork-safe: never auto-create tags/releases in a fork that syncs main.
+    if: ${{ github.repository == 'Boise-State-Development/agentcore-public-stack' }}
     runs-on: ubuntu-24.04
 
     permissions:

@@ -47,14 +47,6 @@ on:
         required: false
         default: ''
         type: string
-      source-project-prefix:
-        description: 'Reserved for ECR image promotion. Currently unused — the
-          content-hash build (scripts/build/build-one.sh) skips rebuilds when ECR
-          already has the hash, so promotion is unnecessary. Declared so existing
-          orchestrator calls remain valid.'
-        required: false
-        default: ''
-        type: string
       run-e2e:
         description: 'Run Playwright E2E tests after smoke test (requires Cognito test user secrets)'
         required: false
@@ -75,71 +67,34 @@ jobs:
   # green. Required by infrastructure/test/repo-shape.test.ts, which encodes
   # the Phase-6 pipeline shape (build-*/code-deploy-* gate on test-backend,
   # deploy-frontend gates on test-frontend, deploy-platform gates on test-infra).
+  # The suites themselves live in the reusable tests.yml; we pass the deploy
+  # ref + nightly track label through to it.
   test-infra:
-    name: "[${{ inputs.label }}] Test infrastructure (jest)"
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: infrastructure/package-lock.json
-      - name: Install
-        working-directory: infrastructure
-        run: npm ci --prefer-offline
-      - name: Run tests
-        working-directory: infrastructure
-        run: npx jest --maxWorkers=2
+    uses: ./.github/workflows/tests.yml
+    with:
+      run_infra: true
+      ref: ${{ inputs.ref }}
+      label: ${{ inputs.label }}
 
   test-backend:
-    name: "[${{ inputs.label }}] Test backend (pytest)"
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: '0.7.12'
-          enable-cache: true
-          cache-dependency-glob: 'backend/uv.lock'
-      - name: Sync deps
-        working-directory: backend
-        run: uv sync --extra agentcore --extra dev
-      - name: Run pytest
-        working-directory: backend
-        run: uv run pytest tests/ -v
+    uses: ./.github/workflows/tests.yml
+    with:
+      run_backend: true
+      ref: ${{ inputs.ref }}
+      label: ${{ inputs.label }}
 
   test-frontend:
-    name: "[${{ inputs.label }}] Test frontend (ng test)"
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: frontend/ai.client/package-lock.json
-      - name: Install
-        working-directory: frontend/ai.client
-        run: npm ci --prefer-offline
-      - name: Run tests
-        working-directory: frontend/ai.client
-        run: npm run test:ci
+    uses: ./.github/workflows/tests.yml
+    with:
+      run_frontend: true
+      ref: ${{ inputs.ref }}
+      label: ${{ inputs.label }}
 
   deploy-platform:
     name: "[${{ inputs.label }}] Deploy PlatformStack"
