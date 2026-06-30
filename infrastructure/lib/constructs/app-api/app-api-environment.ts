@@ -7,8 +7,6 @@
  * objects it can pass to the task definition and IAM grants module.
  */
 
-import * as ssm from 'aws-cdk-lib/aws-ssm';
-
 import { AppConfig, buildCorsOrigins } from '../../config';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 

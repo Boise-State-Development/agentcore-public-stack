@@ -68,31 +68,31 @@ jobs:
   # the Phase-6 pipeline shape (build-*/code-deploy-* gate on test-backend,
   # deploy-frontend gates on test-frontend, deploy-platform gates on test-infra).
   test-infra:
+    name: "[${{ inputs.label }}] Test infrastructure (jest)"
     permissions:
       contents: read
     uses: ./.github/workflows/tests.yml
     with:
       run_infra: true
       ref: ${{ inputs.ref }}
-      label: ${{ inputs.label }}
 
   test-backend:
+    name: "[${{ inputs.label }}] Test backend (pytest)"
     permissions:
       contents: read
     uses: ./.github/workflows/tests.yml
     with:
       run_backend: true
       ref: ${{ inputs.ref }}
-      label: ${{ inputs.label }}
 
   test-frontend:
+    name: "[${{ inputs.label }}] Test frontend"
     permissions:
       contents: read
     uses: ./.github/workflows/tests.yml
     with:
       run_frontend: true
       ref: ${{ inputs.ref }}
-      label: ${{ inputs.label }}
 
   deploy-platform:
     name: "[${{ inputs.label }}] Deploy PlatformStack"
