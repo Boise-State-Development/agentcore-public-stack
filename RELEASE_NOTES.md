@@ -1,3 +1,36 @@
+# Release Notes — v1.0.3
+
+**Release Date:** June 30, 2026
+**Previous Release:** v1.0.2 (June 29, 2026)
+
+---
+
+> ⚠️ **Upgrading from a beta?** 1.0.3 is an in-place upgrade from 1.0.0/1.0.1/1.0.2 with no migration. Moving from any pre-1.0.0 beta is still the destructive backup → teardown → redeploy → restore migration described in the [1.0.0 notes](#upgrading-an-existing-deployment). Brand-new deployments need none of this.
+
+---
+
+## Highlights
+
+v1.0.3 is a maintenance patch — no application code or user-facing behavior changes. It's almost entirely **CI/CD pipeline work**: platform and backend deploys are now serialized through a shared concurrency group so they can't race each other onto the same ECS service / AgentCore Runtime / Lambda, push-triggered (path-scoped) auto-deploys are back on for the platform/backend/frontend workflows, and the duplicated test gates are consolidated into one reusable workflow. Rounding it out is a small dependency + CodeQL sweep (a `joserfc` CVE patch and a couple of unused-import removals). Operators on 1.0.x upgrade in place with no migration.
+
+## 🔒 Security & 📦 Dependencies
+
+- `joserfc` 1.6.3 → 1.7.2 (backend) and 1.6.5 → 1.7.2 (backup-data tooling), remediating Dependabot GHSA-wphv-vfrh-23q5 / CVE-2026-48990. (#526)
+- Removed unused imports flagged by CodeQL — `Optional` in `agents/main_agent/agent_types.py`, `ssm` in `app-api/app-api-environment.ts`. (#526)
+
+## 🔧 CI/CD
+
+- **Serialized deploys.** `platform.yml` and `backend.yml` now share one repo-global concurrency group (`deploy-<ref>`), so a CloudFormation deploy and the API-driven backend code deploys queue instead of running at once and stomping the same ECS service / AgentCore Runtime / Lambda. Frontend stays independent; `cancel-in-progress` stays false. (#525)
+- **Auto-deploy restored.** Push-triggered, path-scoped deploys are re-enabled for platform/backend/frontend (develop → development, main → production) after being manual-dispatch-only since v1.0.0. Each trigger is scoped to its own surface so unrelated changes don't redeploy. (#524)
+- **Reusable test gates.** Duplicated test jobs are extracted into a shared `tests.yml` consumed by `ci`, `platform`, `backend`, `frontend-deploy`, and `nightly-deploy-pipeline`; skipped single-suite callers now render correct job labels instead of raw `${{ }}` expressions. (#524, #526)
+- **Pipeline cleanup.** Pruned dead nightly tracks (AI coverage analysis, merge-validation) and orphaned scripts; `docs-deploy` now publishes from `main` (was `develop`), and `docs-deploy`/`release` are fork-gated so forks syncing `main` don't auto-publish or auto-release. (#524)
+
+## 🚀 Deployment notes
+
+In-place patch on the single-stack `PlatformStack` — no new infrastructure, env vars, or migration. The only operator-visible change is to CI/CD behavior: pushes to `develop`/`main` once again auto-deploy (path-scoped), and platform vs. backend deploys now queue rather than run concurrently.
+
+---
+
 # Release Notes — v1.0.2
 
 **Release Date:** June 29, 2026
