@@ -2,19 +2,22 @@ name: Platform Stack
 
 on:
   workflow_dispatch:
-  # Push-triggered deploys are disabled for the v1.0.0 release so that
-  # forking/syncing the codebase never auto-deploys infrastructure into a
-  # user's AWS account. Deploy intentionally via the Actions tab. Re-enable
-  # by uncommenting the block below.
-  # push:
-  #   branches: [develop, main]
-  #   paths:
-  #     - 'infrastructure/lib/platform-stack.ts'
-  #     - 'infrastructure/lib/constructs/**'
-  #     - 'infrastructure/lib/config.ts'
-  #     - 'infrastructure/bin/infrastructure.ts'
-  #     - 'infrastructure/bootstrap-assets/**'
-  #     - 'scripts/platform/**'
+  # Auto-deploy on pushes that touch the CDK stack or its deploy plumbing.
+  # In a fork this only deploys if the fork configured its own AWS
+  # secrets/environment; without them the credential step fails safely and
+  # never deploys into an unconfigured account. Forks can also deploy on
+  # demand via the Actions tab. Scoped to the infra surface so backend- or
+  # frontend-only changes don't trigger a (rare, slow) CloudFormation deploy.
+  push:
+    branches: [develop, main]
+    paths:
+      - 'infrastructure/lib/platform-stack.ts'
+      - 'infrastructure/lib/constructs/**'
+      - 'infrastructure/lib/config.ts'
+      - 'infrastructure/bin/infrastructure.ts'
+      - 'infrastructure/bootstrap-assets/**'
+      - 'scripts/platform/**'
+      - '.github/workflows/platform.yml'
 
 permissions:
   contents: read
