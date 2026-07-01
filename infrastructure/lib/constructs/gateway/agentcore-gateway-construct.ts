@@ -62,11 +62,25 @@ export class AgentCoreGatewayConstruct extends Construct {
       description: 'Execution role for AgentCore Gateway',
     });
 
-    // NOTE: no standing `lambda:Invoke*` grant. Invoke permission for each
-    // mcpServer target's Lambda Function URL is granted per-target at
-    // registration by app-api (lambda:AddPermission naming this role) and
-    // revoked on delete — least-privilege, and admins add servers with no infra
-    // change. See AgentCoreGatewayTargetAccess on the app-api role.
+    // Lambda invoke grant for MCP targets. AWS docs require an identity-based
+    // policy on the gateway service role allowing `lambda:InvokeFunction` on
+    // target Lambdas, in addition to the resource-based policy added per-target
+    // at registration (lambda:AddPermission). The resource-policy-only approach
+    // is not sufficient — the Gateway needs both.
+    // Ref: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-prerequisites-permissions.html
+    // Scoped to the MCP server naming conventions used by the mcp-servers repo
+    // (`mcp-*`) and this platform (`${prefix}-mcp-*`).
+    this.gatewayRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'LambdaInvokeForMcpTargets',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:${stack.region}:${stack.account}:function:mcp-*`,
+          `arn:aws:lambda:${stack.region}:${stack.account}:function:${config.projectPrefix}-mcp-*`,
+        ],
+      }),
+    );
 
     this.gatewayRole.addToPolicy(
       new iam.PolicyStatement({
