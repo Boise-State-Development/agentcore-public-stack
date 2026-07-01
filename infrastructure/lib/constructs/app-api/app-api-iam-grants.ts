@@ -403,6 +403,14 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       // do not exist as IAM actions, so the entire policy was a silent
       // no-op — the App API hit AccessDeniedException on ListEvents.
       actions: [
+        // GetMemory is required by the memory dashboard read path:
+        // memory_service._get_strategy_namespaces() calls
+        // MemoryClient.get_memory_strategies(), which invokes GetMemory to
+        // enumerate the memory's strategy IDs. Without it the call
+        // AccessDenies, strategy discovery returns (None, None, None), and
+        // GET /memory returns empty preferences/facts with a 200 — the
+        // memories/preferences page renders blank even though records exist.
+        'bedrock-agentcore:GetMemory',
         'bedrock-agentcore:CreateEvent',
         'bedrock-agentcore:GetEvent',
         'bedrock-agentcore:ListEvents',

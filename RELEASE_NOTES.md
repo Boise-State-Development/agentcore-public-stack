@@ -1,3 +1,33 @@
+# Release Notes — v1.0.4
+
+**Release Date:** July 1, 2026
+**Previous Release:** v1.0.3 (June 30, 2026)
+
+---
+
+> ⚠️ **Upgrading from a beta?** 1.0.4 is an in-place upgrade from any 1.0.x with no migration. Moving from a pre-1.0.0 beta is still the destructive backup → teardown → redeploy → restore migration described in the [1.0.0 notes](#upgrading-an-existing-deployment). Brand-new deployments need none of this.
+
+---
+
+## Highlights
+
+v1.0.4 is a one-line-per-role IAM hotfix that restores **AgentCore Memory** functionality. Both the App API task role and the AgentCore Runtime execution role granted every memory data-plane action *except* `bedrock-agentcore:GetMemory` — the action the SDK's `get_memory_strategies()` call requires to resolve a memory's strategy IDs. Without it, strategy discovery failed silently: the **Settings → memories/preferences page came back empty** (the App API returned empty lists with a 200), and the **agent stopped recalling long-term memories** (the runtime kept writing conversation events but ran with retrieval disabled). Granting `GetMemory` on both roles fixes both symptoms. This is an **infrastructure (IAM) change**, so it deploys via the platform (CDK) pipeline.
+
+## 🐛 Bug fixes
+
+- **Memory dashboard showed no memories/preferences.** `GET /memory` calls `get_memory_strategies()` → `bedrock-agentcore:GetMemory`, which the App API task role didn't allow. The call `AccessDenied`, strategy discovery returned no IDs, and the endpoint returned empty `facts`/`preferences` with a 200 — so the page rendered blank even though records existed. (`app-api-iam-grants.ts`)
+- **Agent didn't recall long-term memories.** At session creation the runtime's `_discover_strategy_ids()` makes the same `GetMemory` call to build its retrieval namespaces; the runtime execution role also lacked the action, so retrieval was silently disabled ("long-term memory retrieval disabled") while event writes (`CreateEvent`) continued to succeed. (`inference-api-iam-roles.ts`)
+
+## 🏗️ Infrastructure
+
+- Added `bedrock-agentcore:GetMemory` to the `AgentCoreMemoryAccess` policy statement on **both** roles — the App API Fargate task role (scoped to the memory ARN) and the AgentCore Runtime execution role (scoped to `memory/*`). No other action names changed. Verified against the AWS Service Authorization Reference (`GetMemory` is a Read action on the `memory` resource type).
+
+## 🚀 Deployment notes
+
+This is an IAM change on `PlatformStack`, so it ships through the **platform (CDK)** pipeline, not the API-only backend path. After deploy, no data migration is needed and existing memories become visible immediately. Note the App API caches strategy discovery per process (`functools.lru_cache`) — a normal deploy rolls the ECS tasks and AgentCore Runtime, so the cache starts fresh; no manual restart required.
+
+---
+
 # Release Notes — v1.0.3
 
 **Release Date:** June 30, 2026
