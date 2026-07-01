@@ -301,6 +301,17 @@ export function createRuntimeExecutionRole(
     // speculative names (CreateMemoryEvent, ListMemoryEvents,
     // RetrieveMemory) that don't exist as IAM actions.
     actions: [
+      // GetMemory is required for long-term memory RETRIEVAL. At session
+      // creation the agent calls _discover_strategy_ids() ->
+      // MemoryClient.get_memory_strategies(), which invokes GetMemory to
+      // resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION strategy IDs
+      // used to build the retrieval namespaces. Without it that call
+      // AccessDenies, the retrieval config is left empty, and the agent
+      // silently runs with "long-term memory retrieval disabled" — it keeps
+      // writing events (CreateEvent) but never recalls stored memories.
+      // Verified against the AWS Service Authorization Reference: GetMemory
+      // is a Read action on the `memory` resource type.
+      'bedrock-agentcore:GetMemory',
       'bedrock-agentcore:CreateEvent',
       'bedrock-agentcore:GetEvent',
       'bedrock-agentcore:ListEvents',

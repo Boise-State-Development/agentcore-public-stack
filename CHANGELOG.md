@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.0.4] - 2026-07-01
+
+IAM hotfix restoring AgentCore Memory. Both the App API task role and the AgentCore Runtime execution role were missing `bedrock-agentcore:GetMemory`, which `get_memory_strategies()` needs to resolve strategy IDs — breaking the memory dashboard (empty results) and long-term recall (retrieval silently disabled). Ships via the platform (CDK) pipeline; no migration.
+
+### 🐛 Fixed
+
+- Memory dashboard (`GET /memory`, `/memory/preferences`, `/memory/facts`) returned empty lists with a 200: `get_memory_strategies()` → `bedrock-agentcore:GetMemory` was denied on the App API task role, so strategy discovery yielded no namespaces and retrieval was skipped (`app-api-iam-grants.ts`)
+- Agent stopped recalling long-term memories: the runtime's `_discover_strategy_ids()` makes the same `GetMemory` call to build retrieval namespaces; the runtime execution role also lacked the action, disabling long-term retrieval while `CreateEvent` writes still succeeded (`inference-api-iam-roles.ts`)
+
+### 🏗️ Infrastructure
+
+- Added `bedrock-agentcore:GetMemory` to the `AgentCoreMemoryAccess` statement on both the App API Fargate task role (scoped to the memory ARN) and the AgentCore Runtime execution role (scoped to `memory/*`); no other actions changed. Validated against the AWS Service Authorization Reference (`GetMemory` = Read on the `memory` resource type)
+
 ## [1.0.3] - 2026-06-30
 
 Maintenance patch: CI/CD pipeline cleanup, re-enabled path-scoped auto-deploys, and a dependency/CodeQL sweep. No application code or user-facing behavior changes; upgrade in place.
