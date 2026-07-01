@@ -304,8 +304,48 @@ export class MessageMapService {
       return;
     }
 
-    // Set loading state for this session
-    this._isLoadingSession.set(sessionId);
+    try {
+      await this.fetchAndApplyMessages(sessionId, /* showLoading */ true);
+    } catch (error) {
+      console.error('Failed to load messages for session:', sessionId, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Force a re-fetch of a session's messages from the server, replacing the
+   * in-memory copy with the authoritative persisted state.
+   *
+   * Unlike {@link loadMessagesForSession} this bypasses the
+   * "already loaded" guard and does NOT flip the skeleton loading state, so
+   * it can reconcile a live thread without a visible flash. It is used after
+   * an interrupt resume (OAuth consent / tool approval): the resumed stream
+   * carries only the `tool_result` + the final assistant text — Strands does
+   * not replay the interrupted `tool_use` block — so the live parser can't
+   * attach the result to the paused tool card. Re-reading persisted memory
+   * (where the backend stored both the `tool_use` and its `tool_result`)
+   * flips the card from "Running…" to its completed result.
+   *
+   * Best-effort: a failure leaves the live-streamed state untouched rather
+   * than disrupting the UI.
+   */
+  async reloadMessagesForSession(sessionId: string): Promise<void> {
+    try {
+      await this.fetchAndApplyMessages(sessionId, /* showLoading */ false);
+    } catch (error) {
+      console.error('Failed to reload messages for session:', sessionId, error);
+    }
+  }
+
+  /**
+   * Fetch a session's messages + file metadata, reconstruct tool results and
+   * file attachments, and replace the message map entry. Shared by the
+   * initial load and the post-resume reconcile.
+   */
+  private async fetchAndApplyMessages(sessionId: string, showLoading: boolean): Promise<void> {
+    if (showLoading) {
+      this._isLoadingSession.set(sessionId);
+    }
 
     try {
       // Fetch messages and file metadata in parallel
@@ -351,12 +391,10 @@ export class MessageMapService {
       // session.page resets McpAppStateService before this load, so the
       // non-clobbering seed lands cleanly.
       this.mcpAppState.seedFromHydration(messagesResponse.uiResources ?? []);
-    } catch (error) {
-      console.error('Failed to load messages for session:', sessionId, error);
-      throw error;
     } finally {
-      // Clear loading state
-      this._isLoadingSession.set(null);
+      if (showLoading) {
+        this._isLoadingSession.set(null);
+      }
     }
   }
 

@@ -18,7 +18,6 @@ import {
   ToolApprovalService,
 } from '../../../services/tool-approval/tool-approval.service';
 import { ErrorService } from '../../../services/error/error.service';
-import { StreamParserService } from './stream-parser.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { HttpErrorResponse } from '@angular/common/http';
 
@@ -46,7 +45,6 @@ export class ChatRequestService implements OnDestroy {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
-  private streamParserService = inject(StreamParserService);
   private errorService = inject(ErrorService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
@@ -288,11 +286,17 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    // Reset the parser so the resumed stream is treated as a fresh batch
-    // of events. Without this, the parser stays in Completed state from
-    // the prior `done` and ignores everything.
-    this.streamParserService.reset(sessionId);
-    this.messageMapService.startStreaming(sessionId);
+    // A resume turn has NO new user message and the resumed stream does not
+    // replay the interrupted `tool_use` block (Strands emits only the
+    // `tool_result` + the final assistant text). Continuation streaming pins
+    // the existing messages — including the assistant message holding the
+    // paused tool card — as a stable prefix and appends the resume after
+    // them, instead of the normal sync which truncates back to the last user
+    // message and would discard the tool card. It also resets the parser
+    // (with the correct starting count) so the resumed stream is a fresh
+    // batch; without that the parser stays Completed from the prior `done`
+    // and ignores everything.
+    this.messageMapService.beginContinuationStreaming(sessionId);
     this.chatStateService.createNewAbortController();
     this.chatStateService.setChatLoading(true);
 
@@ -313,6 +317,11 @@ export class ChatRequestService implements OnDestroy {
 
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
+      // The live parser could not attach the resumed `tool_result` to the
+      // paused tool card (its `tool_use` block is in the pinned prefix, not
+      // in the fresh parser). Reconcile from persisted memory so the card
+      // flips from "Running…" to its completed result.
+      await this.messageMapService.reloadMessagesForSession(sessionId);
     } catch (error) {
       this.chatStateService.setChatLoading(false);
       this.messageMapService.endStreaming();
@@ -346,8 +355,11 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    this.streamParserService.reset(sessionId);
-    this.messageMapService.startStreaming(sessionId);
+    // Same shape as the OAuth resume: no new user message and the resumed
+    // stream carries only the `tool_result` + final text, not the paused
+    // `tool_use` block. Pin the existing messages (with the tool card) as a
+    // prefix and append the resume after them.
+    this.messageMapService.beginContinuationStreaming(sessionId);
     this.chatStateService.createNewAbortController();
     this.chatStateService.setChatLoading(true);
 
@@ -364,6 +376,9 @@ export class ChatRequestService implements OnDestroy {
 
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
+      // Reconcile from persisted memory so the approved/declined tool card
+      // shows its result (the live parser can't attach it — see above).
+      await this.messageMapService.reloadMessagesForSession(sessionId);
     } catch (error) {
       this.chatStateService.setChatLoading(false);
       this.messageMapService.endStreaming();
