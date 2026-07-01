@@ -98,6 +98,52 @@ describe('MessageMapService', () => {
     expect(messagesSignal()).toEqual(mockMessages);
   });
 
+  it('reloadMessagesForSession re-fetches even when messages already exist and does not flip loading state', async () => {
+    // Seed an existing (stale) message so the load guard would normally skip.
+    service.addUserMessage('session-reload', 'search');
+
+    // Server holds the authoritative post-resume state: the assistant's
+    // tool_use plus its matching tool_result (in a following user message).
+    const serverMessages = [
+      { id: 'msg-reload-0', role: 'user', content: [{ type: 'text', text: 'search' }] },
+      {
+        id: 'msg-reload-1',
+        role: 'assistant',
+        content: [
+          { type: 'toolUse', toolUse: { toolUseId: 'tu-1', name: 'search_messages', input: {} } },
+        ],
+      },
+      {
+        id: 'msg-reload-2',
+        role: 'user',
+        content: [
+          { type: 'toolResult', toolResult: { toolUseId: 'tu-1', status: 'success', content: [{ text: 'ok' }] } },
+        ],
+      },
+    ];
+    mockSessionService.getMessages.mockResolvedValue({ messages: serverMessages });
+
+    await service.reloadMessagesForSession('session-reload');
+
+    // Bypassed the "already loaded" guard and hit the API.
+    expect(mockSessionService.getMessages).toHaveBeenCalledWith('session-reload');
+    // Never surfaced the skeleton loading state during a live reconcile.
+    expect(service.isLoadingSession()).toBe(null);
+
+    // The tool_use card now carries its result (status flipped to complete).
+    const reloaded = service.getMessagesForSession('session-reload')();
+    const assistant = reloaded.find((m) => m.id === 'msg-reload-1')!;
+    const toolBlock = assistant.content[0] as any;
+    expect(toolBlock.toolUse.status).toBe('complete');
+    expect(toolBlock.toolUse.result).toBeDefined();
+  });
+
+  it('reloadMessagesForSession swallows fetch errors (best-effort reconcile)', async () => {
+    mockSessionService.getMessages.mockRejectedValue(new Error('API error'));
+    await expect(service.reloadMessagesForSession('session-reload-err')).resolves.toBeUndefined();
+    expect(service.isLoadingSession()).toBe(null);
+  });
+
   it('should hydrate pending OAuth interrupts from camelCase wire response', async () => {
     // Regression: backend serializes with by_alias=True so the wire payload uses
     // camelCase (pendingInterrupts, interruptId, providerId, ...). If the consumer

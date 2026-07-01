@@ -12,6 +12,8 @@ import { ToolService } from '../../../services/tool/tool.service';
 import { SkillService } from '../../../services/skill/skill.service';
 import { ChatModeService, ChatMode } from '../../../services/chat-mode/chat-mode.service';
 import { FileUploadService } from '../../../services/file-upload';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 
 describe('ChatRequestService', () => {
   let service: ChatRequestService;
@@ -20,6 +22,10 @@ describe('ChatRequestService', () => {
   let mockModelService: any;
   let mockToolService: any;
   let currentMode: ChatMode;
+  // Captured from the constructor's setResumeHandler(...) calls so the tests
+  // can drive the (private) resume paths the way the consent/approval UIs do.
+  let oauthResumeHandler: ((interruptIds: string[], context?: { sessionId?: string }) => Promise<void>) | null;
+  let approvalResumeHandler: ((interruptId: string, decision: any, context?: { sessionId?: string }) => Promise<void>) | null;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -48,7 +54,7 @@ describe('ChatRequestService', () => {
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
         { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), createNewAbortController: vi.fn() } },
-        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn() } },
+        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },
@@ -56,6 +62,22 @@ describe('ChatRequestService', () => {
         { provide: SkillService, useValue: { getEnabledSkillIds: vi.fn().mockReturnValue(['skill_a']) } },
         { provide: ChatModeService, useValue: { mode: () => currentMode } },
         { provide: FileUploadService, useValue: { getReadyFileById: vi.fn() } },
+        {
+          provide: OAuthConsentService,
+          useValue: {
+            setResumeHandler: vi.fn((handler: any) => {
+              oauthResumeHandler = handler;
+            }),
+          },
+        },
+        {
+          provide: ToolApprovalService,
+          useValue: {
+            setResumeHandler: vi.fn((handler: any) => {
+              approvalResumeHandler = handler;
+            }),
+          },
+        },
       ],
     });
     service = TestBed.inject(ChatRequestService);
@@ -177,6 +199,62 @@ describe('ChatRequestService', () => {
     it('is a no-op without a session id', async () => {
       await service.continueTruncatedTurn(null);
       expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resumeFromOAuthConsent', () => {
+    it('pins existing messages (continuation streaming) and reconciles from server', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await oauthResumeHandler!(['int-1'], { sessionId: 'session1' });
+
+      // The paused tool card must NOT be truncated away: continuation
+      // streaming pins it as a prefix instead of the normal truncate-to-user sync.
+      expect(messageMap.beginContinuationStreaming).toHaveBeenCalledWith('session1');
+      expect(messageMap.startStreaming).not.toHaveBeenCalled();
+      // No new user bubble on a resume turn.
+      expect(messageMap.addUserMessage).not.toHaveBeenCalled();
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          session_id: 'session1',
+          message: '',
+          interrupt_responses: [{ interruptId: 'int-1', response: 'consented' }],
+        }),
+      );
+
+      // The resumed stream can't attach the tool_result live, so we
+      // reconcile from persisted memory to flip the card to its result.
+      expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+    });
+
+    it('is a no-op without interrupt ids', async () => {
+      await oauthResumeHandler!([], { sessionId: 'session1' });
+      expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op without a session id', async () => {
+      await oauthResumeHandler!(['int-1'], {});
+      expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resumeFromToolApproval', () => {
+    it('pins existing messages and reconciles from server after a decision', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+
+      await approvalResumeHandler!('int-9', 'approved', { sessionId: 'session1' });
+
+      expect(messageMap.beginContinuationStreaming).toHaveBeenCalledWith('session1');
+      expect(messageMap.startStreaming).not.toHaveBeenCalled();
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          session_id: 'session1',
+          message: '',
+          interrupt_responses: [{ interruptId: 'int-9', response: 'approved' }],
+        }),
+      );
+      expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
     });
   });
 });
