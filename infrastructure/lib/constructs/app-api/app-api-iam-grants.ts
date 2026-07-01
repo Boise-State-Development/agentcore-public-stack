@@ -507,6 +507,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         'bedrock-agentcore:UpdateGatewayTarget',
         'bedrock-agentcore:DeleteGatewayTarget',
         'bedrock-agentcore:ListGatewayTargets',
+        'bedrock-agentcore:SynchronizeGatewayTargets',
         // GetGateway resolves the gateway execution-role ARN, which the per-
         // target Lambda grant names as the invoke principal.
         'bedrock-agentcore:GetGateway',
