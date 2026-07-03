@@ -34,6 +34,7 @@ import {
 import { VoiceChatService } from './services/voice';
 import { SystemPromptsService } from '../services/system-prompts/system-prompts.service';
 import { ChatModeService } from '../services/chat-mode/chat-mode.service';
+import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
 
 @Component({
   selector: 'app-session-page',
@@ -59,6 +60,7 @@ export class ConversationPage implements OnDestroy {
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppCardHttp = inject(McpAppCardHttpService);
   private mcpAppConsent = inject(McpAppConsentService);
+  private oauthConsent = inject(OAuthConsentService);
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private router = inject(Router);
@@ -406,6 +408,14 @@ export class ConversationPage implements OnDestroy {
       // conversation is dropped fail-closed.
       this.mcpAppCardState.reset();
       this.mcpAppConsent.reset();
+
+      // OAuth "Authorization needed" prompts are held in a root singleton
+      // keyed by providerId (not sessionId), so a prior conversation's
+      // request would otherwise bleed onto the next session — including the
+      // blank welcome screen. Clear fail-closed on conversation change;
+      // loadMessagesForSession below re-seeds this session's own pending
+      // interrupts from the persisted server metadata.
+      this.oauthConsent.clear();
 
       if (id) {
         // Update the messages signal reference (this triggers reactivity)
