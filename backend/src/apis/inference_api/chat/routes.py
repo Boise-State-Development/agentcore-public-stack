@@ -1012,9 +1012,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
     # targeted UpdateExpression in update_session_title is race-safe with
-    # the post-stream _update_session_metadata write.
+    # the post-stream _update_session_metadata write. The task handle is
+    # kept so stream_with_quota_warning can push the finished title to the
+    # client mid-stream as a `session_title` SSE event.
+    title_task: Optional["asyncio.Task[str]"] = None
     if is_new_session and input_data.message:
-        asyncio.create_task(
+        title_task = asyncio.create_task(
             generate_conversation_title(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -1525,6 +1528,36 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # Create stream with optional quota warning injection
         async def stream_with_quota_warning() -> AsyncGenerator[str, None]:
             """Wrap agent stream to inject quota warning at start if needed"""
+            # One-shot `session_title` SSE: once the concurrent title task
+            # (kicked off before the quota check on first turns) finishes,
+            # push the title to the client so the sidebar/header rename in
+            # parallel with the pending response instead of at stream end.
+            # Checked between agent events — never awaited, so it adds no
+            # latency; a stream that outruns Nova Micro simply never emits
+            # and the SPA's post-close metadata refresh covers it.
+            title_emitted = False
+
+            def _session_title_sse() -> Optional[str]:
+                nonlocal title_emitted
+                if title_emitted or title_task is None or not title_task.done():
+                    return None
+                title_emitted = True
+                try:
+                    generated_title = title_task.result()
+                except Exception as title_err:  # noqa: BLE001 - cancelled/failed task must not break the stream
+                    logger.warning("Title task unavailable for SSE emit: %s", title_err)
+                    return None
+                # Generation failures return the "New Conversation"
+                # placeholder — nothing worth pushing over the wire.
+                if not generated_title or generated_title == "New Conversation":
+                    return None
+                payload = {
+                    "type": "session_title",
+                    "sessionId": input_data.session_id,
+                    "title": generated_title,
+                }
+                return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
+
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
@@ -1603,6 +1636,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 continue_truncated=is_continuation,
             ):
                 yield event
+                # Interleave the finished title between agent events (same
+                # non-blocking drain pattern as the MCP Apps broker in the
+                # stream coordinator). SSE events are self-delimited, so
+                # injecting between events is always frame-safe.
+                title_sse = _session_title_sse()
+                if title_sse:
+                    yield title_sse
 
             # Resume bookkeeping: any interrupt that was submitted in this
             # request and is no longer present in the agent's interrupt state

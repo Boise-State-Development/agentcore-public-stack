@@ -42,6 +42,7 @@ import type {
   ArtifactEvent,
   UiResourceEvent,
   ToolInputPartialEvent,
+  SessionTitleEvent,
   ToolProgress,
 } from './stream-parser-types';
 import type { MetadataEvent } from '../../../session/services/models/content-types';
@@ -104,6 +105,10 @@ export interface StreamParserCallbacks {
   // arguments are still streaming, after its frame was mounted early; the
   // frame relays each healed prefix to the App for progressive rendering.
   onToolInputPartial?: (data: ToolInputPartialEvent) => void;
+
+  // Server-generated conversation title, pushed mid-stream on a session's
+  // first turn once concurrent generation finishes (see SessionTitleEvent)
+  onSessionTitle?: (data: SessionTitleEvent) => void;
 
   // Error handling
   onError?: (data: StreamErrorEvent | ConversationalStreamErrorEvent | string) => void;
@@ -491,6 +496,26 @@ export function validateToolInputPartialEvent(
 }
 
 /**
+ * Validate SessionTitleEvent structure. The backend never emits an empty
+ * or placeholder title, so a non-empty `title` is part of the contract.
+ */
+export function validateSessionTitleEvent(data: unknown): data is SessionTitleEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<SessionTitleEvent>;
+
+  return (
+    event.type === 'session_title' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.title === 'string' &&
+    event.title.length > 0
+  );
+}
+
+/**
  * Validate Citation structure
  */
 export function validateCitation(data: unknown): data is Citation {
@@ -702,6 +727,14 @@ export function processStreamEvent(
           callbacks.onParseError?.(
             'ui_tool_input_partial: invalid data structure',
           );
+        }
+        break;
+
+      case 'session_title':
+        if (validateSessionTitleEvent(data)) {
+          callbacks.onSessionTitle?.(data);
+        } else {
+          callbacks.onParseError?.('session_title: invalid data structure');
         }
         break;
 

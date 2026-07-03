@@ -20,6 +20,7 @@ import { ToolApprovalService } from '../../../services/tool-approval/tool-approv
 import { CompactionSummaryService } from './compaction-summary.service';
 import { ArtifactStateService } from '../artifacts/artifact-state.service';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
+import { SessionService } from '../session/session.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
@@ -27,6 +28,7 @@ import type {
   ArtifactEvent,
   UiResourceEvent,
   ToolInputPartialEvent,
+  SessionTitleEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -133,6 +135,7 @@ export class StreamParserService {
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppState = inject(McpAppStateService);
+  private sessionService = inject(SessionService);
 
   // =========================================================================
   // Per-Session State
@@ -243,11 +246,16 @@ export class StreamParserService {
     // stream_error is a terminal signal that likewise arrives after
     // message_stop (e.g. max_tokens truncation) and must never be dropped by
     // state gating, or recovery affordances (Continue) silently disappear.
+    // session_title is a side-channel event interleaved between agent
+    // events — it can land right after `done` when title generation
+    // finishes late in the turn, and it never touches message builders,
+    // so state gating must not drop it.
     const isAlwaysAllowedEvent =
       event === 'message_start' ||
       event === 'error' ||
       event === 'oauth_required' ||
-      event === 'stream_error';
+      event === 'stream_error' ||
+      event === 'session_title';
     if (!isAlwaysAllowedEvent && !this.shouldProcessEvent(state)) {
       return;
     }
@@ -492,6 +500,19 @@ export class StreamParserService {
         // rendering (e.g. Excalidraw's guided camera tour).
         if (this.isViewedSession(state)) {
           this.mcpAppState.recordPartialInput(data.toolUseId, data.arguments);
+        }
+      },
+
+      onSessionTitle: (data: SessionTitleEvent) => {
+        // Server-generated title, pushed mid-stream on the session's first
+        // turn (concurrent with the pending response). Deliberately NOT
+        // viewed-session-scoped: the sidebar row must rename even when the
+        // conversation streams in the background; applyServerTitle only
+        // touches the header when this session is the one being viewed.
+        // Guard on the event's own sessionId (belt-and-braces with the
+        // parser's per-session state).
+        if (data.sessionId === state.sessionId) {
+          this.sessionService.applyServerTitle(data.sessionId, data.title);
         }
       },
 

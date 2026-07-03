@@ -858,6 +858,26 @@ export class SessionService {
     });
   }
 
+  /**
+   * Applies a server-generated title everywhere the UI reads one: the
+   * sidebar list cache AND — when it's the session being viewed — the
+   * `currentSession` signal that drives the top-nav header.
+   *
+   * The cache→currentSession sync effect in the constructor only covers
+   * sessions still in `newSessionIds`, and `updateSessionTitleInCache`
+   * removes the id from that set before the effect can run — so callers
+   * that only update the cache never rename the header. The top-nav's
+   * inline-rename path patches `currentSession` itself for the same
+   * reason. Use this for titles arriving from the server (the mid-stream
+   * `session_title` SSE event and the post-stream metadata fallback).
+   */
+  applyServerTitle(sessionId: string, title: string): void {
+    this.updateSessionTitleInCache(sessionId, title);
+    if (this.currentSession().sessionId === sessionId) {
+      this.currentSession.update(current => ({ ...current, title }));
+    }
+  }
+
 
   /**
    * Clears the local session cache.

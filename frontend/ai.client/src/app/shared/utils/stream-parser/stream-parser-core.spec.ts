@@ -14,6 +14,7 @@ import {
   validateArtifactEvent,
   validateUiResourceEvent,
   validateToolInputPartialEvent,
+  validateSessionTitleEvent,
   processStreamEvent,
   createStreamLineParser,
   inferContentBlockType,
@@ -498,6 +499,34 @@ describe('stream-parser-core', () => {
     });
   });
 
+  describe('validateSessionTitleEvent', () => {
+    const valid = {
+      type: 'session_title',
+      sessionId: 'sess-1',
+      title: 'Python CSV Parser Script',
+    };
+
+    it('should return true for a valid event', () => {
+      expect(validateSessionTitleEvent(valid)).toBe(true);
+    });
+
+    it('should return false for null/undefined or wrong type', () => {
+      expect(validateSessionTitleEvent(null)).toBe(false);
+      expect(validateSessionTitleEvent(undefined)).toBe(false);
+      expect(validateSessionTitleEvent({ ...valid, type: 'compaction' })).toBe(false);
+    });
+
+    it('should return false for empty sessionId or title', () => {
+      expect(validateSessionTitleEvent({ ...valid, sessionId: '' })).toBe(false);
+      expect(validateSessionTitleEvent({ ...valid, title: '' })).toBe(false);
+    });
+
+    it('should return false when fields are missing or non-string', () => {
+      expect(validateSessionTitleEvent({ type: 'session_title' })).toBe(false);
+      expect(validateSessionTitleEvent({ ...valid, title: 42 })).toBe(false);
+    });
+  });
+
   describe('processStreamEvent', () => {
     let callbacks: StreamParserCallbacks;
 
@@ -517,6 +546,7 @@ describe('stream-parser-core', () => {
         onArtifact: vi.fn(),
         onUiResource: vi.fn(),
         onToolInputPartial: vi.fn(),
+        onSessionTitle: vi.fn(),
         onParseError: vi.fn(),
         onDone: vi.fn(),
         onError: vi.fn(),
@@ -568,6 +598,23 @@ describe('stream-parser-core', () => {
     it('should ignore unknown event types', () => {
       processStreamEvent('unknown_event', {}, callbacks);
       expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onSessionTitle for a valid session_title event', () => {
+      const data = {
+        type: 'session_title',
+        sessionId: 'sess-1',
+        title: 'Tokyo Weather Query',
+      };
+      processStreamEvent('session_title', data, callbacks);
+      expect(callbacks.onSessionTitle).toHaveBeenCalledWith(data);
+      expect(callbacks.onParseError).not.toHaveBeenCalled();
+    });
+
+    it('should call onParseError for an invalid session_title event', () => {
+      processStreamEvent('session_title', { type: 'session_title', title: '' }, callbacks);
+      expect(callbacks.onSessionTitle).not.toHaveBeenCalled();
+      expect(callbacks.onParseError).toHaveBeenCalledWith('session_title: invalid data structure');
     });
 
     it('should call onArtifact for a valid artifact event', () => {
