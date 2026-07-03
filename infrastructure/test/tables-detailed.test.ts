@@ -303,12 +303,28 @@ describe('RagDataConstruct — detailed', () => {
     });
   });
 
-  it('assistants table has 3 GSIs', () => {
+  it('assistants table has 4 GSIs', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'OwnerStatusIndex' }),
         Match.objectLike({ IndexName: 'VisibilityStatusIndex' }),
         Match.objectLike({ IndexName: 'SharedWithIndex' }),
+        Match.objectLike({ IndexName: 'DueSyncIndex' }),
+      ]),
+    });
+  });
+
+  it('DueSyncIndex is keyed on GSI4_PK/GSI4_SK with full projection', () => {
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'DueSyncIndex',
+          KeySchema: [
+            { AttributeName: 'GSI4_PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI4_SK', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
       ]),
     });
   });

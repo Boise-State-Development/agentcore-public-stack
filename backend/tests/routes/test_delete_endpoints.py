@@ -35,6 +35,23 @@ USER_ID = "user-001"
 DOC_SERVICE = "apis.app_api.documents.services.document_service"
 CLEANUP_SERVICE = "apis.app_api.documents.services.cleanup_service"
 ASSISTANT_SERVICE = "apis.shared.assistants.service"
+SYNC_POLICY_SERVICE = "apis.shared.sync_policies.service"
+
+
+@pytest.fixture(autouse=True)
+def sync_policy_cascades():
+    """Both delete endpoints cascade into the sync-policy repository; stub it
+    so these route tests stay DynamoDB-free."""
+    with patch(
+        f"{SYNC_POLICY_SERVICE}.delete_sync_policies_for_source",
+        new_callable=AsyncMock,
+        return_value=0,
+    ) as for_source, patch(
+        f"{SYNC_POLICY_SERVICE}.delete_sync_policies_for_assistant",
+        new_callable=AsyncMock,
+        return_value=0,
+    ) as for_assistant:
+        yield SimpleNamespace(for_source=for_source, for_assistant=for_assistant)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +124,31 @@ class TestDocumentDeleteEndpoint:
             resp = client.delete(f"/assistants/{ASSISTANT_ID}/documents/doc-001")
 
         assert resp.status_code == 204
+
+    def test_delete_cascades_sync_policies_for_document(self, app, sync_policy_cascades):
+        """A deleted document must not leave a live sync schedule behind."""
+        doc = _make_document()
+        routes_module = "apis.app_api.documents.routes"
+
+        with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
+            f"{DOC_SERVICE}.soft_delete_document",
+            new_callable=AsyncMock,
+            return_value=doc,
+        ), patch(
+            f"{CLEANUP_SERVICE}.cleanup_document_resources",
+            new_callable=AsyncMock,
+        ), patch(
+            "asyncio.ensure_future",
+        ):
+            client = TestClient(app)
+            resp = client.delete(f"/assistants/{ASSISTANT_ID}/documents/doc-001")
+
+        assert resp.status_code == 204
+        sync_policy_cascades.for_source.assert_awaited_once_with(ASSISTANT_ID, "doc-001")
 
     def test_delete_returns_404_when_not_found(self, app):
         """Req 1.5: Returns 404 when soft_delete_document returns None."""
@@ -232,6 +274,25 @@ class TestAssistantDeleteEndpoint:
             assistant_id=ASSISTANT_ID,
             owner_id=USER_ID,
         )
+
+    def test_delete_cascades_sync_policies_for_assistant(self, app, sync_policy_cascades):
+        """No sync schedule may outlive its assistant."""
+        with patch(
+            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ), patch(
+            f"{self.ROUTES_MODULE}.delete_assistant",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "asyncio.ensure_future",
+        ):
+            client = TestClient(app)
+            resp = client.delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        sync_policy_cascades.for_assistant.assert_awaited_once_with(ASSISTANT_ID)
 
     def test_delete_fires_cleanup_in_background(self, app):
         """Req 8.2: Background cleanup is scheduled via asyncio.ensure_future."""
