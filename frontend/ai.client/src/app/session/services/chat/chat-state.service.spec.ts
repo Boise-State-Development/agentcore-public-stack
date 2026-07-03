@@ -15,42 +15,96 @@ describe('ChatStateService', () => {
     TestBed.resetTestingModule();
   });
 
-  describe('setChatLoading', () => {
-    it('should set loading state to true', () => {
-      service.setChatLoading(true);
-      expect(service.isChatLoading()).toBe(true);
+  describe('viewed-session facades', () => {
+    it('default to inert values when no session is viewed', () => {
+      expect(service.viewedSessionId()).toBeNull();
+      expect(service.isChatLoading()).toBe(false);
+      expect(service.currentStopReason()).toBeNull();
+      expect(service.lastTurnContinuable()).toBe(false);
+      expect(service.costDollars()).toBe(0);
+      expect(service.contextTokens()).toBe(0);
+      expect(service.contextPct()).toBe(0);
     });
 
-    it('should set loading state to false', () => {
-      service.setChatLoading(false);
+    it('project the viewed session state and follow view changes', () => {
+      service.setChatLoading('a', true);
+      service.setStopReason('a', 'end_turn');
+
+      service.setViewedSession('a');
+      expect(service.isChatLoading()).toBe(true);
+      expect(service.currentStopReason()).toBe('end_turn');
+
+      // Session B has its own untouched state.
+      service.setViewedSession('b');
       expect(service.isChatLoading()).toBe(false);
+      expect(service.currentStopReason()).toBeNull();
+    });
+
+    it('react to state created after the session is viewed', () => {
+      service.setViewedSession('fresh');
+      expect(service.isChatLoading()).toBe(false);
+
+      service.setChatLoading('fresh', true);
+      expect(service.isChatLoading()).toBe(true);
     });
   });
 
-  describe('setStopReason', () => {
-    it('should set stop reason', () => {
-      service.setStopReason('max_tokens');
-      expect(service.currentStopReason()).toBe('max_tokens');
-    });
+  describe('setChatLoading', () => {
+    it('is isolated per session', () => {
+      service.setChatLoading('a', true);
+      service.setChatLoading('b', true);
+      service.setChatLoading('b', false);
 
-    it('should clear stop reason with null', () => {
-      service.setStopReason('stop');
-      service.setStopReason(null);
-      expect(service.currentStopReason()).toBeNull();
+      expect(service.isSessionLoading('a')).toBe(true);
+      expect(service.isSessionLoading('b')).toBe(false);
     });
   });
 
   describe('setLastTurnContinuable', () => {
-    it('defaults to false', () => {
-      expect(service.lastTurnContinuable()).toBe(false);
-    });
-
-    it('toggles the continuable flag', () => {
-      service.setLastTurnContinuable(true);
+    it('toggles the continuable flag per session', () => {
+      service.setViewedSession('a');
+      service.setLastTurnContinuable('a', true);
       expect(service.lastTurnContinuable()).toBe(true);
 
-      service.setLastTurnContinuable(false);
+      // Another session's flag doesn't affect the viewed one.
+      service.setLastTurnContinuable('b', false);
+      expect(service.lastTurnContinuable()).toBe(true);
+
+      service.setLastTurnContinuable('a', false);
       expect(service.lastTurnContinuable()).toBe(false);
+    });
+  });
+
+  describe('cost / context aggregates', () => {
+    it('seeds, accumulates, and isolates per session', () => {
+      service.setViewedSession('a');
+      service.seedSessionAggregates('a', {
+        totalCost: 1.5,
+        lastContextTokens: 1000,
+        contextWindow: 200000,
+      });
+      expect(service.costDollars()).toBe(1.5);
+      expect(service.contextTokens()).toBe(1000);
+      expect(service.contextWindowSize()).toBe(200000);
+
+      service.addTurnCost('a', 0.5);
+      expect(service.costDollars()).toBe(2);
+
+      // A background session's turn cost must not leak into the viewed badge.
+      service.addTurnCost('b', 10);
+      expect(service.costDollars()).toBe(2);
+
+      service.setContext('a', 3000, 200000);
+      expect(service.contextTokens()).toBe(3000);
+      expect(service.contextPct()).toBeCloseTo(1.5);
+    });
+
+    it('ignores non-finite or non-positive turn costs', () => {
+      service.setViewedSession('a');
+      service.addTurnCost('a', NaN);
+      service.addTurnCost('a', -1);
+      service.addTurnCost('a', 0);
+      expect(service.costDollars()).toBe(0);
     });
   });
 
@@ -64,50 +118,37 @@ describe('ChatStateService', () => {
     });
   });
 
-  describe('resetState', () => {
-    it('should reset all state to initial values', () => {
-      service.setChatLoading(true);
-      service.setStopReason('stop');
-      service.setLastTurnContinuable(true);
+  describe('abort controllers', () => {
+    it('creates a fresh controller per session', () => {
+      const a = service.createAbortController('a');
+      const b = service.createAbortController('b');
 
-      service.resetState();
-
-      expect(service.isChatLoading()).toBe(false);
-      expect(service.currentStopReason()).toBeNull();
-      expect(service.lastTurnContinuable()).toBe(false);
+      expect(a).toBeInstanceOf(AbortController);
+      expect(a).not.toBe(b);
+      expect(a.signal.aborted).toBe(false);
+      expect(b.signal.aborted).toBe(false);
     });
-  });
 
-  describe('getAbortController', () => {
-    it('should return current abort controller', () => {
-      const controller = service.getAbortController();
-      expect(controller).toBeInstanceOf(AbortController);
-      expect(controller.signal.aborted).toBe(false);
+    it('aborts the previous in-flight controller for the SAME session (double-submit guard)', () => {
+      const first = service.createAbortController('a');
+      const second = service.createAbortController('a');
+
+      expect(first.signal.aborted).toBe(true);
+      expect(second.signal.aborted).toBe(false);
     });
-  });
 
-  describe('createNewAbortController', () => {
-    it('should create and return new abort controller', () => {
-      const oldController = service.getAbortController();
-      const newController = service.createNewAbortController();
-      
-      expect(newController).toBeInstanceOf(AbortController);
-      expect(newController).not.toBe(oldController);
-      expect(service.getAbortController()).toBe(newController);
+    it('abortRequest only aborts the target session', () => {
+      const a = service.createAbortController('a');
+      const b = service.createAbortController('b');
+
+      service.abortRequest('b');
+
+      expect(a.signal.aborted).toBe(false);
+      expect(b.signal.aborted).toBe(true);
     });
-  });
 
-  describe('abortCurrentRequest', () => {
-    it('should abort current controller and create new one', () => {
-      const oldController = service.getAbortController();
-      
-      service.abortCurrentRequest();
-      
-      expect(oldController.signal.aborted).toBe(true);
-      
-      const newController = service.getAbortController();
-      expect(newController).not.toBe(oldController);
-      expect(newController.signal.aborted).toBe(false);
+    it('abortRequest is a no-op for sessions without an in-flight request', () => {
+      expect(() => service.abortRequest('nope')).not.toThrow();
     });
   });
 });

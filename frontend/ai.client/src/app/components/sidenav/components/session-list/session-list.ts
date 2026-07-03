@@ -8,6 +8,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
+import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../../../session/components/share-modal';
 import { ExportDialogComponent, ExportDialogData } from '../../../../session/components/export-dialog';
 import { UserService } from '../../../../auth/user.service';
@@ -26,6 +27,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 })
 export class SessionList {
   private sessionService = inject(SessionService);
+  private chatStateService = inject(ChatStateService);
   private sidenavService = inject(SidenavService);
   private toastService = inject(ToastService);
   private dialog = inject(Dialog);
@@ -168,6 +170,17 @@ export class SessionList {
    */
   protected getSessionId(sessionId: string): string {
     return sessionId;
+  }
+
+  /**
+   * Whether this conversation has a response streaming right now. Reads the
+   * same per-session loading state that drives the composer's Stop button,
+   * so backgrounded conversations (user navigated away mid-stream) show a
+   * live indicator in the list. Signal-backed — the OnPush row re-renders
+   * when the stream starts or finishes.
+   */
+  protected isSessionStreaming(sessionId: string): boolean {
+    return this.chatStateService.isSessionLoading(sessionId);
   }
 
   /**

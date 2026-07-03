@@ -30,9 +30,9 @@ describe('ChatHttpService', () => {
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
         { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn() } },
-        { provide: StreamParserService, useValue: {} },
-        { provide: ChatStateService, useValue: { isStreaming: signal(false), streamingSessionId: signal(null), abortCurrentRequest: vi.fn(), setChatLoading: vi.fn(), resetState: vi.fn(), getAbortController: vi.fn().mockReturnValue(new AbortController()) } },
-        { provide: MessageMapService, useValue: {} },
+        { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn() } },
+        { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()) } },
+        { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
         { provide: ErrorService, useValue: { handleHttpError: vi.fn() } },
       ],
     });
@@ -59,10 +59,13 @@ describe('ChatHttpService', () => {
     expect(result.title).toBe('Generated Title');
   });
 
-  it('should cancel chat request', () => {
-    service.cancelChatRequest();
-    expect(chatStateService.abortCurrentRequest).toHaveBeenCalled();
-    expect(chatStateService.setChatLoading).toHaveBeenCalledWith(false);
-    expect(chatStateService.resetState).toHaveBeenCalled();
+  it('should cancel only the target session and tear down its streaming state', () => {
+    const messageMap = TestBed.inject(MessageMapService) as any;
+
+    service.cancelChatRequest('s1');
+
+    expect(chatStateService.abortRequest).toHaveBeenCalledWith('s1');
+    expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    expect(messageMap.endStreaming).toHaveBeenCalledWith('s1');
   });
 });

@@ -54,23 +54,39 @@
                                             class="block truncate rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
                                             {{ getSessionTitle(session) }}
-                                        </a>
-                                        <!-- Ellipsis menu button - visible on hover with fade-in animation -->
-                                        <button
-                                            type="button"
-                                            [cdkMenuTriggerFor]="sessionMenu"
-                                            [cdkMenuPosition]="menuPositions"
-                                            [disabled]="deletingSessionId() === session.sessionId"
-                                            class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                                            [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
-                                            aria-haspopup="menu"
-                                        >
-                                            @if (deletingSessionId() === session.sessionId) {
-                                                <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
-                                            } @else {
-                                                <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                                            @if (isSessionStreaming(session.sessionId)) {
+                                                <span class="sr-only">(response in progress)</span>
                                             }
-                                        </button>
+                                        </a>
+                                        @if (isSessionStreaming(session.sessionId)) {
+                                            <!-- Response-in-progress dot. While streaming it owns the
+                                                 pr-10 gutter outright — the ellipsis menu button below is
+                                                 not rendered, both to avoid overlapping the dot on hover
+                                                 (animate-pulse animates opacity, so a group-hover fade
+                                                 can't hide it) and because rename/share/delete shouldn't
+                                                 target a conversation mid-response. -->
+                                            <span
+                                                class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-secondary-500 animate-pulse motion-reduce:animate-none"
+                                                aria-hidden="true"
+                                            ></span>
+                                        } @else {
+                                            <!-- Ellipsis menu button - visible on hover with fade-in animation -->
+                                            <button
+                                                type="button"
+                                                [cdkMenuTriggerFor]="sessionMenu"
+                                                [cdkMenuPosition]="menuPositions"
+                                                [disabled]="deletingSessionId() === session.sessionId"
+                                                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                                                [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
+                                                aria-haspopup="menu"
+                                            >
+                                                @if (deletingSessionId() === session.sessionId) {
+                                                    <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
+                                                } @else {
+                                                    <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                                                }
+                                            </button>
+                                        }
 
                                         <!-- Session options menu -->
                                         <ng-template #sessionMenu>
