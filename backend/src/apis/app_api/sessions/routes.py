@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timezone
 from apis.shared.sessions.models import (
     UpdateSessionMetadataRequest,
+    SessionInterruptRequest,
     SessionMetadataResponse,
     SessionMetadata,
     SessionPreferences,
@@ -24,6 +25,7 @@ from apis.shared.sessions.metadata import (
     get_session_metadata,
     remove_pending_interrupts,
     session_exists_for_other_user,
+    set_interrupted_turn,
     store_session_metadata,
 )
 from .services.session_service import SessionService
@@ -594,6 +596,52 @@ async def get_session_messages_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve messages: {str(e)}"
+        )
+
+
+@router.post("/{session_id}/interrupt", status_code=204)
+async def signal_turn_interrupted_endpoint(
+    session_id: str,
+    body: SessionInterruptRequest,
+    current_user: User = Depends(get_current_user_from_session),
+):
+    """Record that the user deliberately stopped the session's in-flight turn.
+
+    This is the AUTHORITATIVE carrier of stop intent for the interrupted-turn
+    flow: the transport cannot distinguish a Stop click from a dropped socket
+    (both surface as a cancelled stream), so the SPA signals intent here
+    out-of-band when the user clicks Stop — via ``fetch(..., {keepalive:
+    true})`` with the ``X-CSRF-Token`` header (NOT ``navigator.sendBeacon``,
+    which cannot set headers and would be rejected by CSRFMiddleware).
+
+    Lives on app-api, not inference-api: the AgentCore Runtime data plane
+    only proxies ``/invocations`` + ``/ping``, so a custom inference-api
+    route would 404 in cloud.
+
+    ``user_stopped`` takes precedence over the ``connection_lost`` fallback
+    that inference-api's cancellation backstop may race against this write
+    (see ``set_interrupted_turn``). No-op for missing sessions — and the GSI
+    lookup inside ``set_interrupted_turn`` is user-scoped, so a session
+    owned by someone else is also a no-op. Returns 204 either way (the
+    user's intent is recorded best-effort; the client never waits on it).
+    """
+    user_id = current_user.user_id
+
+    logger.info("POST /sessions/.../interrupt (reason=%s)", body.reason)
+
+    try:
+        await set_interrupted_turn(
+            session_id,
+            user_id,
+            reason=body.reason,
+            source="client_signal",
+        )
+        return Response(status_code=204)
+    except Exception:
+        logger.error("Error recording turn interruption", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to record interruption",
         )
 
 

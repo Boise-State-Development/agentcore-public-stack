@@ -229,6 +229,21 @@ class SessionMetadata(BaseModel):
         alias="lastTurnContinuable",
         description="True when the last turn ended in a recoverable max_tokens truncation; lets the 'Continue' affordance survive a page refresh. Cleared at the start of any new (non-interrupt-resume) turn",
     )
+    last_turn_interrupted: Optional[bool] = Field(
+        default=None,
+        alias="lastTurnInterrupted",
+        description="True when the last turn was interrupted before completion (user Stop, refresh, or dropped connection). Lets a reload show the 'response interrupted' state. Cleared at the start of any new (non-interrupt-resume) turn",
+    )
+    last_turn_interrupt_reason: Optional[Literal["user_stopped", "connection_lost", "unknown"]] = Field(
+        default=None,
+        alias="lastTurnInterruptReason",
+        description="Why the last turn was interrupted. 'user_stopped' (deliberate Stop, from the client beacon) wins over the 'connection_lost' cancellation fallback",
+    )
+    last_turn_interrupted_at: Optional[str] = Field(
+        default=None,
+        alias="lastTurnInterruptedAt",
+        description="ISO 8601 timestamp when the interruption was detected",
+    )
 
     # Denormalized cost + context aggregates for the session-cost badge.
     # Maintained by _bump_session_aggregates after each turn (write-time
@@ -286,6 +301,20 @@ class UpdateSessionMetadataRequest(BaseModel):
     agent_type: Optional[Literal["skill", "chat"]] = Field(None, alias="agentType", description="Agent mode for this conversation")
 
 
+class SessionInterruptRequest(BaseModel):
+    """Request body for the client stop signal (POST /sessions/{id}/interrupt).
+
+    Only `user_stopped` is accepted from the client — it is the one reason
+    that requires user attestation. `connection_lost` is never client-sent;
+    it is inferred server-side by the stream-cancellation backstop and would
+    otherwise let a client downgrade a deliberate stop.
+    """
+
+    reason: Literal["user_stopped"] = Field(
+        description="Interruption reason. Only the deliberate Stop is client-attested",
+    )
+
+
 class SessionMetadataResponse(BaseModel):
     """Response containing session metadata"""
 
@@ -325,6 +354,21 @@ class SessionMetadataResponse(BaseModel):
         default=None,
         alias="lastTurnContinuable",
         description="True when the last turn ended in a recoverable max_tokens truncation, so the client can re-show the 'Continue' affordance after a refresh",
+    )
+    last_turn_interrupted: Optional[bool] = Field(
+        default=None,
+        alias="lastTurnInterrupted",
+        description="True when the last turn was interrupted before completion (user Stop, refresh, or dropped connection), so the client can show the 'response interrupted' state after a reload",
+    )
+    last_turn_interrupt_reason: Optional[str] = Field(
+        default=None,
+        alias="lastTurnInterruptReason",
+        description="Why the last turn was interrupted: 'user_stopped' (deliberate Stop) or 'connection_lost' (refresh / dropped connection). Drives whether a 'Continue' affordance is offered on reload",
+    )
+    last_turn_interrupted_at: Optional[str] = Field(
+        default=None,
+        alias="lastTurnInterruptedAt",
+        description="ISO 8601 timestamp when the interruption was detected",
     )
     export_receipts: Optional[List[ExportReceipt]] = Field(
         default=None,

@@ -58,3 +58,65 @@ describe('MessageActionsComponent — Continue affordance', () => {
     expect(emitted).toBe(1);
   });
 });
+
+describe('MessageActionsComponent — interrupted-turn chip', () => {
+  let fixture: ComponentFixture<MessageActionsComponent>;
+  let component: MessageActionsComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [MessageActionsComponent],
+      providers: [provideMarkdown()],
+    }).compileComponents();
+
+    const markdownService = TestBed.inject(MarkdownService);
+    markdownService.parse = () => '';
+
+    fixture = TestBed.createComponent(MessageActionsComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('message', makeMessage('partial answer'));
+  });
+
+  it('shows "Response interrupted" + a Continue button for connection_lost', () => {
+    fixture.componentRef.setInput('interruptedReason', 'connection_lost');
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Response interrupted');
+    const btn = fixture.nativeElement.querySelector(
+      'button[aria-label="Continue the interrupted response"]',
+    );
+    expect(btn).not.toBeNull();
+  });
+
+  it('emits continueRequested when the interrupted Continue button is clicked', () => {
+    fixture.componentRef.setInput('interruptedReason', 'connection_lost');
+    fixture.detectChanges();
+
+    let emitted = 0;
+    component.continueRequested.subscribe(() => emitted++);
+    fixture.nativeElement
+      .querySelector('button[aria-label="Continue the interrupted response"]')!
+      .click();
+    expect(emitted).toBe(1);
+  });
+
+  it('shows "You stopped this response" with NO Continue for user_stopped', () => {
+    fixture.componentRef.setInput('interruptedReason', 'user_stopped');
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('You stopped this response');
+    expect(
+      fixture.nativeElement.querySelector('button[aria-label="Continue the interrupted response"]'),
+    ).toBeNull();
+  });
+
+  it('max_tokens Continue takes precedence over an interrupted reason', () => {
+    fixture.componentRef.setInput('canContinue', true);
+    fixture.componentRef.setInput('interruptedReason', 'connection_lost');
+    fixture.detectChanges();
+
+    // The truncated-turn label wins; the interrupted chip is not also shown.
+    expect(fixture.nativeElement.textContent).toContain('Response length limit reached');
+    expect(fixture.nativeElement.textContent).not.toContain('Response interrupted');
+  });
+});

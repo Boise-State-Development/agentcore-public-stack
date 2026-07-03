@@ -272,6 +272,18 @@ export class ConversationPage implements OnDestroy {
       if (session.lastTurnContinuable) {
         this.chatStateService.setLastTurnContinuable(session.sessionId, true);
       }
+      // Refresh-survival for the interrupted-turn chip: the partial (or a
+      // placeholder) is already in restored history; the marker + reason are
+      // the missing pieces. Only set true here — a new send / live abort owns
+      // the in-turn signal, so we never clobber a live true with stale
+      // metadata.
+      if (session.lastTurnInterrupted) {
+        this.chatStateService.setLastTurnInterrupted(
+          session.sessionId,
+          true,
+          session.lastTurnInterruptReason ?? 'unknown',
+        );
+      }
     });
 
     // Hydrate the compaction summary indicator from persisted session

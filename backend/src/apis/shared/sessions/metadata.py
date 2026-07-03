@@ -2202,3 +2202,147 @@ async def clear_truncated_turn(session_id: str, user_id: str) -> None:
         logger.info("Cleared truncated_turn for session %s", session_id)
     except Exception as e:
         logger.error("Failed to clear truncated_turn: %s", e, exc_info=True)
+
+
+async def set_interrupted_turn(
+    session_id: str,
+    user_id: str,
+    reason: str = "unknown",
+    source: str = "cancellation",
+) -> None:
+    """Mark that the last turn was interrupted before completion.
+
+    Interruptions come from two racing sources that write the same session
+    record: the client stop signal (app-api ``POST /sessions/{id}/interrupt``,
+    ``reason="user_stopped"``) and the stream cancellation backstop
+    (inference-api, ``reason="connection_lost"`` fallback). ``user_stopped``
+    is the stronger signal, so a ``user_stopped`` write is unconditional
+    while a fallback write is guarded by a condition so it can never
+    downgrade an already-recorded ``user_stopped`` — whichever source lands
+    first, the final reason is correct. Idempotent. Best-effort: a write
+    failure logs but never breaks the live flow. No-op when the session
+    record is missing or the table env var is unset.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        logger.warning("DYNAMODB_SESSIONS_METADATA_TABLE_NAME not set; skipping interrupted_turn persistence")
+        return
+
+    if reason not in ("user_stopped", "connection_lost", "unknown"):
+        reason = "unknown"
+
+    try:
+        import boto3
+        from datetime import datetime, timezone
+        from botocore.exceptions import ClientError
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info("Skipping interrupted_turn write — session %s not found", session_id)
+            return
+
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning("Session %s has no SK; cannot update interrupted_turn", session_id)
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        update_kwargs: dict = {
+            "Key": {"PK": f"USER#{user_id}", "SK": sk},
+            "UpdateExpression": "SET #lti = :lti, #ltr = :ltr, #ltia = :ltia",
+            "ExpressionAttributeNames": {
+                "#lti": "lastTurnInterrupted",
+                "#ltr": "lastTurnInterruptReason",
+                "#ltia": "lastTurnInterruptedAt",
+            },
+            "ExpressionAttributeValues": {
+                ":lti": True,
+                ":ltr": reason,
+                ":ltia": now_iso,
+            },
+        }
+
+        # A fallback (non-user_stopped) write must not clobber a stronger
+        # user_stopped reason the beacon may have already landed. The
+        # condition is evaluated against the pre-update item, so this is
+        # race-safe regardless of which source writes first.
+        if reason != "user_stopped":
+            update_kwargs["ConditionExpression"] = "attribute_not_exists(#ltr) OR #ltr <> :user_stopped"
+            update_kwargs["ExpressionAttributeValues"][":user_stopped"] = "user_stopped"
+
+        try:
+            table.update_item(**update_kwargs)
+            logger.info(
+                "Persisted interrupted_turn marker for session %s (reason=%s, source=%s)",
+                session_id, reason, source,
+            )
+        except ClientError as ce:
+            if ce.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.info(
+                    "Skipping interrupted_turn downgrade for session %s — user_stopped already recorded",
+                    session_id,
+                )
+            else:
+                raise
+    except Exception as e:
+        logger.error("Failed to persist interrupted_turn: %s", e, exc_info=True)
+
+
+async def clear_interrupted_turn(session_id: str, user_id: str) -> Optional[str]:
+    """Pop the interrupted-turn marker, returning the reason it recorded.
+
+    Called at the start of any new turn that isn't an interrupt-resume, so a
+    stale marker can't resurrect the "response interrupted" state against a
+    turn the user has already moved past. The return value lets the same
+    single read+write also drive the next-turn model note (see the
+    interruption-note prepend in inference-api's invocations route) —
+    ``None`` when no marker was set.
+
+    The REMOVE uses ``ReturnValues=UPDATED_OLD`` so the pop is atomic at the
+    write: a marker updated between the GSI lookup and the update is still
+    captured and cleared. Best-effort like its siblings — a failure logs and
+    returns ``None``.
+    """
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        return None
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            return None
+
+        sk = existing.get("SK")
+        if not sk:
+            return None
+
+        if "lastTurnInterrupted" not in existing:
+            return None  # Already clear
+
+        response = table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #lti, #ltr, #ltia",
+            ExpressionAttributeNames={
+                "#lti": "lastTurnInterrupted",
+                "#ltr": "lastTurnInterruptReason",
+                "#ltia": "lastTurnInterruptedAt",
+            },
+            ReturnValues="UPDATED_OLD",
+        )
+        cleared_reason = (response.get("Attributes") or {}).get("lastTurnInterruptReason")
+        logger.info(
+            "Cleared interrupted_turn for session %s (reason=%s)",
+            session_id, cleared_reason,
+        )
+        return cleared_reason if isinstance(cleared_reason, str) else None
+    except Exception as e:
+        logger.error("Failed to clear interrupted_turn: %s", e, exc_info=True)
+        return None

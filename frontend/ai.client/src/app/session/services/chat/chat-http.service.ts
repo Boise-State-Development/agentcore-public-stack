@@ -255,9 +255,47 @@ export class ChatHttpService {
    * onerror on abort), so the streaming teardown happens here.
    */
   cancelChatRequest(sessionId: string): void {
+    // Authoritative intent signal: the transport can't distinguish a Stop
+    // click from a dropped socket, so we tell the backend explicitly this
+    // was deliberate BEFORE aborting (so the request is queued while the
+    // connection is still alive). `keepalive` survives page teardown and,
+    // unlike `navigator.sendBeacon`, can carry the `X-CSRF-Token` header the
+    // app-api CSRFMiddleware requires on unsafe cookie-authenticated methods.
+    // Best-effort / fire-and-forget — the user's Stop must never block on it.
+    this.signalUserStopped(sessionId);
+    // Reflect the interruption locally right away so the reload chip also
+    // shows within the same session, without waiting for a refresh. The
+    // backend marker (raced with the cancellation backstop) is the
+    // refresh-survival source of truth.
+    this.chatStateService.setLastTurnInterrupted(sessionId, true, 'user_stopped');
+
     this.chatStateService.abortRequest(sessionId);
     this.messageMapService.endStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, false);
+  }
+
+  /** Fire-and-forget POST to app-api recording deliberate stop intent. */
+  private signalUserStopped(sessionId: string): void {
+    try {
+      const appApiUrl = this.config.appApiUrl();
+      if (!appApiUrl) return;
+      const baseUrl = appApiUrl.endsWith('/') ? appApiUrl.slice(0, -1) : appApiUrl;
+      void fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
+        method: 'POST',
+        keepalive: true,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.bffSession.csrfHeaders(),
+        },
+        body: JSON.stringify({ reason: 'user_stopped' }),
+      }).catch(() => {
+        // Best-effort: a failed signal degrades to the server-side
+        // connection_lost backstop (or nothing if the turn completed).
+      });
+    } catch {
+      // Never let intent signalling interfere with the Stop action.
+    }
   }
 
   /**

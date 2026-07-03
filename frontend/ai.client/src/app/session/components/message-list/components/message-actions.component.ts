@@ -53,6 +53,25 @@ import { TooltipDirective } from '../../../../components/tooltip';
           <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
           <span>Continue</span>
         </button>
+      } @else if (interruptedReason() === 'connection_lost') {
+        <span class="pl-1 text-xs text-gray-500 dark:text-gray-400">
+          Response interrupted
+        </span>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-300 dark:hover:bg-blue-950/40"
+          appTooltip="Resume response"
+          appTooltipPosition="top"
+          aria-label="Continue the interrupted response"
+          (click)="continueRequested.emit()"
+        >
+          <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+          <span>Continue</span>
+        </button>
+      } @else if (interruptedReason() === 'user_stopped') {
+        <span class="pl-1 text-xs text-gray-500 dark:text-gray-400">
+          You stopped this response
+        </span>
       }
     </div>
   `,
@@ -81,7 +100,13 @@ export class MessageActionsComponent {
    *  recoverable max_tokens-truncated turn. */
   canContinue = input<boolean>(false);
 
-  /** Emitted when the user asks to continue the truncated response. */
+  /** When set on the last assistant message of an interrupted turn, shows a
+   *  "Response interrupted" chip (+ Continue for 'connection_lost') or a
+   *  "You stopped this response" chip (for 'user_stopped'). */
+  interruptedReason = input<'user_stopped' | 'connection_lost' | null>(null);
+
+  /** Emitted when the user asks to continue the truncated / interrupted
+   *  response. */
   continueRequested = output<void>();
 
   protected copied = signal(false);

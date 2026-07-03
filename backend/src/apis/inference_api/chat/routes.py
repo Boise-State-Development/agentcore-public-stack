@@ -496,6 +496,44 @@ def _build_attachment_guidance(
     return "\n\n".join(parts)
 
 
+def _build_interruption_note(reason: str) -> str:
+    """Reason-driven note prepended to the next turn's prompt when the prior
+    turn was interrupted (see `clear_interrupted_turn`, whose popped reason
+    feeds this).
+
+    Why the note lives HERE and not on the interrupted turn itself: the
+    reason is not knowable at cancellation time — the client's `user_stopped`
+    signal (app-api) races the server-side cancellation backstop
+    (inference-api), and precedence only settles in the session record. By
+    the next turn the marker is authoritative.
+
+    The two reasons carry opposite signal, so the guidance differs:
+    `user_stopped` is deliberate feedback (don't barrel onward);
+    `connection_lost` (or unclassified) is a technical drop (the user likely
+    still wants the answer). The note is prepended to the persisted user
+    message (the `original_message`/displayText split keeps it out of the
+    UI), so it remains an honest in-history record that ages out via
+    compaction rather than a permanent synthetic system turn.
+    """
+    if reason == "user_stopped":
+        guidance = (
+            "The user deliberately stopped your previous response before it "
+            "finished (the last assistant message above is the partial that "
+            "was delivered). Treat that as meaningful feedback — do not "
+            "resume or repeat it on your own; let the user's message below "
+            "set the direction."
+        )
+    else:  # connection_lost / unknown — technical drop, no user intent
+        guidance = (
+            "Your previous response was cut off by a connection interruption "
+            "— the user did not stop it deliberately (the last assistant "
+            "message above is the partial that was delivered). If the user "
+            "asks you to continue, pick up where it left off instead of "
+            "starting over."
+        )
+    return f"<interruption_note>\n{guidance}\n</interruption_note>"
+
+
 async def _build_tabular_inventory(
     session_id: str,
     assistant_id: str | None,
@@ -1002,12 +1040,26 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # turn that isn't an interrupt-resume — both a fresh turn and a
     # continuation supersede it. If a continuation itself re-truncates, the
     # stream_coordinator intercept re-sets the marker.
+    interrupted_turn_reason: Optional[str] = None
     if not is_resume:
         try:
             from apis.shared.sessions.metadata import clear_truncated_turn
             await clear_truncated_turn(input_data.session_id, user_id)
         except Exception as e:
             logger.error("Failed to clear stale truncated_turn on new turn: %s", e, exc_info=True)
+
+        # Same lifecycle for the interrupted-turn marker: any new non-resume
+        # turn supersedes a prior interruption, so a stale marker can't
+        # resurrect the "response interrupted" state against a turn the user
+        # has moved past. The pop returns the settled reason (user_stopped
+        # beats connection_lost via write precedence) so this same read+write
+        # also drives the one-turn interruption note prepended to the prompt
+        # in the stream generator below.
+        try:
+            from apis.shared.sessions.metadata import clear_interrupted_turn
+            interrupted_turn_reason = await clear_interrupted_turn(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to clear stale interrupted_turn on new turn: %s", e, exc_info=True)
 
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
@@ -1611,6 +1663,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 pending_ctx_block = merge_and_clear_pending_context(agent)
                 if pending_ctx_block:
                     final_message = f"{pending_ctx_block}\n\n{final_message}"
+
+                # Interrupted-turn context: the prior turn ended early (Stop /
+                # refresh / dropped connection) and its marker was popped at
+                # turn start — tell the model, with reason-appropriate
+                # guidance, before it reads the new message. Prepended last so
+                # the note sits topmost. Rides the same `original_message`
+                # displayText split as the ctx block, so the user never sees
+                # it while it stays an honest part of persisted history.
+                # Continuation turns skip this (Strands ignores the message
+                # there — the model just continues the persisted partial).
+                if interrupted_turn_reason:
+                    final_message = (
+                        f"{_build_interruption_note(interrupted_turn_reason)}\n\n{final_message}"
+                    )
 
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory

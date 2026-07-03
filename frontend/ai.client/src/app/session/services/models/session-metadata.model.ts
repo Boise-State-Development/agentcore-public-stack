@@ -50,6 +50,16 @@ export interface SessionMetadata {
    *  Lets the "Continue" affordance survive a page refresh. Cleared
    *  server-side at the start of any new (non-interrupt-resume) turn. */
   lastTurnContinuable?: boolean;
+  /** True when the last turn was interrupted before completion (user Stop,
+   *  refresh, or dropped connection). Lets the reload chip survive a
+   *  refresh. Cleared server-side at the start of any new turn. */
+  lastTurnInterrupted?: boolean;
+  /** Why the last turn was interrupted. 'user_stopped' (deliberate Stop) →
+   *  no Continue; 'connection_lost' (refresh / dropped connection) → offer
+   *  Continue. */
+  lastTurnInterruptReason?: 'user_stopped' | 'connection_lost' | 'unknown';
+  /** ISO 8601 timestamp when the interruption was detected. */
+  lastTurnInterruptedAt?: string;
 }
 
 // Request model for updating session metadata
