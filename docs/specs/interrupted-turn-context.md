@@ -106,13 +106,15 @@ On the next non-resume, non-continuation turn, the popped reason drives `_build_
 - **Signal arrives after the next turn already popped the marker:** the stale marker is cleared at the turn after. Harmless.
 - **Hard network loss drops the keepalive fetch:** correctly degrades to `connection_lost` via the backstop (when it fires) or to nothing (when the turn actually completed server-side — in which case nothing was lost).
 
-## 7. Follow-up PRs (frontend)
+## 7. Frontend (shipped)
 
-1. **Stop signal (small):** in `chat-http.service.ts` `cancelChatRequest` (line 257), fire the keepalive fetch with the CSRF header *before* `abortRequest`, best-effort/fire-and-forget. Optionally also from the SPA's unload teardown — but note that an unload signal can only honestly say `user_stopped` for an explicit Stop click; don't send it for refresh/close.
-2. **Reload UX:** session hydration already merges Dynamo metadata; surface `lastTurnInterrupted` + reason:
-   - `connection_lost` → "Response interrupted" chip on the partial + a Continue affordance reusing the truncated-turn continuation path (`continue_truncated` works unchanged against the persisted partial).
-   - `user_stopped` → "You stopped this response" chip, **no** Continue.
-   - Sanity-gate the chip on the last message actually looking interrupted (guards the completed-anyway race in §6).
+1. **Stop signal:** `chat-http.service.ts` `cancelChatRequest` fires a best-effort `fetch(..., { keepalive: true })` to `POST {appApi}/sessions/{id}/interrupt` with `{reason:'user_stopped'}` and the `X-CSRF-Token` header (via `bffSession.csrfHeaders()`) *before* `abortRequest` — and reflects the interruption locally (`setLastTurnInterrupted(id, true, 'user_stopped')`) so the chip shows within the session without a reload. Fire-and-forget: a failed signal never blocks Stop teardown.
+2. **Reload UX:** the interrupted flag + reason are per-session signals on `ChatStateService` (mirroring `lastTurnContinuable`), hydrated in `session.page.ts` from the merged Dynamo metadata (only ever set true, never clobbering a live true), and cleared on any new send / continuation / new streamed turn (beside every `setLastTurnContinuable(id,false)`). `message-actions.component.ts` renders the chip on the last message:
+   - `connection_lost` → "Response interrupted" + a Continue button reusing the truncated-turn continuation path (`continueTruncatedTurn` works unchanged against the persisted partial).
+   - `user_stopped` → "You stopped this response", **no** Continue.
+   - Gated (via `interruptedReasonFor`) on `lastTurnInterrupted && !isChatLoading && id === lastMessageId` — the last-message gate is the sanity check against the completed-anyway race in §6. A live max_tokens `canContinue` takes precedence over the interrupted chip.
+
+Specs: `message-actions.component.spec.ts` (both chip variants, Continue emit, max_tokens precedence), `chat-state.service.spec.ts` (set/clear + reason), `chat-http.service.spec.ts` (keepalive signal shape + local reflect + failure isolation), `chat-request.service.spec.ts` (clears on continuation).
 
 ## 8. Test coverage (this branch)
 

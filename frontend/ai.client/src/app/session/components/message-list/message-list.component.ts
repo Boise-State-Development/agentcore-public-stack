@@ -92,6 +92,25 @@ export class MessageListComponent implements OnDestroy {
     );
   }
 
+  /** The interruption reason to surface on this message, or null. Only the
+   *  final message of an interrupted turn gets the chip, and only while no
+   *  new response is streaming — mirrors `canContinueFor`, and the
+   *  last-message gate sanity-checks against the "completed anyway" race
+   *  (a new turn clears the flag). `connection_lost` also drives a Continue
+   *  affordance; `user_stopped` shows the chip without one. */
+  protected interruptedReasonFor(messageId: string): 'user_stopped' | 'connection_lost' | null {
+    if (
+      !this.chatStateService.lastTurnInterrupted() ||
+      this.isChatLoading() ||
+      messageId !== this.lastMessageId()
+    ) {
+      return null;
+    }
+    return this.chatStateService.lastTurnInterruptReason() === 'user_stopped'
+      ? 'user_stopped'
+      : 'connection_lost';
+  }
+
   /** Session artifacts, newest first. Anchored ones render inline after
    *  their producing assistant message (`producedByMessageIndex` matches
    *  the `msg-{sessionId}-{index}` id); the rest fall back to the

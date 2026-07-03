@@ -579,8 +579,10 @@ export class StreamParserService {
     this.chatStateService.setStopReason(state.sessionId, null);
 
     // A new assistant turn is streaming — retire any stale "Continue"
-    // affordance from a previous max_tokens truncation.
+    // affordance from a previous max_tokens truncation, and any interrupted
+    // chip from a previous aborted turn.
     this.chatStateService.setLastTurnContinuable(state.sessionId, false);
+    this.chatStateService.setLastTurnInterrupted(state.sessionId, false);
 
     // Compute predictable message ID
     const completedCount = state.completedMessages().length;

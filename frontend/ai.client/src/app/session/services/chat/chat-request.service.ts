@@ -76,8 +76,10 @@ export class ChatRequestService implements OnDestroy {
     sessionId = sessionId || uuidv4();
 
     // Any new send (including a "Continue") retires the previous turn's
-    // max_tokens "Continue" affordance immediately, before the stream starts.
+    // max_tokens "Continue" affordance and any interrupted-turn chip
+    // immediately, before the stream starts.
     this.chatStateService.setLastTurnContinuable(sessionId, false);
+    this.chatStateService.setLastTurnInterrupted(sessionId, false);
 
     // We're about to navigate to this session; point the viewed-session
     // facades at it eagerly so the composer's loading state flips before
@@ -152,8 +154,10 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    // Hide the affordance immediately; retire any stale continuable state.
+    // Hide the affordance immediately; retire any stale continuable /
+    // interrupted state (a Continue resumes the interrupted partial too).
     this.chatStateService.setLastTurnContinuable(sessionId, false);
+    this.chatStateService.setLastTurnInterrupted(sessionId, false);
 
     // Continuation streaming: pins the existing messages (history +
     // truncated partial + error bubble) as a stable prefix and appends the

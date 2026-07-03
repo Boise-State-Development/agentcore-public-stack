@@ -75,6 +75,25 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('setLastTurnInterrupted', () => {
+    it('sets the flag + reason per session and clears the reason on false', () => {
+      service.setViewedSession('a');
+      service.setLastTurnInterrupted('a', true, 'user_stopped');
+      expect(service.lastTurnInterrupted()).toBe(true);
+      expect(service.lastTurnInterruptReason()).toBe('user_stopped');
+
+      // Another session's flag doesn't affect the viewed one.
+      service.setLastTurnInterrupted('b', true, 'connection_lost');
+      expect(service.lastTurnInterrupted()).toBe(true);
+      expect(service.lastTurnInterruptReason()).toBe('user_stopped');
+
+      // Clearing drops both the flag and the reason.
+      service.setLastTurnInterrupted('a', false);
+      expect(service.lastTurnInterrupted()).toBe(false);
+      expect(service.lastTurnInterruptReason()).toBeNull();
+    });
+  });
+
   describe('cost / context aggregates', () => {
     it('seeds, accumulates, and isolates per session', () => {
       service.setViewedSession('a');

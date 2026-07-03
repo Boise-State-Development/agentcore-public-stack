@@ -10,6 +10,12 @@ interface SessionChatState {
     loading: WritableSignal<boolean>;
     stopReason: WritableSignal<string | null>;
     lastTurnContinuable: WritableSignal<boolean>;
+    /** True when the last turn was interrupted before completion (Stop /
+     *  refresh / dropped connection). Drives the reload chip. */
+    lastTurnInterrupted: WritableSignal<boolean>;
+    /** Why the last turn was interrupted — gates whether a Continue is
+     *  offered ('connection_lost') or not ('user_stopped'). */
+    lastTurnInterruptReason: WritableSignal<string | null>;
     costDollars: WritableSignal<number>;
     contextTokens: WritableSignal<number>;
     contextWindow: WritableSignal<number>;
@@ -42,6 +48,8 @@ export class ChatStateService {
     readonly isChatLoading = computed(() => this.viewedState()?.loading() ?? false);
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
+    readonly lastTurnInterrupted = computed(() => this.viewedState()?.lastTurnInterrupted() ?? false);
+    readonly lastTurnInterruptReason = computed(() => this.viewedState()?.lastTurnInterruptReason() ?? null);
 
     // ----- Session-level cost / context aggregates ---------------------------
     // Drive the cost badge above the composer. Seeded from session metadata
@@ -104,6 +112,16 @@ export class ChatStateService {
      */
     setLastTurnContinuable(sessionId: string, continuable: boolean): void {
         this.stateFor(sessionId).lastTurnContinuable.set(continuable);
+    }
+
+    /**
+     * Marks (or clears) whether a session's last turn was interrupted before
+     * completion, and why. Setting `interrupted=false` also clears the reason.
+     */
+    setLastTurnInterrupted(sessionId: string, interrupted: boolean, reason: string | null = null): void {
+        const state = this.stateFor(sessionId);
+        state.lastTurnInterrupted.set(interrupted);
+        state.lastTurnInterruptReason.set(interrupted ? reason : null);
     }
 
     /**
@@ -176,6 +194,8 @@ export class ChatStateService {
             loading: signal(false),
             stopReason: signal<string | null>(null),
             lastTurnContinuable: signal(false),
+            lastTurnInterrupted: signal(false),
+            lastTurnInterruptReason: signal<string | null>(null),
             costDollars: signal(0),
             contextTokens: signal(0),
             contextWindow: signal(0),
