@@ -56,9 +56,9 @@ export interface ExportInclude {
 export const DEFAULT_EXPORT_INCLUDE: ExportInclude = {
   userMessages: true,
   assistantMessages: true,
-  toolCalls: true,
-  images: true,
-  citations: true,
+  toolCalls: false,
+  images: false,
+  citations: false,
   reasoning: false,
   timestamps: false,
 };
