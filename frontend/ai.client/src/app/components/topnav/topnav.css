@@ -2,3 +2,48 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Session options menu animation */
+.session-options-menu {
+  animation: menu-fade-in 150ms ease-out;
+}
+
+@keyframes menu-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-options-menu {
+    animation: none;
+  }
+}
+
+/* Session title entry: gentle left-to-right slide with a fade in. Replays on
+   each session switch because the title span is keyed by session id. */
+.session-title-enter {
+  animation: session-title-enter 220ms ease-out;
+}
+
+@keyframes session-title-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-title-enter {
+    animation: none;
+  }
+}
+
