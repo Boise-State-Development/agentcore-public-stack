@@ -69,10 +69,14 @@ describe('SessionList', () => {
     expect(component['getSessionTitle']({ ...mockSession, title: '' })).toBe('Untitled Session');
   });
 
-  it('should close sidenav on session click', async () => {
+  it('closes the sidenav and optimistically sets the clicked session on click', async () => {
     const component = await createComponent();
-    component['onSessionClick']();
+    mockSessionService.currentSession.set({ ...mockSession, sessionId: 'other', title: 'Other' });
+
+    component['onSessionClick'](mockSession);
+
     expect(mockSidenavService.close).toHaveBeenCalled();
+    expect(mockSessionService.currentSession()).toEqual(mockSession);
   });
 
   it('reflects per-session streaming state for the in-progress indicator', async () => {
