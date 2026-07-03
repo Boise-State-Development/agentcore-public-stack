@@ -74,4 +74,20 @@ describe('SessionList', () => {
     component['onSessionClick']();
     expect(mockSidenavService.close).toHaveBeenCalled();
   });
+
+  it('reflects per-session streaming state for the in-progress indicator', async () => {
+    const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+    const chatState = TestBed.inject(ChatStateService);
+    const component = await createComponent();
+
+    expect(component['isSessionStreaming']('test-session')).toBe(false);
+
+    chatState.setChatLoading('test-session', true);
+    expect(component['isSessionStreaming']('test-session')).toBe(true);
+    // Only the streaming conversation shows the indicator.
+    expect(component['isSessionStreaming']('other-session')).toBe(false);
+
+    chatState.setChatLoading('test-session', false);
+    expect(component['isSessionStreaming']('test-session')).toBe(false);
+  });
 });

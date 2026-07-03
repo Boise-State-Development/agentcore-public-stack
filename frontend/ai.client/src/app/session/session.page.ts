@@ -1,4 +1,5 @@
-import { Component, inject, effect, Signal, signal, computed, OnDestroy } from '@angular/core';
+import { Component, inject, effect, Signal, signal, computed, viewChild, OnDestroy, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
@@ -6,6 +7,7 @@ import { ChatRequestService } from './services/chat/chat-request.service';
 import { MessageMapService } from './services/session/message-map.service';
 import { Message } from './services/models/message.model';
 import { SessionService } from './services/session/session.service';
+import { ScrollPositionService } from './services/session/scroll-position.service';
 import { ChatStateService } from './services/chat/chat-state.service';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { HeaderService } from '../services/header/header.service';
@@ -64,6 +66,19 @@ export class ConversationPage implements OnDestroy {
   private voiceChatService = inject(VoiceChatService);
   private systemPromptsService = inject(SystemPromptsService);
   private chatModeService = inject(ChatModeService);
+  private scrollPositions = inject(ScrollPositionService);
+  private platformId = inject(PLATFORM_ID);
+  private isBrowser = isPlatformBrowser(this.platformId);
+
+  private chatContainer = viewChild(ChatContainerComponent);
+
+  /**
+   * The conversation whose scroll position we're currently tracking.
+   * Captured into ScrollPositionService the moment the user navigates away
+   * (route change or component teardown) — see the scroll policy note on
+   * the route subscription.
+   */
+  private lastViewedSessionId: string | null = null;
 
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
@@ -143,7 +158,14 @@ export class ConversationPage implements OnDestroy {
   readonly sessionConversation = this.sessionService.currentSession;
   readonly isChatLoading = this.chatStateService.isChatLoading;
   readonly isLoadingSession = this.messageMapService.isLoadingSession;
-  readonly streamingMessageId = this.streamParserService.streamingMessageId;
+
+  // Streaming indicator for the conversation on screen. Parser state is
+  // per-session, so a conversation streaming in the background never
+  // animates the one being viewed.
+  readonly streamingMessageId = computed<string | null>(() => {
+    const id = this.sessionId();
+    return id ? this.streamParserService.streamingMessageIdFor(id)() : null;
+  });
 
   // Computed signal to check if session has messages
   readonly hasMessages = computed(() => this.messages().length > 0);
@@ -172,6 +194,14 @@ export class ConversationPage implements OnDestroy {
   });
 
   constructor() {
+    // Keep the viewed-session facades in ChatStateService (loading, cost
+    // badge, Continue affordance, Stop button) pointed at the conversation
+    // on screen. Uses the effective id so a staged session (file attached
+    // before the first message) counts as viewed too.
+    effect(() => {
+      this.chatStateService.setViewedSession(this.effectiveSessionId());
+    });
+
     // Control header visibility based on whether there are messages
     effect(() => {
       if (this.hasMessages()) {
@@ -226,19 +256,19 @@ export class ConversationPage implements OnDestroy {
     // session.
     effect(() => {
       const session = this.sessionConversation();
-      if (!session) return;
-      this.chatStateService.seedSessionAggregates({
+      if (!session?.sessionId) return;
+      this.chatStateService.seedSessionAggregates(session.sessionId, {
         totalCost: session.totalCost,
         lastContextTokens: session.lastContextTokens,
         contextWindow: session.contextWindow,
       });
       // Refresh-survival for the max_tokens "Continue" affordance: the
       // truncated partial is already in restored history; this flag is the
-      // missing piece. Only set true here — the route-change reset clears
-      // it (cross-session safety) and the live stream_error path owns the
-      // in-turn signal, so we never clobber a live true with stale metadata.
+      // missing piece. Only set true here — the live stream_error path owns
+      // the in-turn signal, so we never clobber a live true with stale
+      // metadata.
       if (session.lastTurnContinuable) {
-        this.chatStateService.setLastTurnContinuable(true);
+        this.chatStateService.setLastTurnContinuable(session.sessionId, true);
       }
     });
 
@@ -323,20 +353,35 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Subscribe to route parameter changes
+    // Subscribe to route parameter changes.
+    //
+    // Deliberately does NOT abort an in-flight stream for the session being
+    // navigated away from: the stream keeps running in the background,
+    // syncing into its own session's message map (per-session parser +
+    // per-session sync effect), and the backend completes and persists the
+    // turn either way. Only the Stop button aborts, and only its own session.
+    //
+    // Scroll policy on conversation change: remember where the user was in
+    // the conversation they're leaving, reset to the top while the next one
+    // loads (the leftover window offset is meaningless against different
+    // content), then restore below — remembered position if we have one,
+    // otherwise anchor the latest turn (restoreScrollPosition).
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
+
+      if (this.isBrowser && this.lastViewedSessionId !== id) {
+        if (this.lastViewedSessionId) {
+          this.scrollPositions.save(this.lastViewedSessionId, window.scrollY);
+        }
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+      this.lastViewedSessionId = id;
+
       this.sessionId.set(id);
 
-      // Clear stale cost/context badge state BEFORE the new session's
-      // metadata loads — otherwise the previous session's totals briefly
-      // flash on the badge while the new metadata is in flight.
-      this.chatStateService.seedSessionAggregates({});
-
-      // Retire any prior session's "Continue" affordance before the new
-      // session's metadata lands; the seed effect re-sets it from
-      // metadata.lastTurnContinuable when applicable.
-      this.chatStateService.setLastTurnContinuable(false);
+      // Cost/context badge and Continue-affordance state is per-session in
+      // ChatStateService, and the viewed-session effect above repoints the
+      // facades — no cross-session clearing needed here anymore.
 
       // Compaction summary is session-scoped — clear before loading the
       // next session's metadata so the previous session's totals don't
@@ -385,6 +430,10 @@ export class ConversationPage implements OnDestroy {
         // error just means no cards — never disrupt the session.
         this.hydrateArtifacts(id);
         this.hydrateMcpAppCards(id);
+
+        // Messages are in the map and rendering — position the viewport
+        // per the scroll policy (remembered spot, else latest turn).
+        this.restoreScrollPosition(id);
       } else {
         // No session selected, clear the session metadata
         this.sessionService.setSessionMetadataId(null);
@@ -399,8 +448,46 @@ export class ConversationPage implements OnDestroy {
   }
 
   ngOnDestroy() {
+    // Leaving the conversation view entirely (e.g. to an admin page, or the
+    // `/` ↔ `/s/:id` transitions that recreate this component) — remember
+    // where the user was so navigating back restores it.
+    if (this.isBrowser) {
+      const id = this.sessionId();
+      if (id) {
+        this.scrollPositions.save(id, window.scrollY);
+      }
+    }
     this.routeSubscription?.unsubscribe();
     this.queryParamSubscription?.unsubscribe();
+  }
+
+  /**
+   * Position the viewport for a freshly navigated-to conversation:
+   * the remembered offset when the user has been here this SPA session,
+   * otherwise the latest turn (last user message anchored at top — the same
+   * framing the composer submit uses, so "returning to" and "just asked in"
+   * a conversation look alike). Instant, never smooth: animating a jump
+   * across a whole conversation is noise.
+   *
+   * Runs two animation frames after the messages landed in the map so the
+   * message DOM and the bottom spacer have committed and the full scroll
+   * height exists; bails if the user has already navigated elsewhere.
+   */
+  private restoreScrollPosition(sessionId: string): void {
+    if (!this.isBrowser) return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this.sessionId() !== sessionId) return;
+
+        const saved = this.scrollPositions.get(sessionId);
+        if (saved !== undefined) {
+          window.scrollTo({ top: saved, behavior: 'auto' });
+        } else {
+          this.chatContainer()?.scrollToLastUserMessage('auto');
+        }
+      });
+    });
   }
 
   /**
@@ -456,8 +543,8 @@ export class ConversationPage implements OnDestroy {
     const assistantIdToUse =
       this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
 
-    // Set loading state before submitting
-    this.chatStateService.setChatLoading(true);
+    // Loading state is set inside submitChatRequest once the (possibly
+    // freshly generated) session id is known — it's per-session now.
 
     // Submit the chat request with file upload IDs and assistant ID if present
     this.chatRequestService.submitChatRequest(
@@ -511,7 +598,12 @@ export class ConversationPage implements OnDestroy {
   }
 
   onMessageCancelled() {
-    this.chatHttpService.cancelChatRequest();
+    // Stop only the viewed conversation's stream; a conversation streaming
+    // in the background is unaffected.
+    const sessionId = this.effectiveSessionId();
+    if (sessionId) {
+      this.chatHttpService.cancelChatRequest(sessionId);
+    }
   }
 
   /**

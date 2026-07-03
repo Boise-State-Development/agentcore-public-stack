@@ -832,12 +832,10 @@ export class McpAppFrameComponent implements ToolResultRenderer {
           args,
         ),
       sendMessage: (text) => {
-        // Mirror the composer's user-turn affordances that a direct
-        // submitChatRequest() would otherwise skip: show the loading indicator
-        // and scroll the new user message to the top. The user message is
+        // submitChatRequest sets the per-session loading state itself; we
+        // only add the composer's scroll affordance. The user message is
         // added synchronously inside submitChatRequest, so requesting the
         // scroll right after means it already exists in the list.
-        this.chatState.setChatLoading(true);
         const result = this.chatRequest.submitChatRequest(
           text,
           this.conversation.currentSession().sessionId || null,
@@ -878,11 +876,15 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     this.bridge?.notifyDisplayMode('inline');
   }
 
-  /** Complete tool-call arguments, found by toolUseId in the live stream. */
+  /** Complete tool-call arguments, found by toolUseId in the live stream.
+   *  Parser state is per-session; this frame only renders inside the viewed
+   *  conversation, so its stream is the one to search. */
   private lookupToolInput(): Record<string, unknown> {
     const id = this.toolUseId();
     if (!id) return {};
-    for (const msg of this.streamParser.allMessages()) {
+    const sessionId = this.chatState.viewedSessionId();
+    if (!sessionId) return {};
+    for (const msg of this.streamParser.allMessagesFor(sessionId)()) {
       for (const block of msg.content ?? []) {
         const tu = (block as { toolUse?: { toolUseId?: string; input?: unknown } })
           .toolUse;

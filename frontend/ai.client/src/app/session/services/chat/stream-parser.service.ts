@@ -1,5 +1,5 @@
 // services/stream-parser.service.ts
-import { Injectable, signal, computed, inject } from '@angular/core';
+import { Injectable, Signal, WritableSignal, signal, computed, inject } from '@angular/core';
 import { Message, ContentBlock, Citation } from '../models/message.model';
 import { MetadataEvent } from '../models/content-types';
 import { ChatStateService } from './chat-state.service';
@@ -62,6 +62,65 @@ export type { ToolProgress };
  */
 const STREAMING_CONTENT_TOOLS = new Set(['create_artifact', 'update_artifact']);
 
+/**
+ * All mutable parse state for one session's stream. Each session gets its
+ * own instance so two conversations can stream concurrently without one
+ * stream's events corrupting the other's message builders or identity.
+ */
+interface ParserSessionState {
+  /** Session this state belongs to (used for message IDs and side channels). */
+  sessionId: string;
+
+  /** Starting message count for ID computation */
+  startingMessageCount: number;
+
+  /**
+   * Current stream ID. Regenerated on every reset — a stream captures it at
+   * start and passes it back with each event so late events from a
+   * superseded stream (same session, e.g. a re-submit) are dropped.
+   */
+  currentStreamId: string;
+
+  /** Current stream state */
+  streamState: StreamState;
+
+  /** The current message being streamed */
+  currentMessageBuilder: WritableSignal<MessageBuilder | null>;
+
+  /** Completed messages in the current turn (for multi-turn tool use) */
+  completedMessages: WritableSignal<Message[]>;
+
+  /** Tool progress indicator state */
+  toolProgress: WritableSignal<ToolProgress>;
+
+  /** Error state */
+  error: WritableSignal<string | null>;
+
+  /** Stream completion state */
+  isStreamComplete: WritableSignal<boolean>;
+
+  /** Metadata (usage, metrics) from the stream */
+  metadata: WritableSignal<MetadataEvent | null>;
+
+  /** Pending citations for the next assistant message */
+  pendingCitations: WritableSignal<Citation[]>;
+
+  /** The current message converted to the final Message format. */
+  currentMessage: Signal<Message | null>;
+
+  /** All messages in this stream (completed + current). */
+  allMessages: Signal<Message[]>;
+
+  /** The ID of the message currently being streamed, or null. */
+  streamingMessageId: Signal<string | null>;
+
+  /** Callbacks wiring the pure parsing logic to this state's signals. */
+  callbacks: StreamParserCallbacks;
+
+  /** Line parser for raw SSE lines */
+  lineParser: ReturnType<typeof createStreamLineParser>;
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -76,146 +135,105 @@ export class StreamParserService {
   private mcpAppState = inject(McpAppStateService);
 
   // =========================================================================
-  // State Signals
-  // =========================================================================
-
-  /** The current message being streamed */
-  private currentMessageBuilder = signal<MessageBuilder | null>(null);
-
-  /** Completed messages in the current turn (for multi-turn tool use) */
-  private completedMessages = signal<Message[]>([]);
-
-  /** Tool progress indicator state */
-  private toolProgressSignal = signal<ToolProgress>({ visible: false });
-  public toolProgress = this.toolProgressSignal.asReadonly();
-
-  /** Error state */
-  private errorSignal = signal<string | null>(null);
-  public error = this.errorSignal.asReadonly();
-
-  /** Stream completion state */
-  private isStreamCompleteSignal = signal<boolean>(false);
-  public isStreamComplete = this.isStreamCompleteSignal.asReadonly();
-
-  /** Metadata (usage, metrics) from the stream */
-  private metadataSignal = signal<MetadataEvent | null>(null);
-
-  /** Pending citations for the next assistant message */
-  private pendingCitations = signal<Citation[]>([]);
-  public citations = this.pendingCitations.asReadonly();
-  public metadata = this.metadataSignal.asReadonly();
-
-  // =========================================================================
-  // Message ID Computation State
-  // =========================================================================
-
-  /** Session ID for computing message IDs */
-  private sessionId: string | null = null;
-
-  /** Starting message count for ID computation */
-  private startingMessageCount: number = 0;
-
-  // =========================================================================
-  // Computed Signals - Reactive Derived State
+  // Per-Session State
   // =========================================================================
 
   /**
-   * The current message converted to the final Message format.
-   * Efficiently rebuilds only when the builder changes.
+   * Parser state per session, held in a signal so the cached per-session
+   * accessor computeds below re-read when reset() swaps in a fresh state.
    */
-  public currentMessage = computed<Message | null>(() => {
-    const builder = this.currentMessageBuilder();
-    return builder ? this.buildMessage(builder) : null;
-  });
+  private readonly states = signal<ReadonlyMap<string, ParserSessionState>>(new Map());
 
-  /**
-   * All messages in the current streaming session (completed + current).
-   * This is what the UI should bind to for rendering.
-   */
-  public allMessages = computed<Message[]>(() => {
-    const completed = this.completedMessages();
-    const current = this.currentMessage();
-    return current ? [...completed, current] : completed;
-  });
-
-  /**
-   * The latest message's text content as a single string.
-   * Useful for simple text displays.
-   */
-  public currentText = computed<string>(() => {
-    const message = this.currentMessage();
-    if (!message) return '';
-
-    return message.content
-      .filter((block) => block.type === 'text' && block.text)
-      .map((block) => block.text!)
-      .join('');
-  });
-
-  /**
-   * Whether we're currently in the middle of a tool use cycle.
-   */
-  public isToolUseInProgress = computed<boolean>(() => {
-    const builder = this.currentMessageBuilder();
-    if (!builder) return false;
-
-    return Array.from(builder.contentBlocks.values()).some(
-      (block) => (block.type === 'toolUse' || block.type === 'tool_use') && !block.isComplete,
-    );
-  });
-
-  /**
-   * The ID of the message currently being streamed, or null if not streaming.
-   * Used by UI components to determine which message should animate.
-   */
-  public streamingMessageId = computed<string | null>(() => {
-    const builder = this.currentMessageBuilder();
-    const isComplete = this.isStreamCompleteSignal();
-
-    // Return the message ID if we have an active builder and stream is not complete
-    if (builder && !isComplete) {
-      return builder.id;
-    }
-    return null;
-  });
-
-  // =========================================================================
-  // Private State
-  // =========================================================================
-
-  /** Current stream ID - prevents race conditions from overlapping streams */
-  private currentStreamId: string | null = null;
-
-  /** Current stream state */
-  private streamState: StreamState = StreamState.Idle;
-
-  /** Line parser for raw SSE lines */
-  private lineParser = createStreamLineParser(this.createCallbacks());
+  /** Stable per-session accessor signals (cached so callers can hold them). */
+  private readonly allMessagesCache = new Map<string, Signal<Message[]>>();
+  private readonly streamingMessageIdCache = new Map<string, Signal<string | null>>();
+  private readonly toolProgressCache = new Map<string, Signal<ToolProgress>>();
+  private readonly citationsCache = new Map<string, Signal<Citation[]>>();
+  private readonly errorCache = new Map<string, Signal<string | null>>();
+  private readonly isStreamCompleteCache = new Map<string, Signal<boolean>>();
 
   // =========================================================================
   // Public API
   // =========================================================================
 
   /**
-   * Parse an incoming SSE line and update state.
+   * All messages in a session's current streaming batch (completed +
+   * current). This is what the message-map sync binds to for rendering.
+   * Returns a stable signal per session; empty until the first reset().
+   */
+  allMessagesFor(sessionId: string): Signal<Message[]> {
+    return this.cachedAccessor(this.allMessagesCache, sessionId, (state) => state.allMessages(), []);
+  }
+
+  /**
+   * The ID of the message currently being streamed in a session, or null.
+   * Used by UI components to determine which message should animate.
+   */
+  streamingMessageIdFor(sessionId: string): Signal<string | null> {
+    return this.cachedAccessor(this.streamingMessageIdCache, sessionId, (state) => state.streamingMessageId(), null);
+  }
+
+  /** Tool progress indicator state for a session. */
+  toolProgressFor(sessionId: string): Signal<ToolProgress> {
+    return this.cachedAccessor(this.toolProgressCache, sessionId, (state) => state.toolProgress(), { visible: false });
+  }
+
+  /** Pending citations for a session's next assistant message. */
+  citationsFor(sessionId: string): Signal<Citation[]> {
+    return this.cachedAccessor(this.citationsCache, sessionId, (state) => state.pendingCitations(), []);
+  }
+
+  /** Parse-error state for a session. */
+  errorFor(sessionId: string): Signal<string | null> {
+    return this.cachedAccessor(this.errorCache, sessionId, (state) => state.error(), null);
+  }
+
+  /** Stream completion state for a session. */
+  isStreamCompleteFor(sessionId: string): Signal<boolean> {
+    return this.cachedAccessor(this.isStreamCompleteCache, sessionId, (state) => state.isStreamComplete(), false);
+  }
+
+  /**
+   * Parse an incoming SSE line for a session and update its state.
    * Handles the event: and data: format from SSE.
    */
-  parseSSELine(line: string): void {
-    // Check if we should process events
-    if (!this.shouldProcessEvent()) {
+  parseSSELine(sessionId: string, line: string): void {
+    const state = this.states().get(sessionId);
+    if (!state || !this.shouldProcessEvent(state)) {
       return;
     }
 
-    this.lineParser.parseLine(line);
+    state.lineParser.parseLine(line);
   }
 
   /**
    * Parse a pre-parsed EventSourceMessage (from fetch-event-source).
+   *
+   * @param sessionId - The session whose stream produced the event
+   * @param expectedStreamId - The stream ID captured when the request
+   *   started (see {@link getCurrentStreamId}). If the session's parser has
+   *   since been reset for a newer stream, the event is silently dropped —
+   *   this is what keeps a superseded stream's late events from corrupting
+   *   its replacement.
    */
-  parseEventSourceMessage(event: string, data: unknown): void {
+  parseEventSourceMessage(
+    sessionId: string,
+    event: string,
+    data: unknown,
+    expectedStreamId?: string | null,
+  ): void {
+    const state = this.states().get(sessionId);
+    if (!state) {
+      return; // No active parser for this session — nothing to update.
+    }
+
+    if (expectedStreamId && state.currentStreamId !== expectedStreamId) {
+      return; // Stale event from a superseded stream for this session.
+    }
+
     // Validate inputs
     if (!event || typeof event !== 'string') {
-      this.setError('parseEventSourceMessage: event must be a non-empty string');
+      this.setError(state, 'parseEventSourceMessage: event must be a non-empty string');
       return;
     }
 
@@ -230,69 +248,158 @@ export class StreamParserService {
       event === 'error' ||
       event === 'oauth_required' ||
       event === 'stream_error';
-    if (!isAlwaysAllowedEvent && !this.shouldProcessEvent()) {
+    if (!isAlwaysAllowedEvent && !this.shouldProcessEvent(state)) {
       return;
     }
 
     // Special handling for 'done' event which may have null/undefined data
     if (data === undefined || data === null) {
       if (event === 'done') {
-        processStreamEvent(event, data, this.createCallbacks());
+        processStreamEvent(event, data, state.callbacks);
         return;
       }
-      this.setError(`parseEventSourceMessage: data cannot be null/undefined for event '${event}'`);
+      this.setError(state, `parseEventSourceMessage: data cannot be null/undefined for event '${event}'`);
       return;
     }
 
-    processStreamEvent(event, data, this.createCallbacks());
+    processStreamEvent(event, data, state.callbacks);
   }
 
   /**
-   * Reset all state for a new conversation/stream.
+   * Reset a session's state for a new stream.
    * Generates a new stream ID to prevent race conditions.
    *
-   * IMPORTANT: Call this before starting a new stream to prevent
-   * events from previous streams from interfering.
+   * IMPORTANT: Call this before starting a new stream so events from that
+   * session's previous stream (identified by their captured stream ID) are
+   * dropped instead of interfering.
    *
-   * @param sessionId - Session ID for computing predictable message IDs
+   * @param sessionId - Session the stream belongs to (also used for computing
+   *   predictable message IDs)
    * @param startingMessageCount - Current message count in the session (for ID computation)
    */
-  reset(sessionId?: string, startingMessageCount?: number): void {
-    // Generate new stream ID to prevent events from old streams
-    this.currentStreamId = uuidv4();
-    this.streamState = StreamState.Idle;
-
-    // Store session ID and message count for predictable ID generation
-    this.sessionId = sessionId || null;
-    this.startingMessageCount = startingMessageCount || 0;
-
-    // Clear all state
-    this.currentMessageBuilder.set(null);
-    this.completedMessages.set([]);
-    this.toolProgressSignal.set({ visible: false });
-    this.errorSignal.set(null);
-    this.isStreamCompleteSignal.set(false);
-    this.metadataSignal.set(null);
-    this.pendingCitations.set([]);
-
-    // Reset line parser
-    this.lineParser.reset();
+  reset(sessionId: string, startingMessageCount?: number): void {
+    const state = this.createState(sessionId, startingMessageCount || 0);
+    this.states.update((map) => {
+      const next = new Map(map);
+      next.set(sessionId, state);
+      return next;
+    });
   }
 
   /**
-   * Get the current stream ID (for debugging/monitoring).
+   * Get a session's current stream ID. Captured by ChatHttpService when a
+   * request starts, and passed back with each event / lifecycle callback to
+   * detect stale streams.
    */
-  getCurrentStreamId(): string | null {
-    return this.currentStreamId;
+  getCurrentStreamId(sessionId: string): string | null {
+    return this.states().get(sessionId)?.currentStreamId ?? null;
   }
 
   /**
-   * Get completed messages and clear them (for persisting to backend).
+   * Get a session's completed messages and clear them.
    */
-  flushCompletedMessages(): Message[] {
-    const messages = this.completedMessages();
-    this.completedMessages.set([]);
+  flushCompletedMessages(sessionId: string): Message[] {
+    const state = this.states().get(sessionId);
+    if (!state) return [];
+    const messages = state.completedMessages();
+    state.completedMessages.set([]);
     return messages;
+  }
+
+  /**
+   * Drop a session's parser state entirely (e.g. when the session is
+   * cleared). Cached accessor signals keep working — they fall back to
+   * their empty defaults.
+   */
+  clearSession(sessionId: string): void {
+    if (!this.states().get(sessionId)) return;
+    this.states.update((map) => {
+      const next = new Map(map);
+      next.delete(sessionId);
+      return next;
+    });
+  }
+
+  // =========================================================================
+  // State Factory
+  // =========================================================================
+
+  private createState(sessionId: string, startingMessageCount: number): ParserSessionState {
+    const currentMessageBuilder = signal<MessageBuilder | null>(null);
+    const completedMessages = signal<Message[]>([]);
+    const isStreamComplete = signal<boolean>(false);
+
+    const state: ParserSessionState = {
+      sessionId,
+      startingMessageCount,
+      currentStreamId: uuidv4(),
+      streamState: StreamState.Idle,
+      currentMessageBuilder,
+      completedMessages,
+      toolProgress: signal<ToolProgress>({ visible: false }),
+      error: signal<string | null>(null),
+      isStreamComplete,
+      metadata: signal<MetadataEvent | null>(null),
+      pendingCitations: signal<Citation[]>([]),
+      currentMessage: computed<Message | null>(() => {
+        const builder = currentMessageBuilder();
+        return builder ? this.buildMessage(state, builder) : null;
+      }),
+      allMessages: computed<Message[]>(() => {
+        const completed = completedMessages();
+        const current = state.currentMessage();
+        return current ? [...completed, current] : completed;
+      }),
+      streamingMessageId: computed<string | null>(() => {
+        const builder = currentMessageBuilder();
+        const isComplete = isStreamComplete();
+
+        // Return the message ID if we have an active builder and stream is not complete
+        if (builder && !isComplete) {
+          return builder.id;
+        }
+        return null;
+      }),
+      callbacks: undefined as unknown as StreamParserCallbacks,
+      lineParser: undefined as unknown as ReturnType<typeof createStreamLineParser>,
+    };
+
+    state.callbacks = this.createCallbacks(state);
+    state.lineParser = createStreamLineParser(state.callbacks);
+    return state;
+  }
+
+  /**
+   * Cached per-session accessor: a stable computed that follows the
+   * session's current state object across resets and falls back to a
+   * default before the first reset.
+   */
+  private cachedAccessor<T>(
+    cache: Map<string, Signal<T>>,
+    sessionId: string,
+    read: (state: ParserSessionState) => T,
+    fallback: T,
+  ): Signal<T> {
+    let cached = cache.get(sessionId);
+    if (!cached) {
+      cached = computed(() => {
+        const state = this.states().get(sessionId);
+        return state ? read(state) : fallback;
+      });
+      cache.set(sessionId, cached);
+    }
+    return cached;
+  }
+
+  /**
+   * Whether this stream's session is the one the user is currently viewing.
+   * Conversation-view side channels (artifacts panel, MCP App frames,
+   * compaction badge) are viewed-session-scoped: they reset on route change
+   * and re-hydrate from the server, so a background stream must not push
+   * into them while another conversation is on screen.
+   */
+  private isViewedSession(state: ParserSessionState): boolean {
+    return this.chatStateService.viewedSessionId() === state.sessionId;
   }
 
   // =========================================================================
@@ -301,25 +408,25 @@ export class StreamParserService {
 
   /**
    * Create callbacks for the stream parser core.
-   * These callbacks wire the pure parsing logic to our state management.
+   * These callbacks wire the pure parsing logic to one session's state.
    */
-  private createCallbacks(): StreamParserCallbacks {
+  private createCallbacks(state: ParserSessionState): StreamParserCallbacks {
     return {
-      onMessageStart: (data) => this.handleMessageStart(data),
-      onMessageStop: (data) => this.handleMessageStop(data),
-      onDone: () => this.handleDone(),
+      onMessageStart: (data) => this.handleMessageStart(state, data),
+      onMessageStop: (data) => this.handleMessageStop(state, data),
+      onDone: () => this.handleDone(state),
 
-      onContentBlockStart: (data) => this.handleContentBlockStart(data),
-      onContentBlockDelta: (data) => this.handleContentBlockDelta(data),
-      onContentBlockStop: (data) => this.handleContentBlockStop(data),
+      onContentBlockStart: (data) => this.handleContentBlockStart(state, data),
+      onContentBlockDelta: (data) => this.handleContentBlockDelta(state, data),
+      onContentBlockStop: (data) => this.handleContentBlockStop(state, data),
 
-      onToolUse: (data) => this.handleToolUseProgress(data),
-      onToolResult: (data) => this.handleToolResult(data),
-      onToolProgress: (progress) => this.toolProgressSignal.set(progress),
+      onToolUse: (data) => this.handleToolUseProgress(state, data),
+      onToolResult: (data) => this.handleToolResult(state, data),
+      onToolProgress: (progress) => state.toolProgress.set(progress),
 
-      onMetadata: (data) => this.handleMetadata(data),
-      onReasoning: (data) => this.handleReasoning(data),
-      onCitation: (data) => this.handleCitation(data),
+      onMetadata: (data) => this.handleMetadata(state, data),
+      onReasoning: (data) => this.handleReasoning(state, data),
+      onCitation: (data) => this.handleCitation(state, data),
 
       onQuotaWarning: (data) => this.quotaWarningService.setWarning(data as QuotaWarning),
       onQuotaExceeded: (data) => this.quotaWarningService.setQuotaExceeded(data as QuotaExceeded),
@@ -329,39 +436,39 @@ export class StreamParserService {
         // assistant message is normally in completedMessages; fall back
         // to the in-flight builder for tool_use stop reasons that keep
         // the message active.
-        const messages = this.allMessages();
-        let lastAssistantId: string | undefined;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') {
-            lastAssistantId = messages[i].id;
-            break;
-          }
-        }
+        const lastAssistantId = this.findLastAssistantId(state);
         this.oauthConsentService.requestConsent(
           data.providerId,
           data.authorizationUrl,
           data.interruptId,
           lastAssistantId,
-          this.sessionId ?? undefined,
+          state.sessionId,
         );
       },
 
-      onCompaction: (data: CompactionEvent) => this.compactionSummary.recordLive(data),
+      onCompaction: (data: CompactionEvent) => {
+        // CompactionSummaryService is viewed-session-scoped (reset on route
+        // change, reseeded from session metadata) — a background stream's
+        // compaction must not bump the viewed conversation's badge.
+        if (this.isViewedSession(state)) {
+          this.compactionSummary.recordLive(data);
+        }
+      },
 
       onArtifact: (data: ArtifactEvent) => {
+        // Viewed-session only: recordLive auto-opens the artifact panel,
+        // which must never happen for a conversation streaming in the
+        // background. Navigating back re-hydrates artifacts from the
+        // server, so the dropped event is recovered there.
+        if (!this.isViewedSession(state)) {
+          return;
+        }
         // Same post-message_stop timing as oauth_required: the producing
         // assistant message is the last assistant message in the list.
         // Anchor live placement to its concrete id — the numeric index
         // only lines up after a reload (it counts the memory tool
         // messages the folded client message doesn't have).
-        const messages = this.allMessages();
-        let lastAssistantId: string | undefined;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') {
-            lastAssistantId = messages[i].id;
-            break;
-          }
-        }
+        const lastAssistantId = this.findLastAssistantId(state);
         this.artifactState.recordLive(data, lastAssistantId);
       },
 
@@ -369,8 +476,12 @@ export class StreamParserService {
         // Inline event (arrives right after its tool_result, mid-stream),
         // unlike the post-message_stop side channels above — just record
         // it keyed by toolUseId. The tool-use renderer picks it up
-        // reactively and swaps in the MCP App frame.
-        this.mcpAppState.recordLive(data);
+        // reactively and swaps in the MCP App frame. Viewed-session only:
+        // McpAppStateService is reset on route change, so recording for a
+        // background conversation would be wiped before it could render.
+        if (this.isViewedSession(state)) {
+          this.mcpAppState.recordLive(data);
+        }
       },
 
       onToolInputPartial: (data: ToolInputPartialEvent) => {
@@ -379,18 +490,13 @@ export class StreamParserService {
         // the latest healed prefix keyed by toolUseId; the frame relays it to
         // the App as `ui/notifications/tool-input-partial` for progressive
         // rendering (e.g. Excalidraw's guided camera tour).
-        this.mcpAppState.recordPartialInput(data.toolUseId, data.arguments);
+        if (this.isViewedSession(state)) {
+          this.mcpAppState.recordPartialInput(data.toolUseId, data.arguments);
+        }
       },
 
       onToolApprovalRequired: (data: ToolApprovalRequiredEvent) => {
-        const messages = this.allMessages();
-        let lastAssistantId: string | undefined;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') {
-            lastAssistantId = messages[i].id;
-            break;
-          }
-        }
+        const lastAssistantId = this.findLastAssistantId(state);
         this.toolApprovalService.requestApproval({
           interruptId: data.interruptId,
           toolUseId: data.toolUseId,
@@ -398,11 +504,11 @@ export class StreamParserService {
           toolInput: data.toolInput ?? undefined,
           message: data.message,
           messageId: lastAssistantId,
-          sessionId: this.sessionId ?? undefined,
+          sessionId: state.sessionId,
         });
       },
 
-      onError: (data) => this.handleError(data),
+      onError: (data) => this.handleError(state, data),
       onStreamError: (data) => {
         const streamError = data as ConversationalStreamError;
         this.errorService.handleConversationalStreamError(streamError);
@@ -413,47 +519,52 @@ export class StreamParserService {
           streamError.code === ErrorCode.MAX_TOKENS ||
           streamError.metadata?.['error_kind'] === 'max_tokens';
         if (isMaxTokens) {
-          this.chatStateService.setLastTurnContinuable(true);
+          this.chatStateService.setLastTurnContinuable(state.sessionId, true);
         }
       },
 
-      onParseError: (message) => this.setError(message),
+      onParseError: (message) => this.setError(state, message),
     };
+  }
+
+  private findLastAssistantId(state: ParserSessionState): string | undefined {
+    const messages = state.allMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        return messages[i].id;
+      }
+    }
+    return undefined;
   }
 
   // =========================================================================
   // Event Handlers
   // =========================================================================
 
-  private handleMessageStart(data: { role: 'user' | 'assistant' }): void {
-    // Initialize stream ID if not set
-    if (!this.currentStreamId) {
-      this.currentStreamId = uuidv4();
-    }
-
+  private handleMessageStart(state: ParserSessionState, data: { role: 'user' | 'assistant' }): void {
     // Update stream state
-    this.streamState = StreamState.Streaming;
+    state.streamState = StreamState.Streaming;
 
     // Clear any previous errors
-    this.errorSignal.set(null);
+    state.error.set(null);
 
     // If there's an existing message, finalize it before starting a new one
-    const currentBuilder = this.currentMessageBuilder();
+    const currentBuilder = state.currentMessageBuilder();
     if (currentBuilder) {
-      this.finalizeCurrentMessage();
+      this.finalizeCurrentMessage(state);
     }
 
     // Clear stopReason in ChatStateService
-    this.chatStateService.setStopReason(null);
+    this.chatStateService.setStopReason(state.sessionId, null);
 
     // A new assistant turn is streaming — retire any stale "Continue"
     // affordance from a previous max_tokens truncation.
-    this.chatStateService.setLastTurnContinuable(false);
+    this.chatStateService.setLastTurnContinuable(state.sessionId, false);
 
     // Compute predictable message ID
-    const completedCount = this.completedMessages().length;
-    const messageIndex = this.startingMessageCount + completedCount;
-    const computedId = this.sessionId ? `msg-${this.sessionId}-${messageIndex}` : uuidv4();
+    const completedCount = state.completedMessages().length;
+    const messageIndex = state.startingMessageCount + completedCount;
+    const computedId = `msg-${state.sessionId}-${messageIndex}`;
 
     // Create new message builder
     const builder: MessageBuilder = {
@@ -464,24 +575,24 @@ export class StreamParserService {
       isComplete: false,
     };
 
-    this.currentMessageBuilder.set(builder);
+    state.currentMessageBuilder.set(builder);
   }
 
-  private handleContentBlockStart(data: ContentBlockStartEvent): void {
-    const currentBuilder = this.currentMessageBuilder();
+  private handleContentBlockStart(state: ParserSessionState, data: ContentBlockStartEvent): void {
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
-      this.setError('content_block_start: received without active message');
+      this.setError(state, 'content_block_start: received without active message');
       return;
     }
 
     if (currentBuilder.contentBlocks.has(data.contentBlockIndex)) {
-      this.setError(`content_block_start: block at index ${data.contentBlockIndex} already exists`);
+      this.setError(state, `content_block_start: block at index ${data.contentBlockIndex} already exists`);
       return;
     }
 
     const blockType: 'text' | 'tool_use' = data.type === 'tool_use' ? 'tool_use' : 'text';
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
 
       const blockBuilder: ContentBlockBuilder = {
@@ -503,7 +614,7 @@ export class StreamParserService {
 
     // Show tool progress for tool_use blocks
     if (blockType === 'tool_use' && data.toolUse) {
-      this.toolProgressSignal.set({
+      state.toolProgress.set({
         visible: true,
         toolName: data.toolUse.name,
         toolUseId: data.toolUse.toolUseId,
@@ -513,16 +624,16 @@ export class StreamParserService {
     }
   }
 
-  private handleContentBlockDelta(data: ContentBlockDeltaEvent): void {
-    const currentBuilder = this.currentMessageBuilder();
+  private handleContentBlockDelta(state: ParserSessionState, data: ContentBlockDeltaEvent): void {
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
-      this.setError('content_block_delta: received without active message');
+      this.setError(state, 'content_block_delta: received without active message');
       return;
     }
 
     const inferredType = inferContentBlockType(data);
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
 
       let block = builder.contentBlocks.get(data.contentBlockIndex);
@@ -547,7 +658,7 @@ export class StreamParserService {
       // Update chunks
       if (data.text !== undefined) {
         if (typeof data.text !== 'string') {
-          this.setError(`content_block_delta: text must be string, got ${typeof data.text}`);
+          this.setError(state, `content_block_delta: text must be string, got ${typeof data.text}`);
           return builder;
         }
         block.textChunks.push(data.text);
@@ -555,7 +666,7 @@ export class StreamParserService {
 
       if (data.input !== undefined) {
         if (typeof data.input !== 'string') {
-          this.setError(`content_block_delta: input must be string, got ${typeof data.input}`);
+          this.setError(state, `content_block_delta: input must be string, got ${typeof data.input}`);
           return builder;
         }
         block.inputChunks.push(data.input);
@@ -568,19 +679,19 @@ export class StreamParserService {
     });
   }
 
-  private handleContentBlockStop(data: { contentBlockIndex: number }): void {
-    const currentBuilder = this.currentMessageBuilder();
+  private handleContentBlockStop(state: ParserSessionState, data: { contentBlockIndex: number }): void {
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
-      this.setError('content_block_stop: received without active message');
+      this.setError(state, 'content_block_stop: received without active message');
       return;
     }
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
 
       const block = builder.contentBlocks.get(data.contentBlockIndex);
       if (!block) {
-        this.setError(`content_block_stop: block at index ${data.contentBlockIndex} does not exist`);
+        this.setError(state, `content_block_stop: block at index ${data.contentBlockIndex} does not exist`);
         return builder;
       }
 
@@ -591,7 +702,7 @@ export class StreamParserService {
       block.isComplete = true;
 
       if (block.type === 'tool_use') {
-        this.toolProgressSignal.set({ visible: false });
+        state.toolProgress.set({ visible: false });
       }
 
       const newBlocks = new Map(builder.contentBlocks);
@@ -601,10 +712,10 @@ export class StreamParserService {
     });
   }
 
-  private handleToolUseProgress(data: {
+  private handleToolUseProgress(state: ParserSessionState, data: {
     tool_use: { name: string; tool_use_id: string; input: string };
   }): void {
-    this.toolProgressSignal.update((progress) => ({
+    state.toolProgress.update((progress) => ({
       ...progress,
       visible: true,
       toolName: data.tool_use.name,
@@ -612,14 +723,14 @@ export class StreamParserService {
     }));
   }
 
-  private handleToolResult(data: ToolResultEventData): void {
+  private handleToolResult(state: ParserSessionState, data: ToolResultEventData): void {
     const toolUseId = data.tool_result.toolUseId;
     const content = data.tool_result.content || [];
     const status = data.tool_result.status || 'success';
 
-    const currentBuilder = this.currentMessageBuilder();
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
-      this.setError('tool_result: received without active message');
+      this.setError(state, 'tool_result: received without active message');
       return;
     }
 
@@ -641,7 +752,7 @@ export class StreamParserService {
 
     const resultContent = parseToolResultContent(content);
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
 
       const block = builder.contentBlocks.get(foundIndex!);
@@ -662,44 +773,51 @@ export class StreamParserService {
       return { ...builder, contentBlocks: newBlocks };
     });
 
-    this.toolProgressSignal.set({ visible: false });
+    state.toolProgress.set({ visible: false });
   }
 
-  private handleMessageStop(data: { stopReason: string }): void {
-    const currentBuilder = this.currentMessageBuilder();
+  private handleMessageStop(state: ParserSessionState, data: { stopReason: string }): void {
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
-      this.setError('message_stop: received without active message');
+      this.setError(state, 'message_stop: received without active message');
       return;
     }
 
-    this.chatStateService.setStopReason(data.stopReason);
+    this.chatStateService.setStopReason(state.sessionId, data.stopReason);
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
       return { ...builder, isComplete: true };
     });
 
     // If stop reason is tool_use, keep message active for tool result
     if (data.stopReason !== 'tool_use') {
-      this.finalizeCurrentMessage();
+      this.finalizeCurrentMessage(state);
     }
   }
 
-  private handleDone(): void {
-    this.finalizeCurrentMessage();
-    this.isStreamCompleteSignal.set(true);
-    this.toolProgressSignal.set({ visible: false });
-    this.streamState = StreamState.Completed;
+  private handleDone(state: ParserSessionState): void {
+    this.finalizeCurrentMessage(state);
+    state.isStreamComplete.set(true);
+    state.toolProgress.set({ visible: false });
+    state.streamState = StreamState.Completed;
 
-    // Automatic cleanup after delay
+    // Automatic cleanup after delay. Guarded on the stream ID so a session
+    // that started a new stream in the meantime isn't flushed mid-parse.
+    const streamId = state.currentStreamId;
     setTimeout(() => {
-      if (this.streamState === StreamState.Completed) {
-        this.flushCompletedMessages();
+      const current = this.states().get(state.sessionId);
+      if (
+        current === state &&
+        current.currentStreamId === streamId &&
+        current.streamState === StreamState.Completed
+      ) {
+        this.flushCompletedMessages(state.sessionId);
       }
     }, 5000);
   }
 
-  private handleError(data: unknown): void {
+  private handleError(state: ParserSessionState, data: unknown): void {
     let errorMessage = 'Unknown error';
 
     if (data && typeof data === 'object') {
@@ -729,23 +847,23 @@ export class StreamParserService {
       this.errorService.addError('Stream Error', errorMessage);
     }
 
-    this.setError(`Stream error: ${errorMessage}`);
+    this.setError(state, `Stream error: ${errorMessage}`);
   }
 
-  private handleMetadata(data: MetadataEvent): void {
+  private handleMetadata(state: ParserSessionState, data: MetadataEvent): void {
     if (!data.usage && !data.metrics) {
       return;
     }
 
-    this.metadataSignal.set(data);
-    this.updateLastCompletedMessageWithMetadata();
+    state.metadata.set(data);
+    this.updateLastCompletedMessageWithMetadata(state);
 
     // Drive the session cost + context badge above the composer.
     // Cost on the wire may be either a number (legacy) or a CostBreakdown
     // object — extract the total either way (matches backend's Union shape).
     const turnCost = typeof data.cost === 'number' ? data.cost : data.cost?.total ?? 0;
     if (turnCost > 0) {
-      this.chatStateService.addTurnCost(turnCost);
+      this.chatStateService.addTurnCost(state.sessionId, turnCost);
     }
 
     // Only update the context badge from the *final* metadata event —
@@ -766,21 +884,21 @@ export class StreamParserService {
         usage.inputTokens +
         (usage.cacheReadInputTokens ?? 0) +
         (usage.cacheWriteInputTokens ?? 0);
-      this.chatStateService.setContext(totalContext, data.contextWindow);
+      this.chatStateService.setContext(state.sessionId, totalContext, data.contextWindow);
     }
   }
 
-  private handleReasoning(data: { reasoningText?: string }): void {
+  private handleReasoning(state: ParserSessionState, data: { reasoningText?: string }): void {
     if (!data.reasoningText) {
       return;
     }
 
-    const currentBuilder = this.currentMessageBuilder();
+    const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
       return;
     }
 
-    this.currentMessageBuilder.update((builder) => {
+    state.currentMessageBuilder.update((builder) => {
       if (!builder) return builder;
 
       // Find or create reasoning block
@@ -818,8 +936,8 @@ export class StreamParserService {
     });
   }
 
-  private handleCitation(data: Citation): void {
-    this.pendingCitations.update((citations) => [
+  private handleCitation(state: ParserSessionState, data: Citation): void {
+    state.pendingCitations.update((citations) => [
       ...citations,
       {
         assistantId: data.assistantId,
@@ -834,35 +952,27 @@ export class StreamParserService {
   // Helper Methods
   // =========================================================================
 
-  private shouldProcessEvent(): boolean {
-    if (!this.currentStreamId) {
-      return true; // Allow first event
-    }
-
-    if (this.streamState === StreamState.Completed || this.streamState === StreamState.Error) {
-      return false;
-    }
-
-    return true;
+  private shouldProcessEvent(state: ParserSessionState): boolean {
+    return state.streamState !== StreamState.Completed && state.streamState !== StreamState.Error;
   }
 
-  private setError(message: string): void {
-    this.errorSignal.set(message);
-    this.isStreamCompleteSignal.set(true);
-    this.toolProgressSignal.set({ visible: false });
-    this.streamState = StreamState.Error;
+  private setError(state: ParserSessionState, message: string): void {
+    state.error.set(message);
+    state.isStreamComplete.set(true);
+    state.toolProgress.set({ visible: false });
+    state.streamState = StreamState.Error;
   }
 
-  private updateLastCompletedMessageWithMetadata(): void {
-    const completed = this.completedMessages();
+  private updateLastCompletedMessageWithMetadata(state: ParserSessionState): void {
+    const completed = state.completedMessages();
     if (completed.length === 0) return;
 
     const lastMessage = completed[completed.length - 1];
-    const newMetadata = this.getMetadataForMessage();
+    const newMetadata = this.getMetadataForMessage(state);
     if (!newMetadata) return;
 
     if (!lastMessage.metadata) {
-      this.completedMessages.update((messages) => {
+      state.completedMessages.update((messages) => {
         const updated = [...messages];
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
@@ -904,7 +1014,7 @@ export class StreamParserService {
       (existingBreakdown === undefined && newBreakdown !== undefined);
 
     if (needsUpdate) {
-      this.completedMessages.update((messages) => {
+      state.completedMessages.update((messages) => {
         const updated = [...messages];
         const existingLatencyObj = existingMetadata['latency'] as Record<string, unknown> | undefined;
         const newLatencyObj = newMetadata['latency'] as Record<string, unknown> | undefined;
@@ -929,21 +1039,21 @@ export class StreamParserService {
   // Message Building
   // =========================================================================
 
-  private buildMessage(builder: MessageBuilder): Message {
+  private buildMessage(state: ParserSessionState, builder: MessageBuilder): Message {
     const sortedBlocks = Array.from(builder.contentBlocks.entries())
       .sort(([a], [b]) => a - b)
-      .map(([_, block]) => this.buildContentBlock(block));
+      .map(([_, block]) => this.buildContentBlock(state, block));
 
     const message: Message = {
       id: builder.id,
       role: builder.role,
       content: sortedBlocks,
       createdAt: builder.createdAt,
-      metadata: this.getMetadataForMessage(),
+      metadata: this.getMetadataForMessage(state),
     };
 
     if (builder.role === 'assistant') {
-      const citations = this.pendingCitations();
+      const citations = state.pendingCitations();
       if (citations.length > 0) {
         message.citations = citations;
       }
@@ -952,8 +1062,8 @@ export class StreamParserService {
     return message;
   }
 
-  private getMetadataForMessage(): Record<string, unknown> | null {
-    const metadataEvent = this.metadataSignal();
+  private getMetadataForMessage(state: ParserSessionState): Record<string, unknown> | null {
+    const metadataEvent = state.metadata();
     if (!metadataEvent) {
       return null;
     }
@@ -999,7 +1109,7 @@ export class StreamParserService {
     return Object.keys(result).length > 0 ? result : null;
   }
 
-  private buildContentBlock(builder: ContentBlockBuilder): ContentBlock {
+  private buildContentBlock(state: ParserSessionState, builder: ContentBlockBuilder): ContentBlock {
     // Handle reasoning content blocks
     if (builder.type === 'reasoningContent') {
       return {
@@ -1024,7 +1134,7 @@ export class StreamParserService {
       } catch (e) {
         if (builder.isComplete) {
           const errorMsg = e instanceof Error ? e.message : 'Unknown JSON parse error';
-          this.setError(`Failed to parse tool input JSON for '${builder.toolName}': ${errorMsg}`);
+          this.setError(state, `Failed to parse tool input JSON for '${builder.toolName}': ${errorMsg}`);
         }
       }
 
@@ -1070,20 +1180,20 @@ export class StreamParserService {
     } as ContentBlock;
   }
 
-  private finalizeCurrentMessage(): void {
-    const builder = this.currentMessageBuilder();
+  private finalizeCurrentMessage(state: ParserSessionState): void {
+    const builder = state.currentMessageBuilder();
     if (!builder) return;
 
-    const message = this.buildMessage(builder);
+    const message = this.buildMessage(state, builder);
 
     if (message.content.length > 0) {
-      this.completedMessages.update((messages) => [...messages, message]);
+      state.completedMessages.update((messages) => [...messages, message]);
     }
 
     if (builder.role === 'assistant') {
-      this.pendingCitations.set([]);
+      state.pendingCitations.set([]);
     }
 
-    this.currentMessageBuilder.set(null);
+    state.currentMessageBuilder.set(null);
   }
 }

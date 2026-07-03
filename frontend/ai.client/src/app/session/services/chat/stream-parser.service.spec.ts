@@ -21,7 +21,7 @@ describe('StreamParserService - Citation Handling', () => {
       ],
     });
     service = TestBed.inject(StreamParserService);
-    service.reset();
+    service.reset('s1');
   });
 
   afterEach(() => {
@@ -45,13 +45,13 @@ describe('StreamParserService - Citation Handling', () => {
           }),
           (citationData: { assistantId: string; documentId: string; fileName: string; text: string }) => {
             // Reset service for each iteration
-            service.reset();
+            service.reset('s1');
 
             // Parse citation event
-            service.parseEventSourceMessage('citation', citationData);
+            service.parseEventSourceMessage('s1', 'citation', citationData);
 
             // Get accumulated citations
-            const citations = service.citations();
+            const citations = service.citationsFor('s1')();
 
             // Verify citation was added
             expect(citations.length).toBe(1);
@@ -80,13 +80,13 @@ describe('StreamParserService - Citation Handling', () => {
           }),
           (citationData: { documentId: string; fileName: string; text: string }) => {
             // Reset service for each iteration
-            service.reset();
+            service.reset('s1');
 
             // Parse citation event without assistantId
-            service.parseEventSourceMessage('citation', citationData);
+            service.parseEventSourceMessage('s1', 'citation', citationData);
 
             // Get accumulated citations
-            const citations = service.citations();
+            const citations = service.citationsFor('s1')();
 
             // Verify citation was NOT added (missing assistantId)
             expect(citations.length).toBe(0);
@@ -110,9 +110,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -124,9 +124,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -138,9 +138,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -152,9 +152,9 @@ describe('StreamParserService - Citation Handling', () => {
         // text missing
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -166,9 +166,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -180,9 +180,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -194,9 +194,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -208,30 +208,30 @@ describe('StreamParserService - Citation Handling', () => {
         text: { content: 'Some text' }, // object instead of string
       };
 
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
     it('should skip citation with null data', () => {
-      service.parseEventSourceMessage('citation', null);
+      service.parseEventSourceMessage('s1', 'citation', null);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
     it('should skip citation with undefined data', () => {
-      service.parseEventSourceMessage('citation', undefined);
+      service.parseEventSourceMessage('s1', 'citation', undefined);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
     it('should skip citation with non-object data', () => {
-      service.parseEventSourceMessage('citation', 'invalid string data');
+      service.parseEventSourceMessage('s1', 'citation', 'invalid string data');
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -250,11 +250,11 @@ describe('StreamParserService - Citation Handling', () => {
 
       malformedCitations.forEach((malformed) => {
         expect(() => {
-          service.parseEventSourceMessage('citation', malformed);
+          service.parseEventSourceMessage('s1', 'citation', malformed);
         }).not.toThrow();
       });
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(0);
     });
 
@@ -264,7 +264,7 @@ describe('StreamParserService - Citation Handling', () => {
         documentId: 'doc-123',
         // missing assistantId, fileName and text
       };
-      service.parseEventSourceMessage('citation', malformedCitation);
+      service.parseEventSourceMessage('s1', 'citation', malformedCitation);
 
       // Then, send valid citation
       const validCitation = {
@@ -273,9 +273,9 @@ describe('StreamParserService - Citation Handling', () => {
         fileName: 'valid.pdf',
         text: 'Valid text',
       };
-      service.parseEventSourceMessage('citation', validCitation);
+      service.parseEventSourceMessage('s1', 'citation', validCitation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(1);
       expect(citations[0].assistantId).toBe('assistant-1');
       expect(citations[0].documentId).toBe('doc-456');
@@ -297,9 +297,9 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some relevant text from the document',
       };
 
-      service.parseEventSourceMessage('citation', citation);
+      service.parseEventSourceMessage('s1', 'citation', citation);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(1);
       expect(citations[0].assistantId).toBe('assistant-1');
       expect(citations[0].documentId).toBe('doc-123');
@@ -322,10 +322,10 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Text from second document',
       };
 
-      service.parseEventSourceMessage('citation', citation1);
-      service.parseEventSourceMessage('citation', citation2);
+      service.parseEventSourceMessage('s1', 'citation', citation1);
+      service.parseEventSourceMessage('s1', 'citation', citation2);
 
-      const citations = service.citations();
+      const citations = service.citationsFor('s1')();
       expect(citations.length).toBe(2);
       expect(citations[0].documentId).toBe('doc-123');
       expect(citations[0].assistantId).toBe('assistant-1');
@@ -341,11 +341,11 @@ describe('StreamParserService - Citation Handling', () => {
         text: 'Some text',
       };
 
-      service.parseEventSourceMessage('citation', citation);
-      expect(service.citations().length).toBe(1);
+      service.parseEventSourceMessage('s1', 'citation', citation);
+      expect(service.citationsFor('s1')().length).toBe(1);
 
-      service.reset();
-      expect(service.citations().length).toBe(0);
+      service.reset('s1');
+      expect(service.citationsFor('s1')().length).toBe(0);
     });
   });
 });
@@ -366,7 +366,9 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     });
     service = TestBed.inject(StreamParserService);
     chatState = TestBed.inject(ChatStateService);
-    service.reset();
+    // The Continue affordance reads through the viewed-session facade.
+    chatState.setViewedSession('s1');
+    service.reset('s1');
   });
 
   afterEach(() => {
@@ -376,7 +378,7 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
   it('marks the last turn continuable on a max_tokens stream_error', () => {
     expect(chatState.lastTurnContinuable()).toBe(false);
 
-    service.parseEventSourceMessage('stream_error', {
+    service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',
       code: 'max_tokens',
       message: 'I reached my response-length limit.',
@@ -388,7 +390,7 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
   });
 
   it('does not mark continuable for a non-max_tokens stream_error', () => {
-    service.parseEventSourceMessage('stream_error', {
+    service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',
       code: 'stream_error',
       message: 'Something went wrong.',
@@ -399,7 +401,7 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
   });
 
   it('retires the affordance when the next assistant turn starts streaming', () => {
-    service.parseEventSourceMessage('stream_error', {
+    service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',
       code: 'max_tokens',
       message: 'truncated',
@@ -408,7 +410,7 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     });
     expect(chatState.lastTurnContinuable()).toBe(true);
 
-    service.parseEventSourceMessage('message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
     expect(chatState.lastTurnContinuable()).toBe(false);
   });
 
@@ -417,11 +419,11 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     // terminal state (message_start sets currentStreamId; done →
     // Completed), then the max_tokens stream_error arrives last. It must
     // still be processed (always-allowed) so Continue appears.
-    service.parseEventSourceMessage('message_start', { role: 'assistant' });
-    service.parseEventSourceMessage('done', null);
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('s1', 'done', null);
     expect(chatState.lastTurnContinuable()).toBe(false);
 
-    service.parseEventSourceMessage('stream_error', {
+    service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',
       code: 'max_tokens',
       message: 'Response length limit reached.',
@@ -430,5 +432,162 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     });
 
     expect(chatState.lastTurnContinuable()).toBe(true);
+  });
+
+  it('keys the affordance to the stream session, not the viewed one', () => {
+    // A background stream (session s2) truncating must not surface
+    // Continue on the viewed conversation (s1).
+    service.reset('s2');
+    service.parseEventSourceMessage('s2', 'stream_error', {
+      type: 'stream_error',
+      code: 'max_tokens',
+      message: 'truncated',
+      recoverable: true,
+      metadata: { error_kind: 'max_tokens' },
+    });
+
+    expect(chatState.lastTurnContinuable()).toBe(false);
+
+    chatState.setViewedSession('s2');
+    expect(chatState.lastTurnContinuable()).toBe(true);
+  });
+});
+
+describe('StreamParserService - concurrent session isolation', () => {
+  let service: StreamParserService;
+
+  const streamText = (sessionId: string, text: string) => {
+    service.parseEventSourceMessage(sessionId, 'message_start', { role: 'assistant' });
+    service.parseEventSourceMessage(sessionId, 'content_block_delta', {
+      contentBlockIndex: 0,
+      text,
+    });
+  };
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        StreamParserService,
+        ChatStateService,
+        ErrorService,
+        QuotaWarningService,
+      ],
+    });
+    service = TestBed.inject(StreamParserService);
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('parses two interleaved streams into separate per-session state', () => {
+    service.reset('a', 1);
+    service.reset('b', 1);
+
+    streamText('a', 'alpha');
+    streamText('b', 'bravo');
+    service.parseEventSourceMessage('a', 'content_block_delta', {
+      contentBlockIndex: 0,
+      text: '-more',
+    });
+
+    const aMessages = service.allMessagesFor('a')();
+    const bMessages = service.allMessagesFor('b')();
+
+    expect(aMessages).toHaveLength(1);
+    expect(aMessages[0].id).toBe('msg-a-1');
+    expect(aMessages[0].content).toEqual([{ type: 'text', text: 'alpha-more' }]);
+
+    expect(bMessages).toHaveLength(1);
+    expect(bMessages[0].id).toBe('msg-b-1');
+    expect(bMessages[0].content).toEqual([{ type: 'text', text: 'bravo' }]);
+  });
+
+  it('keeps session A streaming after session B resets (route change / new stream)', () => {
+    service.reset('a');
+    streamText('a', 'hello');
+
+    // Session B starting a stream must not disturb A's in-flight parse.
+    service.reset('b');
+    streamText('b', 'other');
+
+    service.parseEventSourceMessage('a', 'content_block_delta', {
+      contentBlockIndex: 0,
+      text: ' world',
+    });
+
+    expect(service.allMessagesFor('a')()[0].content).toEqual([
+      { type: 'text', text: 'hello world' },
+    ]);
+    expect(service.streamingMessageIdFor('a')()).toBe('msg-a-0');
+  });
+
+  it('drops late events carrying a superseded stream id (same-session resubmit)', () => {
+    service.reset('a');
+    const staleStreamId = service.getCurrentStreamId('a');
+    streamText('a', 'first attempt');
+
+    // A re-submit resets the session's parser; the old stream's late
+    // events identify themselves with the captured (now stale) stream id.
+    service.reset('a');
+    expect(service.getCurrentStreamId('a')).not.toBe(staleStreamId);
+
+    service.parseEventSourceMessage(
+      'a',
+      'message_start',
+      { role: 'assistant' },
+      staleStreamId,
+    );
+    service.parseEventSourceMessage(
+      'a',
+      'content_block_delta',
+      { contentBlockIndex: 0, text: 'stale text' },
+      staleStreamId,
+    );
+
+    expect(service.allMessagesFor('a')()).toHaveLength(0);
+
+    // The replacement stream still parses normally with its own id.
+    const freshStreamId = service.getCurrentStreamId('a');
+    service.parseEventSourceMessage('a', 'message_start', { role: 'assistant' }, freshStreamId);
+    service.parseEventSourceMessage(
+      'a',
+      'content_block_delta',
+      { contentBlockIndex: 0, text: 'fresh text' },
+      freshStreamId,
+    );
+    expect(service.allMessagesFor('a')()[0].content).toEqual([
+      { type: 'text', text: 'fresh text' },
+    ]);
+  });
+
+  it('ignores events for a session with no parser state', () => {
+    expect(() =>
+      service.parseEventSourceMessage('ghost', 'message_start', { role: 'assistant' }),
+    ).not.toThrow();
+    expect(service.allMessagesFor('ghost')()).toEqual([]);
+  });
+
+  it('routes cost metadata to the stream session in ChatStateService', () => {
+    const chatState = TestBed.inject(ChatStateService);
+    chatState.setViewedSession('a');
+    service.reset('a');
+    service.reset('b');
+
+    // Background session B finishes a turn while A is viewed.
+    service.parseEventSourceMessage('b', 'message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('b', 'metadata', {
+      usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+      cost: 0.25,
+      contextWindow: 200000,
+    });
+
+    // Viewed badge (session A) is untouched...
+    expect(chatState.costDollars()).toBe(0);
+    // ...and B's own aggregates carry the turn.
+    chatState.setViewedSession('b');
+    expect(chatState.costDollars()).toBe(0.25);
+    expect(chatState.contextTokens()).toBe(100);
   });
 });

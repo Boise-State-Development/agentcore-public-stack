@@ -169,6 +169,16 @@ export class ChatContainerComponent {
     return !a.isSharedWithMe;
   });
 
+  /**
+   * Anchor the latest user message at the top of the viewport. Exposed for
+   * the session page's navigation scroll policy (first open of a
+   * conversation lands on its latest turn, instantly); the composer submit
+   * path below uses the same anchor with smooth scrolling.
+   */
+  scrollToLastUserMessage(behavior: ScrollBehavior = 'smooth'): void {
+    this.messageListComponent()?.scrollToLastUserMessage(behavior);
+  }
+
   // Event handlers
   onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[] }) {
     this.messageSubmitted.emit(event);
