@@ -35,18 +35,29 @@
           class="min-w-0 max-w-xs flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-base/7 font-semibold text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
           aria-label="Rename conversation title"
         />
-      } @else if (currentSession().title) {
-        <!-- Session title with options menu trigger -->
+      } @else if (titlePending()) {
+        <!-- Title not available yet — either a hard refresh (session id + title
+             arrive together once metadata resolves) or a brand-new chat whose
+             title is still generating. Show a skeleton until it lands or, if
+             none ever arrives, until the pending window closes (below). -->
+        <div
+          class="h-4 w-40 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"
+          role="status"
+          aria-label="Loading conversation title"
+        ></div>
+      } @else if (currentSession().sessionId) {
+        <!-- Resolved: real title, or the "Untitled Session" fallback when the
+             session genuinely has no title (generation failed / never ran). -->
         <button
           type="button"
           [cdkMenuTriggerFor]="sessionMenu"
           [cdkMenuPosition]="menuPositions"
           [disabled]="deleting()"
           class="group/title flex min-w-0 items-center gap-x-2 rounded-md px-1.5 py-1 -mx-1.5 text-gray-900 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white dark:hover:bg-white/10"
-          [attr.aria-label]="'Options for conversation: ' + currentSession().title"
+          [attr.aria-label]="'Options for conversation: ' + displayTitle()"
           aria-haspopup="menu"
         >
-          @for (title of [currentSession().title]; track title) {
+          @for (title of [displayTitle()]; track title) {
             <span class="session-title-enter truncate text-base/7 font-semibold">{{ title }}</span>
           }
           <ng-icon
@@ -107,15 +118,6 @@
             </button>
           </div>
         </ng-template>
-      } @else if (currentSession().sessionId || titleLoading()) {
-        <!-- Title not available yet — either a hard refresh (session id + title
-             arrive together once metadata resolves) or a brand-new chat whose
-             title is still generating. Show a skeleton until it lands. -->
-        <div
-          class="h-4 w-40 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"
-          role="status"
-          aria-label="Loading conversation title"
-        ></div>
       }
 
       <!-- Separator -->

@@ -149,6 +149,93 @@ class TestInvocationsValid:
 
 
 # ---------------------------------------------------------------------------
+# session_title SSE: concurrent title generation pushed mid-stream
+# ---------------------------------------------------------------------------
+
+
+class TestSessionTitleEvent:
+    """First-turn streams interleave a `session_title` SSE event once the
+    concurrent title-generation task finishes, so the client can rename the
+    conversation while the response is still pending."""
+
+    @staticmethod
+    def _make_agent():
+        """Fake agent whose stream yields real suspension points so the
+        concurrently scheduled title task gets a chance to run — mirrors the
+        real Bedrock stream, which awaits network I/O between events."""
+        import asyncio
+
+        mock_agent = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            yield 'event: message_start\ndata: {"role": "assistant"}\n\n'
+            await asyncio.sleep(0)
+            yield 'event: content_block_delta\ndata: {"contentBlockIndex": 0, "type": "text", "text": "Hi"}\n\n'
+            await asyncio.sleep(0)
+            yield "event: done\ndata: {}\n\n"
+
+        mock_agent.stream_async = fake_stream
+        return mock_agent
+
+    def _post_first_turn(self, authed_client, title_result, is_new_session=True):
+        async def fake_title(**kwargs):
+            return title_result
+
+        async def fake_ensure(*args, **kwargs):
+            return is_new_session
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=self._make_agent(),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes.ensure_session_metadata_exists",
+            side_effect=fake_ensure,
+        ), patch(
+            "apis.inference_api.chat.routes.generate_conversation_title",
+            side_effect=fake_title,
+        ):
+            return authed_client.post(
+                "/invocations",
+                json={"session_id": "sess-title-1", "message": "Explain SSE"},
+            )
+
+    def test_first_turn_emits_session_title_event(self, authed_app, authed_client):
+        """A new session's stream carries the generated title mid-stream."""
+        resp = self._post_first_turn(authed_client, "SSE Streaming Explained")
+
+        assert resp.status_code == 200
+        body = resp.text
+        assert "event: session_title" in body
+        assert '"title": "SSE Streaming Explained"' in body
+        assert '"sessionId": "sess-title-1"' in body
+        # At most once per stream.
+        assert body.count("event: session_title") == 1
+        # Interleaved into the stream, not appended after the fact: it must
+        # appear before the terminal `done` frame the agent emitted last.
+        assert body.index("event: session_title") < body.rindex("event: done")
+
+    def test_placeholder_title_is_not_emitted(self, authed_app, authed_client):
+        """Generation failure returns the placeholder — nothing is pushed;
+        the SPA's post-close fallback owns that path."""
+        resp = self._post_first_turn(authed_client, "New Conversation")
+
+        assert resp.status_code == 200
+        assert "event: session_title" not in resp.text
+
+    def test_existing_session_emits_no_title_event(self, authed_app, authed_client):
+        """Non-first turns never kick off title generation, so no event."""
+        resp = self._post_first_turn(
+            authed_client, "Should Never Appear", is_new_session=False
+        )
+
+        assert resp.status_code == 200
+        assert "event: session_title" not in resp.text
+
+
+# ---------------------------------------------------------------------------
 # Requirement 15.3: POST /invocations with invalid payload returns 422
 # ---------------------------------------------------------------------------
 

@@ -237,6 +237,20 @@ export class SessionList {
   }
 
   /**
+   * Whether this row should show a title skeleton instead of a label: a
+   * brand-new conversation whose title is still generating server-side (it
+   * arrives mid-stream via the `session_title` SSE event). Gated on the
+   * active stream so the shimmer can't outlive a resolved-but-untitled
+   * session — once streaming ends the row falls back to the real title (if
+   * it landed) or the static "Untitled Session" label. Signal-backed via
+   * `isSessionStreaming`, so the OnPush row swaps the skeleton for the title
+   * the moment either the title or the stream resolves.
+   */
+  protected isTitlePending(session: SessionMetadata): boolean {
+    return !session.title && this.isSessionStreaming(session.sessionId);
+  }
+
+  /**
    * Handles session selection. Optimistically sets the clicked session as the
    * current one so the top-nav title updates the instant the item is clicked,
    * instead of lingering on the previous title until its metadata loads from

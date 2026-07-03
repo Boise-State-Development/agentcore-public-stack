@@ -1,11 +1,12 @@
 // stream-parser.service.spec.ts
 import { TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fc from 'fast-check';
 import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { QuotaWarningService } from '../../../services/quota/quota-warning.service';
+import { SessionService } from '../session/session.service';
 
 describe('StreamParserService - Citation Handling', () => {
   let service: StreamParserService;
@@ -589,5 +590,73 @@ describe('StreamParserService - concurrent session isolation', () => {
     chatState.setViewedSession('b');
     expect(chatState.costDollars()).toBe(0.25);
     expect(chatState.contextTokens()).toBe(100);
+  });
+});
+
+describe('StreamParserService - session_title events', () => {
+  let service: StreamParserService;
+  let applyServerTitle: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    applyServerTitle = vi.fn();
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        StreamParserService,
+        ChatStateService,
+        ErrorService,
+        QuotaWarningService,
+        { provide: SessionService, useValue: { applyServerTitle } },
+      ],
+    });
+    service = TestBed.inject(StreamParserService);
+    service.reset('s1');
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('applies a mid-stream session_title to the session cache and header', () => {
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('s1', 'session_title', {
+      type: 'session_title',
+      sessionId: 's1',
+      title: 'Python CSV Parser Script',
+    });
+
+    expect(applyServerTitle).toHaveBeenCalledWith('s1', 'Python CSV Parser Script');
+  });
+
+  it('still applies a session_title arriving after done (late generation)', () => {
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
+    service.parseEventSourceMessage('s1', 'done', null);
+    service.parseEventSourceMessage('s1', 'session_title', {
+      type: 'session_title',
+      sessionId: 's1',
+      title: 'Late Title',
+    });
+
+    expect(applyServerTitle).toHaveBeenCalledWith('s1', 'Late Title');
+  });
+
+  it('ignores a session_title whose sessionId does not match the stream', () => {
+    service.parseEventSourceMessage('s1', 'session_title', {
+      type: 'session_title',
+      sessionId: 'other-session',
+      title: 'Wrong Stream',
+    });
+
+    expect(applyServerTitle).not.toHaveBeenCalled();
+  });
+
+  it('drops an invalid session_title without applying anything', () => {
+    service.parseEventSourceMessage('s1', 'session_title', {
+      type: 'session_title',
+      sessionId: 's1',
+      title: '',
+    });
+
+    expect(applyServerTitle).not.toHaveBeenCalled();
   });
 });

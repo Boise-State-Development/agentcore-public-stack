@@ -7,6 +7,7 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
 import { SessionService } from '../../session/services/session/session.service';
+import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../session/components/share-modal';
 import { ExportDialogComponent, ExportDialogData } from '../../session/components/export-dialog';
 import { UserService } from '../../auth/user.service';
@@ -26,6 +27,7 @@ export class Topnav {
   private router = inject(Router);
   protected sidenavService = inject(SidenavService);
   protected sessionService = inject(SessionService);
+  private chatStateService = inject(ChatStateService);
   private dialog = inject(Dialog);
   private toastService = inject(ToastService);
   private userService = inject(UserService);
@@ -41,6 +43,33 @@ export class Topnav {
    */
   protected readonly titleLoading = computed(() =>
     this.sessionService.sessionMetadataResource.isLoading()
+  );
+
+  /**
+   * True only while a title is genuinely still expected — so the skeleton
+   * can never outlive a resolved-but-untitled session. Two pending sources:
+   *   1. Metadata is still being fetched (hard refresh).
+   *   2. A brand-new conversation whose title is generating server-side and
+   *      arrives mid-stream via the `session_title` SSE event; bounded to the
+   *      active response, so once the stream ends without a title we fall
+   *      back to the static "Untitled Session" label instead of shimmering
+   *      forever.
+   * A session that already has a title is never pending.
+   */
+  protected readonly titlePending = computed(() => {
+    const session = this.currentSession();
+    if (session.title) {
+      return false;
+    }
+    if (this.titleLoading()) {
+      return true;
+    }
+    return this.chatStateService.isSessionLoading(session.sessionId);
+  });
+
+  /** Header label once a title is no longer pending — real title or fallback. */
+  protected readonly displayTitle = computed(
+    () => this.currentSession().title || 'Untitled Session'
   );
 
   /** True while the title is being edited inline. */

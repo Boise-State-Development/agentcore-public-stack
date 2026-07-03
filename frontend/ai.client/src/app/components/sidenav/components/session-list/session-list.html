@@ -49,11 +49,33 @@
                                         <a
                                             [routerLink]="['/s', getSessionId(session.sessionId)]"
                                             [queryParams]="getSessionQueryParams(session)"
-                                            routerLinkActive="bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                                            routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
                                             (click)="onSessionClick(session)"
-                                            class="block truncate rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
-                                            {{ getSessionTitle(session) }}
+                                            @if (isTitlePending(session)) {
+                                                <!-- Title still generating (new conversation) — shimmer
+                                                     until the session_title event lands or the stream ends.
+                                                     Colour lives in the component stylesheet: on the active
+                                                     row (.session-row--active, whose highlight is bg-gray-200
+                                                     / dark:bg-white/5) the shimmer darkens so it stays
+                                                     visible against it (see .title-skeleton in the CSS).
+                                                     h-4 (1rem) matches the text cap-height; min-h-8 on the
+                                                     row keeps its height identical to a titled row so the
+                                                     skeleton→title swap causes no vertical jank. -->
+                                                <span
+                                                    class="title-skeleton h-4 w-3/5 shrink-0 rounded-md animate-pulse motion-reduce:animate-none"
+                                                    role="status"
+                                                    aria-label="Generating conversation title"
+                                                ></span>
+                                            } @else {
+                                                <!-- Keyed by the title string so the fade replays when the
+                                                     generated title first replaces the skeleton (and on
+                                                     rename), mirroring the top-nav title reveal. -->
+                                                @for (title of [getSessionTitle(session)]; track title) {
+                                                    <span class="session-title-enter min-w-0 truncate">{{ title }}</span>
+                                                }
+                                            }
                                             @if (isSessionStreaming(session.sessionId)) {
                                                 <span class="sr-only">(response in progress)</span>
                                             }

@@ -202,8 +202,12 @@ export class ChatHttpService {
         onclose: () => {
           finalizeStream();
 
-          // Title is generated server-side concurrently with the stream
-          // (see /invocations). Refresh metadata so the sidebar reflects it.
+          // Fallback only: the title normally arrives mid-stream as a
+          // `session_title` SSE event, whose handler (applyServerTitle)
+          // removes the session from newSessionIds — making this a no-op.
+          // It still fires when the stream outran title generation (fast
+          // response) or the event was lost, fetching the title Nova Micro
+          // wrote to session metadata concurrently with the stream.
           if (this.sessionService.isNewSession(requestObject.session_id)) {
             this.refreshTitleFromServer(requestObject.session_id);
           }
@@ -257,18 +261,20 @@ export class ChatHttpService {
   }
 
   /**
-   * Pull the server-generated title into the local sidebar cache.
+   * Fallback pull of the server-generated title (sidebar cache + header).
    *
-   * Title generation runs concurrently with the agent stream on the backend.
-   * Nova Micro typically finishes well before the stream does, but on fast
-   * responses we may race past it — so on a "New Conversation" placeholder
-   * we retry once after a short delay before giving up.
+   * Title generation runs concurrently with the agent stream on the backend
+   * and is normally PUSHED mid-stream as a `session_title` SSE event; this
+   * fetch only runs when the stream closed while the session still looked
+   * new (see onclose). On a "New Conversation" placeholder — generation
+   * still in flight or failed — we retry once after a short delay before
+   * giving up.
    */
   private async refreshTitleFromServer(sessionId: string, retried = false): Promise<void> {
     try {
       const metadata = await this.sessionService.getSessionMetadata(sessionId);
       if (metadata.title && metadata.title !== 'New Conversation') {
-        this.sessionService.updateSessionTitleInCache(sessionId, metadata.title);
+        this.sessionService.applyServerTitle(sessionId, metadata.title);
         return;
       }
       if (!retried) {

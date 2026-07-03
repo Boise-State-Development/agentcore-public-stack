@@ -168,6 +168,29 @@ describe('SessionService', () => {
     });
   });
 
+  describe('applyServerTitle', () => {
+    it('should update the cache and currentSession when the session is active', () => {
+      service.addSessionToCache('s1', 'u1', 'New Conversation');
+      service.currentSession.set({ ...mockSession, sessionId: 's1', title: 'New Conversation' });
+
+      service.applyServerTitle('s1', 'Generated Title');
+
+      expect(service.mergedSessionsResource().sessions[0].title).toBe('Generated Title');
+      expect(service.currentSession().title).toBe('Generated Title');
+      expect(service.isNewSession('s1')).toBe(false);
+    });
+
+    it('should leave currentSession alone when another session is active', () => {
+      service.addSessionToCache('s1', 'u1', 'New Conversation');
+      service.currentSession.set({ ...mockSession, sessionId: 'other', title: 'Other Title' });
+
+      service.applyServerTitle('s1', 'Generated Title');
+
+      expect(service.mergedSessionsResource().sessions[0].title).toBe('Generated Title');
+      expect(service.currentSession().title).toBe('Other Title');
+    });
+  });
+
   describe('enableSessionsLoading / disableSessionsLoading', () => {
     it('should toggle without error', () => {
       expect(() => service.enableSessionsLoading()).not.toThrow();
