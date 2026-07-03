@@ -354,6 +354,12 @@ async def delete_document(
         if not document:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
 
+        # Delete any sync policy covering this document so the schedule
+        # cannot outlive its source (drive_file policies use the document
+        # id as source_ref; crawl policies are cascaded with the CrawlJob)
+        from apis.shared.sync_policies.service import delete_sync_policies_for_source
+        await delete_sync_policies_for_source(assistant_id, document_id)
+
         # Fire-and-forget cleanup (response already sent as 204)
         asyncio.ensure_future(
             cleanup_document_resources(

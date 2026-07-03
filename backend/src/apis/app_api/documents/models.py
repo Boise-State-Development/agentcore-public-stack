@@ -61,6 +61,11 @@ class Document(BaseModel):
     source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
     source_etag: Optional[str] = Field(None, alias="sourceEtag", description="Provider-side version stamp at import time")
     imported_by_user_id: Optional[str] = Field(None, alias="importedByUserId", description="User whose credentials imported the file")
+    # Sync bookkeeping — populated only when the document is covered by a
+    # SyncPolicy (scheduled re-index from source).
+    content_hash: Optional[str] = Field(None, alias="contentHash", description="SHA-256 of the last-ingested raw bytes (change-detection second gate)")
+    last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
+    sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy (UI badges)")
 
 
 class CreateDocumentRequest(BaseModel):

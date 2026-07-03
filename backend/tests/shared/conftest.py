@@ -260,11 +260,14 @@ def assistants_table(aws, monkeypatch):
             {"AttributeName": "GSI2_SK", "AttributeType": "S"},
             {"AttributeName": "GSI3_PK", "AttributeType": "S"},
             {"AttributeName": "GSI3_SK", "AttributeType": "S"},
+            {"AttributeName": "GSI4_PK", "AttributeType": "S"},
+            {"AttributeName": "GSI4_SK", "AttributeType": "S"},
         ],
         gsis=[
             _gsi("OwnerStatusIndex", "GSI_PK", "GSI_SK"),
             _gsi("VisibilityStatusIndex", "GSI2_PK", "GSI2_SK"),
             _gsi("SharedWithIndex", "GSI3_PK", "GSI3_SK"),
+            _gsi("DueSyncIndex", "GSI4_PK", "GSI4_SK"),
         ],
     )
 

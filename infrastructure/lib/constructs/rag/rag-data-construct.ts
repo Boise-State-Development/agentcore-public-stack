@@ -26,10 +26,11 @@ export interface RagDataConstructProps {
  *     dimension and distance metric driven by config; Titan V2
  *     embeddings → 1024-dim float32 cosine. The `text` metadata key
  *     is marked non-filterable because it's too large to filter on.
- *   - DynamoDB assistants table with three GSIs:
+ *   - DynamoDB assistants table with four GSIs:
  *       OwnerStatusIndex
  *       VisibilityStatusIndex
  *       SharedWithIndex (projection = ALL)
+ *       DueSyncIndex (sparse, projection = ALL — KB sync due sweep)
  *
  * SSM publications:
  *   /{prefix}/rag/documents-bucket-name
@@ -147,6 +148,16 @@ export class RagDataConstruct extends Construct {
       indexName: 'SharedWithIndex',
       partitionKey: { name: 'GSI3_PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'GSI3_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Sparse due-sweep index for KB sync policies: GSI4 keys exist only on
+    // SYNCPOL# items while state == "active", so the sync dispatcher's query
+    // physically cannot see paused policies.
+    this.assistantsTable.addGlobalSecondaryIndex({
+      indexName: 'DueSyncIndex',
+      partitionKey: { name: 'GSI4_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI4_SK', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
