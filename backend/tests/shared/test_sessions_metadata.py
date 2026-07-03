@@ -74,6 +74,99 @@ class TestGetSessionMetadata:
         assert result is None
 
 
+class TestInterruptedTurnMarker:
+    """Refresh-survival marker for a turn interrupted before completion."""
+
+    @pytest.mark.asyncio
+    async def test_set_then_clear(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+            clear_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i1", user_id="u1", session_metadata=_make_session_metadata(session_id="i1"))
+
+        result = await get_session_metadata("i1", "u1")
+        assert not result.last_turn_interrupted
+
+        await set_interrupted_turn("i1", "u1", reason="connection_lost", source="cancellation")
+        result = await get_session_metadata("i1", "u1")
+        assert result.last_turn_interrupted is True
+        assert result.last_turn_interrupt_reason == "connection_lost"
+        assert result.last_turn_interrupted_at
+
+        # The clear is a POP: it returns the settled reason so the turn-start
+        # caller can drive the next-turn model note from the same read+write.
+        cleared_reason = await clear_interrupted_turn("i1", "u1")
+        assert cleared_reason == "connection_lost"
+        result = await get_session_metadata("i1", "u1")
+        assert not result.last_turn_interrupted
+        assert result.last_turn_interrupt_reason is None
+
+        # Idempotent: popping an already-clear marker returns None.
+        assert await clear_interrupted_turn("i1", "u1") is None
+
+    @pytest.mark.asyncio
+    async def test_user_stopped_wins_over_connection_lost(self, sessions_metadata_table):
+        # Client stop signal lands first; the cancellation fallback must NOT
+        # downgrade it.
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i2", user_id="u1", session_metadata=_make_session_metadata(session_id="i2"))
+
+        await set_interrupted_turn("i2", "u1", reason="user_stopped", source="client_signal")
+        await set_interrupted_turn("i2", "u1", reason="connection_lost", source="cancellation")
+
+        result = await get_session_metadata("i2", "u1")
+        assert result.last_turn_interrupt_reason == "user_stopped"
+
+    @pytest.mark.asyncio
+    async def test_user_stopped_upgrades_connection_lost(self, sessions_metadata_table):
+        # Cancellation fallback lands first; a later client signal upgrades it.
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        await store_session_metadata(session_id="i3", user_id="u1", session_metadata=_make_session_metadata(session_id="i3"))
+
+        await set_interrupted_turn("i3", "u1", reason="connection_lost", source="cancellation")
+        await set_interrupted_turn("i3", "u1", reason="user_stopped", source="client_signal")
+
+        result = await get_session_metadata("i3", "u1")
+        assert result.last_turn_interrupt_reason == "user_stopped"
+
+    @pytest.mark.asyncio
+    async def test_set_noop_when_session_missing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import set_interrupted_turn, get_session_metadata
+        # No store first — must not raise, and nothing to read back.
+        await set_interrupted_turn("i-missing", "u1", reason="connection_lost")
+        assert await get_session_metadata("i-missing", "u1") is None
+
+    @pytest.mark.asyncio
+    async def test_survives_response_round_trip(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            store_session_metadata,
+            get_session_metadata,
+            set_interrupted_turn,
+        )
+        from apis.shared.sessions.models import SessionMetadataResponse
+
+        await store_session_metadata(session_id="i4", user_id="u1", session_metadata=_make_session_metadata(session_id="i4"))
+        await set_interrupted_turn("i4", "u1", reason="user_stopped", source="client_signal")
+        meta = await get_session_metadata("i4", "u1")
+
+        resp = SessionMetadataResponse.model_validate(meta.model_dump(by_alias=True))
+        assert resp.last_turn_interrupted is True
+        dumped = resp.model_dump(by_alias=True)
+        assert dumped["lastTurnInterrupted"] is True
+        assert dumped["lastTurnInterruptReason"] == "user_stopped"
+
+
 class TestTruncatedTurnMarker:
     """Refresh-survival marker for the max_tokens 'Continue' affordance."""
 

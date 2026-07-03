@@ -114,6 +114,20 @@ class StreamCoordinator:
         per_message_metadata: List[Dict[str, Any]] = []
         current_assistant_message_index = -1  # Track which assistant message we're on (0-indexed within this stream)
 
+        # Accumulate the IN-FLIGHT assistant message's TEXT so an interruption
+        # (client Stop / refresh / dropped socket) can persist the partial the
+        # user already saw. Unlike max_tokens truncation — where Strands
+        # recovers and appends the partial itself — a raw cancellation aborts
+        # the turn before Strands commits the current message, so we
+        # reconstruct it from the deltas here. Scope is strictly the message
+        # currently streaming: TurnBasedSessionManager persists each COMPLETED
+        # message immediately via the append_message hook (flush is a no-op),
+        # so the accumulator resets at assistant `message_start` and clears at
+        # `message_stop` — otherwise re-persisting it would duplicate text
+        # from mid-turn messages that already landed in AgentCore Memory.
+        # See the CancelledError/GeneratorExit handler below.
+        assistant_text_acc: List[str] = []
+
         # OPTIMIZATION: Capture initial message count BEFORE streaming starts
         # This allows us to calculate message indices without post-stream AgentCore Memory queries
         # The TurnBasedSessionManager.message_count is initialized from AgentCore Memory at session start
@@ -155,6 +169,10 @@ class StreamCoordinator:
                 if event.get("type") == "message_start":
                     role = event.get("data", {}).get("role")
                     if role == "assistant":
+                        # New in-flight message — drop any leftover deltas
+                        # (a prior message was completed + persisted by the
+                        # append_message hook, or this is the first message).
+                        assistant_text_acc.clear()
                         current_assistant_message_index += 1
                         # Record the start time for this specific assistant message
                         # This enables accurate per-message latency calculation
@@ -177,6 +195,8 @@ class StreamCoordinator:
                     # Only track first token for text deltas (not tool use deltas)
                     # This gives accurate TTFT for actual text generation
                     if event_data.get("type") == "text" and event_data.get("text"):
+                        # Capture the partial for interruption persistence.
+                        assistant_text_acc.append(event_data["text"])
                         if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                             if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
                                 per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
@@ -226,6 +246,11 @@ class StreamCoordinator:
 
                 # Track when assistant messages end
                 if event.get("type") == "message_stop":
+                    # Message complete — Strands appends it to agent.messages
+                    # and the append_message hook persists it to AgentCore
+                    # Memory. It is no longer "in flight", so an interruption
+                    # from here on must not re-persist its text.
+                    assistant_text_acc.clear()
                     if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
@@ -894,6 +919,31 @@ class StreamCoordinator:
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
 
+        except (asyncio.CancelledError, GeneratorExit):
+            # Client interruption: Stop click, page refresh, or dropped
+            # socket. Depending on where the generator is suspended when the
+            # disconnect lands, Starlette's teardown surfaces here as either
+            # CancelledError (cancellation delivered at an inner `await`,
+            # e.g. while waiting on model tokens — the common case) or
+            # GeneratorExit (thrown at a `yield` via `aclose()`). Both
+            # subclass BaseException, so the `except Exception` below never
+            # sees them — without this arm the partial is lost and the turn
+            # stays an orphan user message. This server-side arm is the
+            # BEST-EFFORT BACKSTOP (disconnect propagation through the
+            # AgentCore Runtime data plane is not guaranteed in cloud); the
+            # authoritative intent signal is the SPA's stop-signal endpoint
+            # on app-api. Persist the partial the user already saw + mark the
+            # turn, then RE-RAISE so teardown unwinds normally.
+            # `connection_lost` is the fallback reason; a `user_stopped`
+            # client signal, if it lands, wins via reason precedence in
+            # set_interrupted_turn.
+            await self._persist_interruption(
+                agent=agent,
+                session_id=session_id,
+                user_id=user_id,
+                partial_text="".join(assistant_text_acc),
+            )
+            raise
         except Exception as e:
             # Handle errors with emergency flush
             logger.error(f"Error in stream_response: {e}")
@@ -957,6 +1007,95 @@ class StreamCoordinator:
                     logger.warning(
                         "MCP Apps broker unsubscribe failed", exc_info=True
                     )
+
+    async def _persist_interruption(
+        self,
+        agent: Any,
+        session_id: str,
+        user_id: str,
+        partial_text: str,
+    ) -> None:
+        """Persist the in-flight partial assistant turn + an interrupted
+        marker when a turn is torn down mid-stream.
+
+        Runs from inside the ``except (CancelledError, GeneratorExit)`` arm,
+        i.e. while the request task is being torn down. Any bare ``await``
+        here would itself be cancelled before it completes, so the work is
+        wrapped in ``asyncio.shield`` around an independent task — the writes
+        finish even as the outer stream unwinds. Best-effort throughout: a
+        failure logs and never masks the original teardown exception (the
+        caller re-raises it).
+
+        Only the assistant partial is persisted — the user turn (and any
+        mid-turn message that completed before the interruption) was already
+        committed by Strands' MessageAddedEvent/append_message hook (same
+        reasoning as the error paths; canonical reference in
+        ``session/persistence.py``).
+
+        Role-alternation repair: when the interruption lands before any token
+        of the in-flight message streamed (empty partial), a minimal
+        placeholder assistant turn is persisted ONLY if the last committed
+        message is a user turn — that is the dangling user→user case the
+        placeholder exists to fix. On continuation/resume turns (history tail
+        is an assistant message) or a pre-turn cancellation nothing needs
+        repair, so no synthetic write happens and only the marker is set.
+        """
+        async def _do() -> None:
+            text = partial_text.strip()
+            last_role = None
+            try:
+                messages = getattr(agent, "messages", None) or []
+                if messages:
+                    last_role = messages[-1].get("role")
+            except Exception:  # noqa: BLE001 - diagnostic only
+                logger.debug("Could not read agent.messages tail", exc_info=True)
+
+            message = text if text else "[Response interrupted before any content was generated]"
+            should_persist = bool(text) or last_role == "user"
+            if should_persist:
+                try:
+                    from agents.main_agent.session.persistence import persist_synthetic_messages
+                    from agents.main_agent.session.session_factory import SessionFactory
+
+                    persist_session_manager = SessionFactory.create_session_manager(
+                        session_id=session_id, user_id=user_id, caching_enabled=False
+                    )
+                    persist_synthetic_messages(
+                        persist_session_manager,
+                        session_id,
+                        [("assistant", message)],
+                    )
+                except Exception as persist_error:
+                    logger.error(
+                        "Failed to persist interrupted partial for session %s: %s",
+                        session_id, persist_error, exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "Interruption with no in-flight partial and non-user history tail "
+                    "(role=%s) for session %s — marker only, no synthetic write",
+                    last_role, session_id,
+                )
+
+            try:
+                from apis.shared.sessions.metadata import set_interrupted_turn
+
+                await set_interrupted_turn(
+                    session_id, user_id, reason="connection_lost", source="cancellation"
+                )
+            except Exception as marker_error:
+                logger.error(
+                    "Failed to persist interrupted_turn marker for session %s: %s",
+                    session_id, marker_error, exc_info=True,
+                )
+
+        try:
+            await asyncio.shield(asyncio.ensure_future(_do()))
+        except asyncio.CancelledError:
+            # The shield itself was cancelled from outside while _do() ran —
+            # the inner task keeps running to completion (that's the point of
+            # shield). Swallow here and let the caller re-raise the original.
+            logger.debug("interrupted-turn persistence shield cancelled; inner write continues")
 
     async def _persist_paused_turn_snapshot(
         self,

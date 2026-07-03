@@ -762,3 +762,67 @@ class TestGetSessionMessages:
             resp = client.get("/sessions/nonexistent/messages")
 
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /sessions/{session_id}/interrupt — client stop signal
+# ---------------------------------------------------------------------------
+
+
+class TestSignalTurnInterrupted:
+    """POST /sessions/{session_id}/interrupt records deliberate stop intent.
+
+    This endpoint is the authoritative carrier of `user_stopped` for the
+    interrupted-turn flow (the stream-cancellation path can only infer
+    `connection_lost`). Cookie-auth via get_current_user_from_session per the
+    app-api auth rule.
+    """
+
+    def test_returns_204_and_records_user_stopped(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "user_stopped"},
+            )
+
+        assert resp.status_code == 204
+        recorder.assert_awaited_once_with(
+            "sess-001",
+            user.user_id,
+            reason="user_stopped",
+            source="client_signal",
+        )
+
+    def test_rejects_non_client_attested_reason(self, app, make_user, authenticated_client):
+        """`connection_lost` is server-inferred only — a client must not be
+        able to plant (or downgrade to) it through this endpoint."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            recorder,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "connection_lost"},
+            )
+
+        assert resp.status_code == 422
+        recorder.assert_not_awaited()
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        resp = client.post(
+            "/sessions/sess-001/interrupt",
+            json={"reason": "user_stopped"},
+        )
+        assert resp.status_code == 401
