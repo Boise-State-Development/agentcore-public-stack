@@ -1,14 +1,17 @@
+<!-- Fixed top bar. Rendered once and kept mounted across the skeleton→loaded
+     transition so it never remounts — a remount restarts the fixed wrapper's
+     `left` transition, which reads as the whole bar sweeping across. -->
+@if (showChatTopnav()) {
+  <div
+    class="chat-topnav-wrapper"
+    [class.sidenav-expanded]="!isSidenavCollapsed()"
+    [class.artifact-pane-open]="artifactPanelOpen()">
+    <app-topnav />
+  </div>
+}
+
 <!-- Skeleton loading state -->
 @if (showSkeleton()) {
-  @if (resolvedConfig().fullPageMode) {
-    <!-- Full-page mode: fixed topnav with sidenav awareness -->
-    <div
-      class="chat-topnav-wrapper"
-      [class.sidenav-expanded]="!isSidenavCollapsed()"
-      [class.artifact-pane-open]="artifactPanelOpen()">
-      <app-topnav />
-    </div>
-  }
   <div class="relative pb-30 pt-16 max-w-[720px] mx-auto px-4 py-6 min-w-0">
     <div class="min-w-0 animate-fade-in">
       <app-paragraph-skeleton />
@@ -306,16 +309,7 @@
       </div>
     </div>
   } @else {
-    <!-- Full-page mode: original layout -->
-    @if (resolvedConfig().showTopnav) {
-      <!-- Header (fixed, content scrolls underneath) -->
-      <div
-        class="chat-topnav-wrapper"
-        [class.sidenav-expanded]="!isSidenavCollapsed()"
-      [class.artifact-pane-open]="artifactPanelOpen()">
-        <app-topnav />
-      </div>
-    }
+    <!-- Full-page mode: original layout (top bar rendered once at the root) -->
 
     <!-- Assistant Error Message -->
     @if (assistantError()) {

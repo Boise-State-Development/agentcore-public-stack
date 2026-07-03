@@ -147,6 +147,25 @@ export class ChatContainerComponent {
   protected readonly showSkeleton = computed(
     () => this.isLoadingSession() && !this.hasMessages()
   );
+  /** The greeting/empty state (new chat, nothing loading). No top bar here. */
+  protected readonly isEmptyState = computed(
+    () =>
+      !this.showSkeleton() &&
+      !this.hasMessages() &&
+      this.resolvedConfig().showEmptyState
+  );
+  /**
+   * Whether the fixed top bar should render. Kept as a single computed so one
+   * persistent <app-topnav> spans the skeleton→loaded transition instead of
+   * remounting — a remount restarts the fixed wrapper's `left` transition,
+   * which reads as the whole bar sweeping across the screen.
+   */
+  protected readonly showChatTopnav = computed(
+    () =>
+      this.resolvedConfig().fullPageMode &&
+      this.resolvedConfig().showTopnav &&
+      !this.isEmptyState()
+  );
   protected readonly canCloseAssistant = computed(
     () =>
       this.resolvedConfig().allowCloseAssistant &&

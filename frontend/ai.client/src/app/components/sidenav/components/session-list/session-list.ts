@@ -237,9 +237,16 @@ export class SessionList {
   }
 
   /**
-   * Handles session selection, closing the sidenav on mobile.
+   * Handles session selection. Optimistically sets the clicked session as the
+   * current one so the top-nav title updates the instant the item is clicked,
+   * instead of lingering on the previous title until its metadata loads from
+   * the API. The metadata resource reload (triggered by the route change) later
+   * replaces this with the authoritative record.
+   *
+   * @param session - The session that was clicked
    */
-  protected onSessionClick(): void {
+  protected onSessionClick(session: SessionMetadata): void {
+    this.sessionService.currentSession.set(session);
     this.sidenavService.close();
   }
 
