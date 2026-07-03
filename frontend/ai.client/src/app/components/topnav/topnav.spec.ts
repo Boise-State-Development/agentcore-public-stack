@@ -3,18 +3,28 @@ import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { signal } from '@angular/core';
 import { SessionService } from '../../session/services/session/session.service';
+import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 
 describe('Topnav', () => {
   let mockRouter: any;
   let mockSessionService: any;
   let mockSidenavService: any;
+  let mockChatStateService: any;
+  let metadataLoading: ReturnType<typeof signal<boolean>>;
+  let loadingSessionIds: Set<string>;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     mockRouter = { navigate: vi.fn() };
+    metadataLoading = signal(false);
     mockSessionService = {
       currentSession: signal({ sessionId: 'test-session', title: 'Test Session' }),
+      sessionMetadataResource: { isLoading: metadataLoading },
+    };
+    loadingSessionIds = new Set<string>();
+    mockChatStateService = {
+      isSessionLoading: (id: string) => loadingSessionIds.has(id),
     };
     mockSidenavService = { open: vi.fn() };
 
@@ -22,6 +32,7 @@ describe('Topnav', () => {
       providers: [
         { provide: Router, useValue: mockRouter },
         { provide: SessionService, useValue: mockSessionService },
+        { provide: ChatStateService, useValue: mockChatStateService },
         { provide: SidenavService, useValue: mockSidenavService },
       ],
     });
@@ -51,5 +62,35 @@ describe('Topnav', () => {
     const component = await createComponent();
     component.openSidenav();
     expect(mockSidenavService.open).toHaveBeenCalled();
+  });
+
+  describe('title pending / fallback', () => {
+    it('is not pending when the session already has a title', async () => {
+      const component = await createComponent();
+      expect((component as any).titlePending()).toBe(false);
+      expect((component as any).displayTitle()).toBe('Test Session');
+    });
+
+    it('is pending while metadata is still loading (hard refresh)', async () => {
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: '' });
+      metadataLoading.set(true);
+      const component = await createComponent();
+      expect((component as any).titlePending()).toBe(true);
+    });
+
+    it('is pending while a brand-new session is streaming its first response', async () => {
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: '' });
+      loadingSessionIds.add('sess-1');
+      const component = await createComponent();
+      expect((component as any).titlePending()).toBe(true);
+    });
+
+    it('falls back to "Untitled Session" once resolved with no title', async () => {
+      // Not loading, not streaming, empty title → the skeleton must clear.
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: '' });
+      const component = await createComponent();
+      expect((component as any).titlePending()).toBe(false);
+      expect((component as any).displayTitle()).toBe('Untitled Session');
+    });
   });
 });

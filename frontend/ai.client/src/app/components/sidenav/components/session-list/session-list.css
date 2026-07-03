@@ -39,3 +39,56 @@
     animation: none;
   }
 }
+
+/*
+ * Title-generating skeleton (new-conversation shimmer). Coloured here rather
+ * than with Tailwind utilities so it can't silently no-op on an arbitrary
+ * variant, and so the selected-row override is a plain descendant rule with
+ * predictable specificity. A brand-new session is also the *selected* row
+ * (.session-row--active, applied by the same routerLinkActive that paints the
+ * bg-gray-200 / dark:bg-white/5 highlight) — a plain gray-200 shimmer vanishes
+ * against that highlight, so the active-row rules darken it. Dark mode is
+ * class-based here (@custom-variant dark → html.dark), matched via
+ * :host-context; its added specificity keeps dark ahead of the light rules.
+ */
+.title-skeleton {
+  background-color: var(--color-gray-200);
+}
+
+.session-row--active .title-skeleton {
+  background-color: color-mix(in oklab, var(--color-gray-400) 70%, transparent);
+}
+
+:host-context(html.dark) .title-skeleton {
+  background-color: color-mix(in oklab, var(--color-white) 10%, transparent);
+}
+
+:host-context(html.dark) .session-row--active .title-skeleton {
+  background-color: color-mix(in oklab, var(--color-white) 20%, transparent);
+}
+
+/* Title reveal: gentle left-to-right slide + fade, played when the generated
+   title first replaces the skeleton (and on rename). Mirrors the top-nav
+   reveal for consistency; the span is a flex item (blockified) so translate
+   applies. Keyed by the title string in the template, so it replays only when
+   the text actually changes — not on unrelated re-renders. */
+.session-title-enter {
+  animation: session-title-enter 220ms ease-out;
+}
+
+@keyframes session-title-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-title-enter {
+    animation: none;
+  }
+}

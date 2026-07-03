@@ -94,4 +94,25 @@ describe('SessionList', () => {
     chatState.setChatLoading('test-session', false);
     expect(component['isSessionStreaming']('test-session')).toBe(false);
   });
+
+  it('marks the title pending only for a titleless session that is streaming', async () => {
+    const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+    const chatState = TestBed.inject(ChatStateService);
+    const component = await createComponent();
+    const untitled = { ...mockSession, sessionId: 'test-session', title: '' };
+
+    // Titleless but not streaming yet → static fallback, no shimmer.
+    expect(component['isTitlePending'](untitled)).toBe(false);
+
+    // Streaming its first response with no title yet → shimmer.
+    chatState.setChatLoading('test-session', true);
+    expect(component['isTitlePending'](untitled)).toBe(true);
+
+    // Title landed mid-stream → shimmer clears even while still streaming.
+    expect(component['isTitlePending']({ ...untitled, title: 'Generated' })).toBe(false);
+
+    // Stream ends without a title → shimmer clears; row shows the fallback.
+    chatState.setChatLoading('test-session', false);
+    expect(component['isTitlePending'](untitled)).toBe(false);
+  });
 });
