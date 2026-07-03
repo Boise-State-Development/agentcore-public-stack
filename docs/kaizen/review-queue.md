@@ -5,6 +5,45 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-03] Bump `bedrock-agentcore` 1.9.1 → 1.17.0 (closes SSE-deadlock #482)
+- **Source**: research/2026-07-03.md ▸ Top 5 #1 — https://github.com/aws/bedrock-agentcore-sdk-python/pull/563 (issue #482); internal inference-api SSE-over-Runtime exposure.
+- **Surface**: backend (`backend/pyproject.toml`, inference-api chat router; full local pytest suite — the only correctness gate, pytest isn't in CI)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the queued [2026-05-22] "defensive guard against #482" work item; the fix (`put_nowait` + disconnect stop-event + source `aclose()`) is now upstream (library-native subtraction)
+- **Status**: open — **highest priority; we're on 1.9.1 and exposed today** to a silent, process-wide container hang that keeps `/ping` green when an SSE consumer stops draining. This supersedes/absorbs the queued [2026-05-22] guard item.
+
+### [2026-07-03] Bump Strands 1.40 → 1.45 + adopt hook ordering; audit cache_tools_ttl / context_manager / Limits
+- **Source**: research/2026-07-03.md ▸ Top 5 #2 — Strands releases 1.41–1.45 (https://github.com/strands-agents/sdk-python/releases, now `harness-sdk` monorepo).
+- **Surface**: backend (`backend/src/agents/main_agent/` hooks + BedrockModel config + compaction, `to_bedrock_config`, `CountTokensBedrockModel`)
+- **Effort × Impact**: M–H × H
+- **Subtracts**: candidate — custom cache-point plumbing (`cache_tools_ttl`, 1.41) and possible compaction simplification (`context_manager="auto"`, 1.43 — gated on the SSE-contract check per decisions.md 2026-05-18, not a bare drop-in)
+- **Unlocks**: `Limits` per-invocation token/cost caps (first-class budget guard we lack)
+- **Status**: open — **supersedes the queued [2026-06-19] "1.40 → 1.44" item.** Adopt optional hook ordering (#2559) to deterministically sequence the OAuth-consent + tool-approval BeforeToolCall hooks through the tool-fold. Only breaking change 1.41→1.45 is Mistral (N/A). Run the full local pytest suite; watch compaction + count_tokens/context-attribution.
+
+### [2026-07-03] Model-settings refresh: reinstate Fable 5 + add Sonnet 5 with temperature-suppression guard
+- **Source**: research/2026-07-03.md ▸ Top 5 #3 — Fable 5 reinstated (https://aws.amazon.com/blogs/aws/anthropic-claude-fable-5-on-aws-mythos-class-capabilities-with-built-in-safeguards-now-available/); Sonnet 5 GA + promo pricing (https://aws.amazon.com/bedrock/pricing/); ref-repo `NO_TEMPERATURE_MODELS` (commit 35bc3a9).
+- **Surface**: cross-cutting (inference-api model config + model-settings admin, `to_bedrock_config`, `CountTokensBedrockModel` de-prefix, frontend model picker)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: addition only — justified: **un-withdraws the [2026-06-12] Fable 5 item** (revoked mid-June, reinstated July 1) and adds a materially cheaper capable tier (Sonnet 5 $2/$10 promo through Aug 31 vs. Opus 4.8)
+- **Unlocks**: Fable 5 harness tier above Opus 4.8; Sonnet 5 as a cheaper default/agent tier
+- **Status**: open — **the temperature-suppression guard is a prerequisite, not optional**: Sonnet 5 rejects `temperature` on ConverseStream. Fable 5 is US inference profile only (Global unstable).
+
+### [2026-07-03] Tool-approval as first-class SSE/part state + tool_result source provenance
+- **Source**: research/2026-07-03.md ▸ Top 5 #4 — assistant-ui `eve@0.0.2` (https://github.com/Yonom/assistant-ui/releases); Vercel AI SDK human-in-the-loop (https://ai-sdk.dev/cookbook/next/human-in-the-loop); NN/g State of UX 2026 (https://www.nngroup.com/articles/state-of-ux-2026/).
+- **Surface**: frontend + backend (tool-approval BeforeToolCall hook, `tool_use`/`tool_result` SSE contract, frontend tool-call card + signal store; reuses `beginContinuationStreaming`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — replaces ad-hoc synthetic-error approval handling with explicit approve/deny/denied states on the tool-use SSE pair
+- **Unlocks**: closes the known "approval hook can't see through the tool-fold" hole (pairs with the Strands hook-ordering bump); "data sources used" provenance on `tool_result` cards (we already carry `serverName`/`icon` on `ui_resource`) — a top NN/g trust driver
+- **Status**: open — auto-resume once all approvals in a turn resolve (the multi-tool piece worth stealing from the AI SDK).
+
+### [2026-07-03] Evaluate gateway-level Guardrails (AgentCore Policy) vs. in-agent #480
+- **Source**: research/2026-07-03.md ▸ Top 5 #5 — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-guardrails.html; relates to queued issue #480.
+- **Surface**: infrastructure + backend (PlatformStack Gateway construct + AgentCore Policy; `apis/shared` tool routing)
+- **Effort × Impact**: M × M
+- **Subtracts**: potential — one gateway-level policy vs. per-tool control complexity
+- **Unlocks**: model-independent FERPA/injection enforcement across all Gateway MCP targets (the agent can't reason around it)
+- **Status**: open — **fold into the #480 decision** rather than run a separate track: assess whether one gateway policy is preferable to or complements the in-agent `guardrail_id` approach.
+
 ### [2026-06-19] Wire configurable Bedrock Guardrails (issue #480)
 - **Source**: research/2026-06-19.md ▸ Top 5 #1 — internal issue #480 (June 15) + AWS Summit NYC Guardrails cluster (`InvokeGuardrailChecks` API + AgentCore policy Guardrails GA, June 16). Strands `BedrockModel` already supports `guardrail_id`/`version`/`stream_processing_mode`/`trace`.
 - **Surface**: backend (`inference_api` `BedrockModel` construction) + infrastructure (optional `CDK_GUARDRAIL_ID` / `CDK_GUARDRAIL_VERSION` env vars threaded to inference-api runtime env)
