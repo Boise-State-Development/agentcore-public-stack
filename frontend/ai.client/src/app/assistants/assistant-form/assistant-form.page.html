@@ -415,6 +415,51 @@
               </div>
             }
 
+            <!-- Web sources (crawl roots). Sync policies attach to the
+                 crawl, not to the individual page documents it produced.
+                 Rendered for owners/editors only — the entire sync surface
+                 is edit-gated, and this list exists to host its controls. -->
+            @if (canManageSync() && webCrawls().length > 0) {
+              <div>
+                <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Web sources</h3>
+                <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+                  @for (crawl of webCrawls(); track crawl.crawlId) {
+                    <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
+                      <ng-icon name="heroGlobeAlt" class="mt-0.5 size-5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                      <div class="min-w-0 flex-1">
+                        <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ crawl.rootUrl }}</p>
+                        <div class="mt-0.5 flex items-center gap-2">
+                          <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ crawl.fetchedCount }} page{{ crawl.fetchedCount === 1 ? '' : 's' }}</span>
+                          @if (crawl.status === 'running') {
+                            <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                            <span class="inline-flex items-center gap-1.5 text-xs/5 font-medium text-blue-600 dark:text-blue-400">
+                              <span class="size-1.5 animate-pulse rounded-full bg-blue-500"></span>
+                              Crawling…
+                            </span>
+                          } @else if (crawl.status === 'failed') {
+                            <span class="text-xs/5 text-gray-400 dark:text-gray-500">&#8226;</span>
+                            <span class="text-xs/5 font-medium text-red-600 dark:text-red-400">Crawl failed</span>
+                          }
+                        </div>
+                        @if (isCrawlSyncable(crawl)) {
+                          <app-sync-policy-control
+                            class="mt-1.5 block"
+                            [policy]="syncPolicyFor(crawl.crawlId)"
+                            [busy]="isSyncBusy(crawl.crawlId)"
+                            [sourceName]="crawl.rootUrl"
+                            (intervalSelected)="onSyncIntervalSelected('web_crawl', crawl.crawlId, $event)"
+                            (runNow)="onSyncRunNow(crawl.crawlId)"
+                            (pause)="onSyncPause(crawl.crawlId)"
+                            (resume)="onSyncResume(crawl.crawlId)"
+                          />
+                        }
+                      </div>
+                    </li>
+                  }
+                </ul>
+              </div>
+            }
+
             <!-- Uploaded Documents List -->
             @if (isLoadingDocuments()) {
               <div>
@@ -473,6 +518,23 @@
                           </div>
                           @if (doc.status === 'failed' && doc.errorMessage) {
                             <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ doc.errorMessage }}</p>
+                          }
+                          <!-- "Keep in sync" — only for documents imported from
+                               an external connector (device uploads have no
+                               source of truth to refetch), owners/editors only. -->
+                          @if (canManageSync() && isDriveSyncable(doc)) {
+                            <app-sync-policy-control
+                              class="mt-1.5 block"
+                              [policy]="syncPolicyFor(doc.documentId)"
+                              [busy]="isSyncBusy(doc.documentId)"
+                              [sourceName]="doc.filename"
+                              [reconnectLabel]="reconnectLabelForDocument(doc)"
+                              (intervalSelected)="onSyncIntervalSelected('drive_file', doc.documentId, $event)"
+                              (runNow)="onSyncRunNow(doc.documentId)"
+                              (pause)="onSyncPause(doc.documentId)"
+                              (resume)="onSyncResume(doc.documentId)"
+                              (reconnect)="onSyncReconnect(doc.documentId)"
+                            />
                           }
                         </div>
                       </div>

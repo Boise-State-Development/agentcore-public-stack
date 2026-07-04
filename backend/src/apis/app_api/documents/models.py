@@ -104,6 +104,14 @@ class DocumentResponse(BaseModel):
     chunk_count: Optional[int] = Field(None, alias="chunkCount", description="Number of chunks")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
+    # Provenance-lite for the SPA: which documents were imported from an
+    # external source (and can therefore carry a sync policy) vs uploaded
+    # from the device. Null for device uploads.
+    source_connector_id: Optional[str] = Field(None, alias="sourceConnectorId", description="OAuth connector the file was imported from")
+    source_adapter_key: Optional[str] = Field(None, alias="sourceAdapterKey", description="File-source adapter that fetched the file")
+    source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
+    sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy")
+    last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
 
 
 class DocumentsListResponse(BaseModel):

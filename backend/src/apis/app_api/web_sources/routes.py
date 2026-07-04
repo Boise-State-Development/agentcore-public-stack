@@ -33,6 +33,7 @@ from apis.app_api.web_sources.crawl_repository import (
     create_crawl_job,
     get_crawl_job,
     list_active_crawls,
+    list_all_crawls,
 )
 from apis.app_api.web_sources.crawler import run_crawl
 from apis.app_api.web_sources.models import (
@@ -172,10 +173,9 @@ async def list_crawls(
     if active:
         crawls = await list_active_crawls(assistant_id)
     else:
-        # The full-history view is reserved for a future "crawl history"
-        # panel; for now we return active only when asked and an empty list
-        # otherwise to keep the contract small.
-        crawls = await list_active_crawls(assistant_id)
+        # Full history: the sync-policy UI needs completed crawls too — a
+        # web_crawl policy's source is the terminal CrawlJob row.
+        crawls = await list_all_crawls(assistant_id)
     return ActiveCrawlsResponse(crawls=crawls)
 
 
