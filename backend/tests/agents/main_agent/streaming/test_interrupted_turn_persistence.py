@@ -104,7 +104,7 @@ async def test_cancellation_invokes_interruption_persistence():
     """The CancelledError arm fires and re-raises so cancellation still unwinds."""
     called: Dict[str, Any] = {}
 
-    async def _fake_persist(self, *, agent, session_id, user_id, partial_text):
+    async def _fake_persist(self, *, agent, session_id, user_id, partial_text, **kwargs):
         called.update(session_id=session_id, user_id=user_id, partial_text=partial_text)
 
     with patch.object(StreamCoordinator, "_persist_interruption", _fake_persist):
@@ -120,7 +120,7 @@ async def test_generator_exit_also_invokes_interruption_persistence():
     instead of CancelledError — the arm must catch both."""
     called: Dict[str, Any] = {}
 
-    async def _fake_persist(self, *, agent, session_id, user_id, partial_text):
+    async def _fake_persist(self, *, agent, session_id, user_id, partial_text, **kwargs):
         called.update(session_id=session_id, user_id=user_id, partial_text=partial_text)
 
     with patch.object(StreamCoordinator, "_persist_interruption", _fake_persist):
@@ -138,7 +138,7 @@ async def test_partial_covers_only_in_flight_message():
     message still streaming at teardown count."""
     called: Dict[str, Any] = {}
 
-    async def _fake_persist(self, *, agent, session_id, user_id, partial_text):
+    async def _fake_persist(self, *, agent, session_id, user_id, partial_text, **kwargs):
         called.update(partial_text=partial_text)
 
     events = [
@@ -247,3 +247,90 @@ async def test_empty_partial_skips_synthetic_write_when_tail_is_assistant():
 
     assert persist_sm.calls == []
     assert marker_calls == [{"reason": "connection_lost"}]
+
+
+@pytest.mark.asyncio
+async def test_interruption_persists_partial_turn_metadata():
+    """A Stop with a partial persists per-message metadata (which also bumps
+    the session cost aggregates) keyed to the interrupted message's index, so
+    the token/cost badges + session cost badge hydrate on reload. When the cut
+    generation never delivered Bedrock's terminal usage event, the input side
+    falls back to the context-attribution projection."""
+    persist_sm = _RecordingPersistSessionManager()
+    stored: Dict[str, Any] = {}
+
+    async def _fake_set_interrupted(session_id, user_id, reason="unknown", source="cancellation"):
+        return None
+
+    async def _fake_store_metadata(self, *, session_id, user_id, message_id, accumulated_metadata, **kwargs):
+        stored.update(
+            message_id=message_id,
+            usage=accumulated_metadata.get("usage"),
+            agent=kwargs.get("agent"),
+        )
+
+    wrapper = object()  # stands in for the MainAgent wrapper (model_config, etc.)
+
+    coordinator = StreamCoordinator()
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ), patch(
+        "apis.shared.sessions.metadata.set_interrupted_turn", _fake_set_interrupted
+    ), patch.object(
+        StreamCoordinator, "_store_message_metadata", _fake_store_metadata
+    ), patch(
+        "agents.main_agent.session.hooks.context_attribution.get_context_breakdown",
+        return_value={"total": 1234, "partitions": []},
+    ):
+        await coordinator._persist_interruption(
+            agent=_InterruptingAgent(),
+            session_id="sess-interrupt",
+            user_id="user-1",
+            partial_text="Here is the start of my answ",
+            main_agent_wrapper=wrapper,
+            accumulated_metadata={"usage": {}, "metrics": {}},
+            initial_message_count=4,
+            current_assistant_message_index=0,
+            stream_start_time=100.0,
+            first_token_time=100.2,
+        )
+
+    # Interrupted message sits at initial + 2*idx + 1 = 4 + 0 + 1 = 5 — the same
+    # odd-position index the messages endpoint re-derives as `idx` on reload.
+    assert stored.get("message_id") == 5
+    # Terminal usage never arrived → projected input from context attribution.
+    assert stored.get("usage") == {"inputTokens": 1234, "outputTokens": 0, "totalTokens": 1234}
+    assert stored.get("agent") is wrapper
+
+
+@pytest.mark.asyncio
+async def test_interruption_metadata_skipped_without_wrapper():
+    """No model wrapper (can't identify/price the model) → skip metadata
+    persistence entirely; the partial + marker still land."""
+    persist_sm = _RecordingPersistSessionManager()
+    store_calls: List[Any] = []
+
+    async def _fake_set_interrupted(session_id, user_id, reason="unknown", source="cancellation"):
+        return None
+
+    async def _fake_store_metadata(self, **kwargs):
+        store_calls.append(kwargs)
+
+    coordinator = StreamCoordinator()
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ), patch(
+        "apis.shared.sessions.metadata.set_interrupted_turn", _fake_set_interrupted
+    ), patch.object(StreamCoordinator, "_store_message_metadata", _fake_store_metadata):
+        await coordinator._persist_interruption(
+            agent=_InterruptingAgent(),
+            session_id="sess-interrupt",
+            user_id="user-1",
+            partial_text="partial",
+            main_agent_wrapper=None,
+        )
+
+    assert store_calls == []
+    assert len(persist_sm.calls) == 1  # partial still persisted

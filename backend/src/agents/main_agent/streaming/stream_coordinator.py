@@ -942,6 +942,12 @@ class StreamCoordinator:
                 session_id=session_id,
                 user_id=user_id,
                 partial_text="".join(assistant_text_acc),
+                main_agent_wrapper=main_agent_wrapper,
+                accumulated_metadata=accumulated_metadata,
+                initial_message_count=initial_message_count,
+                current_assistant_message_index=current_assistant_message_index,
+                stream_start_time=stream_start_time,
+                first_token_time=first_token_time,
             )
             raise
         except Exception as e:
@@ -1014,6 +1020,12 @@ class StreamCoordinator:
         session_id: str,
         user_id: str,
         partial_text: str,
+        main_agent_wrapper: Any = None,
+        accumulated_metadata: Optional[Dict[str, Any]] = None,
+        initial_message_count: int = 0,
+        current_assistant_message_index: int = -1,
+        stream_start_time: Optional[float] = None,
+        first_token_time: Optional[float] = None,
     ) -> None:
         """Persist the in-flight partial assistant turn + an interrupted
         marker when a turn is torn down mid-stream.
@@ -1089,6 +1101,52 @@ class StreamCoordinator:
                     session_id, marker_error, exc_info=True,
                 )
 
+            # Partial-turn metadata. On a Stop the client's socket is already
+            # gone, so the `done`-path metadata SSE (usage / cost / context)
+            # never reaches it and BOTH the per-message badges and the session
+            # cost badge stay blank — even after a reload, because nothing was
+            # persisted. Store it here with the same `_store_message_metadata`
+            # the completion path uses: that writes the per-message row AND
+            # bumps the session aggregates that hydrate the cost badge. Runs
+            # only when an assistant message was actually persisted above
+            # (`should_persist`), keyed to the same odd-position index the
+            # messages endpoint re-derives on reload. Best-effort: a cut
+            # generation often never delivered Bedrock's terminal usage event,
+            # so fall back to the context-attribution projection for the input
+            # side (drives the context-% badge + input-side cost; output is
+            # unknown and priced at zero).
+            if should_persist and main_agent_wrapper is not None:
+                try:
+                    metadata_for_message = dict(accumulated_metadata or {})
+                    if not metadata_for_message.get("usage"):
+                        projected = self._projected_input_usage(agent)
+                        if projected:
+                            metadata_for_message = {**metadata_for_message, "usage": projected}
+                    message_id = (
+                        initial_message_count + 2 * current_assistant_message_index + 1
+                        if current_assistant_message_index >= 0
+                        else initial_message_count + 1
+                    )
+                    await self._store_message_metadata(
+                        session_id=session_id,
+                        user_id=user_id,
+                        message_id=message_id,
+                        accumulated_metadata=metadata_for_message,
+                        stream_start_time=stream_start_time if stream_start_time is not None else time.time(),
+                        stream_end_time=time.time(),
+                        first_token_time=first_token_time,
+                        agent=main_agent_wrapper,
+                    )
+                    logger.info(
+                        "📊 Persisted interrupted-turn metadata for session %s (message_id=%s)",
+                        session_id, message_id,
+                    )
+                except Exception as meta_error:
+                    logger.error(
+                        "Failed to persist interrupted-turn metadata for session %s: %s",
+                        session_id, meta_error, exc_info=True,
+                    )
+
         try:
             await asyncio.shield(asyncio.ensure_future(_do()))
         except asyncio.CancelledError:
@@ -1096,6 +1154,38 @@ class StreamCoordinator:
             # the inner task keeps running to completion (that's the point of
             # shield). Swallow here and let the caller re-raise the original.
             logger.debug("interrupted-turn persistence shield cancelled; inner write continues")
+
+    def _projected_input_usage(self, agent: Any) -> Optional[Dict[str, Any]]:
+        """Best-effort input-token usage for an interrupted turn.
+
+        A cut generation frequently never delivers Bedrock's terminal usage
+        event, so ``accumulated_metadata['usage']`` is empty and the turn
+        would persist with no token/cost/context data. The context-attribution
+        hook computed the turn's projected input at ``BeforeModelCallEvent``
+        (before the model call that got interrupted), so use its total as the
+        input-side occupancy. Output is unknown — the turn never finished — so
+        it's reported as zero (input-side cost only). Returns ``None`` if no
+        projection is available, leaving the caller to persist whatever it has.
+        """
+        try:
+            from agents.main_agent.session.hooks.context_attribution import (
+                get_context_breakdown,
+            )
+
+            breakdown = get_context_breakdown(agent)
+            if not breakdown:
+                return None
+            total = (
+                breakdown.get("total")
+                if isinstance(breakdown, dict)
+                else getattr(breakdown, "total", None)
+            )
+            if not total or total <= 0:
+                return None
+            return {"inputTokens": int(total), "outputTokens": 0, "totalTokens": int(total)}
+        except Exception:  # noqa: BLE001 - best-effort enrichment only
+            logger.debug("Could not project interrupted-turn input usage", exc_info=True)
+            return None
 
     async def _persist_paused_turn_snapshot(
         self,
