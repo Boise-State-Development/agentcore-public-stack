@@ -272,6 +272,46 @@ export class ChatHttpService {
     this.chatStateService.abortRequest(sessionId);
     this.messageMapService.endStreaming(sessionId);
     this.chatStateService.setChatLoading(sessionId, false);
+
+    // Aborting the fetch cut the socket before the stream's terminal
+    // `metadata` SSE (usage / cost / context) could arrive, so the session
+    // cost badge would otherwise stay stale for this turn. The backend
+    // persists that metadata during its interruption teardown instead; pull
+    // the freshly-bumped session aggregates to light the badge up live. The
+    // write races our abort, so this fetch is delayed + retried. (The
+    // per-message token/cost badges hydrate from the same persisted row on
+    // the next message reload.)
+    setTimeout(() => void this.refreshAggregatesAfterStop(sessionId), 900);
+  }
+
+  /**
+   * Re-seed a session's cost/context badge after a Stop, once the backend's
+   * interruption teardown has persisted the partial turn's metadata (which
+   * bumps the denormalized session aggregates). Retries once because that
+   * write races the client abort; best-effort — the next navigation's
+   * `seedSessionAggregates` is the durable backstop.
+   */
+  private async refreshAggregatesAfterStop(sessionId: string, retried = false): Promise<void> {
+    try {
+      const metadata = await this.sessionService.getSessionMetadata(sessionId);
+      const hasAggregates =
+        (metadata.totalCost ?? 0) > 0 ||
+        (metadata.lastContextTokens ?? 0) > 0 ||
+        (metadata.contextWindow ?? 0) > 0;
+      if (hasAggregates) {
+        this.chatStateService.seedSessionAggregates(sessionId, {
+          totalCost: metadata.totalCost,
+          lastContextTokens: metadata.lastContextTokens,
+          contextWindow: metadata.contextWindow,
+        });
+        return;
+      }
+      if (!retried) {
+        setTimeout(() => void this.refreshAggregatesAfterStop(sessionId, true), 1500);
+      }
+    } catch (error) {
+      console.error('Failed to refresh session cost after stop:', error);
+    }
   }
 
   /** Fire-and-forget POST to app-api recording deliberate stop intent. */
