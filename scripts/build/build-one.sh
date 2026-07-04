@@ -113,7 +113,9 @@ case "$SERVICE" in
         # would ship stale code under an unchanged content-hash tag.
         SOURCE_DIRS=(
             "backend/src/apis/app_api/kb_sync"
+            "backend/src/apis/app_api/file_sources"
             "backend/src/apis/shared/sync_policies"
+            "backend/src/apis/shared/oauth"
         )
         # shared/__init__.py hashed as a manifest (same as rag-ingestion);
         # kb_sync/requirements.txt lives inside the first source dir.

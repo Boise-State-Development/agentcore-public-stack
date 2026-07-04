@@ -395,6 +395,9 @@ export class PlatformStack extends cdk.Stack {
     new KbSyncConstruct(this, 'KbSync', {
       config,
       assistantsTable: this.ragAssistantsTable,
+      documentsBucket: this.ragDocumentsBucket,
+      oauthProvidersTable: this.oauthProvidersTable,
+      workloadIdentityName: this.platformWorkloadIdentity.name,
     });
 
     // ============================================================

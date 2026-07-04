@@ -70,31 +70,17 @@ def _parse_timestamp(value: str) -> Optional[datetime]:
         return None
 
 
-def _get_item(pk: str, sk: str) -> Optional[Dict[str, Any]]:
-    import boto3
-
-    table = boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"])
-    response = table.get_item(Key={"PK": pk, "SK": sk})
-    return response.get("Item")
-
-
 def _get_assistant_item(assistant_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch the assistant METADATA record (existence + activity timestamps).
+    """See apis.app_api.kb_sync.records for the raw-lookup rationale."""
+    from apis.app_api.kb_sync import records
 
-    Raw key lookup rather than apis.shared.assistants — that package's
-    __init__ drags in the embeddings stack, which would bloat the
-    kb-sync image for three timestamp fields. Key patterns are the
-    stable storage contract; the dispatcher tests create assistants
-    through the real service so schema drift breaks loudly here.
-    """
-    return _get_item(f"AST#{assistant_id}", "METADATA")
+    return records.get_assistant_item(assistant_id)
 
 
 def _get_source_item(assistant_id: str, source_type: str, source_ref: str) -> Optional[Dict[str, Any]]:
-    """Fetch the source record backing a policy (same raw-lookup rationale
-    as _get_assistant_item; DOC#/CRAWL# per documents/web_sources services)."""
-    sk_prefix = "DOC#" if source_type == "drive_file" else "CRAWL#"
-    return _get_item(f"AST#{assistant_id}", f"{sk_prefix}{source_ref}")
+    from apis.app_api.kb_sync import records
+
+    return records.get_source_item(assistant_id, source_type, source_ref)
 
 
 def _invoke_worker(payload: Dict[str, Any]) -> None:

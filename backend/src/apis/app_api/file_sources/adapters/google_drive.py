@@ -140,6 +140,25 @@ class GoogleDriveAdapter(FileSourceAdapter):
         data = await self._get_json(access_token, "/files", params=params)
         return self._to_browse_result(data)
 
+    async def get_file_metadata(self, access_token: str, file_id: str) -> Dict[str, Any]:
+        """Fetch change-detection metadata for one file (KB sync).
+
+        Cheap files.get — no content transfer. `md5Checksum` is only
+        populated for binary content; native editor files expose
+        `modifiedTime`/`version` instead. A permanently-deleted or
+        unshared file raises FileSourceNotFoundError (Drive returns 404
+        for both, deliberately indistinguishable); an owner-trashed file
+        is a normal 200 with `trashed: true`.
+        """
+        return await self._get_json(
+            access_token,
+            f"/files/{file_id}",
+            params={
+                "fields": "id,name,mimeType,trashed,modifiedTime,version,md5Checksum,size",
+                "supportsAllDrives": "true",
+            },
+        )
+
     async def download(self, access_token: str, file_id: str) -> DownloadedFile:
         meta = await self._get_json(
             access_token,
