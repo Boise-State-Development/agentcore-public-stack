@@ -51,7 +51,7 @@ describe('KbSyncConstruct', () => {
     });
   });
 
-  it('rule is DISABLED when kbSync.enabled is false (dark by default)', () => {
+  it('rule is DISABLED when kbSync.enabled is false (explicit kill switch)', () => {
     t.hasResourceProperties('AWS::Events::Rule', { State: 'DISABLED' });
   });
 

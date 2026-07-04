@@ -132,8 +132,9 @@ export interface RagIngestionConfig {
  *
  * `enabled` gates the whole feature: it sets the EventBridge rule's
  * enabled state AND the KB_SYNC_ENABLED env var on both kb-sync
- * Lambdas. Default false — the kb-sync PRs merge dark and the feature
- * lights up with CDK_KB_SYNC_ENABLED=true on a platform deploy.
+ * Lambdas. Default ON with a kill switch — the feature runs unless it's
+ * explicitly turned off with CDK_KB_SYNC_ENABLED=false (or a
+ * `kbSync.enabled: false` cdk.json context).
  */
 export interface KbSyncConfig {
   enabled: boolean;
@@ -266,10 +267,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
       vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric,
     },
     kbSync: {
-      enabled:
-        process.env.CDK_KB_SYNC_ENABLED !== undefined
-          ? process.env.CDK_KB_SYNC_ENABLED === 'true'
-          : scope.node.tryGetContext('kbSync')?.enabled ?? false,
+      // Default ON with a kill switch: enabled unless explicitly disabled.
+      // The workflow forwards `${{ vars.CDK_KB_SYNC_ENABLED }}`, which is an
+      // EMPTY STRING when the variable is unset — so treat empty/unset as
+      // "use the default (on)" and only the literal "false" as the off
+      // switch. A `kbSync.enabled` cdk.json context can also force it off.
+      enabled: process.env.CDK_KB_SYNC_ENABLED
+        ? process.env.CDK_KB_SYNC_ENABLED !== 'false'
+        : scope.node.tryGetContext('kbSync')?.enabled ?? true,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
