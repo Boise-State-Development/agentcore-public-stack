@@ -114,12 +114,13 @@ class OAuthProvider:
     # CANVAS; both are None for Google/Microsoft/GitHub.
     oauth_discovery_url: Optional[str] = None
     authorization_server_metadata: Optional[Dict[str, Any]] = None
-    # Vendor-specific OAuth parameters merged into AgentCore Identity's
-    # `customParameters` at request time. Examples: Google `hd=mycorp.com`
-    # to restrict to a Workspace domain, `prompt=consent` to force the
-    # consent screen. Hardcoded baselines (e.g. Google's
-    # `access_type=offline`) win on conflict — admins cannot accidentally
-    # turn off a documented requirement.
+    # Vendor-specific OAuth parameters forwarded verbatim into AgentCore
+    # Identity's `customParameters` at request time. The delivered vendors
+    # don't add these on their own, so a Google connector must set
+    # `access_type=offline` here (for Google to issue a refresh token) and
+    # typically `prompt=consent` (so a refresh token is re-issued on
+    # reconnect); other examples: `hd=mycorp.com` to restrict to a Workspace
+    # domain. See the AgentCore Identity docs for each vendor's requirement.
     custom_parameters: Optional[Dict[str, str]] = None
     # Maps this connector to a file-source adapter (e.g. "google-drive"),
     # making it selectable as a file source in the assistant editor. The

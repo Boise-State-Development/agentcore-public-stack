@@ -107,22 +107,19 @@ async def resolve_export_target_token(
     Returns a `TokenResult`: `access_token` is populated when the vault has a
     usable token, `authorization_url` when the user still needs to consent.
 
-    `custom_parameters` is built with `force_authentication=True` so it matches
-    the consent flow — AgentCore factors `customParameters` into whether
-    `get_resource_oauth2_token` short-circuits to a vaulted token (see the
-    file-source service for the full rationale). Pure read; `force_authentication`
-    stays False on `get_token_for_user` itself.
+    `custom_parameters` forwards the connector's admin-configured params
+    verbatim so it matches the consent flow — AgentCore factors
+    `customParameters` into whether `get_resource_oauth2_token` short-circuits
+    to a vaulted token (see the file-source service for the full rationale).
+    Pure read; `force_authentication` stays False on `get_token_for_user`
+    itself.
     """
     identity = get_agentcore_identity_client()
     return await identity.get_token_for_user(
         provider_name=provider.provider_id,
         scopes=provider.scopes,
         user_id=user_id,
-        custom_parameters=custom_parameters_for(
-            provider.provider_type.value,
-            provider.custom_parameters,
-            force_authentication=True,
-        ),
+        custom_parameters=custom_parameters_for(provider.custom_parameters),
     )
 
 

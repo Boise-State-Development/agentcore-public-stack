@@ -13,91 +13,45 @@ from apis.shared.oauth.agentcore_identity import (
 
 
 class TestCustomParametersFor:
-    """Merge of vendor baseline + admin extras. Baseline is non-negotiable
-    because admins can't safely turn off documented requirements (e.g.
-    Google's `access_type=offline` for refresh tokens)."""
-
-    def test_google_baseline_alone(self) -> None:
-        assert custom_parameters_for("google") == {"access_type": "offline"}
-
-    def test_google_match_is_case_insensitive(self) -> None:
-        # OAuthProviderType.GOOGLE.value is "google", but defensive against
-        # callers that pass the upper-case enum name.
-        assert custom_parameters_for("Google") == {"access_type": "offline"}
-
-    @pytest.mark.parametrize(
-        "vendor", ["microsoft", "github", "canvas", "custom", "unknown"]
-    )
-    def test_other_vendors_with_no_extras_return_none(self, vendor: str) -> None:
-        # Per the AgentCore Identity docs, only Google requires baseline
-        # extras today. Returning None lets callers pass through.
-        assert custom_parameters_for(vendor) is None
+    """Pass-through normalizer for a connector's admin-configured
+    `customParameters`. There is no hardcoded vendor baseline — vendor
+    requirements (e.g. Google's `access_type=offline` for refresh tokens)
+    are supplied per-connector via the admin "Custom OAuth Parameters"
+    field, since the delivered vendors don't add them on their own."""
 
     def test_none_returns_none(self) -> None:
         assert custom_parameters_for(None) is None
 
-    def test_empty_string_returns_none(self) -> None:
-        assert custom_parameters_for("") is None
+    def test_empty_dict_returns_none(self) -> None:
+        # Callers pass the result straight to the SDK; None keeps an empty
+        # `customParameters` map off the wire.
+        assert custom_parameters_for({}) is None
 
-    def test_admin_extras_merged_with_google_baseline(self) -> None:
-        # Admin can add domain restriction / prompt without losing
-        # the access_type=offline requirement.
-        result = custom_parameters_for(
-            "google", {"hd": "mycompany.com", "prompt": "consent"}
-        )
-        assert result == {
+    def test_admin_extras_passed_through_verbatim(self) -> None:
+        # A Google connector configured for refresh tokens: the exact map
+        # the admin set is forwarded, untouched.
+        extras = {
             "access_type": "offline",
-            "hd": "mycompany.com",
             "prompt": "consent",
+            "hd": "mycompany.com",
+        }
+        assert custom_parameters_for(extras) == extras
+
+    def test_no_baseline_injected_for_google_like_params(self) -> None:
+        # Nothing is added or overridden — if an admin sets access_type=online
+        # that's what gets sent (their choice, their consequence).
+        assert custom_parameters_for({"access_type": "online"}) == {
+            "access_type": "online"
         }
 
-    def test_admin_cannot_override_baseline_keys(self) -> None:
-        # Admin-supplied access_type=online is silently superseded by the
-        # baseline. This is intentional — overriding it would silently
-        # break refresh tokens, the exact bug we hardcoded against.
-        result = custom_parameters_for("google", {"access_type": "online"})
-        assert result == {"access_type": "offline"}
-
-    def test_admin_extras_only_for_non_baseline_vendor(self) -> None:
-        # Vendors with no baseline still pass through admin extras.
-        result = custom_parameters_for("github", {"prompt": "consent"})
-        assert result == {"prompt": "consent"}
-
-    def test_empty_admin_extras_treated_as_none(self) -> None:
-        assert custom_parameters_for("microsoft", {}) is None
-        assert custom_parameters_for("microsoft", None) is None
-
-    def test_force_authentication_adds_prompt_consent_for_google(self) -> None:
-        # Google only re-issues a refresh token on subsequent grants when
-        # the consent screen is shown — so the explicit re-consent path
-        # must add prompt=consent on top of the baseline.
-        result = custom_parameters_for("google", force_authentication=True)
-        assert result == {"access_type": "offline", "prompt": "consent"}
-
-    def test_force_authentication_does_not_set_prompt_for_other_vendors(
-        self,
-    ) -> None:
-        # Other vendors don't have the same constraint — leaving prompt
-        # unset means we don't accidentally annoy a Microsoft / GitHub
-        # user with an unnecessary consent screen on every reconnect.
-        assert custom_parameters_for("microsoft", force_authentication=True) is None
-        assert custom_parameters_for("github", force_authentication=True) is None
-
-    def test_force_authentication_baseline_still_wins_over_admin(self) -> None:
-        # Even when force_authentication adds prompt=consent, an admin
-        # supplying prompt=login can't override it — the re-consent path
-        # needs the consent screen specifically.
-        result = custom_parameters_for(
-            "google", {"prompt": "login"}, force_authentication=True
-        )
-        assert result == {"access_type": "offline", "prompt": "consent"}
-
-    def test_default_force_authentication_is_false(self) -> None:
-        # Silent refresh path must not get prompt=consent — otherwise
-        # every refresh would force the consent screen.
-        result = custom_parameters_for("google")
-        assert result == {"access_type": "offline"}
-        assert "prompt" not in result
+    def test_returns_a_copy(self) -> None:
+        # Defensive: mutating the returned map must not mutate the caller's
+        # stored connector params.
+        extras = {"access_type": "offline"}
+        result = custom_parameters_for(extras)
+        assert result == extras
+        result["prompt"] = "consent"
+        assert "prompt" not in extras
 
 
 class TestTokenResult:

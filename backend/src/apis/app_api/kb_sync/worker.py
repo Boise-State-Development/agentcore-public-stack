@@ -98,11 +98,7 @@ async def _resolve_access_token(provider, user_id: str) -> Optional[str]:
         provider_name=provider.provider_id,
         scopes=provider.scopes,
         user_id=user_id,
-        custom_parameters=custom_parameters_for(
-            provider.provider_type.value if provider.provider_type else None,
-            provider.custom_parameters,
-            force_authentication=True,
-        ),
+        custom_parameters=custom_parameters_for(provider.custom_parameters),
         callback_url=os.environ.get("AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"),
     )
     if result.requires_consent:
