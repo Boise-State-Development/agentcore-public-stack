@@ -292,6 +292,33 @@ async def increment_counters(
         )
 
 
+async def restore_crawl_ttl(*, assistant_id: str, crawl_id: str) -> None:
+    """Re-apply the finalized-row TTL to a terminal crawl job.
+
+    Inverse of the sync path's finalize_crawl(set_ttl=False): when the sync
+    policy covering a crawl is deleted, the job goes back to the normal
+    30-day auto-expiry so un-synced history doesn't accumulate forever.
+    Running jobs are left alone (finalize owns their transition).
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+            UpdateExpression="SET #ttl = :ttl",
+            ExpressionAttributeNames={"#ttl": "ttl", "#status": "status"},
+            ExpressionAttributeValues={
+                ":ttl": int(time.time()) + _FINALIZED_TTL_DAYS * 86400,
+                ":running": "running",
+            },
+            ConditionExpression="attribute_exists(PK) AND #status <> :running",
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return  # gone already, or still running — nothing to restore
+        raise
+
+
 async def reset_crawl_for_refresh(*, assistant_id: str, crawl_id: str) -> bool:
     """Rearm an existing crawl job for a KB-sync re-crawl.
 

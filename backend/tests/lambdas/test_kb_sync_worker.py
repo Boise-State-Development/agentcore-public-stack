@@ -226,6 +226,13 @@ class TestFailureModes:
         assert "Reconnect" in updated.state_reason
         assert updated.consecutive_failures == 0  # reauth is not a failure streak
         assert updated.sync_run_started_at is None
+        # Marker lets consent completion find this policy without a scan
+        marker = assistants_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SYNCREAUTH#{policy.policy_id}"}
+        ).get("Item")
+        assert marker is not None
+        assert marker["providerId"] == CONNECTOR_ID
+        assert marker["assistantId"] == assistant_id
 
     async def test_requires_consent_pauses_reauth(self, assistants_table, staged, provider_ok, monkeypatch):
         async def no_token(provider, user_id):
@@ -241,6 +248,11 @@ class TestFailureModes:
         assert result["result"] == "paused_reauth"
         updated = await get_sync_policy(assistant_id, policy.policy_id)
         assert updated.state == "paused_reauth"
+        marker = assistants_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SYNCREAUTH#{policy.policy_id}"}
+        ).get("Item")
+        assert marker is not None
+        assert marker["providerId"] == CONNECTOR_ID
 
     async def test_missing_provider_pauses_error(self, assistants_table, staged, token_ok, monkeypatch):
         async def no_provider(self, provider_id):

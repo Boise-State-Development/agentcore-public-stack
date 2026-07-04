@@ -51,6 +51,9 @@ class SyncPolicy(BaseModel):
     sync_run_started_at: Optional[str] = Field(
         None, alias="syncRunStartedAt", description="Set while a worker run is in flight; stale stamps are treated as crashed runs"
     )
+    last_manual_run_at: Optional[str] = Field(
+        None, alias="lastManualRunAt", description="Last 'Sync now' trigger; enforces the manual-run cooldown"
+    )
     created_by_user_id: str = Field(..., alias="createdByUserId", description="User whose credentials background fetches use")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

@@ -1238,6 +1238,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         if assistant.owner_id != user_id:
             await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
 
+        # KB sync inactivity signal: any user's chat use counts. Throttled
+        # to one write/day inside bump_last_used_at (conditional update);
+        # the winning bump also wakes any inactivity-paused sync policies.
+        # Best-effort — a bookkeeping failure must never break a chat turn.
+        try:
+            from apis.shared.assistants.service import bump_last_used_at
+            from apis.shared.sync_policies.service import resume_inactive_policies
+
+            if await bump_last_used_at(input_data.rag_assistant_id):
+                await resume_inactive_policies(input_data.rag_assistant_id)
+        except Exception as bump_err:
+            logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+
         # 3. Search assistant knowledge base
         logger.info("Starting knowledge base search for assistant...")
         try:
