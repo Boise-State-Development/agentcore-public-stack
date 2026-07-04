@@ -80,6 +80,7 @@ def update_document_sync_fields(
     content_hash: Optional[str] = None,
     previous_chunk_count: Optional[int] = None,
     last_synced_at: Optional[str] = None,
+    sync_policy_id: Optional[str] = None,
 ) -> None:
     """Targeted update of the sync-bookkeeping fields on a document record.
 
@@ -100,6 +101,9 @@ def update_document_sync_fields(
     if last_synced_at is not None:
         set_parts.append("lastSyncedAt = :synced")
         values[":synced"] = last_synced_at
+    if sync_policy_id is not None:
+        set_parts.append("syncPolicyId = :spid")
+        values[":spid"] = sync_policy_id
     if not set_parts:
         return
 
@@ -107,4 +111,12 @@ def update_document_sync_fields(
         Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
         UpdateExpression="SET " + ", ".join(set_parts),
         ExpressionAttributeValues=values,
+    )
+
+
+def clear_document_sync_policy_id(assistant_id: str, document_id: str) -> None:
+    """Remove the SyncPolicy back-pointer when its policy is deleted."""
+    _table().update_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+        UpdateExpression="REMOVE syncPolicyId",
     )

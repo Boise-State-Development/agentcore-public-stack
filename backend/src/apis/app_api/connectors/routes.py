@@ -400,6 +400,22 @@ async def complete_consent(
             current_user.user_id, body.provider_id
         )
 
+        # A fresh grant is the ONLY thing that resumes reauth-paused KB
+        # sync policies (docs/specs/assistant-kb-sync.md §7.6). Resumed
+        # policies come due immediately. Best-effort: a hook failure must
+        # never fail the consent completion itself.
+        try:
+            from apis.shared.sync_policies.service import resume_reauth_policies
+
+            await resume_reauth_policies(current_user.user_id, body.provider_id)
+        except Exception as resume_err:
+            logger.warning(
+                "Failed to resume reauth-paused sync policies for user=%s provider=%s: %s",
+                current_user.user_id,
+                scrub_log(body.provider_id),
+                resume_err,
+            )
+
     logger.info(
         "Completed OAuth consent for user=%s provider=%s",
         current_user.user_id,

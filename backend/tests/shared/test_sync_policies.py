@@ -13,16 +13,23 @@ import pytest
 from apis.shared.sync_policies.models import DUE_INDEX_PK
 from apis.shared.sync_policies.service import (
     DuplicateSyncPolicy,
+    RunNowCooldown,
     SyncPolicyLimitExceeded,
+    change_policy_interval,
     create_sync_policy,
+    delete_reauth_marker,
     delete_sync_policies_for_assistant,
     delete_sync_policies_for_source,
     get_sync_policy,
     list_due_policies,
     list_sync_policies,
+    put_reauth_marker,
     rearm_policy,
     record_sync_result,
+    resume_inactive_policies,
+    resume_reauth_policies,
     set_policy_state,
+    trigger_run_now,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -218,3 +225,150 @@ class TestDeleteCascades:
         assert deleted == 2
         assert await list_sync_policies(ASSISTANT_ID) == []
         assert await list_due_policies() == []
+
+
+class TestIntervalChange:
+    async def test_active_policy_rearms_and_moves_due_key(self, assistants_table):
+        policy = await _make_policy(interval="daily")
+        old_next = policy.next_sync_at
+
+        updated = await change_policy_interval(ASSISTANT_ID, policy.policy_id, "monthly")
+
+        assert updated.interval == "monthly"
+        assert updated.next_sync_at > old_next  # one *new* interval out
+        item = assistants_table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"SYNCPOL#{policy.policy_id}"}
+        )["Item"]
+        assert item["GSI4_SK"] == f"{updated.next_sync_at}#{policy.policy_id}"
+
+    async def test_paused_policy_remembers_interval_without_due_keys(self, assistants_table):
+        policy = await _make_policy(interval="daily")
+        await set_policy_state(ASSISTANT_ID, policy.policy_id, "paused_user")
+
+        updated = await change_policy_interval(ASSISTANT_ID, policy.policy_id, "weekly")
+
+        assert updated.interval == "weekly"
+        assert updated.state == "paused_user"
+        item = assistants_table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"SYNCPOL#{policy.policy_id}"}
+        )["Item"]
+        assert "GSI4_SK" not in item  # still invisible to the dispatcher
+
+    async def test_missing_policy_returns_none(self, assistants_table):
+        assert await change_policy_interval(ASSISTANT_ID, "syn-missing", "weekly") is None
+
+
+class TestRunNow:
+    async def test_makes_policy_due_immediately(self, assistants_table):
+        policy = await _make_policy(interval="daily")
+        assert await list_due_policies() == []  # created one interval out
+
+        updated = await trigger_run_now(ASSISTANT_ID, policy.policy_id)
+
+        assert updated.last_manual_run_at is not None
+        assert updated.next_sync_at == updated.last_manual_run_at
+        due = await list_due_policies()
+        assert [p.policy_id for p in due] == [policy.policy_id]
+
+    async def test_second_trigger_within_cooldown_rejected(self, assistants_table):
+        policy = await _make_policy()
+        await trigger_run_now(ASSISTANT_ID, policy.policy_id)
+
+        with pytest.raises(RunNowCooldown):
+            await trigger_run_now(ASSISTANT_ID, policy.policy_id)
+
+    async def test_trigger_allowed_after_cooldown_expires(self, assistants_table):
+        policy = await _make_policy()
+        # Simulate an old manual run: stamp beyond the cooldown window.
+        assistants_table.update_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"SYNCPOL#{policy.policy_id}"},
+            UpdateExpression="SET lastManualRunAt = :old",
+            ExpressionAttributeValues={":old": PAST},
+        )
+
+        updated = await trigger_run_now(ASSISTANT_ID, policy.policy_id)
+
+        assert updated.last_manual_run_at > PAST
+
+    async def test_paused_policy_rejected(self, assistants_table):
+        policy = await _make_policy()
+        await set_policy_state(ASSISTANT_ID, policy.policy_id, "paused_user")
+
+        with pytest.raises(ValueError):
+            await trigger_run_now(ASSISTANT_ID, policy.policy_id)
+
+    async def test_missing_policy_raises_key_error(self, assistants_table):
+        with pytest.raises(KeyError):
+            await trigger_run_now(ASSISTANT_ID, "syn-missing")
+
+
+class TestReauthMarkers:
+    async def test_fresh_consent_resumes_matching_provider_due_now(self, assistants_table):
+        policy = await _make_policy()
+        await set_policy_state(ASSISTANT_ID, policy.policy_id, "paused_reauth", state_reason="Reconnect")
+        await put_reauth_marker(USER_ID, ASSISTANT_ID, policy.policy_id, "google-workspace")
+
+        resumed = await resume_reauth_policies(USER_ID, "google-workspace")
+
+        assert resumed == 1
+        updated = await get_sync_policy(ASSISTANT_ID, policy.policy_id)
+        assert updated.state == "active"
+        assert [p.policy_id for p in await list_due_policies()] == [policy.policy_id]
+        # Marker consumed
+        marker = assistants_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SYNCREAUTH#{policy.policy_id}"}
+        ).get("Item")
+        assert marker is None
+
+    async def test_other_providers_markers_left_alone(self, assistants_table):
+        policy = await _make_policy()
+        await set_policy_state(ASSISTANT_ID, policy.policy_id, "paused_reauth")
+        await put_reauth_marker(USER_ID, ASSISTANT_ID, policy.policy_id, "microsoft-365")
+
+        resumed = await resume_reauth_policies(USER_ID, "google-workspace")
+
+        assert resumed == 0
+        updated = await get_sync_policy(ASSISTANT_ID, policy.policy_id)
+        assert updated.state == "paused_reauth"
+        marker = assistants_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SYNCREAUTH#{policy.policy_id}"}
+        ).get("Item")
+        assert marker is not None  # still waiting on its own provider
+
+    async def test_stale_marker_cleaned_without_resuming(self, assistants_table):
+        # Marker outlived its policy's pause (user resumed another way, or
+        # the policy was deleted): resume must re-verify, not trust it.
+        active = await _make_policy(source_ref="doc-active")
+        await put_reauth_marker(USER_ID, ASSISTANT_ID, active.policy_id, "google-workspace")
+        await put_reauth_marker(USER_ID, ASSISTANT_ID, "syn-deleted", "google-workspace")
+
+        resumed = await resume_reauth_policies(USER_ID, "google-workspace")
+
+        assert resumed == 0
+        for policy_id in (active.policy_id, "syn-deleted"):
+            marker = assistants_table.get_item(
+                Key={"PK": f"USER#{USER_ID}", "SK": f"SYNCREAUTH#{policy_id}"}
+            ).get("Item")
+            assert marker is None
+
+    async def test_delete_marker_is_idempotent(self, assistants_table):
+        await delete_reauth_marker(USER_ID, "syn-never-existed")  # no raise
+
+
+class TestResumeInactive:
+    async def test_resumes_only_inactivity_pauses(self, assistants_table):
+        dormant = await _make_policy(source_ref="doc-dormant")
+        user_paused = await _make_policy(source_ref="doc-user")
+        await set_policy_state(ASSISTANT_ID, dormant.policy_id, "paused_inactive")
+        await set_policy_state(ASSISTANT_ID, user_paused.policy_id, "paused_user")
+
+        resumed = await resume_inactive_policies(ASSISTANT_ID)
+
+        assert resumed == 1
+        assert (await get_sync_policy(ASSISTANT_ID, dormant.policy_id)).state == "active"
+        assert (await get_sync_policy(ASSISTANT_ID, user_paused.policy_id)).state == "paused_user"
+        assert [p.policy_id for p in await list_due_policies()] == [dormant.policy_id]
+
+    async def test_no_inactive_policies_is_noop(self, assistants_table):
+        await _make_policy()
+        assert await resume_inactive_policies(ASSISTANT_ID) == 0

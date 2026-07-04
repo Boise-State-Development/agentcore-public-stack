@@ -297,6 +297,146 @@ async def record_sync_result(assistant_id: str, policy_id: str, result: SyncRunR
     )
 
 
+# ── Reauth markers ───────────────────────────────────────────────────────────
+#
+# When the worker pauses a policy for re-consent it also writes a marker at
+# PK=USER#{user_id}, SK=SYNCREAUTH#{policy_id} carrying {assistantId,
+# providerId}. Consent completion queries this partition instead of scanning
+# the table for the user's paused policies. Markers are advisory: resume
+# re-verifies the policy still exists and is paused_reauth, so stale markers
+# are harmless and are deleted on sight.
+
+
+async def put_reauth_marker(user_id: str, assistant_id: str, policy_id: str, provider_id: str) -> None:
+    _get_table().put_item(
+        Item={
+            "PK": f"USER#{user_id}",
+            "SK": f"SYNCREAUTH#{policy_id}",
+            "assistantId": assistant_id,
+            "policyId": policy_id,
+            "providerId": provider_id,
+            "createdAt": _get_current_timestamp(),
+        }
+    )
+
+
+async def delete_reauth_marker(user_id: str, policy_id: str) -> None:
+    _get_table().delete_item(Key={"PK": f"USER#{user_id}", "SK": f"SYNCREAUTH#{policy_id}"})
+
+
+async def resume_reauth_policies(user_id: str, provider_id: str) -> int:
+    """Reactivate the user's paused_reauth policies for a provider.
+
+    Called from the OAuth consent-completion path: a fresh grant is the ONLY
+    thing that resumes a reauth pause. Resumed policies come due immediately.
+    Returns the number resumed.
+    """
+    from boto3.dynamodb.conditions import Key
+
+    response = _get_table().query(
+        KeyConditionExpression=Key("PK").eq(f"USER#{user_id}") & Key("SK").begins_with("SYNCREAUTH#")
+    )
+    resumed = 0
+    now = _get_current_timestamp()
+    for marker in response.get("Items", []):
+        if marker.get("providerId") != provider_id:
+            continue
+        assistant_id = marker["assistantId"]
+        policy_id = marker["policyId"]
+        policy = await get_sync_policy(assistant_id, policy_id)
+        if policy is not None and policy.state == "paused_reauth":
+            await set_policy_state(assistant_id, policy_id, "active", next_sync_at=now)
+            resumed += 1
+        await delete_reauth_marker(user_id, policy_id)
+    if resumed:
+        logger.info(f"Resumed {resumed} paused_reauth sync policies for user {user_id} / provider {provider_id}")
+    return resumed
+
+
+async def resume_inactive_policies(assistant_id: str) -> int:
+    """Reactivate an assistant's paused_inactive policies (due immediately).
+
+    Called from the lastUsedAt bump path: the first use of a dormant
+    assistant refreshes its knowledge base within a dispatcher tick.
+    """
+    resumed = 0
+    now = _get_current_timestamp()
+    for policy in await list_sync_policies(assistant_id):
+        if policy.state == "paused_inactive":
+            await set_policy_state(assistant_id, policy.policy_id, "active", next_sync_at=now)
+            resumed += 1
+    return resumed
+
+
+async def change_policy_interval(assistant_id: str, policy_id: str, interval: SyncInterval) -> Optional[SyncPolicy]:
+    """Change a policy's cadence. Active policies get re-armed one new
+    interval out (and the due-index key moves with it); paused policies
+    just remember the new interval for when they resume."""
+    policy = await get_sync_policy(assistant_id, policy_id)
+    if policy is None:
+        return None
+
+    values = {":interval": interval, ":updated_at": _get_current_timestamp()}
+    set_parts = ["#interval = :interval", "updatedAt = :updated_at"]
+    if policy.state == "active":
+        next_sync_at = compute_next_sync_at(interval)
+        set_parts += ["nextSyncAt = :next", "GSI4_SK = :gsi4sk"]
+        values[":next"] = next_sync_at
+        values[":gsi4sk"] = _due_sort_key(next_sync_at, policy_id)
+
+    _get_table().update_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
+        UpdateExpression="SET " + ", ".join(set_parts),
+        ExpressionAttributeNames={"#interval": "interval"},
+        ExpressionAttributeValues=values,
+    )
+    return await get_sync_policy(assistant_id, policy_id)
+
+
+RUN_NOW_COOLDOWN_SECONDS = 600
+
+
+class RunNowCooldown(Exception):
+    """Raised when a manual sync is requested within the cooldown window."""
+
+
+async def trigger_run_now(assistant_id: str, policy_id: str) -> SyncPolicy:
+    """Make a policy due immediately (manual "Sync now").
+
+    Flows through the normal dispatcher path so every guard still applies.
+    Only active policies can be manually run — paused states have their own
+    explicit resume affordances. A conditional write on lastManualRunAt
+    enforces the 10-minute cooldown atomically.
+    """
+    from botocore.exceptions import ClientError
+
+    policy = await get_sync_policy(assistant_id, policy_id)
+    if policy is None:
+        raise KeyError(policy_id)
+    if policy.state != "active":
+        raise ValueError(f"Cannot run-now a policy in state {policy.state}")
+
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat() + "Z"
+    cooldown_floor = (now_dt - timedelta(seconds=RUN_NOW_COOLDOWN_SECONDS)).isoformat() + "Z"
+    try:
+        _get_table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
+            UpdateExpression="SET nextSyncAt = :now, GSI4_SK = :gsi4sk, lastManualRunAt = :now, updatedAt = :now",
+            ExpressionAttributeValues={
+                ":now": now,
+                ":gsi4sk": _due_sort_key(now, policy_id),
+                ":floor": cooldown_floor,
+            },
+            ConditionExpression="attribute_not_exists(lastManualRunAt) OR lastManualRunAt < :floor",
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise RunNowCooldown(policy_id) from e
+        raise
+    return await get_sync_policy(assistant_id, policy_id)
+
+
 async def delete_sync_policy(assistant_id: str, policy_id: str) -> bool:
     _get_table().delete_item(Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"})
     logger.info(f"Deleted sync policy {policy_id} for assistant {assistant_id}")

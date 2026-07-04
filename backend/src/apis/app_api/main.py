@@ -194,6 +194,7 @@ from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.file_sources.routes import router as file_sources_router
 from apis.app_api.export_targets.routes import router as export_targets_router
 from apis.app_api.web_sources.routes import router as web_sources_router
+from apis.app_api.sync_policies.routes import router as sync_policies_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 from apis.app_api.voice import router as voice_router
@@ -224,6 +225,7 @@ app.include_router(connectors_router)  # User-facing connector catalog + consent
 app.include_router(file_sources_router)  # File-source catalog + browse/search over connectors
 app.include_router(export_targets_router)  # Export-target catalog + save-a-conversation to a connector
 app.include_router(web_sources_router)  # Web-crawl ingestion: URL -> documents via BFS + S3 staging
+app.include_router(sync_policies_router)  # KB sync schedules: scheduled re-index of assistant sources
 app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)

@@ -110,7 +110,7 @@ async def _resolve_access_token(provider, user_id: str) -> Optional[str]:
     return result.access_token
 
 
-async def _pause_reauth(policy: SyncPolicy, detail: str) -> Dict[str, Any]:
+async def _pause_reauth(policy: SyncPolicy, detail: str, provider_id: Optional[str] = None) -> Dict[str, Any]:
     logger.warning(f"Sync policy {policy.policy_id}: credentials need re-consent ({detail})")
     # "skipped" (not "failed"): resets the breaker streaks and clears the
     # run stamp — reauth is its own terminal state, not a failure count.
@@ -121,6 +121,12 @@ async def _pause_reauth(policy: SyncPolicy, detail: str) -> Dict[str, Any]:
         "paused_reauth",
         state_reason="Reconnect Google Drive to resume syncing",
     )
+    if provider_id:
+        # Marker lets the consent-completion hook find this policy without
+        # a table scan; resume re-verifies, so best-effort is fine here.
+        from apis.shared.sync_policies.service import put_reauth_marker
+
+        await put_reauth_marker(policy.created_by_user_id, policy.assistant_id, policy.policy_id, provider_id)
     return {"policyId": policy.policy_id, "result": "paused_reauth"}
 
 
@@ -168,7 +174,7 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
         logger.error(f"Sync policy {policy.policy_id}: workload token unavailable: {e}")
         return await _finish(policy, "failed")
     if access_token is None:
-        return await _pause_reauth(policy, "vault returned authorization URL")
+        return await _pause_reauth(policy, "vault returned authorization URL", provider_id=connector_id)
 
     try:
         # Gate 1 — metadata. Cheap; an unchanged corpus costs one
@@ -214,7 +220,7 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
     except FileSourceAuthError as e:
         # Provider-side revocation the vault can't see (Google rejected the
         # token). Same terminal state as consent-required.
-        return await _pause_reauth(policy, str(e))
+        return await _pause_reauth(policy, str(e), provider_id=connector_id)
     except FileSourceNotFoundError:
         # Deleted OR unshared — Drive won't say which. Never delete our
         # indexed copy on a 404; strike the counter and let the dispatcher
