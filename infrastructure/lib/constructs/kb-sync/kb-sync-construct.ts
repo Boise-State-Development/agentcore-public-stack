@@ -6,6 +6,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
@@ -16,6 +17,16 @@ export interface KbSyncConstructProps {
   config: AppConfig;
   /** RAG assistants table — sync policies live on it (SYNCPOL# items + DueSyncIndex). */
   assistantsTable: dynamodb.ITable;
+  /** RAG documents bucket — the worker re-stages changed source bytes here. */
+  documentsBucket: s3.IBucket;
+  /** OAuth providers table — the worker resolves connector config from it. */
+  oauthProvidersTable: dynamodb.ITable;
+  /**
+   * Shared platform workload identity name. Vault entries are keyed by
+   * workload identity — a different workload sees an empty vault, so this
+   * MUST be the same identity app-api/inference-api use.
+   */
+  workloadIdentityName: string;
 }
 
 /**
@@ -54,7 +65,13 @@ export class KbSyncConstruct extends Construct {
   constructor(scope: Construct, id: string, props: KbSyncConstructProps) {
     super(scope, id);
 
-    const { config, assistantsTable } = props;
+    const { config, assistantsTable, documentsBucket, oauthProvidersTable, workloadIdentityName } = props;
+
+    // Same value app-api uses (app-api-environment.ts) — the vault requires
+    // a registered return URL even for non-interactive token reads.
+    const oauthCallbackUrl = config.domainName
+      ? `https://${config.domainName}/oauth-complete`
+      : 'http://localhost:4200/oauth-complete';
 
     const bootstrapDir = path.resolve(
       __dirname,
@@ -83,6 +100,10 @@ export class KbSyncConstruct extends Construct {
       logGroup: workerLogGroup,
       environment: {
         DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
+        DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTable.tableName,
+        S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        AGENTCORE_RUNTIME_WORKLOAD_NAME: workloadIdentityName,
+        AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: oauthCallbackUrl,
         KB_SYNC_ENABLED: config.kbSync.enabled ? 'true' : 'false',
       },
       description:
@@ -116,6 +137,32 @@ export class KbSyncConstruct extends Construct {
     assistantsTable.grantReadWriteData(this.dispatcherLambda);
     assistantsTable.grantReadWriteData(this.workerLambda);
     this.workerLambda.grantInvoke(this.dispatcherLambda);
+
+    // Worker: read connector config, stage changed bytes for re-ingestion.
+    oauthProvidersTable.grantReadData(this.workerLambda);
+    documentsBucket.grantPut(this.workerLambda);
+
+    // Worker: retrieve the policy creator's stored 3LO token from the
+    // AgentCore Identity vault with no live user session. Mirrors app-api's
+    // AgentCoreWorkloadIdentityAccess statement (app-api-iam-grants.ts)
+    // minus consent-completion and provider CRUD — a background fetcher
+    // only ever reads tokens.
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreVaultTokenRead',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+          'bedrock-agentcore:GetResourceOauth2Token',
+        ],
+        resources: [
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/*`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/*/oauth2credentialprovider/*`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/*`,
+          `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:workload-identity-directory/*/workload-identity/*`,
+        ],
+      }),
+    );
 
     // Best-effort custom metrics (KBSync namespace). PutMetricData
     // doesn't support resource scoping; condition on the namespace.

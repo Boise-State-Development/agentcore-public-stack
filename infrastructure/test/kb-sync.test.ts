@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 
 import { KbSyncConstruct } from '../lib/constructs/kb-sync/kb-sync-construct';
@@ -12,9 +13,16 @@ function synth(kbSyncEnabled: boolean): Template {
   });
   const config = createMockConfig({ kbSync: { enabled: kbSyncEnabled } });
   const ragData = new RagDataConstruct(stack, 'RagData', { config });
+  const oauthProvidersTable = new dynamodb.Table(stack, 'OAuthProviders', {
+    partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+    sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+  });
   new KbSyncConstruct(stack, 'KbSync', {
     config,
     assistantsTable: ragData.assistantsTable,
+    documentsBucket: ragData.documentsBucket,
+    oauthProvidersTable,
+    workloadIdentityName: 'test-platform-workload',
   });
   return Template.fromStack(stack);
 }
@@ -102,5 +110,40 @@ describe('KbSyncConstruct', () => {
 
   it('creates error alarms for both functions', () => {
     t.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+  });
+
+  it('worker carries the identity + staging env contract', () => {
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      ImageConfig: { Command: ['apis.app_api.kb_sync.worker.lambda_handler'] },
+      Environment: {
+        Variables: Match.objectLike({
+          AGENTCORE_RUNTIME_WORKLOAD_NAME: 'test-platform-workload',
+          AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: Match.stringLikeRegexp('/oauth-complete$'),
+          DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: Match.anyValue(),
+          S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it('worker may read vault tokens but never complete consent or manage providers', () => {
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'AgentCoreVaultTokenRead',
+            Action: [
+              'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+              'bedrock-agentcore:GetResourceOauth2Token',
+            ],
+          }),
+        ]),
+      },
+    });
+    // The trimmed statement must not quietly grow write-side actions.
+    const policies = t.findResources('AWS::IAM::Policy');
+    const allActions = JSON.stringify(policies);
+    expect(allActions).not.toContain('CompleteResourceTokenAuth');
+    expect(allActions).not.toContain('CreateOauth2CredentialProvider');
   });
 });

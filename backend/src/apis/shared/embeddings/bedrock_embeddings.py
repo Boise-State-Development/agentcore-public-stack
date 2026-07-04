@@ -292,6 +292,42 @@ async def delete_vectors_for_document_deterministic(
     return chunk_count
 
 
+async def delete_vector_tail(document_id: str, from_index: int, to_index: int) -> int:
+    """
+    Delete vectors {document_id}#{i} for i in [from_index, to_index).
+
+    Shrinkage cleanup for KB sync re-ingestion: when a re-indexed document
+    produces fewer chunks than before, the in-place vector overwrite leaves
+    stale tail chunks behind — this removes exactly that tail. Deletion of
+    non-existent keys is a no-op in the S3 Vectors API.
+
+    Returns:
+        Number of keys sent for deletion (0 if the range is empty)
+    """
+    if to_index <= from_index:
+        return 0
+
+    client = boto3.client("s3vectors", region_name=AWS_REGION)
+    vector_bucket = _get_vector_store_bucket()
+    vector_index = _get_vector_store_index()
+
+    keys = [f"{document_id}#{i}" for i in range(from_index, to_index)]
+    batch_size = 500
+
+    for i in range(0, len(keys), batch_size):
+        batch = keys[i : i + batch_size]
+        client.delete_vectors(
+            vectorBucketName=vector_bucket,
+            indexName=vector_index,
+            keys=batch,
+        )
+
+    logger.info(
+        f"Tail delete: sent {len(keys)} keys ({from_index}..{to_index - 1}) for document {document_id}"
+    )
+    return len(keys)
+
+
 async def delete_vectors_for_assistant(assistant_id: str) -> int:
     """
     Delete ALL vectors belonging to an assistant from the S3 vector store.
