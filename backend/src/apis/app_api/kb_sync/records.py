@@ -46,6 +46,32 @@ def get_source_item(assistant_id: str, source_type: str, source_ref: str) -> Opt
     return get_item(f"AST#{assistant_id}", f"{sk_prefix}{source_ref}")
 
 
+def list_document_items(assistant_id: str) -> list:
+    """All DOC# records under an assistant (raw items, paginated query)."""
+    from boto3.dynamodb.conditions import Key
+
+    items = []
+    kwargs = {
+        "KeyConditionExpression": Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("DOC#"),
+    }
+    while True:
+        response = _table().query(**kwargs)
+        items.extend(response.get("Items", []))
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            return items
+        kwargs["ExclusiveStartKey"] = last_key
+
+
+def set_document_miss_count(assistant_id: str, document_id: str, count: int) -> None:
+    """Set the re-crawl miss streak on a web page document (0 resets it)."""
+    _table().update_item(
+        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+        UpdateExpression="SET consecutiveMisses = :c",
+        ExpressionAttributeValues={":c": count},
+    )
+
+
 def update_document_sync_fields(
     assistant_id: str,
     document_id: str,

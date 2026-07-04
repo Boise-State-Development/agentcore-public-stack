@@ -131,10 +131,12 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         rec.failed_delta += failed_delta
 
     async def fake_finalize(
-        *, assistant_id: str, crawl_id: str, status: str, error: str | None = None
+        *, assistant_id: str, crawl_id: str, status: str, error: str | None = None,
+        set_ttl: bool = True,
     ):
         rec.finalized_status = status
         rec.finalized_error = error
+        rec.finalized_set_ttl = set_ttl
 
     # Crawler module reaches via the import names it owns. Patch each one
     # on the crawler module so the BFS reroutes uniformly.
@@ -404,7 +406,7 @@ async def test_finalize_runs_on_exception(monkeypatch: pytest.MonkeyPatch):
     """Even if the inner loop crashes, the CrawlJob must not stay 'running'."""
     finalized: List[str] = []
 
-    async def fake_finalize(*, assistant_id, crawl_id, status, error=None):
+    async def fake_finalize(*, assistant_id, crawl_id, status, error=None, set_ttl=True):
         finalized.append(status)
 
     async def fake_increment(**kwargs):
@@ -462,3 +464,189 @@ async def test_visited_dedupes_repeated_links(recorder: _Recorder):
     )
     # Only one extra doc despite three duplicate <a>'s.
     assert len(recorder.created_docs) == 1
+
+
+# ── KB-sync refresh mode ────────────────────────────────────────────────────
+
+
+def _build_refresh_handler(pages: Dict[str, str], etags: Dict[str, str] | None = None):
+    """Like _build_handler, but ETag-aware: a request whose If-None-Match
+    matches the page's etag gets a 304 with no body."""
+    etags = etags or {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/robots.txt") and url not in pages:
+            return httpx.Response(404, text="")
+        if url not in pages:
+            return httpx.Response(404, text="not found")
+        etag = etags.get(url)
+        if etag and request.headers.get("If-None-Match") == etag:
+            return httpx.Response(304)
+        headers = {"content-type": "text/html; charset=utf-8"}
+        if etag:
+            headers["etag"] = etag
+        return httpx.Response(200, text=pages[url], headers=headers)
+
+    return _handler
+
+
+class _ResultLog:
+    """Captures RefreshState.on_result emissions with staging order info."""
+
+    def __init__(self, rec: _Recorder):
+        self.rec = rec
+        self.events: List[Tuple[str, str, int]] = []  # (outcome, url, s3_puts_at_emit)
+
+    async def __call__(self, url, document_id, outcome, etag, content_hash):
+        self.events.append((outcome, url, len(self.rec.s3_puts)))
+
+
+def _refresh_state(rec: _Recorder, docs: Dict[str, crawler.RefreshDoc]):
+    log = _ResultLog(rec)
+    state = crawler.RefreshState(docs=docs, on_result=log)
+    return state, log
+
+
+ROOT = "https://example.com/"
+
+
+async def _run_refresh(rec: _Recorder, pages, state, *, etags=None, settings=None):
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=ROOT,
+        settings=settings or CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id="DOC-root",
+        http_client_factory=_client_factory(_build_refresh_handler(pages, etags)),
+        refresh=state,
+        finalize_with_ttl=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_304_skips_stage_and_counts_unchanged(recorder: _Recorder):
+    pages = {ROOT: "<html><body>hi</body></html>"}
+    etags = {ROOT: '"v1"'}
+    state, log = _refresh_state(
+        recorder, {ROOT: crawler.RefreshDoc(document_id="DOC-root", source_etag='"v1"')}
+    )
+
+    await _run_refresh(recorder, pages, state, etags=etags)
+
+    assert state.unchanged == 1 and state.changed == 0 and state.created == 0
+    assert recorder.s3_puts == []
+    assert recorder.created_docs == []
+    assert ROOT in state.seen_urls
+    assert recorder.finalized_set_ttl is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_identical_hash_skips_stage(recorder: _Recorder):
+    html = "<html><head><title>T</title></head><body><p>same content</p></body></html>"
+    markdown, _ = crawler._extract_markdown(html, ROOT)
+    stored_hash = crawler._content_sha256(markdown)
+    state, log = _refresh_state(
+        recorder,
+        {ROOT: crawler.RefreshDoc(document_id="DOC-root", source_etag='"old"', content_hash=stored_hash)},
+    )
+
+    # Server serves a NEW etag (so the 304 gate misses) but identical content.
+    await _run_refresh(recorder, {ROOT: html}, state, etags={ROOT: '"new"'})
+
+    assert state.unchanged == 1
+    assert recorder.s3_puts == []
+    # etag advanced via on_result so next run's conditional GET can 304
+    assert log.events == [("unchanged", ROOT, 0)]
+
+
+@pytest.mark.asyncio
+async def test_refresh_changed_page_restages_and_emits_before_put(recorder: _Recorder):
+    state, log = _refresh_state(
+        recorder,
+        {ROOT: crawler.RefreshDoc(document_id="DOC-root", source_etag='"old"', content_hash="different", chunk_count=5)},
+    )
+
+    await _run_refresh(
+        recorder, {ROOT: "<html><body><p>brand new words</p></body></html>"}, state, etags={ROOT: '"new"'}
+    )
+
+    assert state.changed == 1
+    assert len(recorder.s3_puts) == 1
+    # "changed" emitted BEFORE staging so the worker can stash the previous
+    # chunk count before the S3 event fires ingestion
+    assert log.events[0][0] == "changed" and log.events[0][2] == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_reuses_existing_docs_and_creates_new_ones(recorder: _Recorder):
+    pages = {
+        ROOT: '<html><body><a href="/a">A</a><a href="/new">N</a></body></html>',
+        "https://example.com/a": "<html><body>a-page</body></html>",
+        "https://example.com/new": "<html><body>new-page</body></html>",
+    }
+    state, log = _refresh_state(
+        recorder,
+        {
+            ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="stale"),
+            "https://example.com/a": crawler.RefreshDoc(document_id="DOC-a", content_hash="stale"),
+        },
+    )
+
+    await _run_refresh(recorder, pages, state)
+
+    # Known URLs reuse their records; only /new creates a document.
+    assert [u for _id, u in recorder.created_docs] == ["https://example.com/new"]
+    assert state.created == 1 and state.changed == 2
+    assert state.seen_urls == {ROOT, "https://example.com/a", "https://example.com/new"}
+
+
+@pytest.mark.asyncio
+async def test_refresh_fetch_error_leaves_existing_doc_untouched(recorder: _Recorder):
+    pages = {ROOT: "<html><body>ok</body></html>", "https://example.com/broken": "irrelevant"}
+    state, _ = _refresh_state(
+        recorder,
+        {
+            ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="stale"),
+            "https://example.com/broken": crawler.RefreshDoc(document_id="DOC-broken", content_hash="x"),
+        },
+    )
+    pages_with_link = dict(pages)
+    pages_with_link[ROOT] = '<html><body><a href="/broken">b</a></body></html>'
+
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id="DOC-root",
+        http_client_factory=_client_factory(
+            _build_handler(pages_with_link, status_codes={"https://example.com/broken": 500})
+        ),
+        refresh=state,
+        finalize_with_ttl=False,
+    )
+
+    # The existing doc must NOT be flipped to failed on a transient error…
+    assert ("DOC-broken", "failed") not in recorder.status_updates
+    # …and it still counts as seen (an erroring page is not a missing page).
+    assert "https://example.com/broken" in state.seen_urls
+
+
+@pytest.mark.asyncio
+async def test_refresh_robots_disallow_is_not_seen(recorder: _Recorder):
+    pages = {
+        "https://example.com/robots.txt": "User-agent: *\nDisallow: /",
+        ROOT: "<html><body>hi</body></html>",
+    }
+    state, _ = _refresh_state(
+        recorder, {ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="h")}
+    )
+
+    await _run_refresh(recorder, pages, state)
+
+    # Robots said stop indexing: the URL is deliberately NOT seen, so the
+    # worker's miss counter starts ticking toward removal.
+    assert state.seen_urls == set()

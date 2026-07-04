@@ -364,3 +364,193 @@ class TestShrinkageCleanup:
 
         assert count == 0
         client.assert_not_called()
+
+
+class TestWebCrawlSync:
+    """Worker web re-crawl orchestration (crawler stubbed at the seam;
+    crawl job + documents live in moto through the real repositories)."""
+
+    ROOT = "https://example.com/"
+
+    async def _setup_crawl(self, assistants_table, *, page_urls=()):
+        from apis.app_api.web_sources.crawl_repository import create_crawl_job, finalize_crawl
+        from apis.app_api.web_sources.models import CrawlSettings
+
+        assistant = await create_assistant(
+            owner_id=USER_ID, owner_name="U", name="A", description="d",
+            instructions="i", vector_index_id="assistants-index",
+        )
+        assistant_id = assistant.assistant_id
+        job = await create_crawl_job(
+            assistant_id=assistant_id, root_url=self.ROOT,
+            settings=CrawlSettings(max_depth=1, max_pages=10),
+            started_by_user_id=USER_ID,
+        )
+        await finalize_crawl(assistant_id=assistant_id, crawl_id=job.crawl_id, status="complete")
+
+        for i, url in enumerate((self.ROOT, *page_urls)):
+            doc_id = f"doc-web-{i}"
+            await create_document(
+                assistant_id=assistant_id, filename=f"p{i}.md", content_type="text/markdown",
+                size_bytes=1, s3_key=f"assistants/{assistant_id}/documents/{doc_id}/p{i}.md",
+                document_id=doc_id,
+                provenance=DocumentProvenance(
+                    source_connector_id="web", source_adapter_key="http",
+                    source_file_id=url, imported_by_user_id=USER_ID,
+                ),
+            )
+
+        policy = await create_sync_policy(
+            assistant_id=assistant_id, source_type="web_crawl", source_ref=job.crawl_id,
+            interval="daily", created_by_user_id=USER_ID,
+        )
+        return assistant_id, job, policy
+
+    def _payload(self, assistant_id, policy, job):
+        return {
+            "policyId": policy.policy_id,
+            "assistantId": assistant_id,
+            "sourceType": "web_crawl",
+            "sourceRef": job.crawl_id,
+        }
+
+    @pytest.fixture()
+    def fake_crawl(self, monkeypatch):
+        """Replace run_crawl with a script: which URLs are seen, which emit
+        which outcome."""
+        script = {"seen": [], "emit": []}  # emit: (url, outcome, etag, hash)
+        captured = {}
+
+        async def fake_run_crawl(**kwargs):
+            captured.update(kwargs)
+            refresh = kwargs["refresh"]
+            for url in script["seen"]:
+                refresh.seen_urls.add(url)
+            for url, outcome, etag, content_hash in script["emit"]:
+                doc = refresh.docs.get(url)
+                doc_id = doc.document_id if doc else "doc-new"
+                await refresh._emit(url, doc_id, outcome, etag, content_hash)
+
+        from apis.app_api.web_sources import crawler
+        monkeypatch.setattr(crawler, "run_crawl", fake_run_crawl)
+        script["captured"] = captured
+        return script
+
+    async def test_changed_page_stashes_and_records_changed(self, assistants_table, fake_crawl):
+        assistant_id, job, policy = await self._setup_crawl(assistants_table)
+        assistants_table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-0"},
+            UpdateExpression="SET chunkCount = :c",
+            ExpressionAttributeValues={":c": 4},
+        )
+        fake_crawl["seen"] = [self.ROOT]
+        fake_crawl["emit"] = [(self.ROOT, "changed", '"e2"', "hash2")]
+
+        result = await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        assert result["result"] == "changed"
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-0"})["Item"]
+        assert item["previousChunkCount"] == 4
+        assert item["sourceEtag"] == '"e2"'
+        assert item["contentHash"] == "hash2"
+        # crawler invoked in refresh mode without TTL finalization
+        assert fake_crawl["captured"]["finalize_with_ttl"] is False
+        assert fake_crawl["captured"]["settings"].max_pages == 10
+
+    async def test_recrawl_reset_removes_job_ttl(self, assistants_table, fake_crawl):
+        assistant_id, job, policy = await self._setup_crawl(assistants_table)
+        # finalize_crawl(set_ttl=True) above put a ttl on the terminal job
+        before = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{job.crawl_id}"})["Item"]
+        assert "ttl" in before
+        fake_crawl["seen"] = [self.ROOT]
+
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        after = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{job.crawl_id}"})["Item"]
+        assert "ttl" not in after
+        assert after["discoveredCount"] == 0 and after["fetchedCount"] == 0
+
+    async def test_all_unchanged_records_unchanged(self, assistants_table, fake_crawl):
+        assistant_id, job, policy = await self._setup_crawl(assistants_table)
+        fake_crawl["seen"] = [self.ROOT]
+        fake_crawl["emit"] = [(self.ROOT, "unchanged", '"e1"', None)]
+
+        result = await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        assert result["result"] == "unchanged"
+
+    async def test_miss_counts_then_deletes_on_second_run(self, assistants_table, fake_crawl, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        cleanup = AsyncMock()
+        monkeypatch.setattr(
+            "apis.app_api.documents.services.cleanup_service.cleanup_document_resources", cleanup
+        )
+        gone_url = "https://example.com/gone"
+        assistant_id, job, policy = await self._setup_crawl(assistants_table, page_urls=(gone_url,))
+        # Root seen, /gone absent
+        fake_crawl["seen"] = [self.ROOT]
+
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-1"})["Item"]
+        assert item["consecutiveMisses"] == 1
+        assert item["status"] != "deleting"
+        cleanup.assert_not_awaited()
+
+        # Policy re-armed a day out by the first run's rearm... but the fake
+        # crawl doesn't touch the policy; run directly again.
+        result = await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-1"})["Item"]
+        assert item["status"] == "deleting"
+        cleanup.assert_awaited_once()
+        assert result["result"] == "changed"  # a deletion is a change
+
+    async def test_seen_again_resets_miss_counter(self, assistants_table, fake_crawl):
+        flaky_url = "https://example.com/flaky"
+        assistant_id, job, policy = await self._setup_crawl(assistants_table, page_urls=(flaky_url,))
+        fake_crawl["seen"] = [self.ROOT]
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        fake_crawl["seen"] = [self.ROOT, flaky_url]
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-1"})["Item"]
+        assert item["consecutiveMisses"] == 0
+        assert item["status"] != "deleting"
+
+    async def test_missing_job_pauses_policy(self, assistants_table, fake_crawl):
+        assistant_id, job, policy = await self._setup_crawl(assistants_table)
+        assistants_table.delete_item(Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{job.crawl_id}"})
+
+        result = await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        assert result["result"] == "skipped"
+        updated = await get_sync_policy(assistant_id, policy.policy_id)
+        assert updated.state == "paused_error"
+
+    async def test_missing_root_doc_is_recreated(self, assistants_table, fake_crawl):
+        from apis.app_api.web_sources.crawl_repository import create_crawl_job
+        from apis.app_api.web_sources.models import CrawlSettings
+
+        assistant = await create_assistant(
+            owner_id=USER_ID, owner_name="U", name="A", description="d",
+            instructions="i", vector_index_id="assistants-index",
+        )
+        assistant_id = assistant.assistant_id
+        job = await create_crawl_job(
+            assistant_id=assistant_id, root_url=self.ROOT,
+            settings=CrawlSettings(), started_by_user_id=USER_ID,
+        )
+        policy = await create_sync_policy(
+            assistant_id=assistant_id, source_type="web_crawl", source_ref=job.crawl_id,
+            interval="daily", created_by_user_id=USER_ID,
+        )
+        fake_crawl["seen"] = [self.ROOT]
+
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        root_doc_id = fake_crawl["captured"]["root_document_id"]
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{root_doc_id}"})["Item"]
+        assert item["sourceFileId"] == self.ROOT
+        assert item["sourceConnectorId"] == "web"
