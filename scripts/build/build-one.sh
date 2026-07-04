@@ -7,7 +7,7 @@
 #   build-one.sh <service>
 #
 # Where <service> is one of:
-#   app-api | inference-api | rag-ingestion
+#   app-api | inference-api | rag-ingestion | kb-sync
 #
 # This script encapsulates the per-service spec (which Dockerfile,
 # which source trees, which manifests, which platform) so that:
@@ -105,9 +105,26 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/rag-ingestion/image-tag"
         ;;
+    kb-sync)
+        DOCKERFILE="backend/Dockerfile.kb-sync"
+        # One image, two Lambdas (dispatcher + worker via ImageConfig
+        # command overrides). Keep SOURCE_DIRS in lockstep with the
+        # Dockerfile's COPY list — a path copied but not hashed here
+        # would ship stale code under an unchanged content-hash tag.
+        SOURCE_DIRS=(
+            "backend/src/apis/app_api/kb_sync"
+            "backend/src/apis/shared/sync_policies"
+        )
+        # shared/__init__.py hashed as a manifest (same as rag-ingestion);
+        # kb_sync/requirements.txt lives inside the first source dir.
+        MANIFESTS=("backend/src/apis/shared/__init__.py")
+        # Both kb-sync Lambdas are arm64 (see the kb-sync CDK construct).
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync" >&2
         exit 1
         ;;
 esac

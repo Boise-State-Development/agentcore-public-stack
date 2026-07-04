@@ -469,6 +469,9 @@ jobs:
       - name: Build rag-ingestion image
         run: docker build -f backend/Dockerfile.rag-ingestion -t rag-ingestion:scan .
 
+      - name: Build kb-sync image
+        run: docker build -f backend/Dockerfile.kb-sync -t kb-sync:scan .
+
       - name: Trivy scan app-api
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -486,6 +489,15 @@ jobs:
           exit-code: '0'
           severity: 'CRITICAL,HIGH'
           output: trivy-inference-api.txt
+
+      - name: Trivy scan kb-sync
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'kb-sync:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-kb-sync.txt
 
       - name: Trivy scan rag-ingestion
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

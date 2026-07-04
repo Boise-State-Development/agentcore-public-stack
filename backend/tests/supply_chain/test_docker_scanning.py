@@ -16,6 +16,7 @@ EXPECTED_DOCKERFILES = [
     "Dockerfile.app-api",
     "Dockerfile.inference-api",
     "Dockerfile.rag-ingestion",
+    "Dockerfile.kb-sync",
 ]
 
 

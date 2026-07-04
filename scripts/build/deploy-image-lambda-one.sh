@@ -8,7 +8,11 @@
 #   deploy-image-lambda-one.sh <service>
 #
 # Where <service> is one of:
-#   rag-ingestion
+#   rag-ingestion | kb-sync-dispatcher | kb-sync-worker
+#
+# kb-sync-dispatcher and kb-sync-worker are two Lambda functions
+# sharing the single kb-sync image; their handlers differ only via
+# ImageConfig.Command, which `update-function-code` doesn't touch.
 #
 # Pre-requisite: scripts/build/build-one.sh has already run for the
 # same service in this workflow. It pushes the image to ECR and
@@ -19,7 +23,7 @@ set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <service>" >&2
-    echo "  service: rag-ingestion" >&2
+    echo "  service: rag-ingestion | kb-sync-dispatcher | kb-sync-worker" >&2
     exit 1
 fi
 
@@ -40,14 +44,39 @@ case "$SERVICE" in
         IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/${SERVICE}/image-tag"
         ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-${SERVICE}"
         ;;
+    kb-sync-dispatcher)
+        FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/kb-sync/dispatcher-function-name"
+        IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
+        ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-kb-sync"
+        ;;
+    kb-sync-worker)
+        FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/kb-sync/worker-function-name"
+        IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
+        ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-kb-sync"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: rag-ingestion" >&2
+        echo "Expected one of: rag-ingestion | kb-sync-dispatcher | kb-sync-worker" >&2
         exit 1
         ;;
 esac
 
 cd "$PROJECT_ROOT"
+
+# First-deploy grace: the function-name SSM param is published by
+# PlatformStack when the Lambda's construct first deploys. A backend
+# run that lands before that platform deploy (e.g. the PR introducing
+# a new Lambda) has an image in ECR but no function to point at it —
+# skip gracefully; the next backend run after the platform deploy
+# completes the swap.
+if ! aws ssm get-parameter --region "$AWS_REGION" --name "$FUNCTION_NAME_SSM" >/dev/null 2>&1; then
+    log_warn "SSM ${FUNCTION_NAME_SSM} not found — ${SERVICE} not yet provisioned by PlatformStack; skipping code deploy."
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        echo "image_tag=skipped-not-provisioned" >> "$GITHUB_OUTPUT"
+    fi
+    exit 0
+fi
+
 log_info "Deploying ${SERVICE} container image to Lambda..."
 
 TAG="$(bash "$DEPLOY" \
