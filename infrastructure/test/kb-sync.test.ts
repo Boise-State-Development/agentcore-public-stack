@@ -137,6 +137,13 @@ describe('KbSyncConstruct', () => {
               'bedrock-agentcore:GetResourceOauth2Token',
             ],
           }),
+          // GetResourceOauth2Token reads the vaulted token through the
+          // provider's backing Secrets Manager secret — the bedrock-agentcore
+          // action is useless without read access to that secret.
+          Match.objectLike({
+            Sid: 'AgentCoreIdentityOAuthSecrets',
+            Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+          }),
         ]),
       },
     });
