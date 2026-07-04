@@ -107,7 +107,18 @@ async def _resolve_access_token(provider, user_id: str) -> Optional[str]:
 
 
 async def _pause_reauth(policy: SyncPolicy, detail: str, provider_id: Optional[str] = None) -> Dict[str, Any]:
-    logger.warning(f"Sync policy {policy.policy_id}: credentials need re-consent ({detail})")
+    # Log the exact (workload identity, userId) the vault lookup used. The
+    # token is keyed by that pair, so a "requires consent" almost always means
+    # the token was vaulted under a DIFFERENT workload — e.g. a consent done
+    # via local dev (AGENTCORE_RUNTIME_WORKLOAD_NAME=local_dev_inference)
+    # can't be read by the deployed worker (platform-workload). Surfacing both
+    # turns an opaque reauth pause into a one-line mismatch diagnosis.
+    logger.warning(
+        f"Sync policy {policy.policy_id}: credentials need re-consent ({detail}); "
+        f"vault lookup used workload={os.environ.get('AGENTCORE_RUNTIME_WORKLOAD_NAME')!r} "
+        f"userId={policy.created_by_user_id!r} provider={provider_id!r} — a token vaulted "
+        f"under a different workload identity will read as consent-required here"
+    )
     # "skipped" (not "failed"): resets the breaker streaks and clears the
     # run stamp — reauth is its own terminal state, not a failure count.
     await record_sync_result(policy.assistant_id, policy.policy_id, "skipped")
