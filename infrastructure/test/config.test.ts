@@ -308,6 +308,44 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // KB Sync feature flag — default ON with a kill switch
+  // ============================================================
+
+  describe('KB Sync feature flag', () => {
+    test('defaults to enabled when CDK_KB_SYNC_ENABLED is unset', () => {
+      delete process.env.CDK_KB_SYNC_ENABLED;
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      // `${{ vars.CDK_KB_SYNC_ENABLED }}` renders to "" when the var is unset.
+      process.env.CDK_KB_SYNC_ENABLED = '';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('CDK_KB_SYNC_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_KB_SYNC_ENABLED = 'false';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(false);
+    });
+
+    test('CDK_KB_SYNC_ENABLED="true" stays enabled', () => {
+      process.env.CDK_KB_SYNC_ENABLED = 'true';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('cdk.json context kbSync.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_KB_SYNC_ENABLED;
+      app.node.setContext('kbSync', { enabled: false });
+
+      expect(loadConfig(app).kbSync.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Configuration Validation Tests
   // ============================================================
 
