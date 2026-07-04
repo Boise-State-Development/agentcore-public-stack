@@ -166,6 +166,23 @@ export class KbSyncConstruct extends Construct {
       }),
     );
 
+    // GetResourceOauth2Token reads the vaulted refresh token *through* a
+    // Secrets Manager secret the vault auto-creates per provider
+    // (bedrock-agentcore-identity!default/oauth2/<id>) — the bedrock-agentcore
+    // action alone is not enough, the caller must also be able to read that
+    // backing secret. Read-only mirror of the app-api / inference-api grants
+    // (a background fetcher never registers providers, so no write lifecycle).
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreIdentityOAuthSecrets',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+        resources: [
+          `arn:aws:secretsmanager:${config.awsRegion}:${config.awsAccount}:secret:bedrock-agentcore-identity!default/oauth2/*`,
+        ],
+      }),
+    );
+
     // Best-effort custom metrics (KBSync namespace). PutMetricData
     // doesn't support resource scoping; condition on the namespace.
     const metricsStatement = new iam.PolicyStatement({
