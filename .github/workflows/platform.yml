@@ -89,6 +89,13 @@ jobs:
       # nonexistent host and MCP Apps fail to load. Cert MUST be in us-east-1.
       CDK_MCP_SANDBOX_CERTIFICATE_ARN: ${{ vars.CDK_MCP_SANDBOX_CERTIFICATE_ARN }}
       CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS: ${{ vars.CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS }}
+      # KB sync scheduled re-index. When "true", CDK enables the EventBridge
+      # rate(15m) rule AND sets KB_SYNC_ENABLED=true on both kb-sync Lambdas;
+      # anything else (incl. unset) keeps the feature dark (config.ts defaults
+      # to false when absent). Set the `CDK_KB_SYNC_ENABLED` variable to "true"
+      # only in the environment(s) where it should run — development today,
+      # production stays dark until validated there.
+      CDK_KB_SYNC_ENABLED: ${{ vars.CDK_KB_SYNC_ENABLED }}
       # Secrets
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
