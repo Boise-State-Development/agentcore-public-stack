@@ -1,0 +1,5 @@
+# kb-sync Lambda image dependencies (backend/Dockerfile.kb-sync).
+# Exact pins per repo policy; versions match backend/uv.lock.
+# PR-3 (Drive sync path) adds httpx + bedrock-agentcore here.
+boto3==1.43.9
+pydantic==2.12.5

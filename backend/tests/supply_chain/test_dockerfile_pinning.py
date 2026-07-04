@@ -15,6 +15,7 @@ DOCKERFILES = [
     BACKEND_DIR / "Dockerfile.app-api",
     BACKEND_DIR / "Dockerfile.inference-api",
     BACKEND_DIR / "Dockerfile.rag-ingestion",
+    BACKEND_DIR / "Dockerfile.kb-sync",
 ]
 
 # apt-get version pin: package=version (e.g., gcc=4:14.2.0-1)

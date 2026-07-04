@@ -41,6 +41,7 @@ import { SharedConversationsConstruct } from './constructs/data/shared-conversat
 // RAG (data half lives in Platform)
 import { RagDataConstruct } from './constructs/rag/rag-data-construct';
 import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-ingestion-lambda-construct';
+import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
 
 // Artifacts (data + render Lambda + CloudFront distribution).
 // Lambda + distribution + Route53 alias here. The Lambda's
@@ -385,6 +386,16 @@ export class PlatformStack extends cdk.Stack {
       new s3n.LambdaDestination(ragIngestion.lambda),
       { prefix: 'assistants/' },
     );
+
+    // ============================================================
+    // KB sync — scheduled re-index of assistant knowledge bases
+    // (dispatcher + worker Lambdas + EventBridge rate rule; inert
+    // unless config.kbSync.enabled)
+    // ============================================================
+    new KbSyncConstruct(this, 'KbSync', {
+      config,
+      assistantsTable: this.ragAssistantsTable,
+    });
 
     // ============================================================
     // Fine-tuning data

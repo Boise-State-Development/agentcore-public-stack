@@ -222,25 +222,40 @@ async def set_policy_state(
         raise
 
 
-async def rearm_policy(assistant_id: str, policy_id: str, expected_next_sync_at: str, new_next_sync_at: str) -> bool:
+async def rearm_policy(
+    assistant_id: str,
+    policy_id: str,
+    expected_next_sync_at: str,
+    new_next_sync_at: str,
+    mark_run_started: bool = False,
+) -> bool:
     """Advance next_sync_at, conditional on the currently stored value.
 
     The dispatcher re-arms BEFORE invoking the worker; the condition makes a
     double-fired tick idempotent — the second dispatcher loses the
     conditional write and skips the policy. Returns True if this caller won.
+
+    mark_run_started stamps syncRunStartedAt in the same write, so winning
+    the re-arm and claiming the in-flight slot are atomic.
     """
     from botocore.exceptions import ClientError
+
+    update_expression = "SET nextSyncAt = :new, GSI4_SK = :gsi4sk, updatedAt = :updated_at"
+    values = {
+        ":new": new_next_sync_at,
+        ":gsi4sk": _due_sort_key(new_next_sync_at, policy_id),
+        ":updated_at": _get_current_timestamp(),
+        ":expected": expected_next_sync_at,
+    }
+    if mark_run_started:
+        update_expression += ", syncRunStartedAt = :run_started"
+        values[":run_started"] = values[":updated_at"]
 
     try:
         _get_table().update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
-            UpdateExpression="SET nextSyncAt = :new, GSI4_SK = :gsi4sk, updatedAt = :updated_at",
-            ExpressionAttributeValues={
-                ":new": new_next_sync_at,
-                ":gsi4sk": _due_sort_key(new_next_sync_at, policy_id),
-                ":updated_at": _get_current_timestamp(),
-                ":expected": expected_next_sync_at,
-            },
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=values,
             ConditionExpression="nextSyncAt = :expected",
         )
         return True

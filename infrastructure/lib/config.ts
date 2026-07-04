@@ -48,6 +48,7 @@ export interface AppConfig {
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
   ragIngestion: RagIngestionConfig;
+  kbSync: KbSyncConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -123,6 +124,19 @@ export interface RagIngestionConfig {
   embeddingModel: string;        // Bedrock model ID (default: "amazon.titan-embed-text-v2")
   vectorDimension: number;       // Embedding dimension (default: 1024)
   vectorDistanceMetric: string;  // Distance metric (default: "cosine")
+}
+
+/**
+ * KB sync — scheduled re-index of assistant knowledge-base sources
+ * (docs/specs/assistant-kb-sync.md).
+ *
+ * `enabled` gates the whole feature: it sets the EventBridge rule's
+ * enabled state AND the KB_SYNC_ENABLED env var on both kb-sync
+ * Lambdas. Default false — the kb-sync PRs merge dark and the feature
+ * lights up with CDK_KB_SYNC_ENABLED=true on a platform deploy.
+ */
+export interface KbSyncConfig {
+  enabled: boolean;
 }
 
 export interface FineTuningConfig {
@@ -250,6 +264,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       embeddingModel: process.env.CDK_RAG_EMBEDDING_MODEL || scope.node.tryGetContext('ragIngestion')?.embeddingModel,
       vectorDimension: parseIntEnv(process.env.CDK_RAG_VECTOR_DIMENSION) || scope.node.tryGetContext('ragIngestion')?.vectorDimension,
       vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric,
+    },
+    kbSync: {
+      enabled:
+        process.env.CDK_KB_SYNC_ENABLED !== undefined
+          ? process.env.CDK_KB_SYNC_ENABLED === 'true'
+          : scope.node.tryGetContext('kbSync')?.enabled ?? false,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
