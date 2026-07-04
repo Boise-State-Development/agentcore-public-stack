@@ -193,6 +193,27 @@ class TestListActiveCrawls:
         assert len(body["crawls"]) == 1
         assert body["crawls"][0]["crawlId"] == "CRAWL-1"
 
+    def test_returns_all_jobs_without_active_filter(self, app: FastAPI):
+        """Default (no ?active=true) is full history — the sync-policy UI
+        lists completed crawls as syncable sources."""
+        mock_auth_user(app, _user())
+        crawl = _stub_crawl()
+        with patch(
+            "apis.app_api.web_sources.routes.get_assistant",
+            new_callable=AsyncMock,
+            return_value={"assistantId": ASSISTANT_ID},
+        ), patch(
+            "apis.app_api.web_sources.routes.list_all_crawls",
+            new_callable=AsyncMock,
+            return_value=[crawl],
+        ) as mock_all:
+            client = TestClient(app)
+            resp = client.get(f"/assistants/{ASSISTANT_ID}/web-sources/crawls")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["crawls"]) == 1
+        mock_all.assert_awaited_once_with(ASSISTANT_ID)
+
 
 class TestGetCrawl:
     def test_returns_single_crawl(self, app: FastAPI):
