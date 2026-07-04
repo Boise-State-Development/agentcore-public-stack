@@ -358,23 +358,14 @@ class BaseAgent(ABC):
             provider = await get_provider_repository().get_provider(provider_id)
             return provider.scopes if provider else []
 
-        async def provider_type_lookup(provider_id: str) -> Optional[str]:
-            # AgentCore Identity needs vendor-specific OAuth params
-            # forwarded via `customParameters` (e.g. Google's
-            # `access_type=offline` for refresh tokens). The hook reads
-            # this to forward those.
-            from apis.shared.oauth.provider_repository import get_provider_repository
-
-            provider = await get_provider_repository().get_provider(provider_id)
-            return provider.provider_type.value if provider else None
-
         async def custom_parameters_lookup(
             provider_id: str,
         ) -> Optional[dict[str, str]]:
-            # Admin-supplied OAuth extras (e.g. `hd=mycorp.com` for
-            # Google Workspace domain restriction). Merged with the
-            # vendor baseline by `custom_parameters_for`; baseline wins
-            # on conflict.
+            # The connector's admin-configured OAuth `customParameters`,
+            # forwarded verbatim to AgentCore Identity (e.g. a Google
+            # connector's `access_type=offline` for refresh tokens +
+            # `prompt=consent`, or `hd=mycorp.com` for Workspace domain
+            # restriction).
             from apis.shared.oauth.provider_repository import get_provider_repository
 
             provider = await get_provider_repository().get_provider(provider_id)
@@ -396,7 +387,6 @@ class BaseAgent(ABC):
             user_id=self.user_id,
             provider_lookup=provider_lookup,
             scopes_lookup=scopes_lookup,
-            provider_type_lookup=provider_type_lookup,
             custom_parameters_lookup=custom_parameters_lookup,
             disconnected_lookup=disconnected_lookup,
             tool_use_provider_lookup=tool_use_provider_lookup,

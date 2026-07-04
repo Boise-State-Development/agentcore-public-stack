@@ -88,64 +88,29 @@ _RUNTIME_WORKLOAD_ENV = "AGENTCORE_RUNTIME_WORKLOAD_NAME"
 _CALLBACK_URL_ENV = "AGENTCORE_LOCAL_OAUTH_CALLBACK_URL"
 
 
-def _vendor_baseline_params(
-    provider_type: Optional[str], *, force_authentication: bool = False
-) -> Dict[str, str]:
-    """Hardcoded params AgentCore Identity *requires* for a given vendor.
-
-    Per the AgentCore Identity authentication docs
-    (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-authentication.html),
-    Google must receive `access_type=offline` to issue a refresh token —
-    without it the vault entry expires after ~1 hour with no refresh
-    path. This is non-negotiable: it always wins over admin-supplied
-    extras to prevent an admin from accidentally turning it off.
-
-    When `force_authentication=True` we additionally send `prompt=consent`
-    for Google. Google only re-issues a refresh token on subsequent
-    authorizations if the user is shown the consent screen again — so a
-    user who clicks "Disconnect" then "Reconnect" would otherwise get a
-    vault entry with an access token but no refresh token, putting them
-    right back in the hourly-reconsent loop on the next access-token
-    expiry. We only set this on the explicit re-consent path; first-time
-    consent and silent refreshes don't trigger it.
-    """
-    if not provider_type:
-        return {}
-    if provider_type.lower() == "google":
-        params = {"access_type": "offline"}
-        if force_authentication:
-            params["prompt"] = "consent"
-        return params
-    return {}
-
-
 def custom_parameters_for(
-    provider_type: Optional[str],
     admin_extras: Optional[Dict[str, str]] = None,
-    *,
-    force_authentication: bool = False,
 ) -> Optional[Dict[str, str]]:
-    """Build the `customParameters` payload AgentCore Identity wants forwarded.
+    """Normalize a connector's admin-supplied OAuth `customParameters`.
 
-    Merges admin-supplied extras (e.g. Google `hd=mycorp.com` for domain
-    restriction) with the hardcoded vendor baseline. Baseline keys win on
-    conflict — admins cannot turn off a documented requirement.
+    Returns the connector's configured extras verbatim, or None when empty
+    so callers can pass the value straight through to the SDK without
+    sending an empty `customParameters` map.
 
-    `force_authentication=True` mirrors the same flag on
-    `get_token_for_user`: when the caller is forcing AgentCore to bypass
-    the vault and walk the user through consent again, this enables any
-    vendor-specific extras needed for that path (e.g. Google's
-    `prompt=consent` so a refresh token is re-issued).
-
-    Returns None when the merged result would be empty, so callers can
-    pass the value through to the SDK unconditionally without sending
-    an empty `customParameters` map.
+    Vendor-specific requirements are NOT hardcoded here — they're supplied
+    per-connector via the admin "Custom OAuth Parameters" field. Per the
+    AgentCore Identity docs
+    (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity-authentication.html)
+    the delivered vendors do not add these on their own, so for a Google
+    connector an admin must configure `access_type=offline` (to have Google
+    issue a refresh token at all) and typically `prompt=consent` (so a
+    refresh token is re-issued on reconnect). Because every call site now
+    forwards the same stored value, the `customParameters` map matches
+    across the consent grant and later token retrievals — AgentCore factors
+    it into the vault key, so a mismatch would otherwise falsely report
+    consent-required.
     """
-    baseline = _vendor_baseline_params(
-        provider_type, force_authentication=force_authentication
-    )
-    merged = {**(admin_extras or {}), **baseline}
-    return merged or None
+    return dict(admin_extras) if admin_extras else None
 
 
 @dataclass(frozen=True)

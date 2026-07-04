@@ -114,13 +114,13 @@ class TestOAuthConsentHookCacheHit:
         assert kwargs["force_authentication"] is True
 
     @pytest.mark.asyncio
-    async def test_force_authentication_sends_prompt_consent_for_google(self):
-        """Google only re-issues a refresh token on subsequent grants if
-        the user is shown the consent screen — so the explicit re-consent
-        path (force_authentication=True) must propagate prompt=consent
-        through to AgentCore Identity. Without it, a Disconnect/Reconnect
-        cycle leaves the vault with an access token but no refresh token,
-        putting the user back in the hourly-reconsent loop."""
+    async def test_force_authentication_forwards_configured_custom_parameters(self):
+        """On the explicit re-consent path (force_authentication=True) the
+        hook forwards the connector's configured customParameters verbatim.
+        For a Google connector that's `access_type=offline` + `prompt=consent`
+        — Google only re-issues a refresh token when the consent screen is
+        shown, so without prompt=consent a Disconnect/Reconnect cycle leaves
+        the vault with an access token but no refresh token."""
         identity = MagicMock()
         identity.get_token_for_user = AsyncMock(
             return_value=TokenResult(authorization_url="https://accounts/consent")
@@ -130,7 +130,10 @@ class TestOAuthConsentHookCacheHit:
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: ["openid"],
-            provider_type_lookup=lambda _: "google",
+            custom_parameters_lookup=lambda _: {
+                "access_type": "offline",
+                "prompt": "consent",
+            },
             disconnected_lookup=lambda _pid: True,
         )
         event = _make_event(provider_id="google")
@@ -150,10 +153,14 @@ class TestOAuthConsentHookCacheHit:
         }
 
     @pytest.mark.asyncio
-    async def test_silent_refresh_does_not_send_prompt_consent(self):
-        """The refresh path (force_authentication=False) must not send
-        prompt=consent — that would force the consent screen on every
-        silent refresh, which is the exact UX we're trying to avoid."""
+    async def test_silent_refresh_forwards_same_custom_parameters(self):
+        """The silent-refresh path (force_authentication=False) forwards the
+        SAME configured customParameters as the consent path. AgentCore
+        factors the map into the vault key, so they must match or a usable
+        vaulted token is treated as a fresh request. (prompt=consent is inert
+        on a refresh-token exchange — that hits the token endpoint, not the
+        interactive authorization redirect — so sending it uniformly is
+        safe.)"""
         identity = MagicMock()
         identity.get_token_for_user = AsyncMock(
             return_value=TokenResult(access_token="refreshed-token")
@@ -163,7 +170,10 @@ class TestOAuthConsentHookCacheHit:
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: ["openid"],
-            provider_type_lookup=lambda _: "google",
+            custom_parameters_lookup=lambda _: {
+                "access_type": "offline",
+                "prompt": "consent",
+            },
         )
         event = _make_event(provider_id="google")
 
@@ -175,8 +185,10 @@ class TestOAuthConsentHookCacheHit:
 
         kwargs = identity.get_token_for_user.call_args.kwargs
         assert kwargs["force_authentication"] is False
-        assert kwargs["custom_parameters"] == {"access_type": "offline"}
-        assert "prompt" not in kwargs["custom_parameters"]
+        assert kwargs["custom_parameters"] == {
+            "access_type": "offline",
+            "prompt": "consent",
+        }
 
     @pytest.mark.asyncio
     async def test_uses_cached_token_without_calling_identity(self):
@@ -785,11 +797,12 @@ class TestOAuthConsentHookErrors:
         assert scopes_lookup.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_provider_type_lookup_forwards_custom_parameters(self):
-        """When the provider is Google, the hook forwards
-        `custom_parameters={"access_type": "offline"}` to AgentCore Identity
-        so Google issues a refresh token (vault entry would otherwise expire
-        after ~1 hour with no refresh path)."""
+    async def test_custom_parameters_lookup_forwards_configured_params(self):
+        """For a Google connector configured with `access_type=offline`, the
+        hook forwards it to AgentCore Identity so Google issues a refresh
+        token (the vault entry would otherwise expire after ~1 hour with no
+        refresh path). The value comes from the connector config, not a
+        hardcoded vendor baseline."""
         identity = MagicMock()
         identity.get_token_for_user = AsyncMock(
             return_value=TokenResult(access_token="t")
@@ -799,7 +812,7 @@ class TestOAuthConsentHookErrors:
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: ["openid"],
-            provider_type_lookup=lambda _: "google",
+            custom_parameters_lookup=lambda _: {"access_type": "offline"},
         )
 
         event = _make_event(provider_id="google")
@@ -815,10 +828,10 @@ class TestOAuthConsentHookErrors:
         }
 
     @pytest.mark.asyncio
-    async def test_admin_custom_parameters_merge_with_baseline(self):
-        """Hook merges admin-supplied extras (e.g. Google `hd=` for Workspace
-        domain restriction) with the vendor baseline before forwarding to
-        AgentCore. Baseline still wins on conflict."""
+    async def test_custom_parameters_forwarded_verbatim(self):
+        """Hook forwards the connector's configured extras verbatim — no
+        hardcoded baseline is injected or allowed to override. An admin who
+        sets `access_type=online` gets exactly that (their choice)."""
         identity = MagicMock()
         identity.get_token_for_user = AsyncMock(
             return_value=TokenResult(access_token="t")
@@ -828,10 +841,9 @@ class TestOAuthConsentHookErrors:
             user_id="alice",
             provider_lookup=lambda _tool: "google",
             scopes_lookup=lambda _: ["openid"],
-            provider_type_lookup=lambda _: "google",
             custom_parameters_lookup=lambda _: {
                 "hd": "mycompany.com",
-                "access_type": "online",  # admin attempts override; ignored
+                "access_type": "online",
             },
         )
 
@@ -844,15 +856,15 @@ class TestOAuthConsentHookErrors:
 
         identity.get_token_for_user.assert_called_once()
         assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
-            "access_type": "offline",  # baseline wins
+            "access_type": "online",
             "hd": "mycompany.com",
         }
 
     @pytest.mark.asyncio
-    async def test_no_provider_type_lookup_omits_custom_parameters(self):
-        """When the lookup is omitted (legacy callers / non-Google vendors),
-        no `custom_parameters` is sent — AgentCore handles vendor defaults
-        and we don't accidentally inject Google-specific keys elsewhere."""
+    async def test_no_custom_parameters_lookup_omits_custom_parameters(self):
+        """When the lookup is omitted (legacy callers / connectors with no
+        configured extras), no `custom_parameters` is sent — AgentCore handles
+        vendor defaults and we don't inject anything."""
         identity = MagicMock()
         identity.get_token_for_user = AsyncMock(
             return_value=TokenResult(access_token="t")
@@ -862,7 +874,7 @@ class TestOAuthConsentHookErrors:
             user_id="alice",
             provider_lookup=lambda _tool: "github",
             scopes_lookup=lambda _: ["read:user"],
-            # no provider_type_lookup
+            # no custom_parameters_lookup
         )
 
         event = _make_event(provider_id="github")
