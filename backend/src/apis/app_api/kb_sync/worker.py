@@ -25,8 +25,14 @@ Pause/breaker outcomes (spec §7):
 - trashed=true → "skipped" (grace state — recoverable from trash)
 - anything else → failed run; dispatcher backoff/breaker handles it
 
-Web re-crawl (source_type == "web_crawl") lands in PR-4 — until then
-those runs record "skipped".
+Web re-crawl (source_type == "web_crawl", spec §6.2): re-runs the
+policy's CrawlJob with its stored (already-capped) settings in the
+crawler's refresh/upsert mode — conditional GET per page, content-hash
+gating, no duplicate documents — then applies miss accounting: a page
+absent from 2 consecutive re-crawls is deleted (transient outages
+don't count; fetch failures are "seen"). The crawl job finalizes
+WITHOUT its usual 30-day TTL so the policy's source record can't
+auto-expire out from under the schedule.
 
 Payload contract with the dispatcher:
     {"policyId", "assistantId", "sourceType", "sourceRef"}
@@ -220,6 +226,169 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
         return await _finish(policy, "failed")
 
 
+async def _delete_missing_web_document(assistant_id: str, item: Dict[str, Any], owner_id: str) -> None:
+    """Soft-delete a page that vanished from 2 consecutive re-crawls, and
+    run the resource cleanup inline (no request context to fire-and-forget
+    from — the Lambda can afford to wait)."""
+    from apis.app_api.documents.services.cleanup_service import cleanup_document_resources
+    from apis.app_api.documents.services.document_service import soft_delete_document
+
+    document_id = item["documentId"]
+    document = await soft_delete_document(assistant_id, document_id, owner_id)
+    if document is None:
+        return
+    await cleanup_document_resources(
+        document_id=document_id,
+        assistant_id=assistant_id,
+        s3_key=document.s3_key,
+        chunk_count=document.chunk_count,
+        source_connector_id=document.source_connector_id,
+        source_file_id=document.source_file_id,
+    )
+
+
+async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
+    """Re-run the policy's crawl with its stored (already-capped) settings
+    in upsert/refresh mode, then apply the 2-consecutive-miss deletion rule
+    (docs/specs/assistant-kb-sync.md §6.2)."""
+    from apis.app_api.documents.models import DocumentProvenance
+    from apis.app_api.documents.services.document_service import _generate_document_id, create_document
+    from apis.app_api.documents.services.storage_service import _get_s3_key, _sanitize_filename
+    from apis.app_api.web_sources import crawler
+    from apis.app_api.web_sources.crawl_repository import get_crawl_job, reset_crawl_for_refresh
+    from apis.app_api.web_sources.url_utils import normalize_url, url_extension_hint
+
+    assistant_id = policy.assistant_id
+    job = await get_crawl_job(assistant_id, policy.source_ref)
+    if job is None:
+        # Dispatcher liveness races a just-expired/deleted job.
+        await set_policy_state(
+            assistant_id, policy.policy_id, "paused_error", state_reason="crawl configuration no longer exists"
+        )
+        return await _finish(policy, "skipped")
+
+    root = normalize_url(job.root_url)
+
+    # Existing web pages under this root, keyed by their normalized URL.
+    web_docs: Dict[str, Dict[str, Any]] = {}
+    for item in records.list_document_items(assistant_id):
+        url = str(item.get("sourceFileId") or "")
+        if (
+            item.get("sourceConnectorId") == "web"
+            and url.startswith(root)
+            and item.get("status") != "deleting"
+        ):
+            web_docs[url] = item
+
+    now = _now_timestamp()
+
+    async def on_result(url: str, document_id: str, outcome: str, etag, content_hash) -> None:
+        if outcome == "changed":
+            # BEFORE the S3 overwrite: stash the previous chunk count for
+            # the ingestion tail-delete, alongside the new gate values.
+            records.update_document_sync_fields(
+                assistant_id,
+                document_id,
+                source_etag=etag,
+                content_hash=content_hash,
+                previous_chunk_count=int(web_docs[url].get("chunkCount") or 0),
+                last_synced_at=now,
+            )
+        elif outcome == "unchanged":
+            records.update_document_sync_fields(
+                assistant_id, document_id, source_etag=etag, content_hash=content_hash, last_synced_at=now
+            )
+        elif outcome == "created":
+            # The crawler's own metadata update owns etag/filename; we add
+            # the hash so the next refresh can gate on it.
+            records.update_document_sync_fields(
+                assistant_id, document_id, content_hash=content_hash, last_synced_at=now
+            )
+
+    refresh = crawler.RefreshState(
+        docs={
+            url: crawler.RefreshDoc(
+                document_id=item["documentId"],
+                source_etag=item.get("sourceEtag"),
+                content_hash=item.get("contentHash"),
+                chunk_count=int(item.get("chunkCount") or 0),
+            )
+            for url, item in web_docs.items()
+        },
+        on_result=on_result,
+    )
+
+    # Root document: reuse if alive, else recreate (mirrors the crawl route).
+    root_item = web_docs.get(root)
+    if root_item is not None:
+        root_document_id = root_item["documentId"]
+    else:
+        root_document_id = _generate_document_id()
+        filename = f"{_sanitize_filename(url_extension_hint(root))}.html"
+        await create_document(
+            assistant_id=assistant_id,
+            filename=filename,
+            content_type="text/html",
+            size_bytes=0,
+            s3_key=_get_s3_key(assistant_id, root_document_id, filename),
+            document_id=root_document_id,
+            provenance=DocumentProvenance(
+                source_connector_id="web",
+                source_adapter_key="http",
+                source_file_id=root,
+                imported_by_user_id=policy.created_by_user_id,
+            ),
+        )
+
+    if not await reset_crawl_for_refresh(assistant_id=assistant_id, crawl_id=job.crawl_id):
+        await set_policy_state(
+            assistant_id, policy.policy_id, "paused_error", state_reason="crawl configuration no longer exists"
+        )
+        return await _finish(policy, "skipped")
+
+    # finalize_with_ttl=False: a sync-covered crawl job must never TTL-expire
+    # out from under its policy. budget_seconds shaves the crawler's default
+    # 15-minute ceiling so finalize + miss accounting fit inside this
+    # Lambda's own 15-minute timeout.
+    await crawler.run_crawl(
+        assistant_id=assistant_id,
+        crawl_id=job.crawl_id,
+        user_id=policy.created_by_user_id,
+        root_url=job.root_url,
+        settings=job.settings,
+        root_document_id=root_document_id,
+        refresh=refresh,
+        finalize_with_ttl=False,
+        budget_seconds=13 * 60,
+    )
+
+    # Miss accounting: pages that never survived the robots gate this run.
+    # Fetch failures ARE in seen_urls (transient outage ≠ gone); only a
+    # 2-consecutive-run absence deletes.
+    assistant_item = records.get_assistant_item(assistant_id)
+    owner_id = str(assistant_item.get("ownerId")) if assistant_item else policy.created_by_user_id
+    deleted = 0
+    for url, item in web_docs.items():
+        if url in refresh.seen_urls:
+            if int(item.get("consecutiveMisses") or 0) > 0:
+                records.set_document_miss_count(assistant_id, item["documentId"], 0)
+            continue
+        misses = int(item.get("consecutiveMisses") or 0) + 1
+        if misses >= 2:
+            logger.info(f"Sync policy {policy.policy_id}: {url} missing {misses} consecutive runs; deleting")
+            await _delete_missing_web_document(assistant_id, item, owner_id)
+            deleted += 1
+        else:
+            records.set_document_miss_count(assistant_id, item["documentId"], misses)
+
+    logger.info(
+        f"Sync policy {policy.policy_id}: re-crawl done — {refresh.changed} changed, "
+        f"{refresh.created} new, {refresh.unchanged} unchanged, {deleted} deleted"
+    )
+    result = "changed" if (refresh.changed or refresh.created or deleted) else "unchanged"
+    return await _finish(policy, result)
+
+
 async def run_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     policy_id = payload["policyId"]
     assistant_id = payload["assistantId"]
@@ -229,18 +398,14 @@ async def run_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"KB sync worker: policy {policy_id} no longer exists; dropping run")
         return {"policyId": policy_id, "result": "dropped"}
 
-    if policy.source_type == "drive_file":
-        try:
-            return await _sync_drive_file(policy)
-        except Exception as e:
-            # Last-resort catch: always record the run so the stamp clears
-            # and the breaker counts, never leave a policy half-run.
-            logger.error(f"KB sync worker: unexpected failure on policy {policy_id}: {e}", exc_info=True)
-            return await _finish(policy, "failed")
-
-    # web_crawl lands in PR-4.
-    logger.info(f"KB sync worker: source_type {policy.source_type} not implemented yet; skipping")
-    return await _finish(policy, "skipped")
+    sync_fn = _sync_drive_file if policy.source_type == "drive_file" else _sync_web_crawl
+    try:
+        return await sync_fn(policy)
+    except Exception as e:
+        # Last-resort catch: always record the run so the stamp clears
+        # and the breaker counts, never leave a policy half-run.
+        logger.error(f"KB sync worker: unexpected failure on policy {policy_id}: {e}", exc_info=True)
+        return await _finish(policy, "failed")
 
 
 def lambda_handler(event, context):

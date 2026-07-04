@@ -114,8 +114,11 @@ case "$SERVICE" in
         SOURCE_DIRS=(
             "backend/src/apis/app_api/kb_sync"
             "backend/src/apis/app_api/file_sources"
+            "backend/src/apis/app_api/documents"
+            "backend/src/apis/app_api/web_sources"
             "backend/src/apis/shared/sync_policies"
             "backend/src/apis/shared/oauth"
+            "backend/src/apis/shared/embeddings"
         )
         # shared/__init__.py hashed as a manifest (same as rag-ingestion);
         # kb_sync/requirements.txt lives inside the first source dir.

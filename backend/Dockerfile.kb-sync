@@ -30,12 +30,16 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
 COPY backend/src/apis/shared/sync_policies/ ${LAMBDA_TASK_ROOT}/apis/shared/sync_policies/
 COPY backend/src/apis/shared/oauth/ ${LAMBDA_TASK_ROOT}/apis/shared/oauth/
+COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
 COPY backend/src/apis/app_api/file_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/file_sources/
+COPY backend/src/apis/app_api/documents/ ${LAMBDA_TASK_ROOT}/apis/app_api/documents/
+COPY backend/src/apis/app_api/web_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/web_sources/
 COPY backend/src/apis/app_api/kb_sync/ ${LAMBDA_TASK_ROOT}/apis/app_api/kb_sync/
 
-# file_sources/service.py is copied with its package but must never be
-# imported here — it pulls FastAPI, which this image deliberately lacks.
-# The worker uses the oauth primitives + adapters directly.
+# file_sources/service.py, documents/routes.py, and web_sources/routes.py
+# ride along with their packages but must never be imported here — they
+# pull FastAPI, which this image deliberately lacks. The worker uses the
+# oauth primitives, document/crawl services, and the crawler directly.
 
 # Default command: dispatcher. The worker function's CMD is overridden
 # to apis.app_api.kb_sync.worker.lambda_handler by its ImageConfig.

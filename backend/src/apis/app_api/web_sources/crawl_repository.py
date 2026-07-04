@@ -292,44 +292,89 @@ async def increment_counters(
         )
 
 
+async def reset_crawl_for_refresh(*, assistant_id: str, crawl_id: str) -> bool:
+    """Rearm an existing crawl job for a KB-sync re-crawl.
+
+    Puts the job back to `running` with zeroed counters and a fresh
+    startedAt, and strips the TTL/error/completedAt from the previous
+    terminal state (a sync-covered job must never auto-expire — see
+    finalize_crawl set_ttl). Returns False if the job no longer exists.
+    """
+    from botocore.exceptions import ClientError
+
+    expression_attribute_names = {"#status": "status", "#ttl": "ttl", "#err": "error"}
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+            UpdateExpression=(
+                "SET #status = :running, startedAt = :now, updatedAt = :now, "
+                "discoveredCount = :zero, fetchedCount = :zero, failedCount = :zero "
+                "REMOVE #ttl, #err, completedAt"
+            ),
+            ExpressionAttributeValues={":running": "running", ":now": _now(), ":zero": 0},
+            ExpressionAttributeNames=expression_attribute_names,
+            ConditionExpression="attribute_exists(PK)",
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.warning("Cannot reset missing crawl job %s/%s for refresh", assistant_id, crawl_id)
+            return False
+        raise
+
+
 async def finalize_crawl(
     *,
     assistant_id: str,
     crawl_id: str,
     status: CrawlJobStatus,
     error: Optional[str] = None,
+    set_ttl: bool = True,
 ) -> None:
     """Move a crawl out of `running`. Never raises.
 
     Callers must invoke this in a `finally` so a crashed task does not leave
     a job pinned at `running` forever (which would keep the editor's watcher
     loop spinning).
+
+    set_ttl=False is the KB-sync path: a crawl job referenced by a sync
+    policy is that policy's source of truth and must NOT auto-expire —
+    the 30-day TTL reaper deleting it would trip the dispatcher's liveness
+    check and silently kill the schedule. Sync re-crawls finalize with the
+    ttl attribute removed instead.
     """
     # DynamoDB TTL requires epoch *seconds* — millisecond values are silently
     # ignored by the reaper. `#ttl` is escaped because `ttl` is a reserved word.
-    ttl_epoch_seconds = int(time.time()) + _FINALIZED_TTL_DAYS * 86400
     expression_attribute_names = {"#status": "status", "#ttl": "ttl"}
     set_parts = [
         "#status = :status",
         "completedAt = :completed_at",
         "updatedAt = :completed_at",
-        "#ttl = :ttl",
     ]
     values: dict[str, object] = {
         ":status": status,
         ":completed_at": _now(),
-        ":ttl": ttl_epoch_seconds,
     }
+    remove_parts = []
+    if set_ttl:
+        set_parts.append("#ttl = :ttl")
+        values[":ttl"] = int(time.time()) + _FINALIZED_TTL_DAYS * 86400
+    else:
+        remove_parts.append("#ttl")
     if error is not None:
         set_parts.append("#err = :err")
         expression_attribute_names["#err"] = "error"
         # Trim long error strings so we never write a >400KB DynamoDB row.
         values[":err"] = (error or "")[:2000]
 
+    update_expression = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        update_expression += " REMOVE " + ", ".join(remove_parts)
+
     try:
         _table().update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
-            UpdateExpression="SET " + ", ".join(set_parts),
+            UpdateExpression=update_expression,
             ExpressionAttributeValues=values,
             ExpressionAttributeNames=expression_attribute_names,
             ConditionExpression="attribute_exists(PK)",

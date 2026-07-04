@@ -93,9 +93,11 @@ export class KbSyncConstruct extends Construct {
         cmd: ['apis.app_api.kb_sync.worker.lambda_handler'],
       }),
       architecture: lambda.Architecture.ARM_64,
-      // Worker fetches source bytes and stages to S3; generous timeout
-      // for large files / slow crawls, modest memory (no ML deps).
-      timeout: cdk.Duration.minutes(10),
+      // Worker fetches source bytes and stages to S3; modest memory (no ML
+      // deps). 15 min is Lambda's max; re-crawls run with a 13-minute
+      // crawler budget (worker passes budget_seconds) so finalize + miss
+      // accounting always fit before the Lambda deadline.
+      timeout: cdk.Duration.minutes(15),
       memorySize: 1024,
       logGroup: workerLogGroup,
       environment: {
