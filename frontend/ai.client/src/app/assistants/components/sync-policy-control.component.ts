@@ -34,18 +34,24 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
   providers: [provideIcons({ heroArrowPath, heroChevronDown })],
   template: `
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span
+        class="text-xs/5 font-medium text-gray-500 dark:text-gray-400"
+        [title]="autoSyncHint()"
+      >
+        {{ autoSyncLabel() }}
+      </span>
       <div class="relative inline-flex">
         <select
-          [attr.aria-label]="'Keep ' + (sourceName() || 'this source') + ' in sync'"
+          [attr.aria-label]="'Auto-sync schedule for ' + (sourceName() || 'this source')"
           [disabled]="busy()"
           [value]="selectValue()"
           (change)="onSelectChange($event)"
           class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
         >
-          <option value="manual">Manual only</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
+          <option value="manual">Don't auto-sync</option>
+          <option value="daily">Sync daily</option>
+          <option value="weekly">Sync weekly</option>
+          <option value="monthly">Sync monthly</option>
         </select>
         <ng-icon
           name="heroChevronDown"
@@ -119,6 +125,18 @@ export class SyncPolicyControlComponent {
   readonly sourceName = input('');
   /** Provider display name for the paused_reauth affordance (e.g. "Google Drive"). */
   readonly reconnectLabel = input('');
+  /**
+   * Provider display name this source is imported from (e.g. "Google Drive"),
+   * shown as the control's lead label so every row states what auto-sync is
+   * and where it pulls from.
+   */
+  readonly sourceLabel = input('');
+  /**
+   * The source's last successful sync, straight from the document record.
+   * Used to keep a "Last synced …" line visible even when the source is
+   * manual-only (no governing policy), where `policy` is null.
+   */
+  readonly lastSyncedAt = input<string | null>(null);
 
   readonly intervalSelected = output<SyncIntervalSelection>();
   readonly runNow = output<void>();
@@ -130,6 +148,19 @@ export class SyncPolicyControlComponent {
     () => this.policy()?.interval ?? 'manual',
   );
 
+  readonly autoSyncLabel = computed<string>(() => {
+    const src = this.sourceLabel();
+    return src ? `Auto-sync from ${src}` : 'Auto-sync';
+  });
+
+  readonly autoSyncHint = computed<string>(() => {
+    const src = this.sourceLabel();
+    const name = this.sourceName() || 'this file';
+    return src
+      ? `Automatically re-imports ${name} from ${src} on a schedule so the assistant always has the latest version.`
+      : `Automatically re-imports ${name} from its source on a schedule so the assistant always has the latest version.`;
+  });
+
   readonly statusTone = computed<'muted' | 'warn'>(() => {
     const p = this.policy();
     if (!p) return 'muted';
@@ -140,16 +171,23 @@ export class SyncPolicyControlComponent {
 
   readonly statusText = computed<string>(() => {
     const p = this.policy();
-    if (!p) return '';
+    // Manual-only (no governing policy): still surface when the file last
+    // refreshed, using the document's own timestamp.
+    if (!p) {
+      const ts = this.lastSyncedAt();
+      return ts ? this.syncedPhrase('Last synced', ts) : '';
+    }
     switch (p.state) {
       case 'active': {
         const parts: string[] = [];
         if (p.lastResult === 'failed') {
           parts.push(
-            p.lastSyncAt ? `Last sync failed ${this.formatAgo(p.lastSyncAt)}` : 'Last sync failed',
+            p.lastSyncAt
+              ? this.syncedPhrase('Last sync failed', p.lastSyncAt)
+              : 'Last sync failed',
           );
         } else if (p.lastSyncAt) {
-          parts.push(`Synced ${this.formatAgo(p.lastSyncAt)}`);
+          parts.push(this.syncedPhrase('Synced', p.lastSyncAt));
         } else {
           parts.push('Not synced yet');
         }
@@ -158,8 +196,10 @@ export class SyncPolicyControlComponent {
         }
         return parts.join(' · ');
       }
-      case 'paused_user':
-        return 'Paused';
+      case 'paused_user': {
+        const ts = p.lastSyncAt ?? this.lastSyncedAt();
+        return ts ? `Paused · last synced ${this.formatAgo(ts)}` : 'Paused';
+      }
       case 'paused_error':
         return this.pausedText(p.stateReason, 'Paused after repeated failures');
       case 'paused_inactive':
@@ -188,6 +228,30 @@ export class SyncPolicyControlComponent {
 
   private pausedText(reason: string | null | undefined, fallback: string): string {
     return reason ? `Paused — ${reason}` : `Paused — ${fallback}`;
+  }
+
+  /**
+   * "{verb} {relative} · {absolute}" — pairs a scannable relative age with an
+   * exact date/time so the reader gets both "how long ago" and "exactly when".
+   */
+  private syncedPhrase(verb: string, iso: string): string {
+    const ago = this.formatAgo(iso);
+    const abs = this.formatAbsolute(iso);
+    if (!ago && !abs) return verb;
+    if (!abs) return `${verb} ${ago}`;
+    if (!ago) return `${verb} ${abs}`;
+    return `${verb} ${ago} · ${abs}`;
+  }
+
+  private formatAbsolute(iso: string): string {
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) return '';
+    return then.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
 
   private formatAgo(iso: string): string {

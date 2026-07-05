@@ -528,6 +528,8 @@
                               [policy]="syncPolicyFor(doc.documentId)"
                               [busy]="isSyncBusy(doc.documentId)"
                               [sourceName]="doc.filename"
+                              [sourceLabel]="reconnectLabelForDocument(doc)"
+                              [lastSyncedAt]="doc.lastSyncedAt ?? null"
                               [reconnectLabel]="reconnectLabelForDocument(doc)"
                               (intervalSelected)="onSyncIntervalSelected('drive_file', doc.documentId, $event)"
                               (runNow)="onSyncRunNow(doc.documentId)"

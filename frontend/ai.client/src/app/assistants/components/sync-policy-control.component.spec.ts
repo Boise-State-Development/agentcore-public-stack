@@ -50,11 +50,34 @@ describe('SyncPolicyControlComponent', () => {
     return ((fixture.nativeElement.querySelector('p')?.textContent as string) ?? '').trim();
   }
 
-  it('defaults the select to "Manual only" with no policy and shows no actions', () => {
+  it('defaults the select to manual ("Don\'t auto-sync") with no policy and shows no actions', () => {
     fixture.detectChanges();
     expect(select().value).toBe('manual');
+    const manualOption = select().querySelector('option[value="manual"]');
+    expect(manualOption?.textContent?.trim()).toBe("Don't auto-sync");
     expect(buttonLabels()).toEqual([]);
     expect(fixture.nativeElement.querySelector('p')).toBeNull();
+  });
+
+  it('labels the control "Auto-sync" and names the source when given one', () => {
+    fixture.detectChanges();
+    const label = () =>
+      (fixture.nativeElement.querySelector('span')?.textContent as string)?.trim();
+    expect(label()).toBe('Auto-sync');
+
+    fixture.componentRef.setInput('sourceLabel', 'Google Drive');
+    fixture.detectChanges();
+    expect(label()).toBe('Auto-sync from Google Drive');
+  });
+
+  it('shows "Last synced" for a manual-only source using the document timestamp', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    // No policy input → manual-only; the timestamp comes from the document.
+    fixture.componentRef.setInput('lastSyncedAt', twoHoursAgo);
+    fixture.detectChanges();
+    expect(statusLine()).toContain('Last synced 2h ago');
+    // Relative age is paired with an absolute date/time.
+    expect(statusLine()).toMatch(/Last synced 2h ago · .+/);
   });
 
   it('reflects the policy interval in the select', () => {
@@ -157,7 +180,7 @@ describe('SyncPolicyControlComponent', () => {
     expect(statusLine()).toContain('inactive');
   });
 
-  it('describes last and next sync on the status line for an active policy', () => {
+  it('describes last (relative + absolute) and next sync for an active policy', () => {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     const inThreeDays = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
     fixture.componentRef.setInput(
@@ -166,7 +189,10 @@ describe('SyncPolicyControlComponent', () => {
     );
     fixture.detectChanges();
 
-    expect(statusLine()).toBe('Synced 2h ago · next sync in 3d');
+    // Relative age, an exact date/time, then the next-run estimate.
+    expect(statusLine()).toContain('Synced 2h ago');
+    expect(statusLine()).toContain('next sync in 3d');
+    expect(statusLine()).toMatch(/Synced 2h ago · .+ · next sync in 3d/);
   });
 
   it('flags a failed last run on the status line', () => {
