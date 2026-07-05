@@ -37,9 +37,21 @@ class DuplicateSyncPolicy(Exception):
     """Raised when the source already has a sync policy on this assistant."""
 
 
+def _iso(dt: datetime) -> str:
+    """Serialize a UTC datetime as strict ISO 8601 with a ``Z`` suffix.
+
+    ``datetime.isoformat()`` renders the offset as ``+00:00``; we normalize that
+    to ``Z`` so the result is valid ISO 8601 that JavaScript's ``Date`` parses.
+    A previous ``isoformat() + "Z"`` produced ``…+00:00Z`` — both an offset and a
+    Z — which is invalid and yields ``Invalid Date`` in strict engines (Safari),
+    leaving the sync status blank in the UI.
+    """
+    return dt.isoformat().replace("+00:00", "Z")
+
+
 def _get_current_timestamp() -> str:
     """Get current timestamp in ISO 8601 format"""
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    return _iso(datetime.now(timezone.utc))
 
 
 def _generate_policy_id() -> str:
@@ -70,7 +82,7 @@ def max_policies_per_assistant() -> int:
 def compute_next_sync_at(interval: SyncInterval, from_time: Optional[datetime] = None) -> str:
     """Compute the next due timestamp for an interval, ISO 8601."""
     base = from_time or datetime.now(timezone.utc)
-    return (base + INTERVAL_DELTAS[interval]).isoformat() + "Z"
+    return _iso(base + INTERVAL_DELTAS[interval])
 
 
 async def create_sync_policy(
@@ -417,8 +429,8 @@ async def trigger_run_now(assistant_id: str, policy_id: str) -> SyncPolicy:
         raise ValueError(f"Cannot run-now a policy in state {policy.state}")
 
     now_dt = datetime.now(timezone.utc)
-    now = now_dt.isoformat() + "Z"
-    cooldown_floor = (now_dt - timedelta(seconds=RUN_NOW_COOLDOWN_SECONDS)).isoformat() + "Z"
+    now = _iso(now_dt)
+    cooldown_floor = _iso(now_dt - timedelta(seconds=RUN_NOW_COOLDOWN_SECONDS))
     try:
         _get_table().update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},

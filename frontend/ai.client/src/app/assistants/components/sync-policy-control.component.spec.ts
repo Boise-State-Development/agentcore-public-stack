@@ -59,17 +59,6 @@ describe('SyncPolicyControlComponent', () => {
     expect(fixture.nativeElement.querySelector('p')).toBeNull();
   });
 
-  it('labels the control "Auto-sync" and names the source when given one', () => {
-    fixture.detectChanges();
-    const label = () =>
-      (fixture.nativeElement.querySelector('span')?.textContent as string)?.trim();
-    expect(label()).toBe('Auto-sync');
-
-    fixture.componentRef.setInput('sourceLabel', 'Google Drive');
-    fixture.detectChanges();
-    expect(label()).toBe('Auto-sync from Google Drive');
-  });
-
   it('shows "Last synced" for a manual-only source using the document timestamp', () => {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     // No policy input → manual-only; the timestamp comes from the document.
@@ -78,6 +67,19 @@ describe('SyncPolicyControlComponent', () => {
     expect(statusLine()).toContain('Last synced 2h ago');
     // Relative age is paired with an absolute date/time.
     expect(statusLine()).toMatch(/Last synced 2h ago · .+/);
+  });
+
+  it('renders timestamps that carry a legacy "+00:00Z" suffix (invalid ISO)', () => {
+    // The backend historically emitted "…+00:00Z" (offset AND Z), which is
+    // unparseable by strict `new Date()` and left the status blank. Already-
+    // persisted policies must still render, so the control normalizes it.
+    const then = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const legacy = then.toISOString().replace('Z', '+00:00Z');
+    fixture.componentRef.setInput('lastSyncedAt', legacy);
+    fixture.detectChanges();
+    expect(statusLine()).toContain('Last synced 3h ago');
+    // Not the blank "Last synced" with no time.
+    expect(statusLine()).not.toBe('Last synced');
   });
 
   it('reflects the policy interval in the select', () => {

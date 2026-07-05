@@ -69,7 +69,10 @@ _NATIVE_PREFIX = "application/vnd.google-apps."
 
 
 def _now_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    # Normalize the +00:00 offset to a single trailing Z; "…+00:00Z" (offset AND
+    # Z) is invalid ISO 8601 and renders as Invalid Date in strict JS engines,
+    # leaving the last-synced time blank in the UI.
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _sha256(content: bytes) -> str:

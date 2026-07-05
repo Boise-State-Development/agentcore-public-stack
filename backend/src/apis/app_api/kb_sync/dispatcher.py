@@ -59,15 +59,22 @@ def _now() -> datetime:
 
 
 def _timestamp(dt: datetime) -> str:
-    return dt.isoformat() + "Z"
+    # Normalize the +00:00 offset to a single trailing Z: "…+00:00Z" (offset AND
+    # Z) is invalid ISO 8601 and renders as Invalid Date in strict JS engines.
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _parse_timestamp(value: str) -> Optional[datetime]:
-    """Parse the house timestamp format (isoformat + trailing 'Z')."""
+    """Parse the house timestamp format, tolerating both the current trailing
+    'Z' and the legacy '+00:00Z' (offset AND Z). Always returns a UTC-aware
+    datetime so comparisons with :func:`_now` never mix naive and aware."""
     try:
-        return datetime.fromisoformat(value.rstrip("Z"))
+        dt = datetime.fromisoformat(value.rstrip("Z"))
     except (ValueError, AttributeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _get_assistant_item(assistant_id: str) -> Optional[Dict[str, Any]]:

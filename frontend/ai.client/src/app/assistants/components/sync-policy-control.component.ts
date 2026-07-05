@@ -34,12 +34,6 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
   providers: [provideIcons({ heroArrowPath, heroChevronDown })],
   template: `
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span
-        class="text-xs/5 font-medium text-gray-500 dark:text-gray-400"
-        [title]="autoSyncHint()"
-      >
-        {{ autoSyncLabel() }}
-      </span>
       <div class="relative inline-flex">
         <select
           [attr.aria-label]="'Auto-sync schedule for ' + (sourceName() || 'this source')"
@@ -105,12 +99,19 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
     </div>
     @if (statusText(); as text) {
       <p
-        class="mt-0.5 text-xs/5"
+        class="mt-1 flex items-center gap-1.5 text-xs/5"
         [class.text-amber-600]="statusTone() === 'warn'"
         [class.dark:text-amber-400]="statusTone() === 'warn'"
         [class.text-gray-500]="statusTone() !== 'warn'"
         [class.dark:text-gray-400]="statusTone() !== 'warn'"
       >
+        <span
+          aria-hidden="true"
+          class="size-1.5 shrink-0 rounded-full"
+          [class.bg-green-500]="statusDot() === 'ok'"
+          [class.bg-amber-500]="statusDot() === 'warn'"
+          [class.bg-gray-400]="statusDot() === 'idle'"
+        ></span>
         {{ text }}
       </p>
     }
@@ -125,12 +126,6 @@ export class SyncPolicyControlComponent {
   readonly sourceName = input('');
   /** Provider display name for the paused_reauth affordance (e.g. "Google Drive"). */
   readonly reconnectLabel = input('');
-  /**
-   * Provider display name this source is imported from (e.g. "Google Drive"),
-   * shown as the control's lead label so every row states what auto-sync is
-   * and where it pulls from.
-   */
-  readonly sourceLabel = input('');
   /**
    * The source's last successful sync, straight from the document record.
    * Used to keep a "Last synced …" line visible even when the source is
@@ -148,25 +143,18 @@ export class SyncPolicyControlComponent {
     () => this.policy()?.interval ?? 'manual',
   );
 
-  readonly autoSyncLabel = computed<string>(() => {
-    const src = this.sourceLabel();
-    return src ? `Auto-sync from ${src}` : 'Auto-sync';
-  });
-
-  readonly autoSyncHint = computed<string>(() => {
-    const src = this.sourceLabel();
-    const name = this.sourceName() || 'this file';
-    return src
-      ? `Automatically re-imports ${name} from ${src} on a schedule so the assistant always has the latest version.`
-      : `Automatically re-imports ${name} from its source on a schedule so the assistant always has the latest version.`;
-  });
-
   readonly statusTone = computed<'muted' | 'warn'>(() => {
     const p = this.policy();
     if (!p) return 'muted';
     if (p.state === 'paused_error' || p.state === 'paused_reauth') return 'warn';
     if (p.state === 'active' && p.lastResult === 'failed') return 'warn';
     return 'muted';
+  });
+
+  /** Colour of the status-line dot: green healthy, amber attention, grey idle. */
+  readonly statusDot = computed<'ok' | 'warn' | 'idle'>(() => {
+    if (this.statusTone() === 'warn') return 'warn';
+    return this.policy()?.state === 'active' ? 'ok' : 'idle';
   });
 
   readonly statusText = computed<string>(() => {
@@ -243,8 +231,19 @@ export class SyncPolicyControlComponent {
     return `${verb} ${ago} · ${abs}`;
   }
 
+  /**
+   * Parse a backend ISO timestamp into a Date, tolerating a historical bug
+   * where timestamps were emitted with BOTH an offset and a "Z"
+   * (e.g. "2026-07-05T16:00:00+00:00Z"). That string is invalid ISO 8601 and
+   * unparseable by strict engines (Safari) — strip the redundant trailing Z so
+   * already-persisted policies still render while the backend is corrected.
+   */
+  private parseIso(iso: string): Date {
+    return new Date(iso.replace(/([+-]\d{2}:\d{2})Z$/, '$1'));
+  }
+
   private formatAbsolute(iso: string): string {
-    const then = new Date(iso);
+    const then = this.parseIso(iso);
     if (Number.isNaN(then.getTime())) return '';
     return then.toLocaleString(undefined, {
       month: 'short',
@@ -255,7 +254,8 @@ export class SyncPolicyControlComponent {
   }
 
   private formatAgo(iso: string): string {
-    const then = new Date(iso).getTime();
+    const parsed = this.parseIso(iso);
+    const then = parsed.getTime();
     if (Number.isNaN(then)) return '';
     const diffMins = Math.floor((Date.now() - then) / 60_000);
     if (diffMins < 1) return 'just now';
@@ -264,11 +264,11 @@ export class SyncPolicyControlComponent {
     if (diffHours < 24) return `${diffHours}h ago`;
     const diffDays = Math.floor(diffHours / 24);
     if (diffDays < 30) return `${diffDays}d ago`;
-    return new Date(iso).toLocaleDateString();
+    return parsed.toLocaleDateString();
   }
 
   private formatUntil(iso: string): string {
-    const then = new Date(iso).getTime();
+    const then = this.parseIso(iso).getTime();
     if (Number.isNaN(then)) return '';
     const diffMins = Math.ceil((then - Date.now()) / 60_000);
     // "due now" covers the run-now window: the dispatcher sweeps every
