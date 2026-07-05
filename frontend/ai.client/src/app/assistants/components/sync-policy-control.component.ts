@@ -97,7 +97,15 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
         }
       }
     </div>
-    @if (statusText(); as text) {
+    @if (busy()) {
+      <p class="mt-1 flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400" role="status">
+        <span
+          class="size-3 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+          aria-hidden="true"
+        ></span>
+        Saving…
+      </p>
+    } @else if (statusText(); as text) {
       <p
         class="mt-1 flex items-center gap-1.5 text-xs/5"
         [class.text-amber-600]="statusTone() === 'warn'"

@@ -211,6 +211,28 @@ describe('SyncPolicyControlComponent', () => {
     expect(statusLine()).toContain('Last sync failed 1h ago');
   });
 
+  it('shows a "Saving…" indicator while a mutation is in flight', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    fixture.componentRef.setInput('policy', stubPolicy({ state: 'active', lastSyncAt: twoHoursAgo }));
+    fixture.detectChanges();
+    // Not busy: the status line describes the sync, not a save.
+    expect(statusLine()).toContain('Synced 2h ago');
+
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    // Busy: the saving indicator takes over so the user sees work happening.
+    expect(statusLine()).toBe('Saving…');
+    expect(fixture.nativeElement.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it('shows "Saving…" even for a manual source with no policy or status yet', () => {
+    // Enabling sync on a manual-only source: no policy exists yet, so without
+    // the busy branch there would be no feedback at all.
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    expect(statusLine()).toBe('Saving…');
+  });
+
   it('disables all controls while busy', () => {
     fixture.componentRef.setInput('policy', stubPolicy({ state: 'active' }));
     fixture.componentRef.setInput('busy', true);
