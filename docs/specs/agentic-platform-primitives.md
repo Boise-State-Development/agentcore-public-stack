@@ -112,11 +112,12 @@ The point: once F1–F6 exist, each of these is **configuration**, not engineeri
 1. ✅ **Harness surface (F1) = minimal internal function, A2A-ready.** Build `run_agent_headless(...)` as an internal primitive first; keep the seam clean so an A2A server / runtime endpoint can front it later without a rewrite. If that A2A surface lands, its `capabilities` **must** include `streaming=True` (`CLAUDE.md`).
 2. ✅ **Governance is foundational, split from discovery.** Pull the **F6a governance floor** (audit / guardrails / PII-classification) forward into Phase A — it gates the first unattended-as-user run and can't be retrofitted. Keep **F6b Registry discovery** deferred to Phase D (after the Tier-1 Gateway-search measurement). Prioritize a flexible foundation; keep user-facing surfaces minimal and governance backend-invisible.
 
-**Still open:**
+**Resolved at the spike decision gate (2026-07-05, post-`harness-entrypoint-spike-findings.md`):**
 
-3. **KB decoupling appetite (F4).** First-class KB is the biggest refactor here (touches the assistant/document ownership model). Do it now as a fundamental, or defer and let scheduled runs borrow an assistant's KB in the interim?
-4. **Governance floor depth (F6a).** Given decision #2, what's the *minimum* audit / guardrails / classification that's table-stakes before Phase A ships — i.e. how much floor is "enough" to run unattended as a user without over-building?
-5. **Sequencing priority.** Confirm the proactive spine (F1→F2→F3) leads, with knowledge/memory (F4/F5) in parallel — or do knowledge/memory matter more to the use cases you care about first?
+3. ✅ **Act-as-user auth policy** *(new — surfaced by the spike).* The preferred workload-token front-door path is **provably impossible** (gateway JWT authorizer can't parse the opaque workload blob; SigV4 refused once a JWT authorizer is configured). Chosen path: **platform mints a per-owner Cognito access token** so every downstream layer sees a genuine user token. This means the platform can act as a user unattended for the token's backing lifetime. **Decision:** accept for Phase A, **but gate it behind an explicit "headless-grant" record** (own consent + revocation + lifecycle), not a silent replay of the BFF session — with a documented "must have logged in within N days for the platform to act as you" policy (default ≈ the BFF 30-day cap). This is the FERPA-defensible form.
+4. ✅ **F6a floor depth — risk-proportionate.** The **audit** checkpoint is table-stakes and ships **fail-closed** in Phase A (no audit record → no run). Split the rest by attendance: **"Run now"** (user-initiated, attended) ships with **audit-only + wired seams**; **scheduled runs** (Phase B, truly unattended over user data) require the **PII/data-classification checkpoint filled** before the cohort can schedule. Guardrails input-check is a fast-follow, not a Phase-A blocker.
+5. ✅ **KB decoupling (F4) — defer.** Let scheduled runs **borrow an assistant's KB** for now; first-class KB is not on the Phase A critical path (the spike confirms F1 doesn't need it). Revisit in Phase C.
+6. ✅ **Sequencing — proactive-spine-first confirmed.** F1→F2→F3 leads; knowledge/memory (F4/F5) proceed in parallel.
 
 ---
 
