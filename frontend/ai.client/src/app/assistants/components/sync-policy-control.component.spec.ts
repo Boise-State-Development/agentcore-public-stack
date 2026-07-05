@@ -50,11 +50,36 @@ describe('SyncPolicyControlComponent', () => {
     return ((fixture.nativeElement.querySelector('p')?.textContent as string) ?? '').trim();
   }
 
-  it('defaults the select to "Manual only" with no policy and shows no actions', () => {
+  it('defaults the select to manual ("Don\'t auto-sync") with no policy and shows no actions', () => {
     fixture.detectChanges();
     expect(select().value).toBe('manual');
+    const manualOption = select().querySelector('option[value="manual"]');
+    expect(manualOption?.textContent?.trim()).toBe("Don't auto-sync");
     expect(buttonLabels()).toEqual([]);
     expect(fixture.nativeElement.querySelector('p')).toBeNull();
+  });
+
+  it('shows "Last synced" for a manual-only source using the document timestamp', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    // No policy input → manual-only; the timestamp comes from the document.
+    fixture.componentRef.setInput('lastSyncedAt', twoHoursAgo);
+    fixture.detectChanges();
+    expect(statusLine()).toContain('Last synced 2h ago');
+    // Relative age is paired with an absolute date/time.
+    expect(statusLine()).toMatch(/Last synced 2h ago · .+/);
+  });
+
+  it('renders timestamps that carry a legacy "+00:00Z" suffix (invalid ISO)', () => {
+    // The backend historically emitted "…+00:00Z" (offset AND Z), which is
+    // unparseable by strict `new Date()` and left the status blank. Already-
+    // persisted policies must still render, so the control normalizes it.
+    const then = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const legacy = then.toISOString().replace('Z', '+00:00Z');
+    fixture.componentRef.setInput('lastSyncedAt', legacy);
+    fixture.detectChanges();
+    expect(statusLine()).toContain('Last synced 3h ago');
+    // Not the blank "Last synced" with no time.
+    expect(statusLine()).not.toBe('Last synced');
   });
 
   it('reflects the policy interval in the select', () => {
@@ -157,7 +182,7 @@ describe('SyncPolicyControlComponent', () => {
     expect(statusLine()).toContain('inactive');
   });
 
-  it('describes last and next sync on the status line for an active policy', () => {
+  it('describes last (relative + absolute) and next sync for an active policy', () => {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     const inThreeDays = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
     fixture.componentRef.setInput(
@@ -166,7 +191,10 @@ describe('SyncPolicyControlComponent', () => {
     );
     fixture.detectChanges();
 
-    expect(statusLine()).toBe('Synced 2h ago · next sync in 3d');
+    // Relative age, an exact date/time, then the next-run estimate.
+    expect(statusLine()).toContain('Synced 2h ago');
+    expect(statusLine()).toContain('next sync in 3d');
+    expect(statusLine()).toMatch(/Synced 2h ago · .+ · next sync in 3d/);
   });
 
   it('flags a failed last run on the status line', () => {
@@ -181,6 +209,28 @@ describe('SyncPolicyControlComponent', () => {
     fixture.detectChanges();
 
     expect(statusLine()).toContain('Last sync failed 1h ago');
+  });
+
+  it('shows a "Saving…" indicator while a mutation is in flight', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    fixture.componentRef.setInput('policy', stubPolicy({ state: 'active', lastSyncAt: twoHoursAgo }));
+    fixture.detectChanges();
+    // Not busy: the status line describes the sync, not a save.
+    expect(statusLine()).toContain('Synced 2h ago');
+
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    // Busy: the saving indicator takes over so the user sees work happening.
+    expect(statusLine()).toBe('Saving…');
+    expect(fixture.nativeElement.querySelector('[role="status"]')).not.toBeNull();
+  });
+
+  it('shows "Saving…" even for a manual source with no policy or status yet', () => {
+    // Enabling sync on a manual-only source: no policy exists yet, so without
+    // the busy branch there would be no feedback at all.
+    fixture.componentRef.setInput('busy', true);
+    fixture.detectChanges();
+    expect(statusLine()).toBe('Saving…');
   });
 
   it('disables all controls while busy', () => {

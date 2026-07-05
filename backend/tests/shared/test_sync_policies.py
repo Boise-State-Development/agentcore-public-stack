@@ -372,3 +372,30 @@ class TestResumeInactive:
     async def test_no_inactive_policies_is_noop(self, assistants_table):
         await _make_policy()
         assert await resume_inactive_policies(ASSISTANT_ID) == 0
+
+
+class TestTimestampFormat:
+    """The stored timestamps are surfaced verbatim to the SPA, where
+    ``new Date(iso)`` parses them. A ``…+00:00Z`` string (offset AND Z) is
+    invalid ISO 8601 → Invalid Date → a blank sync-status line. Guard the
+    generators against that regression."""
+
+    async def test_generated_timestamps_are_valid_iso(self, assistants_table):
+        from datetime import datetime
+
+        from apis.shared.sync_policies.service import (
+            _get_current_timestamp,
+            compute_next_sync_at,
+        )
+
+        policy = await _make_policy()
+        for ts in (
+            _get_current_timestamp(),
+            compute_next_sync_at("weekly"),
+            policy.next_sync_at,
+        ):
+            assert ts.endswith("Z"), ts
+            assert "+00:00" not in ts, ts
+            # Round-trips to an aware datetime the way JS `Date` accepts.
+            parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            assert parsed.tzinfo is not None

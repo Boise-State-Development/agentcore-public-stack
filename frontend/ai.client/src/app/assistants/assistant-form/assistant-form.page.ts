@@ -181,6 +181,13 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   readonly syncPolicies = signal<SyncPolicy[]>([]);
   /** All crawl jobs (any status) — completed crawls are the syncable web sources. */
   readonly webCrawls = signal<CrawlJob[]>([]);
+  /**
+   * True while the crawl catalog is doing its initial fetch. Mirrors
+   * {@link isLoadingDocuments} so both knowledge lists share one loading gate
+   * and reveal together — previously crawls had no loading flag, so the Web
+   * sources list popped into existence after its network round-trip.
+   */
+  readonly isLoadingCrawls = signal<boolean>(false);
   /** Source refs (document/crawl ids) with a sync mutation in flight. */
   readonly syncBusySourceRefs = signal<Set<string>>(new Set());
   /** Provider whose consent popup was opened from a "Reconnect" affordance. */
@@ -218,8 +225,28 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     () =>
       this.uploadedDocuments().length > 0 ||
       this.currentUpload() !== null ||
-      this.isLoadingDocuments(),
+      this.isLoadingDocuments() ||
+      this.isLoadingCrawls(),
   );
+
+  /**
+   * Single initial-load gate for the two knowledge lists (Web sources +
+   * Uploaded Documents). While true a skeleton stands in for both; when it
+   * clears they render together, so neither list pops in after the other.
+   */
+  readonly isLoadingKnowledge = computed(
+    () => this.isLoadingDocuments() || this.isLoadingCrawls(),
+  );
+
+  /**
+   * Varied bar widths (percent) for the knowledge skeleton rows, so the
+   * placeholder reads as content rather than a repeating pattern.
+   */
+  readonly skeletonRows: ReadonlyArray<{ title: number; meta: number }> = [
+    { title: 58, meta: 34 },
+    { title: 72, meta: 42 },
+    { title: 46, meta: 28 },
+  ];
 
   form!: FormGroup;
 
@@ -323,6 +350,12 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     // loadAssistant because it needs the resolved userPermission — the
     // sync-policy surface is edit-gated and viewers must not trigger a 403.
     if (id) {
+      // Raise both knowledge-load flags synchronously so the very first paint
+      // shows the skeleton (not an empty flash). loadSyncData waits on the
+      // resolved permission, so isLoadingCrawls holds the gate until then; it
+      // is cleared there, including on the viewer early-return.
+      this.isLoadingDocuments.set(true);
+      this.isLoadingCrawls.set(true);
       void this.loadAssistant(id).then(() => this.loadSyncData());
       this.loadDocuments();
     }
@@ -989,21 +1022,28 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   private async loadSyncData(): Promise<void> {
     const assistantId = this.assistantId();
     if (!assistantId || !this.canManageSync()) {
+      // Viewers (and create mode) never load crawls — release the gate so the
+      // document list can reveal.
+      this.isLoadingCrawls.set(false);
       return;
     }
-    const [policies, crawls] = await Promise.allSettled([
-      this.syncPolicyService.listPolicies(assistantId),
-      this.webSourceService.listCrawls(assistantId),
-    ]);
-    if (policies.status === 'fulfilled') {
-      this.syncPolicies.set(policies.value);
-    } else {
-      console.error('Error loading sync policies:', policies.reason);
-    }
-    if (crawls.status === 'fulfilled') {
-      this.webCrawls.set(crawls.value);
-    } else {
-      console.error('Error loading web sources:', crawls.reason);
+    try {
+      const [policies, crawls] = await Promise.allSettled([
+        this.syncPolicyService.listPolicies(assistantId),
+        this.webSourceService.listCrawls(assistantId),
+      ]);
+      if (policies.status === 'fulfilled') {
+        this.syncPolicies.set(policies.value);
+      } else {
+        console.error('Error loading sync policies:', policies.reason);
+      }
+      if (crawls.status === 'fulfilled') {
+        this.webCrawls.set(crawls.value);
+      } else {
+        console.error('Error loading web sources:', crawls.reason);
+      }
+    } finally {
+      this.isLoadingCrawls.set(false);
     }
   }
 

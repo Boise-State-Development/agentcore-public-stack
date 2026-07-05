@@ -178,7 +178,7 @@ class TestCircuitBreaker:
 
         # daily * 2^2 = 4 days out
         updated = await get_sync_policy(assistant_id, policy.policy_id)
-        next_dt = datetime.fromisoformat(updated.next_sync_at.rstrip("Z"))
+        next_dt = dispatcher._parse_timestamp(updated.next_sync_at)
         expected = datetime.now(timezone.utc) + timedelta(days=4)
         assert abs((next_dt - expected).total_seconds()) < 300
 

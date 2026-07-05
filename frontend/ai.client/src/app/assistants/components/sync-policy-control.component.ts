@@ -36,16 +36,16 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <div class="relative inline-flex">
         <select
-          [attr.aria-label]="'Keep ' + (sourceName() || 'this source') + ' in sync'"
+          [attr.aria-label]="'Auto-sync schedule for ' + (sourceName() || 'this source')"
           [disabled]="busy()"
           [value]="selectValue()"
           (change)="onSelectChange($event)"
           class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
         >
-          <option value="manual">Manual only</option>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
+          <option value="manual">Don't auto-sync</option>
+          <option value="daily">Sync daily</option>
+          <option value="weekly">Sync weekly</option>
+          <option value="monthly">Sync monthly</option>
         </select>
         <ng-icon
           name="heroChevronDown"
@@ -97,14 +97,29 @@ export type SyncIntervalSelection = SyncInterval | 'manual';
         }
       }
     </div>
-    @if (statusText(); as text) {
+    @if (busy()) {
+      <p class="mt-1 flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400" role="status">
+        <span
+          class="size-3 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600 dark:border-gray-600 dark:border-t-blue-400"
+          aria-hidden="true"
+        ></span>
+        Saving…
+      </p>
+    } @else if (statusText(); as text) {
       <p
-        class="mt-0.5 text-xs/5"
+        class="mt-1 flex items-center gap-1.5 text-xs/5"
         [class.text-amber-600]="statusTone() === 'warn'"
         [class.dark:text-amber-400]="statusTone() === 'warn'"
         [class.text-gray-500]="statusTone() !== 'warn'"
         [class.dark:text-gray-400]="statusTone() !== 'warn'"
       >
+        <span
+          aria-hidden="true"
+          class="size-1.5 shrink-0 rounded-full"
+          [class.bg-green-500]="statusDot() === 'ok'"
+          [class.bg-amber-500]="statusDot() === 'warn'"
+          [class.bg-gray-400]="statusDot() === 'idle'"
+        ></span>
         {{ text }}
       </p>
     }
@@ -119,6 +134,12 @@ export class SyncPolicyControlComponent {
   readonly sourceName = input('');
   /** Provider display name for the paused_reauth affordance (e.g. "Google Drive"). */
   readonly reconnectLabel = input('');
+  /**
+   * The source's last successful sync, straight from the document record.
+   * Used to keep a "Last synced …" line visible even when the source is
+   * manual-only (no governing policy), where `policy` is null.
+   */
+  readonly lastSyncedAt = input<string | null>(null);
 
   readonly intervalSelected = output<SyncIntervalSelection>();
   readonly runNow = output<void>();
@@ -138,18 +159,31 @@ export class SyncPolicyControlComponent {
     return 'muted';
   });
 
+  /** Colour of the status-line dot: green healthy, amber attention, grey idle. */
+  readonly statusDot = computed<'ok' | 'warn' | 'idle'>(() => {
+    if (this.statusTone() === 'warn') return 'warn';
+    return this.policy()?.state === 'active' ? 'ok' : 'idle';
+  });
+
   readonly statusText = computed<string>(() => {
     const p = this.policy();
-    if (!p) return '';
+    // Manual-only (no governing policy): still surface when the file last
+    // refreshed, using the document's own timestamp.
+    if (!p) {
+      const ts = this.lastSyncedAt();
+      return ts ? this.syncedPhrase('Last synced', ts) : '';
+    }
     switch (p.state) {
       case 'active': {
         const parts: string[] = [];
         if (p.lastResult === 'failed') {
           parts.push(
-            p.lastSyncAt ? `Last sync failed ${this.formatAgo(p.lastSyncAt)}` : 'Last sync failed',
+            p.lastSyncAt
+              ? this.syncedPhrase('Last sync failed', p.lastSyncAt)
+              : 'Last sync failed',
           );
         } else if (p.lastSyncAt) {
-          parts.push(`Synced ${this.formatAgo(p.lastSyncAt)}`);
+          parts.push(this.syncedPhrase('Synced', p.lastSyncAt));
         } else {
           parts.push('Not synced yet');
         }
@@ -158,8 +192,10 @@ export class SyncPolicyControlComponent {
         }
         return parts.join(' · ');
       }
-      case 'paused_user':
-        return 'Paused';
+      case 'paused_user': {
+        const ts = p.lastSyncAt ?? this.lastSyncedAt();
+        return ts ? `Paused · last synced ${this.formatAgo(ts)}` : 'Paused';
+      }
       case 'paused_error':
         return this.pausedText(p.stateReason, 'Paused after repeated failures');
       case 'paused_inactive':
@@ -190,8 +226,44 @@ export class SyncPolicyControlComponent {
     return reason ? `Paused — ${reason}` : `Paused — ${fallback}`;
   }
 
+  /**
+   * "{verb} {relative} · {absolute}" — pairs a scannable relative age with an
+   * exact date/time so the reader gets both "how long ago" and "exactly when".
+   */
+  private syncedPhrase(verb: string, iso: string): string {
+    const ago = this.formatAgo(iso);
+    const abs = this.formatAbsolute(iso);
+    if (!ago && !abs) return verb;
+    if (!abs) return `${verb} ${ago}`;
+    if (!ago) return `${verb} ${abs}`;
+    return `${verb} ${ago} · ${abs}`;
+  }
+
+  /**
+   * Parse a backend ISO timestamp into a Date, tolerating a historical bug
+   * where timestamps were emitted with BOTH an offset and a "Z"
+   * (e.g. "2026-07-05T16:00:00+00:00Z"). That string is invalid ISO 8601 and
+   * unparseable by strict engines (Safari) — strip the redundant trailing Z so
+   * already-persisted policies still render while the backend is corrected.
+   */
+  private parseIso(iso: string): Date {
+    return new Date(iso.replace(/([+-]\d{2}:\d{2})Z$/, '$1'));
+  }
+
+  private formatAbsolute(iso: string): string {
+    const then = this.parseIso(iso);
+    if (Number.isNaN(then.getTime())) return '';
+    return then.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
   private formatAgo(iso: string): string {
-    const then = new Date(iso).getTime();
+    const parsed = this.parseIso(iso);
+    const then = parsed.getTime();
     if (Number.isNaN(then)) return '';
     const diffMins = Math.floor((Date.now() - then) / 60_000);
     if (diffMins < 1) return 'just now';
@@ -200,11 +272,11 @@ export class SyncPolicyControlComponent {
     if (diffHours < 24) return `${diffHours}h ago`;
     const diffDays = Math.floor(diffHours / 24);
     if (diffDays < 30) return `${diffDays}d ago`;
-    return new Date(iso).toLocaleDateString();
+    return parsed.toLocaleDateString();
   }
 
   private formatUntil(iso: string): string {
-    const then = new Date(iso).getTime();
+    const then = this.parseIso(iso).getTime();
     if (Number.isNaN(then)) return '';
     const diffMins = Math.ceil((then - Date.now()) / 60_000);
     // "due now" covers the run-now window: the dispatcher sweeps every
