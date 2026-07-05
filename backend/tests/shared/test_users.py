@@ -197,3 +197,67 @@ class TestUserSyncService:
         user.picture = None
         profile, is_new = await sync_service.sync_user_from_jwt(user)
         assert is_new is True
+
+    @pytest.mark.asyncio
+    async def test_sync_timestamps_are_strict_iso8601(self, sync_service):
+        """Regression: timestamps must carry a single trailing ``Z`` and no
+        ``+00:00`` offset. The old ``isoformat() + "Z"`` produced ``…+00:00Z``,
+        which is invalid ISO 8601 and parses to ``Invalid Date`` in Safari,
+        blanking the admin user list / detail dates."""
+        from datetime import datetime
+
+        profile, _ = await sync_service.sync_from_jwt(
+            {"sub": "u1", "email": "alice@example.com", "name": "Alice"}
+        )
+        for ts in (profile.created_at, profile.last_login_at):
+            assert ts.endswith("Z")
+            assert "+00:00" not in ts
+            # Parses cleanly as a UTC-aware datetime (JS ``new Date`` parity).
+            assert datetime.fromisoformat(ts.replace("Z", "+00:00")).tzinfo is not None
+
+
+# ===================================================================
+# Legacy timestamp healing on read
+# ===================================================================
+
+class TestTimestampHealingOnRead:
+    """Rows persisted before the sync fix carry ``…+00:00Z``; the read path
+    normalizes them to a single trailing ``Z`` so already-persisted
+    ``created_at`` (never rewritten) still renders in strict engines."""
+
+    def test_item_to_profile_heals_legacy_suffix(self, user_repository):
+        item = {
+            "userId": "u1",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "emailDomain": "example.com",
+            "createdAt": "2026-01-01T00:00:00+00:00Z",
+            "lastLoginAt": "2026-02-02T00:00:00+00:00Z",
+            "status": "active",
+        }
+        profile = user_repository._item_to_profile(item)
+        assert profile.created_at == "2026-01-01T00:00:00Z"
+        assert profile.last_login_at == "2026-02-02T00:00:00Z"
+
+    def test_item_to_profile_leaves_valid_suffix_untouched(self, user_repository):
+        item = {
+            "userId": "u1",
+            "email": "alice@example.com",
+            "emailDomain": "example.com",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "lastLoginAt": "2026-02-02T00:00:00Z",
+            "status": "active",
+        }
+        profile = user_repository._item_to_profile(item)
+        assert profile.created_at == "2026-01-01T00:00:00Z"
+        assert profile.last_login_at == "2026-02-02T00:00:00Z"
+
+    def test_item_to_list_item_heals_legacy_suffix(self, user_repository):
+        item = {
+            "userId": "u1",
+            "email": "alice@example.com",
+            "status": "active",
+            "lastLoginAt": "2026-02-02T00:00:00+00:00Z",
+        }
+        list_item = user_repository._item_to_list_item(item)
+        assert list_item.last_login_at == "2026-02-02T00:00:00Z"
