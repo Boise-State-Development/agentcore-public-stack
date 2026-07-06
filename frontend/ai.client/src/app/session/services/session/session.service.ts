@@ -176,6 +176,16 @@ export class SessionService {
   private localSessionsCache = signal<SessionMetadata[]>([]);
 
   /**
+   * Optimistic read-watermark: sessionId → the `lastMessageAt` the user has
+   * locally acknowledged as read. Suppresses the server-driven `unread` dot
+   * the instant a session is opened, before `POST /read` round-trips and the
+   * next list refetch reflects `unread=false`. Keyed by `lastMessageAt` (not a
+   * bare id) so a *later* scheduled run — which advances `lastMessageAt` —
+   * correctly re-surfaces the dot instead of being permanently suppressed.
+   */
+  private readonly readWatermarks = signal<ReadonlyMap<string, string>>(new Map());
+
+  /**
    * Signal for the session ID used by the session metadata resource.
    * Update this signal to trigger a refetch with new session ID.
    * Set to null to disable the resource.
@@ -885,6 +895,49 @@ export class SessionService {
    */
   clearSessionCache(): void {
     this.localSessionsCache.set([]);
+  }
+
+  /**
+   * Reloads the session list from the API if loading is enabled. Called when
+   * the tab regains focus so a session that a scheduled (server-side) run left
+   * `unread` surfaces its dot without polling. No-op before auth is ready.
+   */
+  refreshSessions(): void {
+    if (this.sessionsRequest()) {
+      this.sessionsResource.reload();
+    }
+  }
+
+  /**
+   * Whether the session's current activity has been locally acknowledged as
+   * read (see `readWatermarks`). The session list uses this to suppress the
+   * server `unread` dot immediately on open, before the server round-trips.
+   */
+  isLocallyRead(session: SessionMetadata): boolean {
+    return this.readWatermarks().get(session.sessionId) === session.lastMessageAt;
+  }
+
+  /**
+   * Marks a session as read: clears the durable server-side `unread` flag via
+   * `POST /sessions/{id}/read`, and optimistically suppresses the dot locally
+   * (keyed to the activity being acknowledged) so it vanishes instantly.
+   * Best-effort — a failed POST leaves the durable flag set, so the dot simply
+   * re-appears on the next list load rather than being silently lost.
+   */
+  async markSessionRead(session: SessionMetadata): Promise<void> {
+    this.readWatermarks.update(watermarks => {
+      const next = new Map(watermarks);
+      next.set(session.sessionId, session.lastMessageAt);
+      return next;
+    });
+
+    try {
+      await firstValueFrom(
+        this.http.post<void>(`${this.baseUrl()}/${session.sessionId}/read`, {})
+      );
+    } catch (error) {
+      console.error('Failed to mark session read:', error);
+    }
   }
 
   constructor() {

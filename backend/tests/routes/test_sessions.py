@@ -826,3 +826,31 @@ class TestSignalTurnInterrupted:
             json={"reason": "user_stopped"},
         )
         assert resp.status_code == 401
+
+
+class TestMarkSessionRead:
+    """POST /sessions/{session_id}/read clears the durable unread flag.
+
+    Called by the SPA when the user opens a session that a scheduled
+    (unattended) run left unread. Cookie-auth via
+    get_current_user_from_session per the app-api auth rule.
+    """
+
+    def test_returns_204_and_clears_unread(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.mark_session_read",
+            recorder,
+        ):
+            resp = client.post("/sessions/sess-001/read")
+
+        assert resp.status_code == 204
+        recorder.assert_awaited_once_with(session_id="sess-001", user_id=user.user_id)
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        resp = client.post("/sessions/sess-001/read")
+        assert resp.status_code == 401

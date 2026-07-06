@@ -184,6 +184,25 @@ export class SessionList {
   }
 
   /**
+   * Whether this conversation should show the blue unread dot (distinct from
+   * the pulsing secondary streaming dot). Unread has two sources, ORed here:
+   *
+   *  - **Server** (`session.unread`): a scheduled/unattended run left a
+   *    response the user hasn't opened — durable, survives reload, cross-device.
+   *    Suppressed by `isLocallyRead` the instant the user opens it, so the dot
+   *    vanishes before `POST /read` round-trips.
+   *  - **Client** (`ChatStateService`): a stream finished in this tab while the
+   *    user was viewing a different session — ephemeral, cleared on view.
+   *
+   * Signal-backed (client signal + resource-driven `session.unread`), so the
+   * OnPush row updates when either source changes.
+   */
+  protected shouldShowUnreadDot(session: SessionMetadata): boolean {
+    const serverUnread = session.unread === true && !this.sessionService.isLocallyRead(session);
+    return serverUnread || this.chatStateService.isSessionUnread(session.sessionId);
+  }
+
+  /**
    * Gets the queryParams for a session's routerLink. When the session has
    * an assistant attached in preferences, we include it in the URL so the
    * session page can load the assistant without a second round-trip. Keeping
@@ -261,6 +280,12 @@ export class SessionList {
    */
   protected onSessionClick(session: SessionMetadata): void {
     this.sessionService.currentSession.set(session);
+    // Opening a session with a durable (scheduled-run) unread flag clears it
+    // server-side and suppresses the dot locally right away. The client-side
+    // interactive unread signal is cleared separately via setViewedSession.
+    if (session.unread) {
+      this.sessionService.markSessionRead(session);
+    }
     this.sidenavService.close();
   }
 

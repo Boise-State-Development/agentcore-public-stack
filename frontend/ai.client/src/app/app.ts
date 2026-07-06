@@ -7,6 +7,7 @@ import { SidenavService } from './services/sidenav/sidenav.service';
 import { HeaderService } from './services/header/header.service';
 import { TooltipDirective } from './components/tooltip/tooltip.directive';
 import { SessionService } from './auth/session.service';
+import { SessionService as SessionListService } from './session/services/session/session.service';
 import { ArtifactStateService } from './session/services/artifacts/artifact-state.service';
 
 @Component({
@@ -27,6 +28,7 @@ export class App {
   protected headerService = inject(HeaderService);
   private router = inject(Router);
   private session = inject(SessionService);
+  private sessionList = inject(SessionListService);
   private artifactState = inject(ArtifactStateService);
 
   /** True while an artifact pane is docked — content reserves right-side
@@ -52,6 +54,9 @@ export class App {
       const handler = () => {
         if (document.visibilityState === 'visible') {
           this.session.recheck();
+          // Surface unread dots from scheduled (server-side) runs that finished
+          // while the tab was backgrounded — refetch the list on return, no poll.
+          this.sessionList.refreshSessions();
         }
       };
       document.addEventListener('visibilitychange', handler);

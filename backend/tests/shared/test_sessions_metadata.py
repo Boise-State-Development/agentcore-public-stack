@@ -509,6 +509,67 @@ class TestUpdateSessionActivity:
         assert items == []
 
 
+class TestSessionUnread:
+    """Durable unread flag set by unattended (scheduled) runs, cleared on open."""
+
+    @pytest.mark.asyncio
+    async def test_set_then_mark_read(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            set_session_unread,
+            mark_session_read,
+            get_session_metadata,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+        assert (await get_session_metadata("s1", "u1")).unread is False
+
+        await set_session_unread("s1", "u1", True)
+        assert (await get_session_metadata("s1", "u1")).unread is True
+
+        await mark_session_read("s1", "u1")
+        assert (await get_session_metadata("s1", "u1")).unread is False
+
+    @pytest.mark.asyncio
+    async def test_survives_sk_rotation(self, sessions_metadata_table):
+        """Unread set post-run must survive a later per-turn SK rotation."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            set_session_unread,
+            update_session_activity,
+            get_session_metadata,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+        await set_session_unread("s1", "u1", True)
+        await update_session_activity(session_id="s1", user_id="u1", last_model="claude-3")
+        assert (await get_session_metadata("s1", "u1")).unread is True
+
+    @pytest.mark.asyncio
+    async def test_noop_when_session_missing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import set_session_unread
+        # No row exists — best-effort, must not raise or create a row.
+        await set_session_unread("ghost", "u1", True)
+        assert sessions_metadata_table.scan()["Items"] == []
+
+    @pytest.mark.asyncio
+    async def test_noop_for_preview_session(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import set_session_unread
+        await set_session_unread("preview-abc", "u1", True)
+        assert sessions_metadata_table.scan()["Items"] == []
+
+    @pytest.mark.asyncio
+    async def test_user_isolation(self, sessions_metadata_table):
+        """A set for one user must not flip another user's same-id session."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            set_session_unread,
+            get_session_metadata,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+        # Wrong owner → GSI ownership check returns None → no-op.
+        await set_session_unread("s1", "other-user", True)
+        assert (await get_session_metadata("s1", "u1")).unread is False
+
+
 class TestEnsureSessionMetadataExists:
     @pytest.mark.asyncio
     async def test_repeated_calls_do_not_create_duplicates(self, sessions_metadata_table):
