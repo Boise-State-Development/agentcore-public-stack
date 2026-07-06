@@ -55,6 +55,25 @@ describe('AuthTablesConstruct — detailed', () => {
     });
   });
 
+  it('BFFSessions table has the sparse HeadlessGrantUserIndex GSI', () => {
+    // Backs apis/shared/harness/grants.py — per-owner headless-grant lookup.
+    // Sparse: only HEADLESS-GRANT# items carry grant_user_id, so session
+    // rows never project into it.
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-bff-sessions',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'HeadlessGrantUserIndex',
+          KeySchema: [
+            { AttributeName: 'grant_user_id', KeyType: 'HASH' },
+            { AttributeName: 'created_at', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
+      ]),
+    });
+  });
+
   it('Users table has 4 GSIs', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'test-project-users',

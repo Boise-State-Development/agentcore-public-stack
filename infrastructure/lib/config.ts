@@ -49,6 +49,7 @@ export interface AppConfig {
   inferenceApi: InferenceApiConfig;
   ragIngestion: RagIngestionConfig;
   kbSync: KbSyncConfig;
+  scheduledRuns: ScheduledRunsConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -137,6 +138,22 @@ export interface RagIngestionConfig {
  * `kbSync.enabled: false` cdk.json context).
  */
 export interface KbSyncConfig {
+  enabled: boolean;
+}
+
+/**
+ * Scheduled runs — headless agent runs as a user (the Harness primitive,
+ * docs/specs/scheduled-agent-runs.md).
+ *
+ * `enabled` is the global kill switch: it sets the SCHEDULED_RUNS_ENABLED
+ * env var on app-api (gating the "Run now" + headless-grant routes), and
+ * will gate the Phase-B EventBridge dispatcher rule when the scheduler
+ * lands. Default ON with a kill switch — the feature runs unless it's
+ * explicitly turned off with CDK_SCHEDULED_RUNS_ENABLED=false (or a
+ * `scheduledRuns.enabled: false` cdk.json context). *Who* can use the
+ * surface is governed separately by the `scheduled-runs` RBAC capability.
+ */
+export interface ScheduledRunsConfig {
   enabled: boolean;
 }
 
@@ -275,6 +292,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_KB_SYNC_ENABLED
         ? process.env.CDK_KB_SYNC_ENABLED !== 'false'
         : scope.node.tryGetContext('kbSync')?.enabled ?? true,
+    },
+    scheduledRuns: {
+      // Default ON with a kill switch: enabled unless explicitly disabled.
+      // The workflow forwards `${{ vars.CDK_SCHEDULED_RUNS_ENABLED }}`,
+      // which is an EMPTY STRING when the variable is unset — so treat
+      // empty/unset as "use the default (on)" and only the literal "false"
+      // as the off switch. A `scheduledRuns.enabled` cdk.json context can
+      // also force it off. (Same ternary as kbSync above — keep in sync.)
+      enabled: process.env.CDK_SCHEDULED_RUNS_ENABLED
+        ? process.env.CDK_SCHEDULED_RUNS_ENABLED !== 'false'
+        : scope.node.tryGetContext('scheduledRuns')?.enabled ?? true,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,

@@ -48,6 +48,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     kbSync: {
       enabled: false,
     },
+    scheduledRuns: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,
