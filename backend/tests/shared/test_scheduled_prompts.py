@@ -401,6 +401,46 @@ class TestUpdateScheduledPrompt:
         )["Item"]
         assert "GSI3_PK" not in item
 
+    async def test_unset_clearable_field_leaves_it_unchanged(self, sessions_metadata_table):
+        schedule = await _make_schedule(assistant_id="ast-123", enabled_tools=["gmail_search"])
+        # A label-only edit must not disturb the clearable fields (default UNSET).
+        updated = await update_scheduled_prompt(USER_ID, schedule.schedule_id, label="Renamed")
+        assert updated.assistant_id == "ast-123"
+        assert updated.enabled_tools == ["gmail_search"]
+
+    async def test_set_clearable_field_updates_it(self, sessions_metadata_table):
+        schedule = await _make_schedule(assistant_id="ast-123", enabled_tools=["gmail_search"])
+        updated = await update_scheduled_prompt(
+            USER_ID, schedule.schedule_id, assistant_id="ast-456", enabled_tools=["calendar_list"]
+        )
+        assert updated.assistant_id == "ast-456"
+        assert updated.enabled_tools == ["calendar_list"]
+
+    async def test_clear_assistant_removes_attribute(self, sessions_metadata_table):
+        schedule = await _make_schedule(assistant_id="ast-123")
+        updated = await update_scheduled_prompt(USER_ID, schedule.schedule_id, assistant_id=None)
+        assert updated.assistant_id is None
+        item = sessions_metadata_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"}
+        )["Item"]
+        assert "assistantId" not in item
+
+    async def test_clear_enabled_tools_removes_attribute(self, sessions_metadata_table):
+        schedule = await _make_schedule(enabled_tools=["gmail_search"])
+        updated = await update_scheduled_prompt(USER_ID, schedule.schedule_id, enabled_tools=None)
+        assert updated.enabled_tools is None
+        item = sessions_metadata_table.get_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"}
+        )["Item"]
+        assert "enabledTools" not in item
+
+    async def test_clear_is_a_noop_when_field_already_absent(self, sessions_metadata_table):
+        # REMOVE on a missing attribute is harmless — no error, still absent.
+        schedule = await _make_schedule()  # no assistant_id
+        updated = await update_scheduled_prompt(USER_ID, schedule.schedule_id, assistant_id=None)
+        assert updated is not None
+        assert updated.assistant_id is None
+
 
 # ---------------------------------------------------------------------------
 # Delete = total revocation

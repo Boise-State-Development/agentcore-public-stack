@@ -30,6 +30,7 @@ from apis.shared.feature_flags import scheduled_runs_enabled
 from apis.shared.rbac.capabilities import SCHEDULED_RUNS_CAPABILITY, user_has_capability
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
+    UNSET,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
@@ -172,12 +173,25 @@ async def update_schedule(
             detail="weekday is required when cadence is 'weekly'",
         )
 
-    # An edited tool list is a write path into the same frozen snapshot, so it
-    # gets the same RBAC intersection as creation — a PATCH must not be a way
-    # around the create-time check. ``None`` means "leave tools unchanged".
-    enabled_tools = request.enabled_tools
-    if enabled_tools is not None:
-        enabled_tools = await _resolve_enabled_tools_snapshot(user, enabled_tools)
+    # Clear intent is explicit — a bare null means "leave unchanged", so the
+    # service uses the UNSET sentinel for "untouched". Clearing the assistant
+    # reverts to the default agent; clearing tools re-snapshots the caller's
+    # current RBAC-allowed set. An edited tool list is a write path into the
+    # same frozen snapshot, so it gets the same create-time resolution — a
+    # PATCH must not route around the create-time check.
+    if request.clear_assistant:
+        assistant_arg = None
+    elif request.assistant_id is not None:
+        assistant_arg = request.assistant_id
+    else:
+        assistant_arg = UNSET
+
+    if request.clear_tools:
+        tools_arg = await _resolve_enabled_tools_snapshot(user, None)
+    elif request.enabled_tools is not None:
+        tools_arg = await _resolve_enabled_tools_snapshot(user, request.enabled_tools)
+    else:
+        tools_arg = UNSET
 
     schedule = await update_scheduled_prompt(
         user.user_id,
@@ -188,8 +202,8 @@ async def update_schedule(
         hour_local=request.hour_local,
         weekday=request.weekday,
         timezone_name=request.timezone,
-        assistant_id=request.assistant_id,
-        enabled_tools=enabled_tools,
+        assistant_id=assistant_arg,
+        enabled_tools=tools_arg,
         deliver_email=request.deliver_email,
     )
 
