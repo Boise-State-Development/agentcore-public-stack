@@ -46,8 +46,8 @@
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
         </a>
 
-        <!-- Scheduled runs (capability-gated — hidden until the accessibility probe resolves true) -->
-        @if (showSchedules()) {
+        <!-- Scheduled runs (system-admin only, plus the capability gate — hidden until the accessibility probe resolves true) -->
+        @if (showSchedules() && isAdmin()) {
             <a
                 routerLink="/schedules"
                 routerLinkActive="bg-gray-200/80 dark:bg-white/10"
