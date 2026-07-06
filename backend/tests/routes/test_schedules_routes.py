@@ -398,6 +398,56 @@ class TestUpdateSchedule:
         (call,) = update_mock.call_args_list
         assert call.kwargs["enabled_tools"] == ["web_search"]
 
+    def test_omitted_clearable_fields_pass_unset(self, monkeypatch):
+        """A label-only PATCH must leave assistant/tools untouched (UNSET)."""
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+        update_mock = AsyncMock(return_value=_make_schedule(label="Renamed"))
+        monkeypatch.setattr(schedules_routes, "update_scheduled_prompt", update_mock)
+
+        response = client.patch(f"/schedules/{SCHEDULE_ID}", json={"label": "Renamed"})
+
+        assert response.status_code == 200
+        (call,) = update_mock.call_args_list
+        assert call.kwargs["assistant_id"] is schedules_routes.UNSET
+        assert call.kwargs["enabled_tools"] is schedules_routes.UNSET
+
+    def test_clear_assistant_passes_none(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+        update_mock = AsyncMock(return_value=_make_schedule())
+        monkeypatch.setattr(schedules_routes, "update_scheduled_prompt", update_mock)
+
+        response = client.patch(f"/schedules/{SCHEDULE_ID}", json={"clearAssistant": True})
+
+        assert response.status_code == 200
+        (call,) = update_mock.call_args_list
+        assert call.kwargs["assistant_id"] is None
+
+    def test_clear_tools_resnapshots_current_rbac(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+        update_mock = AsyncMock(return_value=_make_schedule())
+        monkeypatch.setattr(schedules_routes, "update_scheduled_prompt", update_mock)
+
+        response = client.patch(f"/schedules/{SCHEDULE_ID}", json={"clearTools": True})
+
+        assert response.status_code == 200
+        (call,) = update_mock.call_args_list
+        # clear = re-snapshot the caller's full RBAC-allowed set (FakeRoleService default).
+        assert call.kwargs["enabled_tools"] == ["class_search", "web_search"]
+
+    def test_clear_flag_with_value_is_422(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+
+        assert client.patch(
+            f"/schedules/{SCHEDULE_ID}", json={"clearAssistant": True, "assistantId": "ast-1"}
+        ).status_code == 422
+        assert client.patch(
+            f"/schedules/{SCHEDULE_ID}", json={"clearTools": True, "enabledTools": ["web_search"]}
+        ).status_code == 422
+
     def test_switching_to_weekly_without_weekday_is_422(self, monkeypatch):
         client = _make_client(monkeypatch)
         monkeypatch.setattr(

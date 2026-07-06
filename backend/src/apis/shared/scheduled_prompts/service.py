@@ -18,12 +18,35 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Union
 from zoneinfo import ZoneInfo
 
 from .models import DUE_INDEX_PK, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
 
 logger = logging.getLogger(__name__)
+
+
+class _Unset:
+    """Singleton sentinel meaning "argument not provided".
+
+    Distinct from ``None``, which on the *clearable* update fields
+    (``assistant_id`` / ``enabled_tools``) means "clear this field". A plain
+    ``None`` default cannot tell "leave unchanged" from "clear".
+    """
+
+    _instance: Optional["_Unset"] = None
+
+    def __new__(cls) -> "_Unset":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return "UNSET"
+
+
+#: Sentinel for update_scheduled_prompt's clearable fields (see _Unset).
+UNSET = _Unset()
 
 DEFAULT_MAX_SCHEDULES_PER_USER = 20
 
@@ -382,8 +405,8 @@ async def update_scheduled_prompt(
     hour_local: Optional[int] = None,
     weekday: Optional[int] = None,
     timezone_name: Optional[str] = None,
-    assistant_id: Optional[str] = None,
-    enabled_tools: Optional[List[str]] = None,
+    assistant_id: Union[str, None, _Unset] = UNSET,
+    enabled_tools: Union[List[str], None, _Unset] = UNSET,
     deliver_email: Optional[bool] = None,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
@@ -394,6 +417,12 @@ async def update_scheduled_prompt(
     just remembers the new cadence for when it resumes (mirrors
     ``sync_policies.change_policy_interval``). Returns None if the schedule
     does not exist.
+
+    ``assistant_id`` and ``enabled_tools`` are *clearable*: pass ``UNSET``
+    (the default) to leave them untouched, a value to set them, or ``None``
+    to clear them (the attribute is removed — the schedule falls back to the
+    default agent / all-RBAC-allowed tools). All other fields keep the plain
+    ``None`` == "leave unchanged" contract.
     """
     schedule = await get_scheduled_prompt(user_id, schedule_id)
     if schedule is None:
@@ -432,22 +461,31 @@ async def update_scheduled_prompt(
             values[":gsipk"] = DUE_INDEX_PK
             values[":gsisk"] = _due_sort_key(next_run_at, schedule_id)
 
-    field_updates = {
-        "label": label,
-        "promptText": prompt_text,
-        "assistantId": assistant_id,
-        "enabledTools": enabled_tools,
-        "deliverEmail": deliver_email,
-    }
-    for attr, value in field_updates.items():
+    # Non-clearable fields: None == "leave unchanged".
+    for attr, value in (("label", label), ("promptText", prompt_text), ("deliverEmail", deliver_email)):
         if value is not None:
-            placeholder = f":{attr}"
-            set_parts.append(f"{attr} = {placeholder}")
-            values[placeholder] = value
+            set_parts.append(f"{attr} = :{attr}")
+            values[f":{attr}"] = value
+
+    # Clearable fields: UNSET == leave, None == clear (REMOVE the attribute),
+    # any other value == set.
+    remove_parts: List[str] = []
+    for attr, value in (("assistantId", assistant_id), ("enabledTools", enabled_tools)):
+        if isinstance(value, _Unset):
+            continue
+        if value is None:
+            remove_parts.append(attr)
+        else:
+            set_parts.append(f"{attr} = :{attr}")
+            values[f":{attr}"] = value
+
+    update_expression = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        update_expression += " REMOVE " + ", ".join(remove_parts)
 
     update_kwargs = {
         "Key": {"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"},
-        "UpdateExpression": "SET " + ", ".join(set_parts),
+        "UpdateExpression": update_expression,
         "ExpressionAttributeValues": values,
     }
     if names:

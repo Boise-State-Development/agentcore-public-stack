@@ -65,13 +65,11 @@ function timezoneOptions(): string[] {
  *
  * Optional fields (assistant, tool selection) use explicit "clear"
  * checkboxes rather than relying on sending null: the backend's
- * `update_scheduled_prompt` only writes a field when the incoming value is
- * not None, so a bare `null` over the wire is silently ignored. The clear
- * checkboxes here are a client-side workaround — they still can't actually
- * detach an already-set field on an *edit*, because there is no
- * value/sentinel the backend currently accepts to mean "erase this". See
- * `buildUpdateRequest` for exactly where this bites, and the PR notes for
- * the suggested backend follow-up.
+ * `update_scheduled_prompt` reads a bare `null` as "leave unchanged", so a
+ * clear is signalled with the explicit `clearAssistant` / `clearTools`
+ * booleans instead. `clearAssistant` reverts to the default agent;
+ * `clearTools` re-snapshots the caller's current RBAC-allowed tools. See
+ * `buildUpdateRequest`.
  */
 @Component({
   selector: 'app-schedule-form-page',
@@ -270,14 +268,12 @@ export class ScheduleFormPage implements OnInit {
   }
 
   /**
-   * Builds the PATCH body for edit mode. KNOWN GAP: `assistantId` and
-   * `enabledTools` cannot be cleared this way — the backend only applies a
-   * field when it is not None (see UpdateScheduleRequest doc comment), so
-   * omitting the field (or sending null) both leave the stored value
-   * unchanged. The "clear" checkboxes are wired up so the UI intent is at
-   * least explicit and ready to send a real sentinel/clear signal the
-   * moment the backend supports one; until then this method sends the
-   * field only when there's a genuine non-empty value to set.
+   * Builds the PATCH body for edit mode. `assistantId` and `enabledTools`
+   * cannot be cleared with a bare null (the backend reads null as "leave
+   * unchanged"), so the "clear" checkboxes send an explicit `clearAssistant`
+   * / `clearTools` intent instead. A clear flag and a value are mutually
+   * exclusive (the backend rejects both), so each pair is either a clear, a
+   * set, or omitted.
    */
   private buildUpdateRequest(
     value: ReturnType<ScheduleFormPage['form']['getRawValue']>,
@@ -291,10 +287,14 @@ export class ScheduleFormPage implements OnInit {
       weekday: value.cadence === 'weekly' ? value.weekday : null,
       timezone: value.timezone!,
     };
-    if (!this.clearAssistant() && value.assistantId) {
+    if (this.clearAssistant()) {
+      request.clearAssistant = true;
+    } else if (value.assistantId) {
       request.assistantId = value.assistantId;
     }
-    if (!this.clearTools() && toolIds.length > 0) {
+    if (this.clearTools()) {
+      request.clearTools = true;
+    } else if (toolIds.length > 0) {
       request.enabledTools = toolIds;
     }
     return request;

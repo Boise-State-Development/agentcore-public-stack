@@ -73,6 +73,12 @@ export interface UpdateScheduleRequest {
   enabledTools?: string[] | null;
   deliverEmail?: boolean;
   state?: 'active' | 'paused';
+  // A bare null cannot clear assistantId/enabledTools (the backend reads null
+  // as "leave unchanged"), so clearing is an explicit intent. clearTools
+  // re-snapshots the caller's current RBAC-allowed tools; clearAssistant
+  // reverts to the default agent. Not combinable with the value field.
+  clearAssistant?: boolean;
+  clearTools?: boolean;
 }
 
 /** Response from GET /schedules. */

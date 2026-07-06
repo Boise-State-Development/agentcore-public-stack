@@ -54,6 +54,20 @@ class UpdateScheduleRequest(BaseModel):
     enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools")
     deliver_email: Optional[bool] = Field(None, alias="deliverEmail")
     state: Optional[Literal["active", "paused"]] = None
+    # A bare null cannot express "clear" for assistant_id / enabled_tools (the
+    # service reads null as "leave unchanged"), so clearing is an explicit
+    # intent. clear_tools re-snapshots the caller's current RBAC-allowed tools
+    # (mirrors creation), clear_assistant reverts to the default agent.
+    clear_assistant: bool = Field(False, alias="clearAssistant")
+    clear_tools: bool = Field(False, alias="clearTools")
+
+    @model_validator(mode="after")
+    def _clear_excludes_value(self) -> "UpdateScheduleRequest":
+        if self.clear_assistant and self.assistant_id is not None:
+            raise ValueError("clearAssistant cannot be combined with assistantId")
+        if self.clear_tools and self.enabled_tools is not None:
+            raise ValueError("clearTools cannot be combined with enabledTools")
+        return self
 
 
 class ScheduledPromptResponse(BaseModel):

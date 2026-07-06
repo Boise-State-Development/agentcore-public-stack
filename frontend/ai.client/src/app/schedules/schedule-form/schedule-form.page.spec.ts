@@ -184,7 +184,7 @@ describe('ScheduleFormPage', () => {
       expect(request.assistantId).toBe('ast-1');
     });
 
-    it('clearing the assistant checkbox omits assistantId (documented gap: cannot actually detach)', async () => {
+    it('clearing the assistant checkbox sends clearAssistant instead of assistantId', async () => {
       component.ngOnInit();
       await Promise.resolve();
       await Promise.resolve();
@@ -193,10 +193,11 @@ describe('ScheduleFormPage', () => {
       await component.onSubmit();
 
       const [, request] = mockScheduleService.updateSchedule.mock.calls[0];
+      expect(request.clearAssistant).toBe(true);
       expect(request.assistantId).toBeUndefined();
     });
 
-    it('clearing the tools checkbox omits enabledTools from the PATCH', async () => {
+    it('clearing the tools checkbox sends clearTools instead of enabledTools', async () => {
       component.ngOnInit();
       await Promise.resolve();
       await Promise.resolve();
@@ -205,6 +206,7 @@ describe('ScheduleFormPage', () => {
       await component.onSubmit();
 
       const [, request] = mockScheduleService.updateSchedule.mock.calls[0];
+      expect(request.clearTools).toBe(true);
       expect(request.enabledTools).toBeUndefined();
       expect(component.selectedToolIds().size).toBe(0);
     });
