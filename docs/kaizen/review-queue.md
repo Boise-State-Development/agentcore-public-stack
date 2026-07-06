@@ -5,6 +5,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-07-06] Spike: managed AgentCore Harness as the headless/scheduled run engine
+- **Source**: `scoping/2026-07-06-managed-harness-build-vs-adopt.md` — surfaced while dogfooding scheduled runs (Phil asked whether we use the AWS Harness feature; we use the lower-level Runtime). AWS **managed Harness** is now GA.
+- **Surface**: backend (`apis/shared/harness/run_agent_headless` — swap the Runtime `/invocations` target for an `InvokeHarness` endpoint on the headless lane only) + infra (a managed-Harness resource + OAuth-inbound JWT authorizer on our Cognito pool). Interactive `inference-api` untouched.
+- **Effort × Impact**: M (spike) × H
+- **Subtracts**: potentially large — managed memory (fixes AgentCore-Memory-write-only-in-cloud → F5), immutable versions + named endpoints (retires the ECR-tag/`update-function-code` fragility that bit the scheduled-runs deploy), auto observability, `InvokeHarness` Step Functions composition, execution limits/truncation — all as config on the proactive lane.
+- **Unlocks**: managed long-term memory + ops maturity for proactive/scheduled agents without touching interactive chat; `export harness` keeps lock-in low.
+- **Status**: open — **spike, don't adopt blindly**. Full replace is a non-starter (managed Harness has `Hooks ❌`, `Choice of framework ❌`, no MCP Apps UI, not our SSE contract — our interactive differentiation lives there). Three gating questions in the brief: (1) RBAC→`allowedTools`, (2) per-user connector tokens via OAuth-inbound + Identity vault, (3) acceptable to lose MCP Apps + SSE contract on the *headless* path. Newly GA → verify maturity/pricing/quotas in the spike.
+
 ### [2026-06-19] Wire configurable Bedrock Guardrails (issue #480)
 - **Source**: research/2026-06-19.md ▸ Top 5 #1 — internal issue #480 (June 15) + AWS Summit NYC Guardrails cluster (`InvokeGuardrailChecks` API + AgentCore policy Guardrails GA, June 16). Strands `BedrockModel` already supports `guardrail_id`/`version`/`stream_processing_mode`/`trace`.
 - **Surface**: backend (`inference_api` `BedrockModel` construction) + infrastructure (optional `CDK_GUARDRAIL_ID` / `CDK_GUARDRAIL_VERSION` env vars threaded to inference-api runtime env)
