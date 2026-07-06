@@ -11,7 +11,7 @@
 | # | Question | Verdict |
 |---|---|---|
 | 1 | RBAC → `allowedTools` (+ Cedar), per-invoke, without hook enforcement | **Qualified YES** — set membership reduces cleanly (we already snapshot it statically); three non-membership gates must relocate, none blocking for headless |
-| 2 | Per-user connector tokens via OAuth-inbound + Identity vault, as schedule owner | **YES on the mechanism** (it *is* our primitive) — one residual live-probe: `customParameters` pinning on the Gateway outbound exchange |
+| 2 | Per-user connector tokens via OAuth-inbound + Identity vault, as schedule owner | **YES on the mechanism** (it *is* our primitive). Residual **probed live 2026-07-06 → GO-with-boundary:** `customParameters` pinning is present & honored (config persists verbatim; forwarded into the same `GetResourceOauth2Token` call), but the managed **Gateway** 3LO exchange is blocked by a `ResourceOauth2ReturnUrl` wiring gap → keep 3LO connectors on our own `get_token_for_user`. See **Q2 probe result** below. |
 | 3 | Acceptable to lose MCP Apps UI + our SSE contract on headless | **YES** — the losses land entirely on interactive affordances a scheduled run has no consumer for |
 
 **Net:** all three clear for the headless/scheduled lane. Green-light a scoped `InvokeHarness` prototype whose one job is to close the Q2 residual; everything else is already answered.
@@ -103,3 +103,43 @@ If the probe clears, the payoff is the brief's thesis intact: **managed memory (
 ### Refs
 - AWS: `devguide/harness.html`, `harness-tools.html` (`allowedTools` globs, per-invoke override, inline_function, trust boundary), `harness-security.html` (OAuth-inbound vs SigV4 per-user identity, Cedar on Gateway, outbound OAuth2 credential provider).
 - Internal: `docs/specs/harness-entrypoint-spike-findings.md` (F1, proven live), `apis/shared/oauth/agentcore_identity.py:168`, `apis/shared/rbac/service.py:217`, `apis/app_api/schedules/routes.py:75`, `infrastructure/lib/constructs/inference-api/inference-agentcore-construct.ts:275`.
+
+---
+
+## Q2 probe result — `customParameters` pinning (live, dev-ai 2026-07-06)
+
+**Verdict: GO-with-boundary.** The pinning mechanism the residual asked about **exists and is honored** — confirmed live. But a *second*, newly-discovered boundary means vault-key-sensitive 3LO connectors should keep running through **our own `get_token_for_user` call-site path** (already proven by F1), not the Harness-managed Gateway exchange, until AWS's return-URL wiring gap is resolved. This *sharpens and reinforces* the original recommendation rather than changing it.
+
+**Method:** Product is real & GA (**AgentCore managed Harness, GA 2026-06-18, AWS NY Summit** — past training cutoff, so validated live). Called the real APIs via `boto3 1.43.9` (the backend `agentcore` extra; the system `aws` CLI 2.22.12 predates the service). Reused infra to minimise footprint: the **runtime execution role** (`dev-boisestateai-v2-agentcore-runtime-role`, trust already allows `bedrock-agentcore.amazonaws.com`), the **existing dev Gateway**, the real **`google-drive` Identity provider**, and a **purpose-minted headless-grant** owner (`18419330-…`, the F1-proven holder of a consented `google-drive` vault token). No new IAM role, no gateway-target changes.
+
+### What was confirmed LIVE
+
+1. **`CreateHarness` accepts our exact `customJWTAuthorizer`** — a 1:1 port of `inference-agentcore-construct.ts:275` (`discoveryUrl` = Cognito pool, `allowedClients=[BFF client]`). Harness reached `READY`. (Aside: managed memory is provisioned **by default** — a `managedMemoryConfiguration` appears unbidden; relevant to the brief's F5 "reads in cloud" thesis. Defaults observed: model `global.anthropic.claude-sonnet-4-6`, `allowedTools:["*"]`, sliding-window-150 truncation, `idleRuntimeSessionTimeout=900s`, `maxLifetime=28800s`, `maxIterations=75`.)
+2. **`outboundAuth.oauth.customParameters` is a first-class, honored config field.** botocore contract exposes it (map, required-alongside `providerArn`+`scopes`, at **both** create-time and per-invoke `tools`). `GetHarness` **round-trips it verbatim** — tested with the 2-key `{prompt,access_type}` and the 3-key `{hd,prompt,access_type}` maps, persisted exactly, never dropped. **→ We CAN pin the same `customParameters` our consent flow uses.** This is the core residual question, answered YES.
+3. **OAuth-inbound works end-to-end.** Minted the owner's Cognito access token (F1 `CognitoRefreshBearerAuth` refresh-grant), `POST /harnesses/invoke` with `Authorization: Bearer …` → **HTTP 200, harness ran as the owner.**
+4. **The Harness-managed exchange IS our primitive.** When the agent loads the gateway OAuth tool, the runtime calls **`GetResourceOauth2Token`** — the *exact* vault API `apis/shared/oauth/agentcore_identity.py:168` `get_token_for_user` and F1 already use — forwarding the configured `outboundAuth`. So the on-behalf-of exchange is the same call, relocated behind Gateway config (Q2's mechanism claim, confirmed at the wire).
+5. **Failures surface LEGIBLY (Q3 step 5 / `paused_reauth`).** A failed exchange arrives as a **typed `runtimeClientError` exception event** in the InvokeHarness stream carrying structured JSON (`{"message": "… GetResourceOauth2Token … <reason>"}`) — mappable to our `oauth_required` → scheduler `paused_reauth`. Not a silent error.
+
+### The boundary discovered live (why not a clean GO)
+
+I could **not** observe a clean *positive* token-resolution through the managed Gateway exchange. Every owner-scoped 3LO (`AUTHORIZATION_CODE`) attempt failed at gateway-tool init with:
+
+> `ValidationException … GetResourceOauth2Token … You must provide a ResourceOauth2ReturnUrl to proceed with this flow`
+
+I supplied the return URL through **every** documented channel and the error persisted identically:
+- per-invoke `tools[].outboundAuth.oauth.defaultReturnUrl`,
+- create-time (persisted) `defaultReturnUrl` (confirmed via `GetHarness` round-trip),
+- the `OAuth2CallbackUrl` request header (the channel Runtime uses),
+- registering the URL as `AllowedResourceOauth2ReturnUrl` on the harness's auto-created workload identity via `UpdateWorkloadIdentity` (the mechanism `oauth2-authorization-url-session-binding.html` prescribes).
+
+**Conclusion:** in this GA build the managed **Gateway** 3LO exchange does not source the `resourceOauth2ReturnUrl` from `defaultReturnUrl`/header/workload registration for the gateway-MCP-client-init flow — an undocumented-required-channel or a genuine gap. Because the flow errored *before* any cache lookup, I could not run the intended discriminator (correct `{hd,prompt,access_type}` → resolves vs. `hd`-omitted → consent-required). A related **unknown remains unreached past this blocker:** cross-workload token visibility — F1's token was consented under our **platform** workload identity, whereas the harness runs under its **own** auto-created workload identity; whether a platform-consented token is even visible to the harness workload (absent `scope-credential-provider-access`) is untested.
+
+### Recommendation
+
+- **GO** to adopt the managed Harness on the **headless/scheduled lane** (Q1+Q3 already clear; this probe adds live proof of the customJWTAuthorizer port, OAuth-inbound, and legible failure surfacing).
+- **Boundary:** drive `customParameters`-sensitive (and, conservatively, *all* 3LO) connectors through **our own `get_token_for_user`** inside the run — the path F1 already proved unattended — **not** the Harness-managed Gateway `outboundAuth.oauth` exchange, until (a) the `ResourceOauth2ReturnUrl` wiring is resolved with AWS and (b) cross-workload token visibility is confirmed. Zero loss vs. today: we keep the call-site control the vault-key gotcha ([[project_agentcore_custom_parameters_vault_key]]) requires. Plain-scopes / non-3LO providers are unaffected.
+- **Static-pin sub-finding stands:** our `customParameters` are admin-static per-connector (`custom_parameters_for`, `oauth/models.py`), so a static Harness config *can* carry byte-identical values — the pinning is expressible; only the exchange plumbing blocks it today.
+
+**Follow-ups worth a short AWS-support / re-probe pass:** ① correct channel for `ResourceOauth2ReturnUrl` on a managed Gateway 3LO exchange (or confirm the gap); ② harness-workload vs platform-workload token visibility (`scope-credential-provider-access`). **Pricing:** no separate harness charge — you pay only for the underlying AgentCore capabilities used (`harness.html`); note managed memory is on by default (an extra Memory cost dimension per harness).
+
+**Teardown:** probe harness `q2probe_cparams` deleted (its runtime + managed memory + auto-created workload identity `harness_q2probe_cparams-*` are removed with it); the reused runtime role, dev Gateway, and its `arxiv`/`policy-search` targets were never modified.
