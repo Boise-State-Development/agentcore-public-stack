@@ -1,0 +1,6 @@
+# scheduled-runs Lambda image dependencies (backend/Dockerfile.scheduled-runs).
+# Exact pins per repo policy; versions match backend/uv.lock.
+boto3==1.43.9
+pydantic==2.12.5
+httpx==0.28.1
+bedrock-agentcore==1.9.1

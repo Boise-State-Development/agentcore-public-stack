@@ -52,6 +52,11 @@ class ScheduledPrompt(BaseModel):
     last_run_status: Optional[str] = Field(None, alias="lastRunStatus", description="Outcome of the last completed run")
     last_run_session_id: Optional[str] = Field(None, alias="lastRunSessionId", description="Session the last run materialized as")
     last_error: Optional[str] = Field(None, alias="lastError", description="Error detail from the last failed run")
+    consecutive_failures: int = Field(
+        0,
+        alias="consecutiveFailures",
+        description="Consecutive error runs; reset to 0 on a completed run. Drives the worker's repeated-failure breaker (mirrors SyncPolicy).",
+    )
     # Runaway guards (B1 fields only — B2 dispatcher/worker enforce these;
     # present now so B2 needs no migration).
     runs_today: int = Field(0, alias="runsToday", description="Runs fired today (runaway-guard counter)")
