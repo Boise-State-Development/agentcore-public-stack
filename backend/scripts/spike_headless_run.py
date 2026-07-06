@@ -180,7 +180,45 @@ async def main() -> int:
         return 0
 
     # Import after env export — the harness reads configuration from env.
-    from apis.shared.harness import CognitoRefreshBearerAuth, run_agent_headless
+    from apis.shared.harness import (
+        CognitoRefreshBearerAuth,
+        HeadlessGrantService,
+        run_agent_headless,
+    )
+
+    # Dev-driver stand-in for create-on-enable: production creates the
+    # headless grant from the caller's *live* session on the "Run now"
+    # route; from a laptop we bootstrap it from the user's newest BFF
+    # session row instead (a filtered Scan is fine for a dev script).
+    grants = HeadlessGrantService()
+    if await grants.get_active_grant(args.user_id) is None:
+        import boto3
+        from boto3.dynamodb.conditions import Attr
+
+        table = boto3.resource("dynamodb", region_name=args.region).Table(
+            os.environ["BFF_SESSIONS_TABLE_NAME"]
+        )
+        rows: list[dict] = []
+        kwargs: dict = {"FilterExpression": Attr("user_id").eq(args.user_id)}
+        while True:
+            page = table.scan(**kwargs)
+            rows.extend(page.get("Items", []))
+            if "LastEvaluatedKey" not in page:
+                break
+            kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        if not rows:
+            logger.error(
+                "No BFF session for %s — log in once, then re-run", args.user_id
+            )
+            return 1
+        newest = max(rows, key=lambda r: int(r.get("last_seen_at") or 0))
+        await grants.enable(
+            user_id=args.user_id,
+            username=str(newest["username"]),
+            refresh_token=str(newest["cognito_refresh_token"]),
+            token_issued_at=int(newest.get("created_at") or 0) or None,
+        )
+        logger.info("Bootstrapped headless grant for %s", args.user_id)
 
     async def on_event(name: str, data: dict) -> None:
         if name in ("tool_use", "tool_result", "session_title", "stream_error"):

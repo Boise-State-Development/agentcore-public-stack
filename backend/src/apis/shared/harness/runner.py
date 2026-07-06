@@ -1,4 +1,4 @@
-"""`run_agent_headless` — the F1 headless run entrypoint (spike).
+"""`run_agent_headless` — the F1 headless run entrypoint.
 
 Given ``(user_id, prompt)`` and no live session: mint a per-owner bearer,
 POST the AgentCore Runtime ``/invocations`` data plane, drain the SSE stream
@@ -9,9 +9,9 @@ webhook) is just a caller of this function.
 A2A-readiness: the seam is ``(user_id, prompt, resolved config) → RunResult``
 plus the optional ``on_event`` callback, which relays every typed SSE event
 as it arrives — an A2A server front can map that stream onto task status
-updates
-without a rewrite. Reminder from CLAUDE.md: if this is ever exposed as an
-A2A server, its advertised ``capabilities`` MUST include ``streaming=True``.
+updates without a rewrite. Reminder from CLAUDE.md: if this is ever exposed
+as an A2A server, its advertised ``capabilities`` MUST include
+``streaming=True``.
 """
 
 from __future__ import annotations
@@ -39,6 +39,16 @@ DEFAULT_TIMEOUT_SECONDS = 300.0
 OnEvent = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 
+def _build_http_client(timeout_seconds: float) -> httpx.AsyncClient:
+    """Single seam where the runner's upstream client is constructed.
+
+    Tests substitute a MockTransport-backed client here without patching
+    the global ``httpx.AsyncClient`` symbol (same pattern as the chat
+    proxy's ``_build_upstream_client``).
+    """
+    return httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -46,12 +56,20 @@ def _now_iso() -> str:
 def build_invocations_url(base_url: str) -> str:
     """Resolve the upstream `/invocations` URL from an INFERENCE_API_URL-style base.
 
-    Same resolution as the app-api chat proxy (`proxy_routes.py`): in cloud
-    the base is the AgentCore data plane
-    (`https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>`) whose
-    ARN path segment must be percent-encoded and given a qualifier; locally
-    it's a plain FastAPI origin. Phase A should point the proxy at this
-    shared copy rather than keeping two.
+    This is the single canonical resolver — the app-api chat proxy
+    (`proxy_routes.py`) and the MCP Apps proxy import it from here.
+
+    Cloud: the base is the AgentCore Runtime data plane
+    (`https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>`),
+    where `<ARN>` is unencoded in SSM. The data-plane route is
+    `POST /runtimes/{agentRuntimeArn}/invocations?qualifier={qualifier}`
+    with `{agentRuntimeArn}` as a single URL-encoded path segment — the
+    ARN's literal `/` and `:` must be percent-encoded or AWS returns 404.
+    A `qualifier` is also required; we use `DEFAULT`.
+
+    Local dev: the base is `http://localhost:8001`, where `/invocations`
+    is a real FastAPI route on inference-api directly. No encoding or
+    qualifier needed.
     """
     parts = urlsplit(base_url)
     prefix = "/runtimes/"
@@ -90,6 +108,14 @@ async def run_agent_headless(
     ``enabled_tools``, ``agent_type``, ``inference_params``) mirror the
     existing ``InvocationRequest`` contract — the entrypoint resolves *no*
     new config type (scheduled-agent-runs.md decision #6).
+
+    ``enabled_tools=None`` means "the user's defaults" — inference-api
+    resolves it to **all RBAC-allowed tools** for the owner, exactly as an
+    attended chat turn would. That is the right semantic for the attended
+    "Run now" surface; *schedules* should instead snapshot an explicit tool
+    list at creation time so a sleeping schedule's behavior doesn't shift
+    when the catalog or the owner's grants change underneath it
+    (spike-findings punch list #7 — enforce in the Phase B schedule model).
 
     Returns a ``RunResult`` in all outcomes except audit-start failure and
     ``HeadlessAuthError`` (both raise: a run we cannot audit or authenticate
@@ -147,9 +173,7 @@ async def run_agent_headless(
 
     acc = InvocationStreamAccumulator()
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds)
-        ) as client:
+        async with _build_http_client(timeout_seconds) as client:
             async with client.stream(
                 "POST",
                 url,

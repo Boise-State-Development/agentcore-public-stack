@@ -2,30 +2,34 @@
 
 The moment an agent turn runs unattended *as a user*, it touches user data
 with no human in the loop — so every headless run passes through this floor.
-The spike implements exactly one slice for real (the audit record); the
-guardrails and data-classification checkpoints are explicit no-op seams so
-Phase A fills them in without touching the runner's control flow.
+The "Run now" phase (PR-1) ships **audit-only + wired seams** (locked
+decision, agentic-platform-primitives.md §6): the audit checkpoints are
+implemented and fail-closed on start; the guardrails and
+data-classification checkpoints are deliberate no-op seams whose
+implementations are gated to the *scheduled* (fully unattended) trigger in
+a later phase. "Run now" is user-initiated and attended — the human is in
+the loop — so the audit trail is the floor it needs.
 
 Hook points (called by ``run_agent_headless`` in this order):
 
 1. ``on_run_start``  — AUDIT (implemented): who/what/when/trigger, before
-   any token is minted or model called.
-2. ``check_input``   — GUARDRAILS seam (no-op): Phase A calls Bedrock
-   ``ApplyGuardrail`` on the prompt; a blocked verdict raises before the
-   run spends tokens or reads user data.
-3. ``classify_output`` — DATA-CLASSIFICATION seam (no-op): Phase A runs the
-   PII/FERPA checkpoint over the final message (and tool-result previews)
-   before the result is delivered anywhere.
+   any token is minted or model called. **Fail-closed**: no audit record →
+   no run.
+2. ``check_input``   — GUARDRAILS seam (no-op): the scheduled-runs phase
+   calls Bedrock ``ApplyGuardrail`` on the prompt here; a blocked verdict
+   raises before the run spends tokens or reads user data.
+3. ``classify_output`` — DATA-CLASSIFICATION seam (no-op): the
+   scheduled-runs phase runs the PII/FERPA checkpoint over the final
+   message (and tool-result previews) here, before delivery.
 4. ``on_run_end``    — AUDIT (implemented): outcome, stop reason, tool
-   names, usage.
+   names, usage. Best-effort.
 
 Audit records are written to the sessions-metadata table under
 ``PK=USER#{user_id}, SK=RUN#{run_id}``. The session listing queries
 ``begins_with(SK, 'S#ACTIVE#')`` and the GSI lookups use their own key
 shapes, so ``RUN#`` items are invisible to every existing access path.
-Phase A should promote run-records to their own table (or a documented SK
-family) with a "due/recent runs" GSI; for the spike the point is that the
-seam exists and every run leaves a durable, queryable trail.
+When the scheduler lands (Phase B), promote run-records to their own table
+(or a documented SK family) with a "recent runs per user" GSI.
 """
 
 from __future__ import annotations
@@ -150,19 +154,22 @@ class GovernanceFloor:
         )
 
     async def check_input(self, *, prompt: str, user_id: str) -> None:
-        """GUARDRAILS seam — no-op in the spike.
+        """GUARDRAILS seam — deliberate no-op for attended "Run now".
 
-        Phase A: Bedrock ``ApplyGuardrail`` (source=INPUT) on the prompt;
-        raise a ``GovernanceBlocked`` error on a blocked verdict so the
-        runner records an audited, non-retryable failure.
+        Scheduled-runs phase: Bedrock ``ApplyGuardrail`` (source=INPUT) on
+        the prompt; raise a ``GovernanceBlocked`` error on a blocked
+        verdict so the runner records an audited, non-retryable failure
+        before any token is spent. The runner already calls this on every
+        run, so filling it in requires no control-flow change.
         """
 
     async def classify_output(self, *, result: RunResult) -> None:
-        """DATA-CLASSIFICATION seam — no-op in the spike.
+        """DATA-CLASSIFICATION seam — deliberate no-op for attended "Run now".
 
-        Phase A: PII/FERPA checkpoint over ``result.final_message`` and
-        ``result.tool_trace`` previews before delivery. May redact (mutate
-        the result) or block (raise), per policy.
+        Scheduled-runs phase: PII/FERPA checkpoint over
+        ``result.final_message`` and ``result.tool_trace`` previews before
+        delivery. May redact (mutate the result) or block (raise), per
+        policy. The runner already calls this before delivery on every run.
         """
 
     async def on_run_end(self, *, result: RunResult) -> None:

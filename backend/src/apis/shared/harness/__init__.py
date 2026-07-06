@@ -1,16 +1,16 @@
-"""Headless agent-run harness (F1 spike).
+"""Headless agent-run harness (primitive F1).
 
 The trigger-agnostic entrypoint for running an agent turn as a user with no
 live browser session: schedules, "Run now", A2A, webhooks, and eval harnesses
 are all just callers of :func:`run_agent_headless`.
 
 Lives in ``apis.shared`` because it is consumed by more than one service
-(app-api "Run now" routes, future dispatcher/worker Lambdas) and must never
-be an inference-api route — the AgentCore Runtime data plane only exposes
-``/invocations`` + ``/ping`` (see CLAUDE.md, Inference API boundary). The
-harness is a *client* of ``/invocations``, not a new server surface.
+(app-api "Run now" routes, the Phase-B dispatcher/worker Lambdas) and must
+never be an inference-api route — the AgentCore Runtime data plane only
+exposes ``/invocations`` + ``/ping`` (see CLAUDE.md, Inference API boundary).
+The harness is a *client* of ``/invocations``, not a new server surface.
 
-Spike status: see docs/specs/harness-entrypoint-spike-findings.md.
+Design + spike evidence: docs/specs/harness-entrypoint-spike-findings.md.
 """
 
 from apis.shared.harness.auth import (
@@ -20,6 +20,11 @@ from apis.shared.harness.auth import (
     StaticBearerAuth,
 )
 from apis.shared.harness.governance import GovernanceFloor, RunAuditRecorder
+from apis.shared.harness.grants import (
+    HEADLESS_GRANT_MAX_AGE_DAYS,
+    HeadlessGrant,
+    HeadlessGrantService,
+)
 from apis.shared.harness.models import (
     OAuthConsentRequired,
     RunResult,
@@ -32,7 +37,10 @@ __all__ = [
     "BearerAuthStrategy",
     "CognitoRefreshBearerAuth",
     "GovernanceFloor",
+    "HEADLESS_GRANT_MAX_AGE_DAYS",
     "HeadlessAuthError",
+    "HeadlessGrant",
+    "HeadlessGrantService",
     "OAuthConsentRequired",
     "RunAuditRecorder",
     "RunResult",
