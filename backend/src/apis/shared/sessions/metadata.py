@@ -907,6 +907,16 @@ async def mark_session_read(session_id: str, user_id: str) -> None:
     await set_session_unread(session_id, user_id, False)
 
 
+async def mark_session_unread(session_id: str, user_id: str) -> None:
+    """Set the ``unread`` flag on a session (user marked it unread manually).
+
+    Thin wrapper over ``set_session_unread(..., True)`` — the unread verb the
+    app-api ``POST /sessions/{id}/unread`` endpoint calls. Ownership is enforced
+    inside ``set_session_unread`` via the per-user GSI lookup.
+    """
+    await set_session_unread(session_id, user_id, True)
+
+
 async def update_session_activity(
     session_id: str,
     user_id: str,

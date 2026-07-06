@@ -24,6 +24,7 @@ from apis.shared.sessions.metadata import (
     list_user_sessions,
     get_session_metadata,
     mark_session_read,
+    mark_session_unread,
     remove_pending_interrupts,
     session_exists_for_other_user,
     set_interrupted_turn,
@@ -172,6 +173,26 @@ async def mark_session_read_endpoint(
     Requires session-cookie authentication. Returns 204 No Content.
     """
     await mark_session_read(session_id=session_id, user_id=current_user.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{session_id}/unread", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_session_unread_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """
+    Mark a session as unread, setting the durable ``unread`` flag.
+
+    The manual counterpart to ``POST /{id}/read`` — lets a user re-flag a
+    conversation (e.g. "remind me to revisit this") so the sidebar dot
+    returns. Idempotent single-attribute write; ownership is enforced inside
+    ``mark_session_unread`` via the per-user GSI lookup, so a session
+    belonging to another user is silently ignored (no state change).
+
+    Requires session-cookie authentication. Returns 204 No Content.
+    """
+    await mark_session_unread(session_id=session_id, user_id=current_user.user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

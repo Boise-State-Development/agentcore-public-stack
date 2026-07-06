@@ -99,10 +99,15 @@
                                                      backgrounded response completed while the user was viewing
                                                      another conversation. Static blue (vs. the pulsing
                                                      secondary streaming dot) and, unlike the streaming dot, it
-                                                     fades on hover so the ellipsis menu can own the gutter.
-                                                     Cleared once the user opens the session. -->
+                                                     fades when the ellipsis menu would occupy the same gutter —
+                                                     on hover and when the trigger is keyboard-focused
+                                                     (focus-visible). Crucially NOT on plain focus-within: the
+                                                     CDK menu restores focus to the in-row trigger on close, and
+                                                     hiding the dot for that (mouse-driven) focus is what made a
+                                                     just-marked-unread dot stay invisible until the next
+                                                     interaction. Cleared once the user opens the session. -->
                                                 <span
-                                                    class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-blue-500 transition-opacity group-hover:opacity-0 dark:bg-blue-400"
+                                                    class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-blue-500 transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0 dark:bg-blue-400"
                                                     aria-hidden="true"
                                                 ></span>
                                             }
@@ -112,7 +117,7 @@
                                                 [cdkMenuTriggerFor]="sessionMenu"
                                                 [cdkMenuPosition]="menuPositions"
                                                 [disabled]="deletingSessionId() === session.sessionId"
-                                                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                                                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
                                                 [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
                                                 aria-haspopup="menu"
                                             >
@@ -161,6 +166,16 @@
                                                 >
                                                     <ng-icon name="heroCloudArrowUp" class="size-4" aria-hidden="true" />
                                                     <span>Save to…</span>
+                                                </button>
+                                                <button
+                                                    cdkMenuItem
+                                                    type="button"
+                                                    (click)="onToggleReadClick($event, session)"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                                                    role="menuitem"
+                                                >
+                                                    <ng-icon [name]="shouldShowUnreadDot(session) ? 'heroEnvelopeOpen' : 'heroEnvelope'" class="size-4" aria-hidden="true" />
+                                                    <span>{{ shouldShowUnreadDot(session) ? 'Mark as read' : 'Mark as unread' }}</span>
                                                 </button>
                                                 <button
                                                     cdkMenuItem

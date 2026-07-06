@@ -122,7 +122,14 @@ export class ChatStateService {
         return this.unreadSessionIds().has(sessionId);
     }
 
-    private markSessionUnread(sessionId: string): void {
+    /**
+     * Flags a session's client-side unread state. Set internally when a
+     * background stream finishes unwatched (see setChatLoading), and by the
+     * session list's "Mark as unread" action for an instant dot — the durable
+     * server flag lands async and the list query is eventually consistent, so
+     * this signal is what surfaces the dot immediately. Cleared on open.
+     */
+    markSessionUnread(sessionId: string): void {
         this.unreadSessionIds.update(set => {
             if (set.has(sessionId)) return set;
             const next = new Set(set);
@@ -131,7 +138,13 @@ export class ChatStateService {
         });
     }
 
-    private clearSessionUnread(sessionId: string): void {
+    /**
+     * Clears a session's client-side unread flag. Called internally when a
+     * session is opened (see setViewedSession), and by the session list's
+     * "Mark as read" action so a background-stream unread dot can be dismissed
+     * without opening the conversation.
+     */
+    clearSessionUnread(sessionId: string): void {
         this.unreadSessionIds.update(set => {
             if (!set.has(sessionId)) return set;
             const next = new Set(set);

@@ -930,6 +930,7 @@ export class SessionService {
       next.set(session.sessionId, session.lastMessageAt);
       return next;
     });
+    this.syncCurrentSessionUnread(session.sessionId, false);
 
     try {
       await firstValueFrom(
@@ -937,6 +938,43 @@ export class SessionService {
       );
     } catch (error) {
       console.error('Failed to mark session read:', error);
+    }
+  }
+
+  /**
+   * Marks a session as unread — the manual counterpart to `markSessionRead`.
+   * Lifts the local read-watermark (so the dot's server-side suppression is
+   * released), sets the durable flag via `POST /sessions/{id}/unread`, then
+   * refetches the list so the row carries `unread=true` and the sidebar dot
+   * returns. Best-effort — a failed POST leaves the flag clear, so the dot
+   * simply won't appear rather than being silently wrong.
+   */
+  async markSessionUnread(session: SessionMetadata): Promise<void> {
+    this.readWatermarks.update(watermarks => {
+      const next = new Map(watermarks);
+      next.delete(session.sessionId);
+      return next;
+    });
+    this.syncCurrentSessionUnread(session.sessionId, true);
+
+    try {
+      await firstValueFrom(
+        this.http.post<void>(`${this.baseUrl()}/${session.sessionId}/unread`, {})
+      );
+      // The dot reads off the list row's `unread` field — refetch so it flips.
+      this.refreshSessions();
+    } catch (error) {
+      console.error('Failed to mark session unread:', error);
+    }
+  }
+
+  /**
+   * Mirror an unread change onto `currentSession` when it's the active session,
+   * so a menu toggle keyed on `currentSession().unread` flips label instantly.
+   */
+  private syncCurrentSessionUnread(sessionId: string, unread: boolean): void {
+    if (this.currentSession().sessionId === sessionId) {
+      this.currentSession.update(current => ({ ...current, unread }));
     }
   }
 
