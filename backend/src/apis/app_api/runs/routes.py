@@ -199,6 +199,11 @@ class GrantRevokeResponse(BaseModel):
     revoked: bool
 
 
+class GrantEnableResponse(GrantStatusResponse):
+    """Identical shape to the status response. A distinct name documents
+    intent at the call site (POST = mutate/enable, GET = read status)."""
+
+
 # ─── Routes ─────────────────────────────────────────────────────────────────
 
 
@@ -281,6 +286,25 @@ async def run_now(
         result.session_id,
     )
     return RunNowResponse.from_run_result(result)
+
+
+@router.post(
+    "/grant", response_model=GrantEnableResponse, response_model_by_alias=True
+)
+async def enable_grant(
+    request: Request,
+    user: User = Depends(require_scheduled_runs_user),
+) -> GrantEnableResponse:
+    """Create or refresh the caller's headless grant from their live session.
+
+    Lets a user turn on scheduled runs directly (e.g. from the schedules
+    page) without first having to exercise "Run now". Shares the exact
+    create-on-enable logic ``run_now`` uses via ``_resolve_grant`` — the
+    same 409 applies if the caller has neither an existing grant nor a
+    live session to pin one from (e.g. a stale API-key-only context).
+    """
+    grant = await _resolve_grant(request, user)
+    return GrantEnableResponse.from_grant(grant)
 
 
 @router.get(

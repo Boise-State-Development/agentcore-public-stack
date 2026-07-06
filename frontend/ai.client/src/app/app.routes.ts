@@ -50,6 +50,21 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'schedules/new',
+        loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'schedules/:scheduleId/edit',
+        loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'schedules',
+        loadComponent: () => import('./schedules/schedules.page').then(m => m.SchedulesPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'memories',
         loadComponent: () => import('./memory/memory-dashboard.page').then(m => m.MemoryDashboardPage),
         canActivate: [authGuard],
