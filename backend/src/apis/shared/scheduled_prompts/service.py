@@ -321,12 +321,16 @@ async def record_run_result(
     status: str,
     session_id: Optional[str] = None,
     error: Optional[str] = None,
-) -> None:
-    """Record a completed run's outcome and bump the runaway-guard counter.
+) -> int:
+    """Record a run's outcome; return the new consecutive-failure streak.
 
-    ``runs_today``/``runs_today_date`` reset when the UTC date rolls over —
-    the B2 dispatcher reads this counter to auto-pause a schedule that
-    exceeds ``max_runs_per_day``. Not called by anything yet in B1.
+    Bumps the runaway-guard counter (``runs_today``/``runs_today_date``,
+    reset on a UTC date rollover) and maintains ``consecutive_failures`` — a
+    ``"completed"`` run resets it to 0, any other status increments it
+    (mirrors ``sync_policies.update_sync_result``). The B2 worker uses the
+    returned streak to trip the repeated-failure breaker at any threshold;
+    the dispatcher reads ``runs_today`` to auto-pause a schedule that exceeds
+    ``max_runs_per_day``.
     """
     today = date.today().isoformat()
     existing = await get_scheduled_prompt(user_id, schedule_id)
@@ -334,12 +338,16 @@ async def record_run_result(
     if existing is not None and existing.runs_today_date == today:
         runs_today = existing.runs_today + 1
 
+    prior_failures = existing.consecutive_failures if existing is not None else 0
+    consecutive_failures = 0 if status == "completed" else prior_failures + 1
+
     now = _get_current_timestamp()
     values = {
         ":now": now,
         ":status": status,
         ":runs_today": runs_today,
         ":today": today,
+        ":cf": consecutive_failures,
     }
     set_parts = [
         "lastRunAt = :now",
@@ -347,6 +355,7 @@ async def record_run_result(
         "updatedAt = :now",
         "runsToday = :runs_today",
         "runsTodayDate = :today",
+        "consecutiveFailures = :cf",
     ]
     if session_id is not None:
         set_parts.append("lastRunSessionId = :session_id")
@@ -360,6 +369,7 @@ async def record_run_result(
         UpdateExpression="SET " + ", ".join(set_parts),
         ExpressionAttributeValues=values,
     )
+    return consecutive_failures
 
 
 async def update_scheduled_prompt(

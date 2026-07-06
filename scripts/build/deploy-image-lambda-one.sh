@@ -8,11 +8,13 @@
 #   deploy-image-lambda-one.sh <service>
 #
 # Where <service> is one of:
-#   rag-ingestion | kb-sync-dispatcher | kb-sync-worker
+#   rag-ingestion | kb-sync-dispatcher | kb-sync-worker |
+#   scheduled-runs-dispatcher | scheduled-runs-worker
 #
-# kb-sync-dispatcher and kb-sync-worker are two Lambda functions
-# sharing the single kb-sync image; their handlers differ only via
-# ImageConfig.Command, which `update-function-code` doesn't touch.
+# kb-sync-dispatcher/kb-sync-worker (and scheduled-runs-dispatcher/
+# scheduled-runs-worker) are pairs of Lambda functions sharing a single
+# image; their handlers differ only via ImageConfig.Command, which
+# `update-function-code` doesn't touch.
 #
 # Pre-requisite: scripts/build/build-one.sh has already run for the
 # same service in this workflow. It pushes the image to ECR and
@@ -23,7 +25,7 @@ set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <service>" >&2
-    echo "  service: rag-ingestion | kb-sync-dispatcher | kb-sync-worker" >&2
+    echo "  service: rag-ingestion | kb-sync-dispatcher | kb-sync-worker | scheduled-runs-dispatcher | scheduled-runs-worker" >&2
     exit 1
 fi
 
@@ -54,9 +56,19 @@ case "$SERVICE" in
         IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/kb-sync/image-tag"
         ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-kb-sync"
         ;;
+    scheduled-runs-dispatcher)
+        FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/scheduled-runs/dispatcher-function-name"
+        IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/scheduled-runs/image-tag"
+        ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-scheduled-runs"
+        ;;
+    scheduled-runs-worker)
+        FUNCTION_NAME_SSM="/${CDK_PROJECT_PREFIX}/scheduled-runs/worker-function-name"
+        IMAGE_URI_SSM="/${CDK_PROJECT_PREFIX}/scheduled-runs/image-tag"
+        ECR_REPO_URI="${REGISTRY}/${CDK_PROJECT_PREFIX}-scheduled-runs"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: rag-ingestion | kb-sync-dispatcher | kb-sync-worker" >&2
+        echo "Expected one of: rag-ingestion | kb-sync-dispatcher | kb-sync-worker | scheduled-runs-dispatcher | scheduled-runs-worker" >&2
         exit 1
         ;;
 esac
