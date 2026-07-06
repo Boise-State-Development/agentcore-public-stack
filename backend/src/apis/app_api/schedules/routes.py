@@ -74,14 +74,24 @@ async def require_scheduled_runs_user(
 async def _resolve_enabled_tools_snapshot(user: User, requested: Optional[List[str]]) -> Optional[List[str]]:
     """Snapshot enabled_tools at creation time (Phase A punch #7).
 
-    An explicit list from the caller is trusted as-is (the SPA's tool
-    picker already filters to what the user may select). ``None`` resolves
-    to the user's current RBAC-allowed tool set *right now* and freezes it
-    into the schedule — the catalog shifting later never changes what a
-    sleeping schedule is allowed to call.
+    An explicit list from the caller is intersected with the user's current
+    RBAC grant before it is frozen — the SPA picker filters for UX, but the
+    request body is attacker-controlled within the caller's own session, so
+    the server must not let a crafted list enable a tool the AppRole does not
+    carry (the snapshot is later handed straight to the tool filter, which
+    performs no RBAC check of its own). ``None`` resolves to the user's
+    current RBAC-allowed tool set *right now* and freezes it — the catalog
+    shifting later never changes what a sleeping schedule is allowed to call.
     """
     if requested is not None:
-        return requested
+        allowed = await get_app_role_service().filter_requested_tools(user, requested)
+        if len(allowed) != len(requested):
+            logger.warning(
+                "Dropped %d requested tool(s) outside user %s's RBAC grant on schedule create",
+                len(requested) - len(allowed),
+                user.user_id,
+            )
+        return allowed
     permissions = await get_app_role_service().resolve_user_permissions(user)
     return list(permissions.tools)
 
@@ -162,6 +172,13 @@ async def update_schedule(
             detail="weekday is required when cadence is 'weekly'",
         )
 
+    # An edited tool list is a write path into the same frozen snapshot, so it
+    # gets the same RBAC intersection as creation — a PATCH must not be a way
+    # around the create-time check. ``None`` means "leave tools unchanged".
+    enabled_tools = request.enabled_tools
+    if enabled_tools is not None:
+        enabled_tools = await _resolve_enabled_tools_snapshot(user, enabled_tools)
+
     schedule = await update_scheduled_prompt(
         user.user_id,
         schedule_id,
@@ -172,7 +189,7 @@ async def update_schedule(
         weekday=request.weekday,
         timezone_name=request.timezone,
         assistant_id=request.assistant_id,
-        enabled_tools=request.enabled_tools,
+        enabled_tools=enabled_tools,
         deliver_email=request.deliver_email,
     )
 
