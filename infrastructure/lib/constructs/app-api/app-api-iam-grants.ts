@@ -439,6 +439,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Bedrock control-plane model browsing ──
+  // GET /admin/bedrock/models calls the Bedrock control plane's
+  // ListFoundationModels (apis/app_api/admin/routes.py). These are
+  // account-level list/read actions that do NOT support resource-level
+  // permissions, so they must be granted on `*`. Without this, the deployed
+  // task role gets AccessDeniedException and the endpoint 502s (works locally
+  // only because local dev runs with the developer's broader AWS credentials).
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockListFoundationModels',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModel'],
+      resources: ['*'],
+    }),
+  );
+
   // ── Bedrock Mantle model browsing ──
   // GET /admin/mantle/models authenticates against the OpenAI-compatible
   // Bedrock Mantle endpoint with a short-term bearer token presigned by this
