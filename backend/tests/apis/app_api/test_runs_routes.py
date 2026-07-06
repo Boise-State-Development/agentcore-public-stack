@@ -314,6 +314,67 @@ class TestRunNow:
 # ---------------------------------------------------------------------------
 
 
+class TestEnableGrant:
+    """POST /runs/grant — shares `_resolve_grant` with /runs/now, so this
+    pins the same create-on-enable behavior via a distinct entrypoint that
+    doesn't require running a prompt first."""
+
+    def test_creates_grant_from_live_session(self, monkeypatch):
+        client, grants, _ = _make_client(monkeypatch, with_session_record=True)
+
+        response = client.post("/runs/grant")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["grantId"] == "hlg-abc"
+        assert "rt-stored" not in str(body)
+
+        (enable,) = grants.enable_calls
+        assert enable["user_id"] == "user-1"
+        assert enable["username"] == "user1"
+        assert enable["refresh_token"] == "rt-live"
+        assert enable["token_issued_at"] == NOW - 3600
+
+    def test_refreshes_an_existing_grant_from_a_new_session(self, monkeypatch):
+        grants = FakeGrantService(grant=_grant())
+        client, grants, _ = _make_client(
+            monkeypatch, grants=grants, with_session_record=True
+        )
+
+        response = client.post("/runs/grant")
+
+        assert response.status_code == 200
+        assert len(grants.enable_calls) == 1  # re-pinned, not skipped
+
+    def test_existing_grant_without_a_session_record_is_reused(self, monkeypatch):
+        grants = FakeGrantService(grant=_grant())
+        client, grants, _ = _make_client(monkeypatch, grants=grants)
+
+        response = client.post("/runs/grant")
+
+        assert response.status_code == 200
+        assert response.json()["grantId"] == "hlg-abc"
+        assert grants.enable_calls == []
+
+    def test_no_grant_and_no_session_is_409(self, monkeypatch):
+        client, _, _ = _make_client(monkeypatch)
+
+        assert client.post("/runs/grant").status_code == 409
+
+    def test_kill_switch_off_hides_the_surface_as_404(self, monkeypatch):
+        client, _, _ = _make_client(monkeypatch, flag="false")
+        assert client.post("/runs/grant").status_code == 404
+
+    def test_missing_capability_is_403(self, monkeypatch):
+        client, _, _ = _make_client(monkeypatch, capability=False)
+        assert client.post("/runs/grant").status_code == 403
+
+    def test_unauthenticated_request_is_401(self, monkeypatch):
+        client, _, _ = _make_client(monkeypatch, authed=False)
+        assert client.post("/runs/grant").status_code == 401
+
+
 class TestGrantRoutes:
     def test_grant_status_when_enabled(self, monkeypatch):
         client, _, _ = _make_client(monkeypatch, grants=FakeGrantService(_grant()))
