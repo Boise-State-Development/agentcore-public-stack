@@ -18,8 +18,19 @@ from decimal import Decimal
 # Relative imports from shared sessions module
 from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingInterrupt, SessionMetadata, SessionPreferences
 
-# Import preview session helper
-from agents.main_agent.session.preview_session_manager import is_preview_session
+# Preview-session helper — imported lazily (not at module top level) so this
+# module stays importable in the lean scheduled-runs Lambda image, which
+# deliberately omits the agents/strands packages that preview_session_manager
+# pulls in. The heavy import resolves only when a preview-aware path actually
+# runs — never in a headless run, whose delivery path
+# (ensure_session_metadata_exists / update_session_title) does not touch
+# preview sessions. Public name is unchanged for all callers.
+def is_preview_session(session_id: str) -> bool:
+    from agents.main_agent.session.preview_session_manager import (
+        is_preview_session as _is_preview_session_impl,
+    )
+
+    return _is_preview_session_impl(session_id)
 
 logger = logging.getLogger(__name__)
 

@@ -4,3 +4,9 @@ boto3==1.43.9
 pydantic==2.12.5
 httpx==0.28.1
 bedrock-agentcore==1.9.1
+# Worker transitive deps: apis.shared.harness -> apis.shared.sessions_bff,
+# whose cookie.py needs cryptography (AESGCM) and cache.py needs cachetools
+# (TTLCache). Kept in sync with the dispatcher requirements.txt, which is the
+# file Dockerfile.scheduled-runs actually installs for the shared image.
+cryptography==48.0.1
+cachetools==6.2.4
