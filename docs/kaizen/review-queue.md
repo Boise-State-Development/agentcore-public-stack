@@ -50,30 +50,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L-M × H
 - **Subtracts**: addition only — config wiring of a capability Strands already exposes; zero-cost when unset; mirrors `CDK_ARTIFACTS_ENABLED`/`CDK_MCP_SANDBOX_ENABLED` optional-feature pattern
 - **Unlocks**: deployers attach content-safety filtering + staff-alerting monitoring to all model invocations without modifying inference-api source (FERPA duty-of-care for higher-ed: proactive self-harm/crisis-language monitoring Claude's reactive layer doesn't surface)
-- **Status**: open — strongest fit of the week (filed issue + library-native path + AWS feature cluster aligned). Verify the guardrail *resource* region availability; confirm guardrail streaming mode is compatible with the SSE relay.
+- **Status**: open — strongest fit (filed issue + library-native path). **Decide in-agent vs. gateway-level in one pass** — the [2026-07-03] "gateway-level Guardrails (AgentCore Policy)" item folds into this #480 decision (one gateway policy blankets every MCP target, model-independent). Verify guardrail *resource* region availability + SSE streaming-mode compatibility. Reviewed reviews/2026-07-03.md ▸ Proposal #4.
 
 ### [2026-06-19] Fix Nightly Build & Test (`exit 127` at install — ~14 consecutive failures)
 - **Source**: research/2026-06-19.md ▸ Internal Audit + Top 5 #2 — `gh run view 27820449858 --log-failed` shows `exit code 127` on every install/setup step (June 19); failing daily since June 5. Carries the [2026-06-12] nightly item forward with a sharper diagnosis (was "root cause unknown").
 - **Surface**: CI — `.github/workflows/` nightly workflow install/setup steps (`setup-uv` / `setup-node` / cache action)
 - **Effort × Impact**: L × H
-- **Subtracts**: no — hygiene; prerequisite for trusting the Strands 1.44 + bedrock-agentcore 1.15 bumps
-- **Status**: open — time-sensitive; CI environment/runner regression (a binary expected by install returns 127, likely `uv`/`node` PATH after an action or runner-image change), NOT a test regression. Do not land dep bumps on a suite that can't install. Supersedes the [2026-06-12] nightly item.
-
-### [2026-06-19] Bump Strands 1.40 → 1.44 — supersedes the [2026-06-12] 1.43 keystone
-- **Source**: research/2026-06-19.md ▸ Top 5 #3 — strands-agents v1.44.0 (June 16). **Supersedes** [2026-06-12] "Strands 1.40 → 1.43" — target advances one more minor; no new Python breaking changes 1.41–1.44.
-- **Surface**: backend (`pyproject.toml`/`uv.lock` — `strands-agents` 1.40→1.44, `strands-agents-tools` 0.5.2→0.8.1; agent invocation in `inference_api`; `BedrockModel`/`CacheConfig`; SSE `limit_*` stop-reason; tooling that assumed the old `vX.Y.Z` tag scheme — now `python/vX.Y.Z` in the `harness-sdk` monorepo)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — library-native `Limits` retires the hand-rolled runaway guardrail; `cache_tools_ttl` retires hand-rolled TTL; collapses the superseded 1.42/1.43 keystone entries + the #2635 guard into one PR
-- **Unlocks**: native per-turn cost ceiling; 1h prompt caching; accurate context attribution on tool-heavy turns
-- **Status**: open — prerequisite: green Nightly (see above). **Do NOT** adopt the new native memory-manager / agentic-context-management ports on this bump (they overlap `TurnBasedSessionManager`; decisions.md bars a bare swap) — scope a separate compat review. #2636 (non-ASCII) still live in 1.44.0 — add a known-limitation comment; a second bump follows once #2661/#2653 merge.
-
-### [2026-06-19] Bump `bedrock-agentcore` 1.9.1 → 1.15.0 + adopt `async_mode`
-- **Source**: research/2026-06-19.md ▸ Top 5 #4 — bedrock-agentcore v1.15.0 (June 17); 6 minors behind. **Supersedes** the [2026-06-12] "1.9.1 → 1.14.1" item and consolidates the [2026-05-22] bump + async_mode items. The #482 SSE-disconnect-deadlock fix lives in the 1.14.x line.
-- **Surface**: `backend/pyproject.toml` + `uv.lock`; `AgentCoreMemoryConfig` construction (`async_mode`); inference-api `/invocations` SSE worker (the #482 deadlock path)
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: yes — folds the deferred [2026-05-22] "#482 SSE-disconnect deadlock guard" into a dep bump (upstream fix instead of a hand-rolled guard); `async_mode` retires the latent #452 event-loop-blocking mode; consolidates 2–3 queue items
-- **Unlocks**: interactive-shell API access; bearer-token integration; A2A cap prerequisite for the first A2A server PR
-- **Status**: open — bundle as the "dep hygiene" PR after the Nightly is green; verify the #482 fix exercises our SSE-disconnect path.
+- **Subtracts**: no — hygiene; the dep-bump gate
+- **Status**: open — **#518 (in 1.0.2) repointed the test/install paths but nightly STILL failed Jun 29–30** (research/2026-07-03.md): a different stage (the ephemeral deploy/teardown per the `fix/nightly` work) is implicated. **Live note**: Jul 1–3 nightly is green on `main` — likely just-fixed; confirm the `develop` nightly (last develop run 2026-06-03) is covered before trusting it as the dep-bump gate. Consolidates the [2026-06-12] nightly item. Reviewed reviews/2026-07-03.md ▸ Proposal #9.
 
 ### [2026-06-19] Ship the interactive context-breakdown badge (Cursor + LibreChat convergence)
 - **Source**: research/2026-06-19.md ▸ Top 5 #5 — LibreChat v0.8.7-rc1 real-time context gauge + Cursor Context Usage Report (2026-06-05) + internal PR #433. **Reinforces** the [2026-06-05] "make the context-breakdown badge interactive" item with a second independent product datapoint.
@@ -81,82 +65,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: M × M
 - **Subtracts**: no — addition; lands on a surface we shipped and reuses `contextBreakdown` already on the final `metadata` event
 - **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
-- **Status**: open — presentation-layer only (no backend change). Now validated by two products. Consider folding into / superseding the [2026-06-05] item at review.
-
-### [2026-06-12] Add Claude Fable 5 to model settings + audit model-ID string matching — ⚠️ WITHDRAW (Fable 5 revoked on Bedrock)
-- **Source**: research/2026-06-19.md ▸ Retirement candidates — Fable 5 + Mythos 5 were **revoked on Bedrock for all users (US gov directive, June 12–13)**, three days after their June 9 GA. The "add Fable 5 / consider as default" core of the original [2026-06-12] item is dead until/unless the directive lifts.
-- **Surface**: n/a (withdrawal)
-- **Effort × Impact**: — × —
-- **Subtracts**: yes — removes a queued addition that external availability killed
-- **Status**: open — **recommend review-prep mark the [2026-06-12] Fable 5 item RESOLVED (Decline/superseded)**. Minor residual merit: the `claude-opus-4` capability-gate string-match audit is still worth doing for future-proofing, but decoupled from Fable 5. Opus 4.8 stays the default/floor.
-
-### [2026-06-12] Bump Strands 1.40 → 1.43 — supersedes [2026-06-05] keystone; closes #2635 + context_manager="auto" + A2A isolation fix
-- **Source**: research/2026-06-12.md ▸ Top 5 #1 — Strands v1.43.0 released June 12, 2026. **Supersedes** [2026-06-05] "Strands 1.40 → 1.42 bump" — target advances one more minor; no additional blast radius. Also closes the [2026-06-05] "#2635 guard" queue item.
-- **Surface**: backend (`pyproject.toml`/`uv.lock` — `strands-agents==1.40.0` → `==1.43.0`; agent invocation in `inference_api`; `BedrockModel`/`CacheConfig`; SSE `limit_*` stop-reason)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — library-native `Limits` retires the hand-rolled runaway guardrail; `cache_tools_ttl` retires hand-rolled TTL; #2635 defensive guard resolves as part of the bump; three queue items collapse into one PR
-- **Unlocks**: native per-turn cost ceiling; 1h prompt caching; accurate context attribution on tool-heavy turns
-- **Status**: open — prerequisite: confirm Nightly CI is green (see [2026-06-12] nightly investigation item) before landing. #2636 (non-ASCII) still live in 1.43.0 — add a known-limitation comment, a second bump will follow once PR #2661 merges.
-
-### [2026-06-12] Add Claude Fable 5 to model settings + audit model-ID string matching
-- **Source**: research/2026-06-12.md ▸ Top 5 #2 — Claude Fable 5 GA June 9 (https://aws.amazon.com/about-aws/whats-new/2026/06/claude-fable-5-aws/). Naming convention shift (`-fable-`/`-mythos-` suffixes vs. `claude-opus-4.N`) is a live breakage risk.
-- **Surface**: frontend (`model-settings.html`, `model-settings.ts` — add `claude-fable-5` to dropdown) + backend (grep `claude-opus-4` in capability gates: prompt-caching beta header, fine-grained tool-streaming beta header; admin model catalog)
-- **Effort × Impact**: L-M × H
-- **Subtracts**: partial — Fable 5 at $10/$50/M may replace Opus 4.8 as default once benchmarked; no hard retirement yet
-- **Unlocks**: top-of-range Anthropic model on Bedrock at materially lower cost; model-list parity for end users
-- **Status**: open — use the `claude-api` skill to confirm exact Bedrock IDs before committing; verify context window + caching API support on Bedrock model card before flipping to default
-
-### [2026-06-12] Investigate + triage Nightly Build & Test (7 consecutive failures June 5–12)
-- **Source**: research/2026-06-12.md ▸ Internal Audit — CI failures. Same pattern resolved via PR #290 in May; root cause unknown this time.
-- **Surface**: CI — `.github/workflows/` nightly workflow + backend test suite
-- **Effort × Impact**: L × H
-- **Subtracts**: no — hygiene; prerequisite for trusting the Strands 1.43 keystone bump and any other dep changes
-- **Status**: open — time-sensitive; run `gh run view <latest-nightly-id> --log-failed`; classify flaky-vs-regression; quarantine or file. Do not land dep bumps on an untrusted suite.
-
-### [2026-06-12] Bump `bedrock-agentcore` 1.9.1 → 1.14.1 + adopt `async_mode` + note A2A cap prerequisite
-- **Source**: research/2026-06-12.md ▸ Top 5 #4 — bedrock-agentcore v1.14.1 (June 11). **Consolidates** [2026-05-22] "Bump bedrock-agentcore 1.9.1 → 1.11.0" and [2026-05-22] "Re-bump 1.9.1 → 1.11.0 + async_mode" open items (which were already 4+ minors behind; now 5).
-- **Surface**: `backend/pyproject.toml` + `uv.lock`; `AgentCoreMemoryConfig` construction (`async_mode` adoption)
-- **Effort × Impact**: L × M
-- **Subtracts**: `async_mode` adoption retires the latent #452 event-loop-blocking failure mode; two queue items consolidate into one
-- **Unlocks**: interactive shell API access; A2A cap fix is a hard prerequisite for the first A2A server PR
-- **Status**: open — can bundle with the starlette CVE bump (#5 below) as a single "dep hygiene" PR
-
-### [2026-06-12] Bump `starlette` 1.0.0 → 1.0.1 to close CVE-2026-48710
-- **Source**: research/2026-06-12.md ▸ Top 5 #5 — FastMCP v3.4.1 (June 5) surfaced CVE-2026-48710 affecting starlette < 1.0.1. Our `pyproject.toml` pins `starlette==1.0.0`.
-- **Surface**: `backend/pyproject.toml` — 1-line pin bump
-- **Effort × Impact**: L × M
-- **Subtracts**: no — 1-line security fix; the existing comment says the pin was already security-motivated
-- **Status**: open — bundle with bedrock-agentcore bump (#4 above) as a single dep-hygiene PR; also flag to MCP server repos to bump FastMCP to ≥3.4.1
-
-### [2026-06-05] Strands 1.40 → 1.42 bump — unblocks `Limits` (cost caps) + `cache_tools_ttl` (#269 caching)
-- **Source**: research/2026-06-05.md ▸ Top 5 #1 — Strands v1.42.0 (June 1). **Consolidates** the queued 2026-05-22 "Strands 1.40→1.41 + caching #269" item AND the 2026-05-29 #2 "Adopt Strands `Limits`" item — both were gated on 1.42, which is now out. Treat as one keystone bump, not two.
-- **Surface**: backend (`pyproject.toml`/`uv.lock`, agent invocation in `inference_api`, `BedrockModel`/`CacheConfig`, SSE `limit_*` stop-reason) + infrastructure (CloudWatch Bedrock-spend alarm)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — adopts library-native `Limits` (retires the hand-rolled runaway guardrail) + `cache_tools_ttl` (retires the hand-rolled TTL); two queued items collapse into one bump
-- **Unlocks**: native per-turn cost ceiling (`limit_*` stop_reason) + end-to-end 1h prompt caching → lower input-token cost, surfaced in the admin "Cache Savings" card
-- **Status**: open — 1.42 is released (no longer gated). Blast radius to audit first: `strands-agents-tools` 0.5→0.8 (possible breaking tool-interface changes) + `starlette` 1.2.1 (FastAPI 0.136.x transitive compat)
-
-### [2026-06-05] Guard the context-attribution path against Strands `count_tokens` toolResult=0 bug (#2635)
-- **Source**: research/2026-06-05.md ▸ Top 5 #2 — Strands issue #2635 (open) + internal PR #428–433 (context-attribution feature, shipped this window)
-- **Surface**: backend (`CountTokensBedrockModel`, the `contextBreakdown` hook/coordinator channel, the compaction trigger)
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: no — defensive; protects the freshly-shipped context-breakdown badge
-- **Status**: open — time-sensitive; confirm native Bedrock CountTokens is used for all turns (incl. JSON toolResults) and the heuristic path #2635 affects is never hit; add a regression test asserting a non-zero count for a turn with a JSON toolResult
-
-### [2026-06-05] Make the context-breakdown badge interactive (Cursor Context Usage Report pattern)
-- **Source**: research/2026-06-05.md ▸ Top 5 #3 — Cursor "Context Usage Report" (https://cursor.com/changelog/canvas-improvements) + internal PR #433
-- **Surface**: frontend (context-breakdown badge component + Artifacts docked panel)
-- **Effort × Impact**: M × M
-- **Subtracts**: no — addition; justified because it lands on a surface we shipped last week and reuses `contextBreakdown` data already on the final metadata event
-- **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
-- **Status**: open — presentation-layer work; no new backend (data already on the wire)
+- **Status**: open — presentation-layer only (no backend change). Consolidated the superseded [2026-06-05] Cursor-only entry into this item. Lower priority than the [2026-07-03] reliability/model cluster. Reviewed reviews/2026-07-03.md ▸ below-cap (defer 1 week).
 
 ### [2026-06-05] Bump `docling` past the 2.81.0 content-sniffing defect → close #405 (`.txt` uploads fail)
 - **Source**: research/2026-06-05.md ▸ Top 5 #4 — docling 2.97.0 (June 3) + internal issue #405
 - **Surface**: backend (document-ingestion docling dep pin)
 - **Effort × Impact**: L × M
 - **Subtracts**: yes — library-native bump closes an open user-facing bug; no custom workaround needed
-- **Status**: open — cleanest subtraction of the week; bump off 2.81.x, verify `.txt` upload, close #405
+- **Status**: open — **#405 still open ~5 weeks; `requirements.lock` still pins `docling==2.81.0` (latest 2.109.0).** Cleanest subtraction; bump off 2.81.x, verify `.txt` upload, close #405. Reviewed reviews/2026-07-03.md ▸ Proposal #6.
 
 ### [2026-06-05] De-risk #419 (admin-managed Gateway target registration) against the new AWS auth-code-flow + BYO-secrets references
 - **Source**: research/2026-06-05.md ▸ Top 5 #5 — AWS "secure OAuth auth-code flow with Gateway + MCP clients" + AgentCore Identity BYO Secrets Manager (both June 1) + internal issue #419
@@ -196,26 +112,12 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — defensive; protects the shared event loop from being wedged by one user's request
 - **Status**: open — #399 already filed; kaizen value is the broader class-of-bug sweep (pairs with the queued SDK #482 guard)
 
-### [2026-05-22] Defensive guard against SDK #482 SSE-disconnect runtime deadlock
-- **Source**: research/2026-05-22.md ▸ Top 5 #2 — AgentCore SDK issue #482
-- **Surface**: backend (`inference-api` streaming worker — the `/invocations` SSE handler)
-- **Effort × Impact**: M × H
-- **Subtracts**: no — defensive; silent 78s+ microVM stall on mid-stream client disconnect
-- **Status**: open
-
-### [2026-05-22] Bump `bedrock-agentcore` 1.9.1 → 1.11.0
-- **Source**: research/2026-05-22.md ▸ Top 5 #3 — SDK v1.10.0/v1.11.0 releases
-- **Surface**: backend (`pyproject.toml`, `uv.lock`)
-- **Effort × Impact**: L × M
-- **Subtracts**: possibly — v1.10.0 header-forwarding may retire a custom `X-Amzn-Custom-` header workaround (audit during bump)
-- **Status**: open
-
 ### [2026-05-22] Opus 4.7 `temperature`-omission guard
 - **Source**: research/2026-05-22.md ▸ Top 5 #4 — ref-repo commit `9385454`
 - **Surface**: backend (provider-translation chokepoint — same site as `_shape_thinking_value` / #329 / #331)
 - **Effort × Impact**: L × M
 - **Subtracts**: no — defensive; Opus 4.7 rejects `temperature` on extended-thinking turns
-- **Status**: open
+- **Status**: open — **subsumed by the [2026-07-03] model-settings per-model temperature-suppression guard** (same `to_bedrock_config` chokepoint; Sonnet 5 has the same rejection). Ship as one guard covering both. Reviewed reviews/2026-07-03.md ▸ Proposal #3.
 
 ### [2026-05-15] Wire per-tool `duration_ms` into `tool_result` SSE
 - **Source**: research/2026-05-15.md ▸ Top 5 #5 — Claude Code 2.1.141 hook pattern
@@ -269,21 +171,36 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — additive but pattern-validated across Linear/ChatGPT/Cursor
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
-### [2026-05-22] Re-bump `bedrock-agentcore` 1.9.1 → 1.11.0 + adopt `async_mode`
-- **Source**: reviews/2026-05-22.md ▸ Proposal #2 — re-evaluation of the `async_mode`/#452 risk the 2026-05-15 review explicitly deferred "to the 2026-05-22 review".
-- **Surface**: backend (`backend/pyproject.toml`, `backend/uv.lock`, `AgentCoreMemoryConfig` construction)
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: no — dep bump; adopting `async_mode` retires the latent #452 event-loop-blocking failure mode
-- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #2 (Ship); no decision logged yet. Lag re-opened to 2 releases the week after #337 closed it.
-
-### [2026-05-22] Fast PR-gate for the deterministic `supply_chain` + `architecture` test subset
-- **Source**: reviews/2026-05-22.md ▸ Proposal #6 — root-cause of the Proposal #1 friction (policy violation merged clean because PR-merge CI runs no pytest).
-- **Surface**: CI — new lightweight job in the PR workflow
-- **Effort × Impact**: L × M
-- **Subtracts**: no — addition; converts a recurring post-merge friction class into a pre-merge block. Scoped to two deterministic dirs to avoid reopening the "no full pytest in PR CI" decision.
-- **Status**: open — surfaced in reviews/2026-05-22.md ▸ Proposal #6 (Ship scoped, or Defer 2 weeks); no decision logged yet.
-
 ## Resolved
+
+### [2026-06-19] Bump Strands 1.40 → 1.44 + [2026-06-12] 1.43 + [2026-06-05] 1.42 + [2026-06-05] #2635 guard → RESOLVED — superseded by the [2026-07-03] 1.45 keystone
+- **Decision**: Superseded — all four consolidated into the open [2026-07-03] "Strands 1.40 → 1.45 + hook ordering" item. The #2635 count-tokens guard folds into the bump.
+- **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #2.
+
+### [2026-06-19] Bump `bedrock-agentcore` 1.9.1 → 1.15.0 + [2026-06-12] 1.14.1 + [2026-05-22] 1.11.0 (×2) + [2026-05-22] #482 hand-written guard → RESOLVED — superseded by the [2026-07-03] 1.17.0 bump
+- **Decision**: Superseded — all consolidated into the open [2026-07-03] "bedrock-agentcore 1.9.1 → 1.17.0" item. Per research/2026-07-03.md the #482 fix is now **upstream in 1.17.0** (PR #563), so the queued hand-written guard converts to "bump the pin" — a library-native subtraction.
+- **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #1.
+
+### [2026-06-12] Add Claude Fable 5 to model settings (+ the [2026-06-19] WITHDRAW) → RESOLVED — un-withdrawn, folded into the [2026-07-03] model-settings refresh
+- **Decision**: Superseded — **NOT declined.** Fable 5 was revoked on Bedrock mid-June (forcing the withdrawal) and **reinstated Jul 1**. The reinstatement + Sonnet 5 GA are consolidated into the open [2026-07-03] "Model-settings refresh: reinstate Fable 5 + add Sonnet 5" item (US inference profile only; Global unstable).
+- **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #3.
+
+### [2026-06-12] Investigate + triage Nightly Build & Test (7 failures) → RESOLVED — consolidated
+- **Decision**: Superseded — consolidated into the open [2026-06-19] nightly item (still open; #518 was incomplete, see that item).
+- **Reviewed-in**: reviews/2026-07-03.md ▸ Proposal #9.
+
+### [2026-06-12] Bump `starlette` 1.0.0 → 1.0.1 (CVE-2026-48710) → RESOLVED — shipped
+- **Decision**: Resolved — `backend/pyproject.toml` now pins `starlette==1.3.1` (past the CVE floor) via PR #487 (June 18, "remediate 22 HIGH Dependabot findings"). Confirmed in research/2026-06-19.md's version-pin table.
+- **Reviewed-in**: reviews/2026-07-03.md ▸ What Shipped.
+
+### [2026-06-05] Make the context-breakdown badge interactive (Cursor) → RESOLVED — consolidated
+- **Decision**: Superseded — consolidated into the open [2026-06-19] "interactive context-breakdown badge (Cursor + LibreChat convergence)" item.
+- **Reviewed-in**: reviews/2026-07-03.md ▸ below-cap.
+
+### [2026-05-22] Fast PR-gate for the deterministic test subset → RESOLVED — shipped (broader than proposed)
+- **Decision**: Resolved — satisfied by **PR #490** (June 18, "ci: add pull_request test gate").
+- **Reasoning**: #490 added `.github/workflows/ci.yml` on `pull_request → [develop, main]` with three parallel jobs — `test-backend` (`uv run pytest tests/`), `test-frontend` (vitest), `test-infra` (jest), SHA-pinned, `ubuntu-24.04`. This is **broader** than the proposed `supply_chain`+`architecture` subset: it runs the full backend pytest suite on PRs. **Premise change**: the "backend pytest isn't in CI" line (still repeated in research/2026-07-03.md) is now stale — backend pytest *is* a PR gate as of #490.
+- **Reviewed-in**: reviews/2026-07-03.md ▸ Friction + What Shipped.
 
 ### [2026-05-29] Adopt Strands `Limits` for per-invocation cost/turn caps → RESOLVED — superseded (folded into the 2026-06-05 Strands 1.42 keystone)
 - **Decision**: Superseded — consolidated into the [2026-06-05] "Strands 1.40 → 1.42 keystone bump" Open item.
