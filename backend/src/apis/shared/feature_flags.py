@@ -1,9 +1,10 @@
 """Process-level feature flags resolved from environment variables.
 
-These gate optional product surfaces that ship in the codebase but stay
-disabled for an environment until explicitly turned on — mirroring the
-``FINE_TUNING_ENABLED`` pattern used in app-api. Each flag is read on every
-call (not cached at import) so that:
+These gate optional product surfaces per environment. Each flag documents
+its own default: deferred features default off until explicitly turned on
+(the ``FINE_TUNING_ENABLED`` pattern), while shipping features default on
+with a kill switch (the ``KB_SYNC_ENABLED`` pattern). Each flag is read on
+every call (not cached at import) so that:
 
 * import-time callers (conditional router mounting) and per-request callers
   observe the same value, and
@@ -24,3 +25,22 @@ def skills_enabled() -> bool:
     unmounted / hidden, but all skills data and code remain intact.
     """
     return os.environ.get("SKILLS_ENABLED", "false").lower() == "true"
+
+
+def scheduled_runs_enabled() -> bool:
+    """Whether the scheduled-runs surface is enabled for this environment.
+
+    Covers the headless "Run now" route and headless-grant lifecycle today,
+    and the schedule CRUD + dispatcher when Phase B lands. **Default ON
+    with a kill switch** (house style, mirroring ``CDK_KB_SYNC_ENABLED``):
+    unset or empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables. The CDK side threads
+    ``config.scheduledRuns.enabled`` into this env var with the same
+    empty-string-safe ternary, so an unset GitHub Actions variable can
+    never silently turn the feature off.
+
+    Note this flag gates *feature existence* per environment; *who* can use
+    it is the ``scheduled-runs`` RBAC capability
+    (``apis.shared.rbac.capabilities``) — two independent controls.
+    """
+    return os.environ.get("SCHEDULED_RUNS_ENABLED", "").strip().lower() != "false"
