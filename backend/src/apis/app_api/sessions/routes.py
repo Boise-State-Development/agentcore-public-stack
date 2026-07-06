@@ -23,6 +23,7 @@ from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import (
     list_user_sessions,
     get_session_metadata,
+    mark_session_read,
     remove_pending_interrupts,
     session_exists_for_other_user,
     set_interrupted_turn,
@@ -152,6 +153,26 @@ async def get_session_metadata_endpoint(
             status_code=500,
             detail=f"Failed to retrieve session metadata: {str(e)}"
         )
+
+
+@router.post("/{session_id}/read", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_session_read_endpoint(
+    session_id: str,
+    current_user: User = Depends(get_current_user_from_session)
+):
+    """
+    Mark a session as read, clearing the durable ``unread`` flag.
+
+    Called by the SPA when the user opens a session that a scheduled
+    (unattended) run left unread. Idempotent single-attribute write — a
+    no-op if the session is already read or doesn't exist. Ownership is
+    enforced inside ``mark_session_read`` via the GSI lookup, so a session
+    belonging to another user is silently ignored (no state change).
+
+    Requires session-cookie authentication. Returns 204 No Content.
+    """
+    await mark_session_read(session_id=session_id, user_id=current_user.user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put("/{session_id}/metadata", response_model=SessionMetadataResponse, response_model_exclude_none=True)

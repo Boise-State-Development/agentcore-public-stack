@@ -78,6 +78,8 @@
                                             }
                                             @if (isSessionStreaming(session.sessionId)) {
                                                 <span class="sr-only">(response in progress)</span>
+                                            } @else if (shouldShowUnreadDot(session)) {
+                                                <span class="sr-only">(unread)</span>
                                             }
                                         </a>
                                         @if (isSessionStreaming(session.sessionId)) {
@@ -92,6 +94,18 @@
                                                 aria-hidden="true"
                                             ></span>
                                         } @else {
+                                            @if (shouldShowUnreadDot(session)) {
+                                                <!-- Unread dot: an unattended (scheduled) run finished, or a
+                                                     backgrounded response completed while the user was viewing
+                                                     another conversation. Static blue (vs. the pulsing
+                                                     secondary streaming dot) and, unlike the streaming dot, it
+                                                     fades on hover so the ellipsis menu can own the gutter.
+                                                     Cleared once the user opens the session. -->
+                                                <span
+                                                    class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-blue-500 transition-opacity group-hover:opacity-0 dark:bg-blue-400"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            }
                                             <!-- Ellipsis menu button - visible on hover with fade-in animation -->
                                             <button
                                                 type="button"

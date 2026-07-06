@@ -67,7 +67,7 @@ _HAPPY_STREAM = _sse(
 @pytest.fixture
 def delivery_spy(monkeypatch):
     """Spy the runner's delivery calls (imported lazily from sessions.metadata)."""
-    calls = {"ensure": [], "title": []}
+    calls = {"ensure": [], "title": [], "unread": []}
 
     async def fake_ensure(session_id, user_id):
         calls["ensure"].append((session_id, user_id))
@@ -76,8 +76,12 @@ def delivery_spy(monkeypatch):
     async def fake_title(session_id, user_id, title):
         calls["title"].append((session_id, user_id, title))
 
+    async def fake_unread(session_id, user_id, unread):
+        calls["unread"].append((session_id, user_id, unread))
+
     monkeypatch.setattr(sessions_metadata, "ensure_session_metadata_exists", fake_ensure)
     monkeypatch.setattr(sessions_metadata, "update_session_title", fake_title)
+    monkeypatch.setattr(sessions_metadata, "set_session_unread", fake_unread)
     return calls
 
 
@@ -178,6 +182,54 @@ async def test_happy_path_completes_and_delivers(monkeypatch, delivery_spy):
     # Delivery: idempotent session ensure + explicit title override.
     assert delivery_spy["ensure"] == [(result.session_id, "user-1")]
     assert delivery_spy["title"] == [(result.session_id, "user-1", "My Briefing")]
+    # Attended trigger ("run_now") — the user is present, so no unread flag.
+    assert delivery_spy["unread"] == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_completion_marks_session_unread(monkeypatch, delivery_spy):
+    """An unattended (schedule) run flags the session unread on completion."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_HAPPY_STREAM,
+        )
+
+    _mock_http(monkeypatch, handler)
+
+    result = await run_agent_headless(
+        user_id="user-1",
+        prompt="daily briefing",
+        auth=SpyBearerAuth("bearer-xyz"),
+        trigger="schedule",
+        invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+
+    assert result.status == "completed"
+    assert delivery_spy["unread"] == [(result.session_id, "user-1", True)]
+
+
+@pytest.mark.asyncio
+async def test_scheduled_error_does_not_mark_unread(monkeypatch, delivery_spy):
+    """A failed schedule run leaves no unread dot (nothing worth reading)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "OAuth authorization failed"})
+
+    _mock_http(monkeypatch, handler)
+
+    result = await run_agent_headless(
+        user_id="user-1",
+        prompt="daily briefing",
+        auth=SpyBearerAuth("bearer-xyz"),
+        trigger="schedule",
+        invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+
+    assert result.status != "completed"
+    assert delivery_spy["unread"] == []
 
 
 @pytest.mark.asyncio

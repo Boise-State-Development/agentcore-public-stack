@@ -60,6 +60,13 @@ export interface SessionMetadata {
   lastTurnInterruptReason?: 'user_stopped' | 'connection_lost' | 'unknown';
   /** ISO 8601 timestamp when the interruption was detected. */
   lastTurnInterruptedAt?: string;
+  /** True when an unattended (scheduled) run left a response the user hasn't
+   *  opened yet. Server-persisted, so the unread dot survives reload and
+   *  reaches other devices; cleared server-side via POST /sessions/{id}/read
+   *  when the user opens the session. Distinct from the ephemeral, in-tab
+   *  unread state ChatStateService tracks for interactive background
+   *  completions — the session list ORs the two. */
+  unread?: boolean;
 }
 
 // Request model for updating session metadata

@@ -60,6 +60,42 @@ describe('ChatStateService', () => {
     });
   });
 
+  describe('unread tracking', () => {
+    it('flags a session unread when its response finishes while unviewed', () => {
+      service.setViewedSession('a');
+
+      service.setChatLoading('b', true);
+      expect(service.isSessionUnread('b')).toBe(false);
+
+      service.setChatLoading('b', false);
+      expect(service.isSessionUnread('b')).toBe(true);
+    });
+
+    it('does not flag the currently-viewed session when its response finishes', () => {
+      service.setViewedSession('a');
+      service.setChatLoading('a', true);
+      service.setChatLoading('a', false);
+      expect(service.isSessionUnread('a')).toBe(false);
+    });
+
+    it('only flags on a true→false transition, not an idempotent stop', () => {
+      service.setViewedSession('a');
+      // No prior loading=true, so this is not a "finished" transition.
+      service.setChatLoading('b', false);
+      expect(service.isSessionUnread('b')).toBe(false);
+    });
+
+    it('clears the unread flag when the user opens the session', () => {
+      service.setViewedSession('a');
+      service.setChatLoading('b', true);
+      service.setChatLoading('b', false);
+      expect(service.isSessionUnread('b')).toBe(true);
+
+      service.setViewedSession('b');
+      expect(service.isSessionUnread('b')).toBe(false);
+    });
+  });
+
   describe('setLastTurnContinuable', () => {
     it('toggles the continuable flag per session', () => {
       service.setViewedSession('a');

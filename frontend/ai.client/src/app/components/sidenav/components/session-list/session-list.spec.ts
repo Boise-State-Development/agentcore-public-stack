@@ -32,6 +32,8 @@ describe('SessionList', () => {
       currentSession: signal(mockSession),
       deleteSession: vi.fn().mockResolvedValue(undefined),
       sessionsResource: { value: vi.fn().mockReturnValue(null), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
+      isLocallyRead: vi.fn().mockReturnValue(false),
+      markSessionRead: vi.fn().mockResolvedValue(undefined),
     };
     mockSidenavService = { close: vi.fn() };
     mockToastService = { success: vi.fn(), error: vi.fn() };
@@ -93,6 +95,46 @@ describe('SessionList', () => {
 
     chatState.setChatLoading('test-session', false);
     expect(component['isSessionStreaming']('test-session')).toBe(false);
+  });
+
+  it('shows the unread dot for a server-unread session and suppresses it once locally read', async () => {
+    const component = await createComponent();
+    const unreadSession = { ...mockSession, unread: true };
+
+    // Server flag set, not yet locally read → dot shows.
+    expect(component['shouldShowUnreadDot'](unreadSession)).toBe(true);
+
+    // User opened it: local read-watermark suppresses the dot before the
+    // server round-trips.
+    mockSessionService.isLocallyRead.mockReturnValue(true);
+    expect(component['shouldShowUnreadDot'](unreadSession)).toBe(false);
+
+    // A session with no server flag and no client signal shows nothing.
+    mockSessionService.isLocallyRead.mockReturnValue(false);
+    expect(component['shouldShowUnreadDot'](mockSession)).toBe(false);
+  });
+
+  it('ORs the client-side interactive unread signal into the dot', async () => {
+    const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+    const chatState = TestBed.inject(ChatStateService);
+    const component = await createComponent();
+
+    // No server flag, but a stream finished in this tab while viewing elsewhere.
+    chatState.setViewedSession('other');
+    chatState.setChatLoading('test-session', true);
+    chatState.setChatLoading('test-session', false);
+
+    expect(component['shouldShowUnreadDot'](mockSession)).toBe(true);
+  });
+
+  it('marks a server-unread session read on open, but not a read one', async () => {
+    const component = await createComponent();
+
+    component['onSessionClick'](mockSession);
+    expect(mockSessionService.markSessionRead).not.toHaveBeenCalled();
+
+    component['onSessionClick']({ ...mockSession, unread: true });
+    expect(mockSessionService.markSessionRead).toHaveBeenCalledOnce();
   });
 
   it('marks the title pending only for a titleless session that is streaming', async () => {

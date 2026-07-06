@@ -232,6 +232,7 @@ async def run_agent_headless(
     try:
         from apis.shared.sessions.metadata import (
             ensure_session_metadata_exists,
+            set_session_unread,
             update_session_title,
         )
 
@@ -239,6 +240,15 @@ async def run_agent_headless(
         if title:
             await update_session_title(session_id, user_id, title)
             result.title = title
+
+        # A scheduled (unattended) run produced a response the user wasn't
+        # watching — flag the session unread so the sidebar shows a dot until
+        # they open it. Runs *after* the SK-rotating writes above, on the row's
+        # final SK. Gated on a successful completion (no dot for a failed or
+        # consent-blocked run) and on the unattended trigger (attended "Run
+        # now" / manual invocations don't mark unread — the user is present).
+        if trigger == "schedule" and result.status == "completed":
+            await set_session_unread(session_id, user_id, True)
     except Exception:
         logger.error(
             "Headless run %s: result delivery failed", run_id, exc_info=True

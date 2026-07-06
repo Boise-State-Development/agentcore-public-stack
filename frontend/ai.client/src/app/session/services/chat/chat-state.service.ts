@@ -45,6 +45,14 @@ export class ChatStateService {
     private readonly viewedSessionIdSignal = signal<string | null>(null);
     readonly viewedSessionId: Signal<string | null> = this.viewedSessionIdSignal.asReadonly();
 
+    /**
+     * Sessions whose most recent response finished while the user was looking
+     * somewhere else — "unread" until they open the conversation. Held as a
+     * signal so the OnPush session-list rows re-render when a background stream
+     * completes (dot appears) or the user navigates in (dot clears).
+     */
+    private readonly unreadSessionIds = signal<ReadonlySet<string>>(new Set());
+
     readonly isChatLoading = computed(() => this.viewedState()?.loading() ?? false);
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
@@ -73,21 +81,63 @@ export class ChatStateService {
     private readonly scrollToLastUserSignal = signal(0);
     readonly scrollToLastUserTick: Signal<number> = this.scrollToLastUserSignal.asReadonly();
 
-    /** Point the viewed-session facades at a (possibly null) session. */
+    /**
+     * Point the viewed-session facades at a (possibly null) session. Opening a
+     * session also clears its unread flag — the user has now seen whatever
+     * response finished while they were away.
+     */
     setViewedSession(sessionId: string | null): void {
         this.viewedSessionIdSignal.set(sessionId);
+        if (sessionId) {
+            this.clearSessionUnread(sessionId);
+        }
     }
 
     /**
-     * Sets the chat loading state for a session.
+     * Sets the chat loading state for a session. When a response *finishes*
+     * (loading true→false) in a session the user isn't currently viewing, that
+     * conversation is flagged unread so the session list can surface a dot.
      */
     setChatLoading(sessionId: string, loading: boolean): void {
-        this.stateFor(sessionId).loading.set(loading);
+        const state = this.stateFor(sessionId);
+        const wasLoading = state.loading();
+        state.loading.set(loading);
+
+        if (wasLoading && !loading && sessionId !== this.viewedSessionIdSignal()) {
+            this.markSessionUnread(sessionId);
+        }
     }
 
     /** Whether a specific session is currently streaming (loading). */
     isSessionLoading(sessionId: string): boolean {
         return this.states().get(sessionId)?.loading() ?? false;
+    }
+
+    /**
+     * Whether a session has an unread response — one that finished streaming
+     * while the user was looking at a different conversation. Cleared when the
+     * user opens the session (see setViewedSession).
+     */
+    isSessionUnread(sessionId: string): boolean {
+        return this.unreadSessionIds().has(sessionId);
+    }
+
+    private markSessionUnread(sessionId: string): void {
+        this.unreadSessionIds.update(set => {
+            if (set.has(sessionId)) return set;
+            const next = new Set(set);
+            next.add(sessionId);
+            return next;
+        });
+    }
+
+    private clearSessionUnread(sessionId: string): void {
+        this.unreadSessionIds.update(set => {
+            if (!set.has(sessionId)) return set;
+            const next = new Set(set);
+            next.delete(sessionId);
+            return next;
+        });
     }
 
     /**

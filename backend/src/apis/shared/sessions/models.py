@@ -283,6 +283,16 @@ class SessionMetadata(BaseModel):
         description="Receipts for conversation exports to connected apps, newest appended last",
     )
 
+    # Durable "unread" flag: set when an UNATTENDED run (scheduled / headless)
+    # completes in this session, since the user by definition wasn't watching.
+    # Interactive turns never set it (the client tracks same-tab unread state).
+    # Cleared server-side when the user opens the session (mark_session_read),
+    # so the dot survives reload and reaches other devices. Not part of the SK.
+    unread: Optional[bool] = Field(
+        False,
+        description="True when an unattended (scheduled) run left a response the user hasn't opened yet",
+    )
+
 
 class UpdateSessionMetadataRequest(BaseModel):
     """Request body for updating session metadata"""
@@ -374,6 +384,10 @@ class SessionMetadataResponse(BaseModel):
         default=None,
         alias="exportReceipts",
         description="Receipts for conversation exports to connected apps, newest appended last; lets the UI restore a 'Saved · Open' affordance after a reload",
+    )
+    unread: Optional[bool] = Field(
+        False,
+        description="True when an unattended (scheduled) run left a response the user hasn't opened yet; drives the blue unread dot in the session list",
     )
 
 

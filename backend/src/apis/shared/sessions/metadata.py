@@ -851,6 +851,62 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
         logger.error(f"update_session_title failed: {e}", exc_info=True)
 
 
+async def set_session_unread(session_id: str, user_id: str, unread: bool) -> None:
+    """Set (or clear) the durable ``unread`` flag on the session row.
+
+    Targeted ``UpdateExpression`` on the current SK — mirrors
+    ``update_session_title`` so it can run concurrently with the full-row
+    merge without clobbering ``messageCount`` / ``lastMessageAt`` / ``title``.
+    ``unread`` is NOT part of the SK, so no SK rotation is needed. Looks up the
+    current SK via the GSI because the SK contains a timestamp.
+
+    Set ``True`` from the unattended-run delivery path (a scheduled run the user
+    didn't witness); cleared via ``mark_session_read`` when they open it.
+
+    No-op when the session row doesn't exist (preview sessions, sessions
+    deleted mid-turn) — best-effort, never raises.
+    """
+    if is_preview_session(session_id):
+        return
+
+    sessions_metadata_table = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not sessions_metadata_table:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+
+    try:
+        import boto3
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(sessions_metadata_table)
+
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        if not existing:
+            logger.info(f"set_session_unread: session {session_id} not found, skipping")
+            return
+        sk = existing.get("SK")
+        if not sk:
+            logger.warning(f"set_session_unread: session {session_id} has no SK")
+            return
+
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="SET unread = :u",
+            ExpressionAttributeValues={":u": unread},
+        )
+        logger.info(f"💾 Set unread={unread} for session {session_id}")
+    except Exception as e:
+        logger.error(f"set_session_unread failed: {e}", exc_info=True)
+
+
+async def mark_session_read(session_id: str, user_id: str) -> None:
+    """Clear the ``unread`` flag on a session (user opened it).
+
+    Thin wrapper over ``set_session_unread(..., False)`` — the read verb the
+    app-api ``POST /sessions/{id}/read`` endpoint calls.
+    """
+    await set_session_unread(session_id, user_id, False)
+
+
 async def update_session_activity(
     session_id: str,
     user_id: str,
