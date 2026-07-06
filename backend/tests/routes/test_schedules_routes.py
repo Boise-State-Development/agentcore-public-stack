@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from apis.app_api.schedules import routes as schedules_routes
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.tools.scoped_ids import base_tool_id
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.service import ScheduledPromptLimitExceeded
 from tests.routes.conftest import mock_no_auth
@@ -77,6 +78,13 @@ class FakeRoleService:
 
     async def resolve_user_permissions(self, user):
         return _FakePermissions(tools=self.tools)
+
+    async def filter_requested_tools(self, user, requested):
+        """Mirror AppRoleService.filter_requested_tools' narrow-never-grant."""
+        allowed = set(self.tools)
+        if "*" in allowed:
+            return list(requested)
+        return [t for t in requested if t in allowed or base_tool_id(t) in allowed]
 
 
 def _make_client(
@@ -193,7 +201,13 @@ class TestCreateSchedule:
         (call,) = create_mock.call_args_list
         assert call.kwargs["enabled_tools"] == ["class_search", "web_search"]
 
-    def test_explicit_enabled_tools_bypasses_rbac_resolution(self, monkeypatch):
+    def test_explicit_enabled_tools_intersected_with_rbac(self, monkeypatch):
+        """A granted tool is kept; an ungranted one is dropped, not frozen in.
+
+        FakeRoleService grants {class_search, web_search}; ``gmail_search`` is
+        outside the caller's role and must never reach the stored snapshot —
+        the tool filter downstream performs no RBAC check of its own.
+        """
         client = _make_client(monkeypatch)
         create_mock = AsyncMock(return_value=_make_schedule())
         monkeypatch.setattr(schedules_routes, "create_scheduled_prompt", create_mock)
@@ -206,12 +220,33 @@ class TestCreateSchedule:
                 "cadence": "daily",
                 "hourLocal": 9,
                 "timezone": "America/Boise",
-                "enabledTools": ["gmail_search"],
+                "enabledTools": ["class_search", "gmail_search"],
             },
         )
 
         (call,) = create_mock.call_args_list
-        assert call.kwargs["enabled_tools"] == ["gmail_search"]
+        assert call.kwargs["enabled_tools"] == ["class_search"]
+
+    def test_explicit_ungranted_tools_all_dropped(self, monkeypatch):
+        """A request made entirely of ungranted tools freezes an empty set."""
+        client = _make_client(monkeypatch)
+        create_mock = AsyncMock(return_value=_make_schedule())
+        monkeypatch.setattr(schedules_routes, "create_scheduled_prompt", create_mock)
+
+        client.post(
+            "/schedules",
+            json={
+                "label": "Briefing",
+                "promptText": "Go",
+                "cadence": "daily",
+                "hourLocal": 9,
+                "timezone": "America/Boise",
+                "enabledTools": ["gmail_search", "some_admin_tool"],
+            },
+        )
+
+        (call,) = create_mock.call_args_list
+        assert call.kwargs["enabled_tools"] == []
 
     def test_weekly_without_weekday_is_422(self, monkeypatch):
         client = _make_client(monkeypatch)
@@ -345,6 +380,23 @@ class TestUpdateSchedule:
 
         response = client.patch(f"/schedules/{SCHEDULE_ID}", json={"label": "Renamed"})
         assert response.status_code == 404
+
+    def test_edit_enabled_tools_intersected_with_rbac(self, monkeypatch):
+        """A PATCH is a write into the same snapshot, so it gets the same
+        RBAC intersection — an edit cannot smuggle in an ungranted tool."""
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+        update_mock = AsyncMock(return_value=_make_schedule())
+        monkeypatch.setattr(schedules_routes, "update_scheduled_prompt", update_mock)
+
+        response = client.patch(
+            f"/schedules/{SCHEDULE_ID}",
+            json={"enabledTools": ["web_search", "gmail_search"]},
+        )
+
+        assert response.status_code == 200
+        (call,) = update_mock.call_args_list
+        assert call.kwargs["enabled_tools"] == ["web_search"]
 
     def test_switching_to_weekly_without_weekday_is_422(self, monkeypatch):
         client = _make_client(monkeypatch)

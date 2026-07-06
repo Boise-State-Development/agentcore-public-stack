@@ -19,10 +19,24 @@ from apis.shared.auth.models import User
 from apis.shared.harness.auth import HeadlessAuthError
 from apis.shared.harness.grants import HeadlessGrant
 from apis.shared.harness.models import RunResult, ToolTraceEntry
+from apis.shared.tools.scoped_ids import base_tool_id
 
 from apis.app_api.runs import routes as runs_routes
 
 NOW = int(time.time())
+
+
+class FakeRoleService:
+    """Grants a fixed tool set; mirrors filter_requested_tools' contract."""
+
+    def __init__(self, tools: Optional[list[str]] = None):
+        self.tools = tools if tools is not None else ["class_search", "web_search"]
+
+    async def filter_requested_tools(self, user, requested):
+        allowed = set(self.tools)
+        if "*" in allowed:
+            return list(requested)
+        return [t for t in requested if t in allowed or base_tool_id(t) in allowed]
 
 
 def _user() -> User:
@@ -119,6 +133,7 @@ def _make_client(
     with_session_record: bool = False,
     run_result: Optional[RunResult] = None,
     run_error: Optional[Exception] = None,
+    role_tools: Optional[list[str]] = None,
 ) -> tuple[TestClient, FakeGrantService, list[dict]]:
     monkeypatch.delenv("SKIP_AUTH", raising=False)
     if flag is None:
@@ -134,6 +149,7 @@ def _make_client(
 
     grants = grants or FakeGrantService()
     monkeypatch.setattr(runs_routes, "get_headless_grant_service", lambda: grants)
+    monkeypatch.setattr(runs_routes, "get_app_role_service", lambda: FakeRoleService(role_tools))
 
     run_calls: list[dict] = []
 
@@ -265,6 +281,33 @@ class TestRunNow:
         assert call["enabled_tools"] == ["class_search"]
         assert call["agent_type"] == "chat"
         assert call["trigger"] == "run_now"
+
+    def test_enabled_tools_intersected_with_rbac_before_harness(self, monkeypatch):
+        """A crafted body cannot enable a tool outside the caller's grant.
+
+        FakeRoleService grants {class_search, web_search}; the ungranted
+        ``gmail_search`` must be stripped before the harness (and thus the
+        RBAC-blind tool filter) ever sees it.
+        """
+        client, _, run_calls = _make_client(monkeypatch, with_session_record=True)
+
+        response = client.post(
+            "/runs/now",
+            json={"prompt": "ping", "enabledTools": ["class_search", "gmail_search"]},
+        )
+
+        assert response.status_code == 200
+        (call,) = run_calls
+        assert call["enabled_tools"] == ["class_search"]
+
+    def test_none_enabled_tools_passes_through_as_defaults(self, monkeypatch):
+        """Omitting enabled_tools stays None → harness resolves user defaults."""
+        client, _, run_calls = _make_client(monkeypatch, with_session_record=True)
+
+        assert client.post("/runs/now", json={"prompt": "ping"}).status_code == 200
+
+        (call,) = run_calls
+        assert call["enabled_tools"] is None
 
     def test_create_on_enable_pins_the_live_session_token(self, monkeypatch):
         client, grants, _ = _make_client(monkeypatch, with_session_record=True)

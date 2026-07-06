@@ -45,6 +45,7 @@ from apis.shared.rbac.capabilities import (
     SCHEDULED_RUNS_CAPABILITY,
     user_has_capability,
 )
+from apis.shared.rbac.service import get_app_role_service
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,21 @@ async def run_now(
     """
     await _resolve_grant(request, user)
 
+    # The request body is attacker-controlled within the caller's own session,
+    # and the downstream tool filter performs no RBAC check — so narrow the
+    # requested tools to the caller's actual grant before handing them to the
+    # headless harness. ``None`` keeps "resolve to the user's defaults".
+    enabled_tools = body.enabled_tools
+    if enabled_tools is not None:
+        allowed = await get_app_role_service().filter_requested_tools(user, enabled_tools)
+        if len(allowed) != len(enabled_tools):
+            logger.warning(
+                "Run-now dropped %d requested tool(s) outside user %s's RBAC grant",
+                len(enabled_tools) - len(allowed),
+                user.user_id,
+            )
+        enabled_tools = allowed
+
     try:
         result = await run_agent_headless(
             user_id=user.user_id,
@@ -263,7 +279,7 @@ async def run_now(
             title=body.title,
             model_id=body.model_id,
             rag_assistant_id=body.rag_assistant_id,
-            enabled_tools=body.enabled_tools,
+            enabled_tools=enabled_tools,
             agent_type=body.agent_type,
             trigger="run_now",
         )
