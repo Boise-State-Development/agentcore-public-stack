@@ -68,7 +68,11 @@ describe('ScheduleFormPage', () => {
     TestBed.configureTestingModule({
       imports: [ReactiveFormsModule],
       providers: [
-        provideRouter([]),
+        // Register the route the component navigates to on save/cancel
+        // (`router.navigate(['/schedules'])`); an empty `provideRouter([])`
+        // makes that navigation reject with NG04002 as an unhandled
+        // rejection after the test body, failing the whole vitest process.
+        provideRouter([{ path: 'schedules', children: [] }]),
         { provide: ScheduleService, useValue: mockScheduleService },
         { provide: AssistantService, useValue: mockAssistantService },
         { provide: ToolService, useValue: mockToolService },

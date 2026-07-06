@@ -78,7 +78,13 @@ describe('SchedulesPage', () => {
 
     TestBed.configureTestingModule({
       providers: [
-        provideRouter([]),
+        // Register the routes the component navigates to (new / edit); an
+        // empty provideRouter([]) would make those navigations reject with
+        // NG04002 as unhandled rejections and fail the vitest process.
+        provideRouter([
+          { path: 'schedules/new', children: [] },
+          { path: 'schedules/:scheduleId/edit', children: [] },
+        ]),
         { provide: ScheduleService, useValue: mockScheduleService },
         { provide: GrantService, useValue: mockGrantService },
         { provide: ToastService, useValue: mockToast },
