@@ -161,7 +161,7 @@ binds the same way and is governed the same way:
   distilled entries, not a document corpus — that overlaps the existing RAG/assistant KB.
 - Cross-space linking. A `[[wikilink]]` resolves **within** its space in v1.
 - **Full org-shared memory in the first release** — the storage is *keyed for sharing from day
-  one* (see below), but the grant/collaboration surface is a distinct later phase (PR-6). Sequencing,
+  one* (see below), but the grant/collaboration surface is a distinct later phase (A4). Sequencing,
   not a governance gate — access control is identity-based and inherits the platform posture.
 - Replacing AgentCore Memory or the compaction/summary path — this is additive.
 
@@ -513,29 +513,58 @@ sentence, not a gate.
 
 ---
 
-## Phasing (proposed PRs)
+## Phasing (proposed PRs) — two workstreams
 
-- **PR-1 — Data layer.** ✅ `apis/shared/memory/` (`MemorySpaceStore` + `MemorySpaceService` +
-  `MemoryEntryRef`/`MemorySpace`/`MemoryIndex`/`SpaceMember` models + space-keyed repo +
-  `resolve_permission` + Blank/Chief-of-Staff/Research-Notebook templates).
-  `MemorySpacesConstruct` (CDK) = the S3 bucket + a dedicated `memory-spaces` table with
-  `OwnerIndex`/`MemberIndex` GSIs, wired to both compute roles (readwrite). Unit tests (moto).
-  No runtime wiring. Flag `MEMORY_SPACES_ENABLED` added, default off.
-- **PR-2 — Templates + read path.** Space templates (Chief of Staff / Research Notebook / Blank).
-  Index injection (strategy A) + `memory_read` + `memory_query` tools + `memory` partition in
-  `contextBreakdown`. Gated by the flag.
-- **PR-3 — Binding.** `memorySpaces` on the assistant/agent record; wake-up hydration
-  (`alwaysLoad`, `latest:` resolution); default personal space auto-create.
-- **PR-4 — Write path (agentic, W1).** `memory_write` / `memory_update` + index maintenance +
-  `updated_by` attribution. Round-trips through tool RBAC/registry.
-- **PR-5 — User surface.** `app-api` `/memory/spaces/` CRUD + SPA Memory section (list, per-space
-  panel, create-from-template) + **zip export** (`GET .../export`, streamed, §9).
-- **PR-6 — Sharing.** Membership API + `resolve_permission` on all paths + share dialog (with the
-  scope note) + shared concurrency (optimistic manifest). Access control is identity-based; no
-  content-inspection gate.
-- **PR-7 — Consolidation.** Scheduled/threshold consolidation per space + index cap.
-- **PR-8 — Reflection writes (W2), optional.** Post-turn reflection on `update_after_turn`. Defer
-  until W1 reliability is measured.
+**The boundary (decided 2026-07-07):** this epic delivers the **Memory Space primitive and its
+user-facing "own your data" surface** — the corpus, its store/service API, and the ways a *person*
+manages it (CRUD, export, sharing, the SPA panel). It does **not** deliver the ways an *agent
+consumes* it: the `memory_*` tools, the declarative binding, and the system-prompt index
+injection are **agent-consumption**, and they live in the **Agent / Harness workstream** (below).
+
+Rationale: a Memory Space is the **4th bindable primitive** (alongside tools/skills/KBs). Welding
+its consumption tools/prompt-wiring into the memory epic would bind it to one agent surface
+(today's `inference-api`). Keeping consumption in the Agent/Harness layer lets *any* surface —
+interactive `inference-api`, our headless harness entrypoint, or an adopted managed Harness — bind
+and consume the same primitive. The primitive exposes only `MemorySpaceService`; the agent layer
+calls it.
+
+### Workstream A — Memory Spaces epic (primitive + user surface)
+
+- **A1 — Data layer.** ✅ (PR #582) `apis/shared/memory/` (`MemorySpaceStore` + `MemorySpaceService`
+  + `MemoryEntryRef`/`MemorySpace`/`MemoryIndex`/`SpaceMember` models + space-keyed repo +
+  `resolve_permission` + Blank/Chief-of-Staff/Research-Notebook templates). `MemorySpacesConstruct`
+  (CDK) = the S3 bucket + a dedicated `memory-spaces` table with `OwnerIndex`/`MemberIndex` GSIs,
+  wired to both compute roles (readwrite). moto tests. No runtime wiring. Flag
+  `MEMORY_SPACES_ENABLED`, default off.
+- **A2 — User surface (app-api CRUD).** `app-api` `/memory/spaces/` routes over `MemorySpaceService`
+  (`Depends(get_current_user_from_session)`, router mounted behind the flag): list / create-from-
+  template / get / delete-or-leave, entry read/list/upsert/delete, index read/update. Error
+  translation (`NotFound→404`, `Permission→403`). Route tests.
+- **A3 — Export / download (§9).** `GET /memory/spaces/{id}/export` → streamed `.zip` of the raw
+  markdown (index + entries + `metadata.json`). The "own your data" leg.
+- **A4 — Sharing.** Membership API (`POST|PATCH|DELETE .../shares`) over the `MEMBER#` rows +
+  shared concurrency (optimistic manifest). Access control is identity-based; no content gate.
+- **A5 — SPA Memory panel.** The Memory section: list, per-space view/edit/delete, create-from-
+  template, download `.zip`, share dialog (reuse the assistant-share component + `redesign-tokens`).
+- **A6 — Consolidation.** A maintenance job (scheduled per space, or on index-cap threshold) that
+  merges duplicate entries, fixes stale ones, and prunes the index. Uses `MemorySpaceService`; runs
+  on the shipped scheduler. Primitive-side corpus health, not a per-turn concern.
+
+### Workstream B — Agent / Harness consumption (binds the primitive)
+
+These are **not** part of the memory epic; they are how an agent surface reads/writes a bound space.
+They plug into `inference-api` today and ride whatever run surface a given lane uses.
+
+- **B1 — Binding.** `memorySpaces` declarative config on the assistant/agent record (`spaceId`,
+  `access`, `alwaysLoad`); resolution against the invoking user's grant; default personal-space
+  auto-create. This is the seam that connects an agent to a space.
+- **B2 — Read path.** `memory_read` / `memory_query` tools (over `MemorySpaceService`) + system-
+  prompt index injection (strategy A, the prompt-cache decision) + a `memory` partition in
+  `contextBreakdown`. Wake-up hydration (`alwaysLoad`, `latest:` resolution).
+- **B3 — Write path (agentic, W1).** `memory_write` / `memory_update` tools + `updated_by`
+  attribution, through the tool RBAC/registry.
+- **B4 — Reflection writes (W2), optional.** Post-turn reflection on the `update_after_turn` seam.
+  Defer until W1 reliability is measured.
 
 ---
 
@@ -562,7 +591,7 @@ sentence, not a gate.
 
 ## Validation note
 
-Before/while building PR-2, walk the repo's **own** coding-agent memory (`MEMORY.md` + per-fact
+Before/while building the read path (B2), walk the repo's **own** coding-agent memory (`MEMORY.md` + per-fact
 files + consolidation) **and the live Oliver skill** (`~/Documents/memory/`) end-to-end as the
 reference behavior — both are the exact pattern, already proven, and surface the
 index-maintenance, entry-typing, and wikilink edge cases early.
