@@ -1,0 +1,138 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">
+          Memory Spaces
+        </h1>
+        <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
+          Named markdown "second brains" your agents read and maintain over time.
+        </p>
+      </div>
+      @if (accessible() !== false) {
+        <button
+          type="button"
+          (click)="onCreate()"
+          class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+        >
+          <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+          New space
+        </button>
+      }
+    </div>
+
+    <!-- Feature unavailable (kill switch off) -->
+    @if (accessible() === false) {
+      <div class="mt-10 rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-800">
+        <ng-icon name="heroCircleStack" class="mx-auto size-8 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+        <p class="mt-3 text-sm/6 text-gray-500 dark:text-gray-400">
+          Memory Spaces isn't enabled for your environment yet.
+        </p>
+      </div>
+    } @else {
+      <!-- Error -->
+      @if (error()) {
+        <div class="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+          {{ error() }}
+        </div>
+      }
+
+      <!-- Loading -->
+      @if (loading() && spaces().length === 0) {
+        <div class="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+          @for (row of [0, 1, 2]; track row) {
+            <div class="h-40 animate-pulse rounded-xl border border-gray-200/80 bg-white dark:border-gray-700/60 dark:bg-gray-800/80"></div>
+          }
+        </div>
+        <span class="sr-only" role="status">Loading memory spaces…</span>
+      } @else if (spaces().length === 0) {
+        <!-- Empty -->
+        <div class="mt-10 rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-800">
+          <ng-icon name="heroCircleStack" class="mx-auto size-8 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+          <h2 class="mt-3 text-sm/6 font-semibold text-gray-900 dark:text-white">No memory spaces yet</h2>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            Create one from a template to give an agent a persistent, editable knowledge base.
+          </p>
+          <button
+            type="button"
+            (click)="onCreate()"
+            class="mt-5 inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+          >
+            <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+            New space
+          </button>
+        </div>
+      } @else {
+        <!-- Grid -->
+        <div class="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          @for (space of spaces(); track space.spaceId) {
+            <div
+              class="group relative flex h-full cursor-pointer flex-col rounded-xl border border-gray-200/80 bg-white p-5 transition-all duration-300 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-lg dark:border-gray-700/60 dark:bg-gray-800/80 dark:hover:border-gray-600 dark:hover:shadow-black/20"
+              role="button"
+              tabindex="0"
+              (click)="openSpace(space)"
+              (keydown.enter)="openSpace(space)"
+              (keydown.space)="openSpace(space)"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <h3 class="min-w-0 flex-1 truncate text-base/7 font-semibold text-gray-900 dark:text-white">
+                  {{ space.name }}
+                </h3>
+                <span
+                  class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize"
+                  [class]="space.role === 'owner'
+                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
+                >
+                  {{ space.role }}
+                </span>
+              </div>
+
+              <div class="mt-2">
+                <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                  {{ templateLabel(space.template) }}
+                </span>
+              </div>
+
+              <!-- Actions -->
+              <div class="mt-auto flex items-center gap-1 pt-5">
+                @if (space.role === 'owner') {
+                  <button
+                    type="button"
+                    (click)="onShare(space, $event)"
+                    class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                    [attr.aria-label]="'Share ' + space.name"
+                  >
+                    <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
+                  </button>
+                }
+                <button
+                  type="button"
+                  (click)="onDownload(space, $event)"
+                  [disabled]="exportingId() === space.spaceId"
+                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  [attr.aria-label]="'Download ' + space.name + ' as a zip'"
+                >
+                  <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  (click)="onDeleteOrLeave(space, $event)"
+                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                  [attr.aria-label]="(space.role === 'owner' ? 'Delete ' : 'Leave ') + space.name"
+                >
+                  <ng-icon
+                    [name]="space.role === 'owner' ? 'heroTrash' : 'heroArrowRightStartOnRectangle'"
+                    class="size-4"
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+</div>
