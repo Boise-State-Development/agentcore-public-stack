@@ -1,0 +1,13 @@
+# scheduled-runs Lambda image dependencies (backend/Dockerfile.scheduled-runs).
+# Exact pins per repo policy; versions match backend/uv.lock.
+boto3==1.43.9
+pydantic==2.12.5
+httpx==0.28.1
+bedrock-agentcore==1.9.1
+# Worker-only transitive deps (both handlers share ONE image, and the
+# Dockerfile installs THIS file): the worker imports apis.shared.harness ->
+# apis.shared.sessions_bff, whose cookie.py needs cryptography (AESGCM) and
+# cache.py needs cachetools (TTLCache). The dispatcher itself does not import
+# these, but the shared image must satisfy the worker's import chain.
+cryptography==48.0.1
+cachetools==6.2.4

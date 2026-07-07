@@ -397,12 +397,17 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
                 document_ids=[doc.document_id for doc in docs],
             )
 
-        # 3. Hard-delete assistant record
+        # 3. Delete sync policies eagerly so no schedule outlives the assistant
+        #    (the dispatcher's liveness check is the backstop, not the mechanism)
+        from apis.shared.sync_policies.service import delete_sync_policies_for_assistant
+        await delete_sync_policies_for_assistant(assistant_id)
+
+        # 4. Hard-delete assistant record
         success = await delete_assistant(assistant_id=assistant_id, owner_id=user_id)
         if not success:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
 
-        # 4. Fire-and-forget background cleanup for all documents
+        # 5. Fire-and-forget background cleanup for all documents
         if docs:
             from apis.app_api.documents.services.cleanup_service import cleanup_assistant_documents
             asyncio.ensure_future(cleanup_assistant_documents(assistant_id, docs))

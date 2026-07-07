@@ -53,7 +53,7 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), createNewAbortController: vi.fn() } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn() } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
@@ -163,6 +163,16 @@ describe('ChatRequestService', () => {
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+  });
+
+  it('keys loading and viewed-session state to the submitted session', async () => {
+    const chatState = TestBed.inject(ChatStateService) as any;
+
+    await service.submitChatRequest('Hello', 'session1');
+
+    expect(chatState.setViewedSession).toHaveBeenCalledWith('session1');
+    expect(chatState.setChatLoading).toHaveBeenCalledWith('session1', true);
+    expect(chatState.setLastTurnContinuable).toHaveBeenCalledWith('session1', false);
   });
 
   it('should throw error when no model selected', async () => {

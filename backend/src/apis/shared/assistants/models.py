@@ -22,6 +22,11 @@ class Assistant(BaseModel):
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
     usage_count: int = Field(0, alias="usageCount", description="Number of times used")
+    last_used_at: Optional[str] = Field(
+        None,
+        alias="lastUsedAt",
+        description="ISO 8601 timestamp of last chat use (any user); drives the KB-sync inactivity pause",
+    )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")
     status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Assistant lifecycle status")

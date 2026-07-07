@@ -273,6 +273,10 @@ export function buildAppApiEnvironment(
       ? `https://${config.domainName}/`
       : 'http://localhost:4200/',
     INFERENCE_API_URL: params.inferenceApiRuntimeEndpointUrl,
+    // Kill switch for the headless "Run now" + headless-grant routes
+    // (scheduled-runs PR-1). Cohort access is RBAC (`scheduled-runs`
+    // capability); this only gates feature existence per environment.
+    SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

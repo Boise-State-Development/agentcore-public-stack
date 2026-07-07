@@ -1,0 +1,46 @@
+# kb-sync Lambda image — KB sync dispatcher + worker.
+#
+# One image, two Lambda functions: the CDK construct
+# (infrastructure/lib/constructs/kb-sync/kb-sync-construct.ts) points
+# both functions at this image with different ImageConfig.Command
+# overrides (dispatcher vs worker handler). The command override is
+# function *configuration*, so the workflow's
+# `update-function-code --image-uri` swaps code on both functions
+# without touching their handlers.
+#
+# Deliberately lightweight: the worker only fetches source bytes and
+# stages them to S3 — chunking/embedding stays in the rag-ingestion
+# image, triggered by the staged object's S3 event.
+#
+# Base image digest-pinned, same pin as the other Lambda images (see
+# backend/Dockerfile.rag-ingestion and the supply-chain
+# dockerfile-pinning test).
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins)
+COPY backend/src/apis/app_api/kb_sync/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code — namespace-package layout mirrors backend/src.
+# Keep this surface minimal: apis.shared domains the handlers import,
+# plus the kb_sync package itself. If a handler needs more, COPY it
+# here AND add the path to the kb-sync SOURCE_DIRS in
+# scripts/build/build-one.sh so the content-hash tag notices changes.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/sync_policies/ ${LAMBDA_TASK_ROOT}/apis/shared/sync_policies/
+COPY backend/src/apis/shared/oauth/ ${LAMBDA_TASK_ROOT}/apis/shared/oauth/
+COPY backend/src/apis/shared/embeddings/ ${LAMBDA_TASK_ROOT}/apis/shared/embeddings/
+COPY backend/src/apis/app_api/file_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/file_sources/
+COPY backend/src/apis/app_api/documents/ ${LAMBDA_TASK_ROOT}/apis/app_api/documents/
+COPY backend/src/apis/app_api/web_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/web_sources/
+COPY backend/src/apis/app_api/kb_sync/ ${LAMBDA_TASK_ROOT}/apis/app_api/kb_sync/
+
+# file_sources/service.py, documents/routes.py, and web_sources/routes.py
+# ride along with their packages but must never be imported here — they
+# pull FastAPI, which this image deliberately lacks. The worker uses the
+# oauth primitives, document/crawl services, and the crawler directly.
+
+# Default command: dispatcher. The worker function's CMD is overridden
+# to apis.app_api.kb_sync.worker.lambda_handler by its ImageConfig.
+CMD ["apis.app_api.kb_sync.dispatcher.lambda_handler"]

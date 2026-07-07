@@ -496,6 +496,44 @@ def _build_attachment_guidance(
     return "\n\n".join(parts)
 
 
+def _build_interruption_note(reason: str) -> str:
+    """Reason-driven note prepended to the next turn's prompt when the prior
+    turn was interrupted (see `clear_interrupted_turn`, whose popped reason
+    feeds this).
+
+    Why the note lives HERE and not on the interrupted turn itself: the
+    reason is not knowable at cancellation time — the client's `user_stopped`
+    signal (app-api) races the server-side cancellation backstop
+    (inference-api), and precedence only settles in the session record. By
+    the next turn the marker is authoritative.
+
+    The two reasons carry opposite signal, so the guidance differs:
+    `user_stopped` is deliberate feedback (don't barrel onward);
+    `connection_lost` (or unclassified) is a technical drop (the user likely
+    still wants the answer). The note is prepended to the persisted user
+    message (the `original_message`/displayText split keeps it out of the
+    UI), so it remains an honest in-history record that ages out via
+    compaction rather than a permanent synthetic system turn.
+    """
+    if reason == "user_stopped":
+        guidance = (
+            "The user deliberately stopped your previous response before it "
+            "finished (the last assistant message above is the partial that "
+            "was delivered). Treat that as meaningful feedback — do not "
+            "resume or repeat it on your own; let the user's message below "
+            "set the direction."
+        )
+    else:  # connection_lost / unknown — technical drop, no user intent
+        guidance = (
+            "Your previous response was cut off by a connection interruption "
+            "— the user did not stop it deliberately (the last assistant "
+            "message above is the partial that was delivered). If the user "
+            "asks you to continue, pick up where it left off instead of "
+            "starting over."
+        )
+    return f"<interruption_note>\n{guidance}\n</interruption_note>"
+
+
 async def _build_tabular_inventory(
     session_id: str,
     assistant_id: str | None,
@@ -1002,6 +1040,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # turn that isn't an interrupt-resume — both a fresh turn and a
     # continuation supersede it. If a continuation itself re-truncates, the
     # stream_coordinator intercept re-sets the marker.
+    interrupted_turn_reason: Optional[str] = None
     if not is_resume:
         try:
             from apis.shared.sessions.metadata import clear_truncated_turn
@@ -1009,12 +1048,28 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         except Exception as e:
             logger.error("Failed to clear stale truncated_turn on new turn: %s", e, exc_info=True)
 
+        # Same lifecycle for the interrupted-turn marker: any new non-resume
+        # turn supersedes a prior interruption, so a stale marker can't
+        # resurrect the "response interrupted" state against a turn the user
+        # has moved past. The pop returns the settled reason (user_stopped
+        # beats connection_lost via write precedence) so this same read+write
+        # also drives the one-turn interruption note prepended to the prompt
+        # in the stream generator below.
+        try:
+            from apis.shared.sessions.metadata import clear_interrupted_turn
+            interrupted_turn_reason = await clear_interrupted_turn(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to clear stale interrupted_turn on new turn: %s", e, exc_info=True)
+
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
     # targeted UpdateExpression in update_session_title is race-safe with
-    # the post-stream _update_session_metadata write.
+    # the post-stream _update_session_metadata write. The task handle is
+    # kept so stream_with_quota_warning can push the finished title to the
+    # client mid-stream as a `session_title` SSE event.
+    title_task: Optional["asyncio.Task[str]"] = None
     if is_new_session and input_data.message:
-        asyncio.create_task(
+        title_task = asyncio.create_task(
             generate_conversation_title(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -1182,6 +1237,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # Mark as viewed if this is a shared assistant (not owned)
         if assistant.owner_id != user_id:
             await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
+
+        # KB sync inactivity signal: any user's chat use counts. Throttled
+        # to one write/day inside bump_last_used_at (conditional update);
+        # the winning bump also wakes any inactivity-paused sync policies.
+        # Best-effort — a bookkeeping failure must never break a chat turn.
+        try:
+            from apis.shared.assistants.service import bump_last_used_at
+            from apis.shared.sync_policies.service import resume_inactive_policies
+
+            if await bump_last_used_at(input_data.rag_assistant_id):
+                await resume_inactive_policies(input_data.rag_assistant_id)
+        except Exception as bump_err:
+            logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
 
         # 3. Search assistant knowledge base
         logger.info("Starting knowledge base search for assistant...")
@@ -1525,6 +1593,36 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # Create stream with optional quota warning injection
         async def stream_with_quota_warning() -> AsyncGenerator[str, None]:
             """Wrap agent stream to inject quota warning at start if needed"""
+            # One-shot `session_title` SSE: once the concurrent title task
+            # (kicked off before the quota check on first turns) finishes,
+            # push the title to the client so the sidebar/header rename in
+            # parallel with the pending response instead of at stream end.
+            # Checked between agent events — never awaited, so it adds no
+            # latency; a stream that outruns Nova Micro simply never emits
+            # and the SPA's post-close metadata refresh covers it.
+            title_emitted = False
+
+            def _session_title_sse() -> Optional[str]:
+                nonlocal title_emitted
+                if title_emitted or title_task is None or not title_task.done():
+                    return None
+                title_emitted = True
+                try:
+                    generated_title = title_task.result()
+                except Exception as title_err:  # noqa: BLE001 - cancelled/failed task must not break the stream
+                    logger.warning("Title task unavailable for SSE emit: %s", title_err)
+                    return None
+                # Generation failures return the "New Conversation"
+                # placeholder — nothing worth pushing over the wire.
+                if not generated_title or generated_title == "New Conversation":
+                    return None
+                payload = {
+                    "type": "session_title",
+                    "sessionId": input_data.session_id,
+                    "title": generated_title,
+                }
+                return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
+
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
@@ -1579,6 +1677,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 if pending_ctx_block:
                     final_message = f"{pending_ctx_block}\n\n{final_message}"
 
+                # Interrupted-turn context: the prior turn ended early (Stop /
+                # refresh / dropped connection) and its marker was popped at
+                # turn start — tell the model, with reason-appropriate
+                # guidance, before it reads the new message. Prepended last so
+                # the note sits topmost. Rides the same `original_message`
+                # displayText split as the ctx block, so the user never sees
+                # it while it stays an honest part of persisted history.
+                # Continuation turns skip this (Strands ignores the message
+                # there — the model just continues the persisted partial).
+                if interrupted_turn_reason:
+                    final_message = (
+                        f"{_build_interruption_note(interrupted_turn_reason)}\n\n{final_message}"
+                    )
+
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
                 or bool(files_to_send)               # File attachments
@@ -1603,6 +1715,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 continue_truncated=is_continuation,
             ):
                 yield event
+                # Interleave the finished title between agent events (same
+                # non-blocking drain pattern as the MCP Apps broker in the
+                # stream coordinator). SSE events are self-delimited, so
+                # injecting between events is always frame-safe.
+                title_sse = _session_title_sse()
+                if title_sse:
+                    yield title_sse
 
             # Resume bookkeeping: any interrupt that was submitted in this
             # request and is no longer present in the agent's interrupt state

@@ -1,0 +1,43 @@
+# scheduled-runs Lambda image — dispatcher + worker for the F3 scheduled
+# trigger (docs/specs/scheduled-runs-phase-b-brief.md, docs/specs/
+# scheduled-agent-runs.md).
+#
+# One image, two Lambda functions: the CDK construct
+# (infrastructure/lib/constructs/scheduled-runs/scheduled-runs-construct.ts)
+# points both functions at this image with different ImageConfig.Command
+# overrides (dispatcher vs worker handler). The command override is
+# function *configuration*, so the workflow's
+# `update-function-code --image-uri` swaps code on both functions
+# without touching their handlers. Mirrors backend/Dockerfile.kb-sync,
+# except the two handlers are plain top-level modules (dispatcher.py /
+# worker.py) rather than living under the apis.* namespace package — the
+# house rule (CLAUDE.md) keeps standalone Lambda code out of apis/, so
+# there is no natural dotted path to reuse here the way kb-sync reuses
+# apis.app_api.kb_sync.
+#
+# Base image digest-pinned, same pin as the other Lambda images (see
+# backend/Dockerfile.kb-sync and the supply-chain dockerfile-pinning test).
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins)
+COPY backend/src/lambdas/scheduled_runs_dispatcher/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code — namespace-package layout mirrors backend/src for the
+# apis.shared modules the handlers import. If a handler needs more, COPY
+# it here AND add the path to the scheduled-runs SOURCE_DIRS in
+# scripts/build/build-one.sh so the content-hash tag notices changes.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/harness/ ${LAMBDA_TASK_ROOT}/apis/shared/harness/
+COPY backend/src/apis/shared/scheduled_prompts/ ${LAMBDA_TASK_ROOT}/apis/shared/scheduled_prompts/
+COPY backend/src/apis/shared/sessions_bff/ ${LAMBDA_TASK_ROOT}/apis/shared/sessions_bff/
+COPY backend/src/apis/shared/sessions/ ${LAMBDA_TASK_ROOT}/apis/shared/sessions/
+
+# The two handlers themselves, as plain top-level modules.
+COPY backend/src/lambdas/scheduled_runs_dispatcher/dispatcher.py ${LAMBDA_TASK_ROOT}/dispatcher.py
+COPY backend/src/lambdas/scheduled_runs_worker/worker.py ${LAMBDA_TASK_ROOT}/worker.py
+
+# Default command: dispatcher. The worker function's CMD is overridden
+# to worker.lambda_handler by its ImageConfig.
+CMD ["dispatcher.lambda_handler"]

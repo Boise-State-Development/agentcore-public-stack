@@ -3,6 +3,7 @@
 Contains business logic for chat operations, including agent creation and management.
 """
 
+import asyncio
 import json
 import logging
 import hashlib
@@ -372,12 +373,16 @@ async def generate_conversation_title(
 
         logger.info("🎯 Generating title (input length: %d chars)", len(truncated_input))
 
-        # Call Bedrock Nova Micro
-        response = bedrock_client.converse(
+        # Call Bedrock Nova Micro in a worker thread. boto3's converse() is
+        # synchronous — awaited inline it would block the event loop for the
+        # whole Nova round-trip, stalling the agent stream this task runs
+        # concurrently with.
+        response = await asyncio.to_thread(
+            bedrock_client.converse,
             modelId="us.amazon.nova-micro-v1:0",
             messages=request_body["messages"],
             system=request_body["system"],
-            inferenceConfig=request_body["inferenceConfig"]
+            inferenceConfig=request_body["inferenceConfig"],
         )
 
         # Extract generated title from response

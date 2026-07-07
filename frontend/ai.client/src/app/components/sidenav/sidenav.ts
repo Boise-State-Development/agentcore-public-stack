@@ -1,4 +1,4 @@
-import { Component, inject, computed } from '@angular/core';
+import { Component, effect, inject, computed } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { SessionList } from './components/session-list/session-list';
 import { SessionService } from '../../session/services/session/session.service';
@@ -7,6 +7,7 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
+import { ScheduleService } from '../../schedules/services/schedule.service';
 
 @Component({
   selector: 'app-sidenav',
@@ -18,6 +19,7 @@ export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
   private bffSession = inject(BffSessionService);
+  private scheduleService = inject(ScheduleService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -37,6 +39,27 @@ export class Sidenav {
   // Check if user has system_admin AppRole (resolved from backend RBAC)
   protected isAdmin = this.userService.isAdmin;
 
+  /**
+   * Whether to show the "Scheduled runs" nav entry. There is no dedicated
+   * client-side capability signal for `scheduled-runs` yet, so this rides
+   * the schedules list call itself: a successful (even empty) list means
+   * the caller has the capability and the kill switch is on; a 403/404
+   * flips `accessible$` to false and the nav entry stays hidden. `null`
+   * (not yet resolved) also hides it, so the item doesn't flash in before
+   * disappearing.
+   */
+  readonly showSchedules = computed(() => this.scheduleService.accessible$() === true);
+
+  constructor() {
+    // Kick off the accessibility probe once the user is authenticated —
+    // mirrors UserService's own permissions-fetch gating.
+    effect(() => {
+      if (this.userService.currentUser()) {
+        void this.scheduleService.loadSchedules();
+      }
+    });
+  }
+
   newSession() {
     this.sidenavService.close();
     this.router.navigate(['']);
@@ -45,6 +68,11 @@ export class Sidenav {
   navigateToAssistants() {
     this.sidenavService.close();
     this.router.navigate(['/assistants']);
+  }
+
+  navigateToSchedules() {
+    this.sidenavService.close();
+    this.router.navigate(['/schedules']);
   }
 
   toggleCollapse() {

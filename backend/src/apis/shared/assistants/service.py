@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from .models import Assistant
@@ -291,6 +291,46 @@ async def resolve_assistant_permission(
             return assistant, share_permission
 
     return assistant, None
+
+
+async def bump_last_used_at(assistant_id: str, throttle_hours: int = 24) -> bool:
+    """Record that an assistant was used in chat, throttled to one write
+    per `throttle_hours`.
+
+    Drives the KB-sync inactivity guard (docs/specs/assistant-kb-sync.md
+    §7.3). A conditional write keeps concurrent chat turns from stampeding:
+    only the caller that actually advances the stale timestamp gets True —
+    that winner is responsible for resuming any paused_inactive policies.
+    Any user's use counts, not just the owner's. Never raises.
+    """
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        return False
+
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        now_dt = datetime.now(timezone.utc)
+        floor = (now_dt - timedelta(hours=throttle_hours)).isoformat() + "Z"
+        table = boto3.resource("dynamodb").Table(assistants_table)
+        table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"},
+            UpdateExpression="SET lastUsedAt = :now",
+            ExpressionAttributeValues={":now": now_dt.isoformat() + "Z", ":floor": floor},
+            ConditionExpression=(
+                "attribute_exists(PK) AND (attribute_not_exists(lastUsedAt) OR lastUsedAt < :floor)"
+            ),
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False  # fresh enough, or assistant gone — nothing to do
+        logger.warning(f"Failed to bump lastUsedAt for {assistant_id}: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to bump lastUsedAt for {assistant_id}: {e}")
+        return False
 
 
 async def assistant_exists(assistant_id: str) -> bool:

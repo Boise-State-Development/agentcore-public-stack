@@ -29,10 +29,10 @@ describe('ChatHttpService', () => {
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
-        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn() } },
-        { provide: StreamParserService, useValue: {} },
-        { provide: ChatStateService, useValue: { isStreaming: signal(false), streamingSessionId: signal(null), abortCurrentRequest: vi.fn(), setChatLoading: vi.fn(), resetState: vi.fn(), getAbortController: vi.fn().mockReturnValue(new AbortController()) } },
-        { provide: MessageMapService, useValue: {} },
+        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}) } },
+        { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn() } },
+        { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()) } },
+        { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
         { provide: ErrorService, useValue: { handleHttpError: vi.fn() } },
       ],
     });
@@ -59,10 +59,89 @@ describe('ChatHttpService', () => {
     expect(result.title).toBe('Generated Title');
   });
 
-  it('should cancel chat request', () => {
-    service.cancelChatRequest();
-    expect(chatStateService.abortCurrentRequest).toHaveBeenCalled();
-    expect(chatStateService.setChatLoading).toHaveBeenCalledWith(false);
-    expect(chatStateService.resetState).toHaveBeenCalled();
+  it('should cancel only the target session and tear down its streaming state', () => {
+    const messageMap = TestBed.inject(MessageMapService) as any;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+
+    service.cancelChatRequest('s1');
+
+    expect(chatStateService.abortRequest).toHaveBeenCalledWith('s1');
+    expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    expect(messageMap.endStreaming).toHaveBeenCalledWith('s1');
+    vi.restoreAllMocks();
+  });
+
+  it('fires a keepalive user_stopped signal and reflects the interruption locally on cancel', () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 204 }));
+
+    service.cancelChatRequest('s1');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe('http://localhost:8000/sessions/s1/interrupt');
+    expect(init?.method).toBe('POST');
+    expect(init?.keepalive).toBe(true);
+    expect(init?.credentials).toBe('include');
+    expect(JSON.parse(init?.body as string)).toEqual({ reason: 'user_stopped' });
+
+    // The chip reflects locally without waiting for a reload.
+    expect(chatStateService.setLastTurnInterrupted).toHaveBeenCalledWith('s1', true, 'user_stopped');
+    vi.restoreAllMocks();
+  });
+
+  it('a failed stop signal never blocks the Stop teardown', () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+
+    expect(() => service.cancelChatRequest('s1')).not.toThrow();
+    expect(chatStateService.abortRequest).toHaveBeenCalledWith('s1');
+    vi.restoreAllMocks();
+  });
+
+  it('re-seeds the session cost badge after a stop once the backend persisted the interrupted turn', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    const sessionSvc = TestBed.inject(SessionService) as any;
+    sessionSvc.getSessionMetadata = vi
+      .fn()
+      .mockResolvedValue({ totalCost: 0.0123, lastContextTokens: 4200, contextWindow: 200000 });
+
+    service.cancelChatRequest('s1');
+
+    // The refresh is delayed to let the teardown write land, then awaits the fetch.
+    await vi.runAllTimersAsync();
+
+    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledWith('s1');
+    expect(chatStateService.seedSessionAggregates).toHaveBeenCalledWith('s1', {
+      totalCost: 0.0123,
+      lastContextTokens: 4200,
+      contextWindow: 200000,
+    });
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('retries the cost refresh once when the interrupted-turn write has not landed yet', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    const sessionSvc = TestBed.inject(SessionService) as any;
+    // First read races the teardown write (empty aggregates); second succeeds.
+    sessionSvc.getSessionMetadata = vi
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockResolvedValue({ totalCost: 0.02, lastContextTokens: 100, contextWindow: 200000 });
+
+    service.cancelChatRequest('s1');
+    await vi.runAllTimersAsync();
+
+    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(2);
+    expect(chatStateService.seedSessionAggregates).toHaveBeenCalledWith('s1', {
+      totalCost: 0.02,
+      lastContextTokens: 100,
+      contextWindow: 200000,
+    });
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 });

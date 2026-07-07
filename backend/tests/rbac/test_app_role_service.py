@@ -329,3 +329,78 @@ async def test_only_enabled_roles_merged(service, mock_app_role_repo, mock_app_r
     assert "tool_a" in perms.tools
     assert "tool_secret" not in perms.tools
     assert "viewer" not in perms.app_roles
+
+
+# ---------------------------------------------------------------------------
+# filter_requested_tools — narrow-never-grant intersection of a client list
+# ---------------------------------------------------------------------------
+
+def _wire_single_role(mock_app_role_repo, role):
+    """Point the mock repo at one role mapped from the user's 'Editor' JWT role."""
+    mock_app_role_repo.get_roles_for_jwt_role.side_effect = lambda r: (
+        [role.role_id] if r == "Editor" else []
+    )
+    mock_app_role_repo.get_role.side_effect = lambda rid: (
+        role if rid == role.role_id else None
+    )
+
+
+@pytest.mark.asyncio
+async def test_filter_requested_tools_drops_ungranted(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """A requested tool outside the user's grant is silently dropped."""
+    _wire_single_role(mock_app_role_repo, make_app_role(role_id="editor", tools=["tool_a", "tool_b"]))
+
+    result = await service.filter_requested_tools(user, ["tool_a", "tool_secret", "tool_b"])
+
+    assert result == ["tool_a", "tool_b"]
+
+
+@pytest.mark.asyncio
+async def test_filter_requested_tools_preserves_caller_order(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """The caller's ordering is preserved, not the grant's."""
+    _wire_single_role(mock_app_role_repo, make_app_role(role_id="editor", tools=["tool_a", "tool_b", "tool_c"]))
+
+    result = await service.filter_requested_tools(user, ["tool_c", "tool_a"])
+
+    assert result == ["tool_c", "tool_a"]
+
+
+@pytest.mark.asyncio
+async def test_filter_requested_tools_wildcard_passes_everything(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """A ``*`` grant admits any requested tool (including ones not enumerated)."""
+    _wire_single_role(mock_app_role_repo, make_app_role(role_id="admin", tools=["*"]))
+
+    requested = ["tool_a", "gateway_anything", "some_admin_tool"]
+    result = await service.filter_requested_tools(user, requested)
+
+    assert result == requested
+
+
+@pytest.mark.asyncio
+async def test_filter_requested_tools_scoped_id_allowed_by_base_grant(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """A scoped id (base::tool) passes when its base server id is granted."""
+    _wire_single_role(mock_app_role_repo, make_app_role(role_id="editor", tools=["gateway_wikipedia"]))
+
+    result = await service.filter_requested_tools(user, ["gateway_wikipedia::search"])
+
+    assert result == ["gateway_wikipedia::search"]
+
+
+@pytest.mark.asyncio
+async def test_filter_requested_tools_empty_grant_drops_all(
+    service, mock_app_role_repo, make_app_role, user
+):
+    """No grant means an empty result — never a passthrough."""
+    _wire_single_role(mock_app_role_repo, make_app_role(role_id="editor", tools=[]))
+
+    result = await service.filter_requested_tools(user, ["tool_a", "tool_b"])
+
+    assert result == []

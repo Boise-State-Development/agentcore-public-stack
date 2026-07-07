@@ -55,6 +55,25 @@ describe('AuthTablesConstruct — detailed', () => {
     });
   });
 
+  it('BFFSessions table has the sparse HeadlessGrantUserIndex GSI', () => {
+    // Backs apis/shared/harness/grants.py — per-owner headless-grant lookup.
+    // Sparse: only HEADLESS-GRANT# items carry grant_user_id, so session
+    // rows never project into it.
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-bff-sessions',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'HeadlessGrantUserIndex',
+          KeySchema: [
+            { AttributeName: 'grant_user_id', KeyType: 'HASH' },
+            { AttributeName: 'created_at', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
+      ]),
+    });
+  });
+
   it('Users table has 4 GSIs', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       TableName: 'test-project-users',
@@ -303,12 +322,28 @@ describe('RagDataConstruct — detailed', () => {
     });
   });
 
-  it('assistants table has 3 GSIs', () => {
+  it('assistants table has 4 GSIs', () => {
     t.hasResourceProperties('AWS::DynamoDB::Table', {
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({ IndexName: 'OwnerStatusIndex' }),
         Match.objectLike({ IndexName: 'VisibilityStatusIndex' }),
         Match.objectLike({ IndexName: 'SharedWithIndex' }),
+        Match.objectLike({ IndexName: 'DueSyncIndex' }),
+      ]),
+    });
+  });
+
+  it('DueSyncIndex is keyed on GSI4_PK/GSI4_SK with full projection', () => {
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'DueSyncIndex',
+          KeySchema: [
+            { AttributeName: 'GSI4_PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI4_SK', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
       ]),
     });
   });

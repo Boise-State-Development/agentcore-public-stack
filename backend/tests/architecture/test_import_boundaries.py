@@ -171,6 +171,54 @@ class TestSharedIsolation:
         )
 
 
+class TestScheduledRunsLeanImageIsImportable:
+    """The scheduled-runs Lambda image must not import agents/ or strands.
+
+    ``backend/Dockerfile.scheduled-runs`` bundles only a handful of
+    ``apis.shared`` subpackages plus the two Lambda handlers — it deliberately
+    omits the ``agents``/``strands`` packages to stay small. Any import of
+    those (top level *or* lazy — a deferred import still crashes at call time
+    in the lean image) breaks the dispatcher/worker at runtime. This test is
+    the guard that would have caught the ``ModuleNotFoundError: No module
+    named 'agents'`` that shipped in the first cut of the worker.
+
+    Keep ``_BUNDLED_DIRS`` in lockstep with the ``COPY`` lines in
+    ``backend/Dockerfile.scheduled-runs`` and the ``scheduled-runs``
+    ``SOURCE_DIRS`` in ``scripts/build/build-one.sh``.
+    """
+
+    # Paths (relative to backend/src) the scheduled-runs image COPYs in.
+    _BUNDLED_DIRS = (
+        Path("apis/shared/harness"),
+        Path("apis/shared/scheduled_prompts"),
+        Path("apis/shared/sessions_bff"),
+        Path("apis/shared/sessions"),
+        Path("lambdas/scheduled_runs_dispatcher"),
+        Path("lambdas/scheduled_runs_worker"),
+    )
+
+    def test_no_agents_or_strands_imports(self):
+        violations: List[str] = []
+        for rel_dir in self._BUNDLED_DIRS:
+            source = _BACKEND_SRC / rel_dir
+            if not source.exists():
+                pytest.skip(f"{rel_dir} not found")
+            violations += _find_violations(
+                source,
+                {"agents", "strands"},
+                "scheduled-runs lean image → agents/strands (unavailable in image)",
+            )
+
+        assert violations == [], (
+            "The scheduled-runs Lambda image bundles modules that import "
+            "agents/ or strands, which are NOT in the image:\n"
+            + "\n".join(violations)
+            + "\n\nMove the needed helper into a dependency-free apis.shared "
+            "leaf (see apis/shared/sessions/preview.py), or add the package to "
+            "the image requirements if it truly belongs there."
+        )
+
+
 class TestAppApiDoesNotImportInferenceApi:
     """app_api must not import from inference_api.
 

@@ -56,7 +56,14 @@ import {
 } from '../components/web-source-dialog.component';
 import { FileSourceService } from '../services/file-source.service';
 import { WebSourceService } from '../services/web-source.service';
+import { SyncPolicyService } from '../services/sync-policy.service';
 import { FileSourceConnector } from '../models/file-source.model';
+import { CrawlJob } from '../models/web-source.model';
+import { SyncPolicy, SyncSourceType } from '../models/sync-policy.model';
+import {
+  SyncPolicyControlComponent,
+  SyncIntervalSelection,
+} from '../components/sync-policy-control.component';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
@@ -74,6 +81,7 @@ import { ToastService } from '../../services/toast/toast.service';
     PickerComponent,
     CdkOverlayOrigin,
     CdkConnectedOverlay,
+    SyncPolicyControlComponent,
   ],
   providers: [
     provideIcons({
@@ -100,6 +108,7 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   private documentService = inject(DocumentService);
   private fileSourceService = inject(FileSourceService);
   private webSourceService = inject(WebSourceService);
+  private syncPolicyService = inject(SyncPolicyService);
   private readonly connectorsService = inject(UserConnectorsService);
   private readonly consentService = inject(OAuthConsentService);
   readonly sidenavService = inject(SidenavService);
@@ -166,6 +175,47 @@ export class AssistantFormPage implements OnInit, OnDestroy {
   readonly webCrawlActive = signal<boolean>(false);
   private crawlWatcherHandle: ReturnType<typeof setInterval> | null = null;
 
+  // ── KB sync policies ────────────────────────────────────────────────────
+
+  /** Sync policies covering this assistant's sources. Loaded for owners/editors only. */
+  readonly syncPolicies = signal<SyncPolicy[]>([]);
+  /** All crawl jobs (any status) — completed crawls are the syncable web sources. */
+  readonly webCrawls = signal<CrawlJob[]>([]);
+  /**
+   * True while the crawl catalog is doing its initial fetch. Mirrors
+   * {@link isLoadingDocuments} so both knowledge lists share one loading gate
+   * and reveal together — previously crawls had no loading flag, so the Web
+   * sources list popped into existence after its network round-trip.
+   */
+  readonly isLoadingCrawls = signal<boolean>(false);
+  /** Source refs (document/crawl ids) with a sync mutation in flight. */
+  readonly syncBusySourceRefs = signal<Set<string>>(new Set());
+  /** Provider whose consent popup was opened from a "Reconnect" affordance. */
+  readonly reconnectingProviderId = signal<string | null>(null);
+
+  /**
+   * Sync controls are owner/editor-only: the backend edit-gates the whole
+   * sync-policy surface, so viewers never see the controls (and we never
+   * issue the list call that would 403 for them).
+   */
+  readonly canManageSync = computed(
+    () => this.mode() === 'edit' && this.userPermission() !== 'viewer',
+  );
+
+  private readonly policiesBySourceRef = computed(
+    () => new Map(this.syncPolicies().map((p) => [p.sourceRef, p])),
+  );
+
+  /**
+   * Crawls that can carry a sync policy. A `running` crawl is excluded —
+   * its page set is still forming — but it still renders in the web-sources
+   * list with a progress note.
+   */
+  readonly syncableCrawlStatuses: ReadonlySet<CrawlJob['status']> = new Set([
+    'complete',
+    'failed',
+  ]);
+
   /**
    * True once at least one document exists, is uploading, or is still
    * loading. Drives swapping the full drop zone for a compact "Add files"
@@ -175,8 +225,28 @@ export class AssistantFormPage implements OnInit, OnDestroy {
     () =>
       this.uploadedDocuments().length > 0 ||
       this.currentUpload() !== null ||
-      this.isLoadingDocuments(),
+      this.isLoadingDocuments() ||
+      this.isLoadingCrawls(),
   );
+
+  /**
+   * Single initial-load gate for the two knowledge lists (Web sources +
+   * Uploaded Documents). While true a skeleton stands in for both; when it
+   * clears they render together, so neither list pops in after the other.
+   */
+  readonly isLoadingKnowledge = computed(
+    () => this.isLoadingDocuments() || this.isLoadingCrawls(),
+  );
+
+  /**
+   * Varied bar widths (percent) for the knowledge skeleton rows, so the
+   * placeholder reads as content rather than a repeating pattern.
+   */
+  readonly skeletonRows: ReadonlyArray<{ title: number; meta: number }> = [
+    { title: 58, meta: 34 },
+    { title: 72, meta: 42 },
+    { title: 46, meta: 28 },
+  ];
 
   form!: FormGroup;
 
@@ -211,6 +281,20 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       if (!completion || !completion.providerId) {
         return;
       }
+      // A consent kicked off from a sync-control "Reconnect" affordance:
+      // a fresh consent auto-resumes paused_reauth policies server-side,
+      // so all that's left here is to refetch and confirm.
+      if (completion.providerId === this.reconnectingProviderId()) {
+        this.consentService.acknowledgeCompletion();
+        this.finishReconnect();
+        if (completion.status === 'success') {
+          this.toast.success('Reconnected — sync will resume automatically.');
+          void this.loadSyncData();
+        } else {
+          this.toast.error(completion.error ?? 'Could not reconnect the content source.');
+        }
+        return;
+      }
       const connecting = this.connectingProviderId();
       if (completion.providerId !== connecting) {
         return;
@@ -233,6 +317,10 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       if (connecting && this.connectPhase() === 'awaiting' && !inFlight.has(connecting)) {
         this.connectingProviderId.set(null);
         this.connectPhase.set(null);
+      }
+      const reconnecting = this.reconnectingProviderId();
+      if (reconnecting && this.reconnectAwaiting && !inFlight.has(reconnecting)) {
+        this.finishReconnect();
       }
     });
   }
@@ -258,9 +346,17 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       status: ['DRAFT'],
     });
 
-    // If editing, load the assistant data and documents
+    // If editing, load the assistant data and documents. Sync data waits on
+    // loadAssistant because it needs the resolved userPermission — the
+    // sync-policy surface is edit-gated and viewers must not trigger a 403.
     if (id) {
-      this.loadAssistant(id);
+      // Raise both knowledge-load flags synchronously so the very first paint
+      // shows the skeleton (not an empty flash). loadSyncData waits on the
+      // resolved permission, so isLoadingCrawls holds the gate until then; it
+      // is cleared there, including on the viewer early-return.
+      this.isLoadingDocuments.set(true);
+      this.isLoadingCrawls.set(true);
+      void this.loadAssistant(id).then(() => this.loadSyncData());
       this.loadDocuments();
     }
 
@@ -644,6 +740,9 @@ export class AssistantFormPage implements OnInit, OnDestroy {
       this.toast.success('Crawling web content…');
       await this.loadDocuments();
       this.startCrawlWatcher();
+      // Surface the new crawl in the web-sources list right away (it shows
+      // as running until the watcher sees it finish).
+      void this.loadSyncData();
     }
   }
 
@@ -673,6 +772,9 @@ export class AssistantFormPage implements OnInit, OnDestroy {
           // tick and the server reporting "no crawls running" — still
           // incremental, so no list-wide refresh.
           await this.discoverNewDocuments();
+          // The crawl just went terminal — refresh the web-sources list so
+          // its row flips from "Crawling…" to a syncable source.
+          void this.loadSyncData();
           return;
         }
         await this.discoverNewDocuments();
@@ -891,12 +993,268 @@ export class AssistantFormPage implements OnInit, OnDestroy {
 
     try {
       await this.documentService.deleteDocument(assistantId, documentId);
+      // The backend cascades sync policies with their source — mirror that
+      // locally so a covering policy's control disappears with the row.
+      const covering = this.syncPolicyFor(documentId);
+      if (covering) {
+        this.removePolicy(covering.policyId);
+      }
     } catch (error) {
       this.uploadedDocuments.set(previousDocs);
       const message =
         error instanceof Error ? error.message : 'Failed to delete document.';
       this.toast.error(message);
     }
+  }
+
+  // ── KB sync policy actions ──────────────────────────────────────────────
+
+  /** True while the reconnect consent popup is open (guards the abort effect). */
+  private reconnectAwaiting = false;
+  /** Source ref whose row is busy because of an in-flight reconnect. */
+  private reconnectSourceRef: string | null = null;
+
+  /**
+   * Load sync policies + the crawl catalog for owners/editors. Best-effort:
+   * the sync surface is secondary to the document editor, so a failure logs
+   * and leaves the controls at their previous state instead of blocking.
+   */
+  private async loadSyncData(): Promise<void> {
+    const assistantId = this.assistantId();
+    if (!assistantId || !this.canManageSync()) {
+      // Viewers (and create mode) never load crawls — release the gate so the
+      // document list can reveal.
+      this.isLoadingCrawls.set(false);
+      return;
+    }
+    try {
+      const [policies, crawls] = await Promise.allSettled([
+        this.syncPolicyService.listPolicies(assistantId),
+        this.webSourceService.listCrawls(assistantId),
+      ]);
+      if (policies.status === 'fulfilled') {
+        this.syncPolicies.set(policies.value);
+      } else {
+        console.error('Error loading sync policies:', policies.reason);
+      }
+      if (crawls.status === 'fulfilled') {
+        this.webCrawls.set(crawls.value);
+      } else {
+        console.error('Error loading web sources:', crawls.reason);
+      }
+    } finally {
+      this.isLoadingCrawls.set(false);
+    }
+  }
+
+  syncPolicyFor(sourceRef: string): SyncPolicy | null {
+    return this.policiesBySourceRef().get(sourceRef) ?? null;
+  }
+
+  isSyncBusy(sourceRef: string): boolean {
+    return this.syncBusySourceRefs().has(sourceRef);
+  }
+
+  /**
+   * A document is a syncable Drive-import source when it carries import
+   * provenance from a real connector. Web pages carry the sentinel
+   * connector id 'web' — those sync at the crawl level, not per page.
+   */
+  isDriveSyncable(doc: Document): boolean {
+    return !!doc.sourceFileId && !!doc.sourceConnectorId && doc.sourceConnectorId !== 'web';
+  }
+
+  isCrawlSyncable(crawl: CrawlJob): boolean {
+    return this.syncableCrawlStatuses.has(crawl.status);
+  }
+
+  /** Provider display name for a document's reconnect affordance. */
+  reconnectLabelForDocument(doc: Document): string {
+    const provider = this.fileSources().find((s) => s.providerId === doc.sourceConnectorId);
+    return provider?.displayName ?? '';
+  }
+
+  async onSyncIntervalSelected(
+    sourceType: SyncSourceType,
+    sourceRef: string,
+    selection: SyncIntervalSelection,
+  ): Promise<void> {
+    const assistantId = this.assistantId();
+    if (!assistantId) {
+      return;
+    }
+    const existing = this.syncPolicyFor(sourceRef);
+    this.setSyncBusy(sourceRef, true);
+    try {
+      if (selection === 'manual') {
+        if (existing) {
+          await this.syncPolicyService.deletePolicy(assistantId, existing.policyId);
+          this.removePolicy(existing.policyId);
+        }
+      } else if (existing) {
+        this.upsertPolicy(
+          await this.syncPolicyService.updatePolicy(assistantId, existing.policyId, {
+            interval: selection,
+          }),
+        );
+      } else {
+        this.upsertPolicy(
+          await this.syncPolicyService.createPolicy(assistantId, {
+            sourceType,
+            sourceRef,
+            interval: selection,
+          }),
+        );
+      }
+    } catch (error) {
+      this.toastSyncError(error, 'Could not update sync settings.');
+      // A duplicate/not-found conflict means our local view is stale — converge.
+      void this.loadSyncData();
+    } finally {
+      this.setSyncBusy(sourceRef, false);
+    }
+  }
+
+  async onSyncPause(sourceRef: string): Promise<void> {
+    await this.patchSyncState(sourceRef, 'paused_user');
+  }
+
+  async onSyncResume(sourceRef: string): Promise<void> {
+    await this.patchSyncState(sourceRef, 'active');
+  }
+
+  private async patchSyncState(
+    sourceRef: string,
+    state: 'active' | 'paused_user',
+  ): Promise<void> {
+    const assistantId = this.assistantId();
+    const existing = this.syncPolicyFor(sourceRef);
+    if (!assistantId || !existing) {
+      return;
+    }
+    this.setSyncBusy(sourceRef, true);
+    try {
+      this.upsertPolicy(
+        await this.syncPolicyService.updatePolicy(assistantId, existing.policyId, { state }),
+      );
+    } catch (error) {
+      this.toastSyncError(
+        error,
+        state === 'active' ? 'Could not resume sync.' : 'Could not pause sync.',
+      );
+      void this.loadSyncData();
+    } finally {
+      this.setSyncBusy(sourceRef, false);
+    }
+  }
+
+  async onSyncRunNow(sourceRef: string): Promise<void> {
+    const assistantId = this.assistantId();
+    const existing = this.syncPolicyFor(sourceRef);
+    if (!assistantId || !existing) {
+      return;
+    }
+    this.setSyncBusy(sourceRef, true);
+    try {
+      this.upsertPolicy(await this.syncPolicyService.runNow(assistantId, existing.policyId));
+      this.toast.success('Sync requested — it will run within about 15 minutes.');
+    } catch (error) {
+      // 429 (cooldown) and 409 (not active) both carry a user-appropriate
+      // detail message from the server — surface it as-is.
+      this.toastSyncError(error, 'Could not request a sync.');
+    } finally {
+      this.setSyncBusy(sourceRef, false);
+    }
+  }
+
+  /**
+   * "Reconnect <provider>" for a paused_reauth policy. Runs the same OAuth
+   * consent popup as the connector buttons; the backend's consent-complete
+   * hook flips the paused policies back to active, so on success we only
+   * refetch. Reconnect is a Drive-source affair — web crawls fetch
+   * anonymously and can never enter paused_reauth.
+   */
+  async onSyncReconnect(sourceRef: string): Promise<void> {
+    const doc = this.uploadedDocuments().find((d) => d.documentId === sourceRef);
+    const providerId = doc?.sourceConnectorId;
+    if (!providerId || providerId === 'web') {
+      this.toast.error('This source cannot be reconnected from here.');
+      return;
+    }
+    this.reconnectingProviderId.set(providerId);
+    this.reconnectSourceRef = sourceRef;
+    this.setSyncBusy(sourceRef, true);
+    try {
+      const result = await this.connectorsService.initiateConsent(providerId);
+      if (result.connected) {
+        // The vault thinks the token is fine (provider-side revocations are
+        // invisible to it) — no consent popup will open, so the resume hook
+        // won't fire. Refetch and tell the user what actually happened.
+        this.finishReconnect();
+        await this.loadSyncData();
+        if (this.syncPolicyFor(sourceRef)?.state === 'paused_reauth') {
+          this.toast.error(
+            'The connection still needs to be re-authorized. Disconnect and reconnect it under Settings → Connectors, then sync will resume.',
+          );
+        } else {
+          this.toast.success('Reconnected — sync will resume automatically.');
+        }
+        return;
+      }
+      if (!result.authorizationUrl) {
+        this.finishReconnect();
+        this.toast.error('Unexpected response from the server.');
+        return;
+      }
+      this.consentService.requestConsent(providerId, result.authorizationUrl);
+      void this.consentService.openConsentPopup(providerId);
+      this.reconnectAwaiting = true;
+    } catch (error) {
+      this.finishReconnect();
+      const message =
+        error instanceof Error ? error.message : 'Could not start the reconnect flow.';
+      this.toast.error(message);
+    }
+  }
+
+  /** Reset all reconnect bookkeeping (success, failure, or aborted popup). */
+  private finishReconnect(): void {
+    this.reconnectingProviderId.set(null);
+    this.reconnectAwaiting = false;
+    if (this.reconnectSourceRef) {
+      this.setSyncBusy(this.reconnectSourceRef, false);
+      this.reconnectSourceRef = null;
+    }
+  }
+
+  private setSyncBusy(sourceRef: string, busy: boolean): void {
+    this.syncBusySourceRefs.update((set) => {
+      const next = new Set(set);
+      if (busy) {
+        next.add(sourceRef);
+      } else {
+        next.delete(sourceRef);
+      }
+      return next;
+    });
+  }
+
+  private upsertPolicy(policy: SyncPolicy): void {
+    this.syncPolicies.update((list) => {
+      const exists = list.some((p) => p.policyId === policy.policyId);
+      return exists
+        ? list.map((p) => (p.policyId === policy.policyId ? policy : p))
+        : [...list, policy];
+    });
+  }
+
+  private removePolicy(policyId: string): void {
+    this.syncPolicies.update((list) => list.filter((p) => p.policyId !== policyId));
+  }
+
+  private toastSyncError(error: unknown, fallback: string): void {
+    const message = error instanceof Error && error.message ? error.message : fallback;
+    this.toast.error(message);
   }
 
   async startPollingDocument(documentId: string, assistantId: string): Promise<void> {

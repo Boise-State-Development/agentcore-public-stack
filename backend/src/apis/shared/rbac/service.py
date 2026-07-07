@@ -5,6 +5,7 @@ from typing import List, Set, Optional
 from datetime import datetime, timezone
 
 from apis.shared.auth.models import User
+from apis.shared.tools.scoped_ids import base_tool_id
 
 from .models import AppRole, UserEffectivePermissions
 from .repository import AppRoleRepository
@@ -212,6 +213,33 @@ class AppRoleService:
         """Get list of tool IDs user can access."""
         permissions = await self.resolve_user_permissions(user)
         return permissions.tools
+
+    async def filter_requested_tools(
+        self, user: User, requested: List[str]
+    ) -> List[str]:
+        """Intersect a client-requested tool list with the user's RBAC grant.
+
+        Client-supplied ``enabled_tools`` (from the SPA tool picker, a
+        "Run now" body, or a schedule-creation request) must never *grant*
+        access the caller's AppRole does not already carry — the picker is a
+        UI convenience, not a security boundary. This narrows the request to
+        what the user may actually invoke, preserving the caller's order and
+        scoping (mirrors ``_apply_enabled_skills_filter``'s narrow-never-grant
+        contract on the skills axis).
+
+        A ``"*"`` grant passes everything through. A scoped id (``base::tool``)
+        is allowed when its base server id is granted, so a role that grants a
+        whole MCP server still admits that server's per-tool selections.
+        """
+        permissions = await self.resolve_user_permissions(user)
+        allowed = set(permissions.tools)
+        if "*" in allowed:
+            return list(requested)
+        return [
+            tool_id
+            for tool_id in requested
+            if tool_id in allowed or base_tool_id(tool_id) in allowed
+        ]
 
     async def get_accessible_models(self, user: User) -> List[str]:
         """Get list of model IDs user can access."""

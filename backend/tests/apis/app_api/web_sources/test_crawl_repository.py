@@ -362,3 +362,49 @@ async def test_cascade_leaves_running_crawl_alone(ddb) -> None:
     await _cascade_delete_orphaned_crawl_jobs(ASSISTANT_ID)
 
     assert await crawl_repository.get_crawl_job(ASSISTANT_ID, crawl.crawl_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_restore_crawl_ttl_reapplies_expiry_to_sync_covered_job(ddb) -> None:
+    """Deleting a crawl's sync policy puts the job back on 30-day auto-expiry."""
+    job = await crawl_repository.create_crawl_job(
+        assistant_id=ASSISTANT_ID,
+        root_url="https://example.com/",
+        settings=CrawlSettings(),
+        started_by_user_id=USER_ID,
+    )
+    # Sync path: finalized with the ttl attribute removed
+    await crawl_repository.finalize_crawl(
+        assistant_id=ASSISTANT_ID, crawl_id=job.crawl_id, status="complete", set_ttl=False
+    )
+    item = ddb.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"CRAWL#{job.crawl_id}"})["Item"]
+    assert "ttl" not in item
+
+    before = int(time.time())
+    await crawl_repository.restore_crawl_ttl(assistant_id=ASSISTANT_ID, crawl_id=job.crawl_id)
+
+    item = ddb.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"CRAWL#{job.crawl_id}"})["Item"]
+    thirty_days = 30 * 86400
+    assert before + thirty_days - 5 <= int(item["ttl"]) <= int(time.time()) + thirty_days + 5
+
+
+@pytest.mark.asyncio
+async def test_restore_crawl_ttl_leaves_running_job_alone(ddb) -> None:
+    """finalize_crawl owns the running→terminal transition; restore must not race it."""
+    job = await crawl_repository.create_crawl_job(
+        assistant_id=ASSISTANT_ID,
+        root_url="https://example.com/",
+        settings=CrawlSettings(),
+        started_by_user_id=USER_ID,
+    )
+
+    await crawl_repository.restore_crawl_ttl(assistant_id=ASSISTANT_ID, crawl_id=job.crawl_id)
+
+    item = ddb.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"CRAWL#{job.crawl_id}"})["Item"]
+    assert "ttl" not in item
+    assert item["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_restore_crawl_ttl_missing_job_is_noop(ddb) -> None:
+    await crawl_repository.restore_crawl_ttl(assistant_id=ASSISTANT_ID, crawl_id="crawl-gone")

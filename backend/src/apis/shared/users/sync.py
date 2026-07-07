@@ -10,6 +10,18 @@ from .repository import UserRepository
 logger = logging.getLogger(__name__)
 
 
+def _iso(dt: datetime) -> str:
+    """Serialize a UTC datetime as strict ISO 8601 with a ``Z`` suffix.
+
+    ``datetime.isoformat()`` renders the offset as ``+00:00``; we normalize that
+    to ``Z`` so the result is valid ISO 8601 that JavaScript's ``Date`` parses.
+    A previous ``isoformat() + "Z"`` produced ``…+00:00Z`` — both an offset and a
+    Z — which is invalid and yields ``Invalid Date`` in strict engines (Safari),
+    leaving the admin user list / detail dates blank ("Never").
+    """
+    return dt.isoformat().replace("+00:00", "Z")
+
+
 class UserSyncService:
     """
     Syncs user data from JWT claims to DynamoDB.
@@ -62,7 +74,7 @@ class UserSyncService:
         if "@" in email:
             email_domain = email.split("@")[1]
 
-        now = datetime.now(timezone.utc).isoformat() + "Z"
+        now = _iso(datetime.now(timezone.utc))
 
         # Build profile from JWT claims
         profile = UserProfile(

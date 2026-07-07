@@ -49,28 +49,85 @@
                                         <a
                                             [routerLink]="['/s', getSessionId(session.sessionId)]"
                                             [queryParams]="getSessionQueryParams(session)"
-                                            routerLinkActive="bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
-                                            (click)="onSessionClick()"
-                                            class="block truncate rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                                            (click)="onSessionClick(session)"
+                                            class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
-                                            {{ getSessionTitle(session) }}
-                                        </a>
-                                        <!-- Ellipsis menu button - visible on hover with fade-in animation -->
-                                        <button
-                                            type="button"
-                                            [cdkMenuTriggerFor]="sessionMenu"
-                                            [cdkMenuPosition]="menuPositions"
-                                            [disabled]="deletingSessionId() === session.sessionId"
-                                            class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                                            [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
-                                            aria-haspopup="menu"
-                                        >
-                                            @if (deletingSessionId() === session.sessionId) {
-                                                <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
+                                            @if (isTitlePending(session)) {
+                                                <!-- Title still generating (new conversation) — shimmer
+                                                     until the session_title event lands or the stream ends.
+                                                     Colour lives in the component stylesheet: on the active
+                                                     row (.session-row--active, whose highlight is bg-gray-200
+                                                     / dark:bg-white/5) the shimmer darkens so it stays
+                                                     visible against it (see .title-skeleton in the CSS).
+                                                     h-4 (1rem) matches the text cap-height; min-h-8 on the
+                                                     row keeps its height identical to a titled row so the
+                                                     skeleton→title swap causes no vertical jank. -->
+                                                <span
+                                                    class="title-skeleton h-4 w-3/5 shrink-0 rounded-md animate-pulse motion-reduce:animate-none"
+                                                    role="status"
+                                                    aria-label="Generating conversation title"
+                                                ></span>
                                             } @else {
-                                                <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                                                <!-- Keyed by the title string so the fade replays when the
+                                                     generated title first replaces the skeleton (and on
+                                                     rename), mirroring the top-nav title reveal. -->
+                                                @for (title of [getSessionTitle(session)]; track title) {
+                                                    <span class="session-title-enter min-w-0 truncate">{{ title }}</span>
+                                                }
                                             }
-                                        </button>
+                                            @if (isSessionStreaming(session.sessionId)) {
+                                                <span class="sr-only">(response in progress)</span>
+                                            } @else if (shouldShowUnreadDot(session)) {
+                                                <span class="sr-only">(unread)</span>
+                                            }
+                                        </a>
+                                        @if (isSessionStreaming(session.sessionId)) {
+                                            <!-- Response-in-progress dot. While streaming it owns the
+                                                 pr-10 gutter outright — the ellipsis menu button below is
+                                                 not rendered, both to avoid overlapping the dot on hover
+                                                 (animate-pulse animates opacity, so a group-hover fade
+                                                 can't hide it) and because rename/share/delete shouldn't
+                                                 target a conversation mid-response. -->
+                                            <span
+                                                class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-secondary-500 animate-pulse motion-reduce:animate-none"
+                                                aria-hidden="true"
+                                            ></span>
+                                        } @else {
+                                            @if (shouldShowUnreadDot(session)) {
+                                                <!-- Unread dot: an unattended (scheduled) run finished, or a
+                                                     backgrounded response completed while the user was viewing
+                                                     another conversation. Static blue (vs. the pulsing
+                                                     secondary streaming dot) and, unlike the streaming dot, it
+                                                     fades when the ellipsis menu would occupy the same gutter —
+                                                     on hover and when the trigger is keyboard-focused
+                                                     (focus-visible). Crucially NOT on plain focus-within: the
+                                                     CDK menu restores focus to the in-row trigger on close, and
+                                                     hiding the dot for that (mouse-driven) focus is what made a
+                                                     just-marked-unread dot stay invisible until the next
+                                                     interaction. Cleared once the user opens the session. -->
+                                                <span
+                                                    class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-blue-500 transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0 dark:bg-blue-400"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            }
+                                            <!-- Ellipsis menu button - visible on hover with fade-in animation -->
+                                            <button
+                                                type="button"
+                                                [cdkMenuTriggerFor]="sessionMenu"
+                                                [cdkMenuPosition]="menuPositions"
+                                                [disabled]="deletingSessionId() === session.sessionId"
+                                                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                                                [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
+                                                aria-haspopup="menu"
+                                            >
+                                                @if (deletingSessionId() === session.sessionId) {
+                                                    <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
+                                                } @else {
+                                                    <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                                                }
+                                            </button>
+                                        }
 
                                         <!-- Session options menu -->
                                         <ng-template #sessionMenu>
@@ -109,6 +166,16 @@
                                                 >
                                                     <ng-icon name="heroCloudArrowUp" class="size-4" aria-hidden="true" />
                                                     <span>Save to…</span>
+                                                </button>
+                                                <button
+                                                    cdkMenuItem
+                                                    type="button"
+                                                    (click)="onToggleReadClick($event, session)"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                                                    role="menuitem"
+                                                >
+                                                    <ng-icon [name]="shouldShowUnreadDot(session) ? 'heroEnvelopeOpen' : 'heroEnvelope'" class="size-4" aria-hidden="true" />
+                                                    <span>{{ shouldShowUnreadDot(session) ? 'Mark as read' : 'Mark as unread' }}</span>
                                                 </button>
                                                 <button
                                                     cdkMenuItem

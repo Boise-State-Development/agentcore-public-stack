@@ -284,6 +284,40 @@ class DocumentStatusManager:
             vector_store_id=vector_store_id
         )
     
+    async def pop_previous_chunk_count(
+        self,
+        assistant_id: str,
+        document_id: str
+    ) -> Optional[int]:
+        """
+        Atomically read-and-clear the previousChunkCount stash.
+
+        The KB sync worker stashes the pre-sync chunk count on the document
+        record before re-staging its S3 object (docs/specs/assistant-kb-sync.md
+        §6.1 shrinkage cleanup). REMOVE with ReturnValues=UPDATED_OLD makes
+        the pop atomic — a duplicate S3 event can't double-delete the tail.
+
+        Returns:
+            The stashed count, or None if no stash was present (the common
+            case: every non-sync ingestion).
+        """
+        if not self.table_name:
+            return None
+        try:
+            import boto3
+
+            table = boto3.resource('dynamodb').Table(self.table_name)
+            response = table.update_item(
+                Key={'PK': f'AST#{assistant_id}', 'SK': f'DOC#{document_id}'},
+                UpdateExpression='REMOVE previousChunkCount',
+                ReturnValues='UPDATED_OLD',
+            )
+            old_value = response.get('Attributes', {}).get('previousChunkCount')
+            return int(old_value) if old_value is not None else None
+        except Exception as e:
+            logger.warning(f"Failed to pop previousChunkCount for {document_id}: {e}")
+            return None
+
     async def mark_failed(
         self,
         assistant_id: str,

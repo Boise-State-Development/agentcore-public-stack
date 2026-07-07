@@ -23,7 +23,112 @@
         </svg>
       </button>
 
-      <h1 class="text-base/7 font-semibold text-gray-900 dark:text-white">{{ currentSession().title || '' }}</h1>
+      @if (renaming()) {
+        <!-- Inline rename input -->
+        <input
+          #renameInput
+          type="text"
+          [value]="renameValue()"
+          (input)="renameValue.set(renameInput.value)"
+          (keydown)="onRenameKeydown($event)"
+          (blur)="onRenameSubmit()"
+          class="min-w-0 max-w-xs flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-base/7 font-semibold text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
+          aria-label="Rename conversation title"
+        />
+      } @else if (titlePending()) {
+        <!-- Title not available yet — either a hard refresh (session id + title
+             arrive together once metadata resolves) or a brand-new chat whose
+             title is still generating. Show a skeleton until it lands or, if
+             none ever arrives, until the pending window closes (below). -->
+        <div
+          class="h-4 w-40 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"
+          role="status"
+          aria-label="Loading conversation title"
+        ></div>
+      } @else if (currentSession().sessionId) {
+        <!-- Resolved: real title, or the "Untitled Session" fallback when the
+             session genuinely has no title (generation failed / never ran). -->
+        <button
+          type="button"
+          [cdkMenuTriggerFor]="sessionMenu"
+          [cdkMenuPosition]="menuPositions"
+          [disabled]="deleting()"
+          class="group/title flex min-w-0 items-center gap-x-2 rounded-md px-1.5 py-1 -mx-1.5 text-gray-900 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white dark:hover:bg-white/10"
+          [attr.aria-label]="'Options for conversation: ' + displayTitle()"
+          aria-haspopup="menu"
+        >
+          @for (title of [displayTitle()]; track title) {
+            <span class="session-title-enter truncate text-base/7 font-semibold">{{ title }}</span>
+          }
+          <ng-icon
+            name="heroChevronDown"
+            class="shrink-0 text-gray-500 transition-transform duration-150 group-aria-expanded/title:rotate-180 dark:text-gray-400"
+            size="13"
+            aria-hidden="true"
+          />
+        </button>
+
+        <!-- Session options menu -->
+        <ng-template #sessionMenu>
+          <div
+            cdkMenu
+            class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+            role="menu"
+            aria-orientation="vertical"
+          >
+            <button
+              cdkMenuItem
+              type="button"
+              (click)="onRenameClick($event)"
+              class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              role="menuitem"
+            >
+              <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+              <span>Rename</span>
+            </button>
+            <button
+              cdkMenuItem
+              type="button"
+              (click)="onShareClick($event)"
+              class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              role="menuitem"
+            >
+              <ng-icon name="heroArrowUpOnSquare" class="size-4" aria-hidden="true" />
+              <span>Share</span>
+            </button>
+            <button
+              cdkMenuItem
+              type="button"
+              (click)="onExportClick($event)"
+              class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              role="menuitem"
+            >
+              <ng-icon name="heroCloudArrowUp" class="size-4" aria-hidden="true" />
+              <span>Save to…</span>
+            </button>
+            <button
+              cdkMenuItem
+              type="button"
+              (click)="onToggleReadClick($event)"
+              class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              role="menuitem"
+            >
+              <ng-icon [name]="isCurrentUnread() ? 'heroEnvelopeOpen' : 'heroEnvelope'" class="size-4" aria-hidden="true" />
+              <span>{{ isCurrentUnread() ? 'Mark as read' : 'Mark as unread' }}</span>
+            </button>
+            <button
+              cdkMenuItem
+              type="button"
+              (click)="onDeleteClick($event)"
+              class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-red-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-red-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+              role="menuitem"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+              <span>Delete</span>
+            </button>
+          </div>
+        </ng-template>
+      }
 
       <!-- Separator -->
       <div aria-hidden="true" class="h-6 w-px bg-gray-200 lg:hidden dark:bg-gray-700"></div>

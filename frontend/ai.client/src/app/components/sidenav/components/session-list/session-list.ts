@@ -5,9 +5,10 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
+import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../../../session/components/share-modal';
 import { ExportDialogComponent, ExportDialogData } from '../../../../session/components/export-dialog';
 import { UserService } from '../../../../auth/user.service';
@@ -19,13 +20,14 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class SessionList {
   private sessionService = inject(SessionService);
+  private chatStateService = inject(ChatStateService);
   private sidenavService = inject(SidenavService);
   private toastService = inject(ToastService);
   private dialog = inject(Dialog);
@@ -171,6 +173,36 @@ export class SessionList {
   }
 
   /**
+   * Whether this conversation has a response streaming right now. Reads the
+   * same per-session loading state that drives the composer's Stop button,
+   * so backgrounded conversations (user navigated away mid-stream) show a
+   * live indicator in the list. Signal-backed — the OnPush row re-renders
+   * when the stream starts or finishes.
+   */
+  protected isSessionStreaming(sessionId: string): boolean {
+    return this.chatStateService.isSessionLoading(sessionId);
+  }
+
+  /**
+   * Whether this conversation should show the blue unread dot (distinct from
+   * the pulsing secondary streaming dot). Unread has two sources, ORed here:
+   *
+   *  - **Server** (`session.unread`): a scheduled/unattended run left a
+   *    response the user hasn't opened — durable, survives reload, cross-device.
+   *    Suppressed by `isLocallyRead` the instant the user opens it, so the dot
+   *    vanishes before `POST /read` round-trips.
+   *  - **Client** (`ChatStateService`): a stream finished in this tab while the
+   *    user was viewing a different session — ephemeral, cleared on view.
+   *
+   * Signal-backed (client signal + resource-driven `session.unread`), so the
+   * OnPush row updates when either source changes.
+   */
+  protected shouldShowUnreadDot(session: SessionMetadata): boolean {
+    const serverUnread = session.unread === true && !this.sessionService.isLocallyRead(session);
+    return serverUnread || this.chatStateService.isSessionUnread(session.sessionId);
+  }
+
+  /**
    * Gets the queryParams for a session's routerLink. When the session has
    * an assistant attached in preferences, we include it in the URL so the
    * session page can load the assistant without a second round-trip. Keeping
@@ -224,9 +256,36 @@ export class SessionList {
   }
 
   /**
-   * Handles session selection, closing the sidenav on mobile.
+   * Whether this row should show a title skeleton instead of a label: a
+   * brand-new conversation whose title is still generating server-side (it
+   * arrives mid-stream via the `session_title` SSE event). Gated on the
+   * active stream so the shimmer can't outlive a resolved-but-untitled
+   * session — once streaming ends the row falls back to the real title (if
+   * it landed) or the static "Untitled Session" label. Signal-backed via
+   * `isSessionStreaming`, so the OnPush row swaps the skeleton for the title
+   * the moment either the title or the stream resolves.
    */
-  protected onSessionClick(): void {
+  protected isTitlePending(session: SessionMetadata): boolean {
+    return !session.title && this.isSessionStreaming(session.sessionId);
+  }
+
+  /**
+   * Handles session selection. Optimistically sets the clicked session as the
+   * current one so the top-nav title updates the instant the item is clicked,
+   * instead of lingering on the previous title until its metadata loads from
+   * the API. The metadata resource reload (triggered by the route change) later
+   * replaces this with the authoritative record.
+   *
+   * @param session - The session that was clicked
+   */
+  protected onSessionClick(session: SessionMetadata): void {
+    this.sessionService.currentSession.set(session);
+    // Opening a session with a durable (scheduled-run) unread flag clears it
+    // server-side and suppresses the dot locally right away. The client-side
+    // interactive unread signal is cleared separately via setViewedSession.
+    if (session.unread) {
+      this.sessionService.markSessionRead(session);
+    }
     this.sidenavService.close();
   }
 
@@ -320,6 +379,46 @@ export class SessionList {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
       } as ShareModalData,
+    });
+  }
+
+  /**
+   * Toggles a session's unread state from the options menu, keyed on the
+   * currently visible dot. When unread, marks it read — clearing both the
+   * durable server flag and the transient client-side (background-stream)
+   * flag, so the dot vanishes without opening the conversation. Otherwise
+   * marks it unread ("remind me to revisit"), re-surfacing the server dot.
+   *
+   * @param event - Click event (stopped to prevent navigation)
+   * @param session - The session to toggle
+   */
+  protected onToggleReadClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Defer past the CDK menu's synchronous close. Mutating unread state inside
+    // the menu-item click is swallowed by the overlay teardown's change-
+    // detection pass (zoneless), so the dot wouldn't update until the next
+    // interaction. Running after the menu closes — as the delete flow does via
+    // its confirmation dialog — lets the signal updates re-render the row.
+    queueMicrotask(() => {
+      if (this.shouldShowUnreadDot(session)) {
+        void this.sessionService.markSessionRead(session);
+        this.chatStateService.clearSessionUnread(session.sessionId);
+        // markSessionRead relies on the watermark (no refetch); sync the list
+        // row's server flag too so it's not left stale.
+        this.sessionService.refreshSessions();
+      } else {
+        // markSessionUnread only refetches the list AFTER its POST resolves, so
+        // the OnPush row wouldn't re-render to insert the dot until then. Kick a
+        // synchronous refresh here — exactly as the mark-read branch does — so
+        // the row re-evaluates right away; the dot reads true off the client
+        // signal immediately, even while the server flag is eventually
+        // consistent, and clears when the session is next opened.
+        void this.sessionService.markSessionUnread(session);
+        this.chatStateService.markSessionUnread(session.sessionId);
+        this.sessionService.refreshSessions();
+      }
     });
   }
 

@@ -41,6 +41,8 @@ import { SharedConversationsConstruct } from './constructs/data/shared-conversat
 // RAG (data half lives in Platform)
 import { RagDataConstruct } from './constructs/rag/rag-data-construct';
 import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-ingestion-lambda-construct';
+import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
+import { ScheduledRunsConstruct } from './constructs/scheduled-runs/scheduled-runs-construct';
 
 // Artifacts (data + render Lambda + CloudFront distribution).
 // Lambda + distribution + Route53 alias here. The Lambda's
@@ -387,6 +389,19 @@ export class PlatformStack extends cdk.Stack {
     );
 
     // ============================================================
+    // KB sync — scheduled re-index of assistant knowledge bases
+    // (dispatcher + worker Lambdas + EventBridge rate rule; inert
+    // unless config.kbSync.enabled)
+    // ============================================================
+    new KbSyncConstruct(this, 'KbSync', {
+      config,
+      assistantsTable: this.ragAssistantsTable,
+      documentsBucket: this.ragDocumentsBucket,
+      oauthProvidersTable: this.oauthProvidersTable,
+      workloadIdentityName: this.platformWorkloadIdentity.name,
+    });
+
+    // ============================================================
     // Fine-tuning data
     // ============================================================
     const fineTuningData = new FineTuningDataConstruct(
@@ -692,6 +707,24 @@ export class PlatformStack extends cdk.Stack {
       sagemakerExecutionRoleArn: sagemaker.executionRole.roleArn,
       sagemakerSecurityGroupId: sagemaker.securityGroup.securityGroupId,
       sagemakerPrivateSubnetIds,
+    });
+
+    // ============================================================
+    // Scheduled runs — the F3 scheduled trigger's engine (dispatcher +
+    // worker Lambdas + EventBridge rate rule; inert unless
+    // config.scheduledRuns.enabled). Needs inferenceApi.runtimeEndpointUrl,
+    // so it lands here in wireCompute() rather than the constructor
+    // (unlike KbSyncConstruct, which has no such dependency).
+    // ============================================================
+    new ScheduledRunsConstruct(this, 'ScheduledRuns', {
+      config: this._config,
+      sessionsMetadataTable: this.sessionsMetadataTable,
+      bffSessionsTable: this.bffSessionsTable,
+      bffAppClient: this.bffAppClient,
+      bffAppClientSecret: this.bffAppClientSecret,
+      workloadIdentityName: this.platformWorkloadIdentity.name,
+      inferenceApiRuntimeEndpointUrl: inferenceApi.runtimeEndpointUrl,
+      cognitoRegion: this._config.awsRegion,
     });
   }
 }

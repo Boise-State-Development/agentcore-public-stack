@@ -21,10 +21,9 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from urllib.parse import quote, urlsplit
-
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.harness.runner import build_invocations_url
 
 logger = logging.getLogger(__name__)
 
@@ -37,29 +36,12 @@ def _inference_api_url() -> str:
 # wedged upstream eventually surfaces.
 _PROXY_TIMEOUT_SECONDS = 300.0
 
-
-def _build_invocations_url(base_url: str) -> str:
-    """Resolve the upstream `/invocations` URL from `INFERENCE_API_URL`.
-
-    Cloud: `INFERENCE_API_URL` is the AgentCore Runtime data-plane base
-    (`https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>`),
-    where `<ARN>` is unencoded in SSM. The data-plane route is
-    `POST /runtimes/{agentRuntimeArn}/invocations?qualifier={qualifier}`
-    with `{agentRuntimeArn}` as a single URL-encoded path segment — so the
-    ARN's literal `/` and `:` must be percent-encoded or AWS returns 404.
-    A `qualifier` is also required; we use `DEFAULT`.
-
-    Local dev: `INFERENCE_API_URL` is `http://localhost:8001`, where
-    `/invocations` is a real FastAPI route on inference-api directly. No
-    encoding or qualifier needed.
-    """
-    parts = urlsplit(base_url)
-    prefix = "/runtimes/"
-    if parts.netloc.startswith("bedrock-agentcore.") and parts.path.startswith(prefix):
-        arn = parts.path[len(prefix):]
-        encoded_arn = quote(arn, safe="")
-        return f"{parts.scheme}://{parts.netloc}/runtimes/{encoded_arn}/invocations?qualifier=DEFAULT"
-    return f"{base_url}/invocations"
+# Canonical `/invocations` URL resolution lives in the shared harness
+# (`apis.shared.harness.runner.build_invocations_url`) — the headless
+# runner, this proxy, and the MCP Apps proxy all share one copy. Kept
+# under the historical private name so existing call sites and docstring
+# references stay valid.
+_build_invocations_url = build_invocations_url
 
 
 def _build_upstream_client() -> httpx.AsyncClient:

@@ -230,20 +230,15 @@ async def initiate_consent(
             scopes=provider.scopes,
             user_id=current_user.user_id,
             force_authentication=force_auth,
-            # initiate_consent is by definition a "walk me through consent"
-            # path — the user clicked Connect/Reconnect after seeing they
-            # were not connected. For Google this means we must send
-            # `prompt=consent`, otherwise Google sees a previously-consented
-            # user, skips the consent screen, and re-issues an access_token
-            # WITHOUT a refresh_token. Vault then expires after ~1h and the
-            # user is back here. Decoupled from `force_auth` (which only
-            # toggles the SDK's vault-bypass) so the silent-refresh fast
-            # path elsewhere is unaffected.
-            custom_parameters=custom_parameters_for(
-                provider.provider_type.value,
-                provider.custom_parameters,
-                force_authentication=True,
-            ),
+            # Forward the connector's admin-configured `customParameters`
+            # verbatim. For a Google connector these come from the "Custom
+            # OAuth Parameters" field — typically `access_type=offline` (so
+            # Google issues a refresh token) plus `prompt=consent` (so a
+            # previously-consented user is still shown the consent screen and
+            # a refresh token is re-issued, rather than an access-token-only
+            # grant that expires in ~1h). The same map is sent on the status
+            # read below so AgentCore's vault key matches.
+            custom_parameters=custom_parameters_for(provider.custom_parameters),
             # No custom_state: AgentCore appears to treat its presence as a
             # signal to start a fresh flow, never short-circuiting to the
             # cached token. The frontend passes provider_id via the
@@ -321,15 +316,12 @@ async def connector_status(
             # Match the customParameters `initiate_consent` used to grant the
             # token. AgentCore factors `customParameters` into whether
             # `get_resource_oauth2_token` short-circuits to a vaulted token, so
-            # a status read that omits Google's `prompt=consent` is treated as
-            # a fresh request and reports consent-required even when a usable
-            # token is vaulted. Pure read — `get_token_for_user` itself stays
-            # at `force_authentication=False`.
-            custom_parameters=custom_parameters_for(
-                provider.provider_type.value,
-                provider.custom_parameters,
-                force_authentication=True,
-            ),
+            # a status read that omits the connector's configured params (e.g.
+            # a Google connector's `prompt=consent`) is treated as a fresh
+            # request and reports consent-required even when a usable token is
+            # vaulted. Pure read — `get_token_for_user` itself stays at
+            # `force_authentication=False`.
+            custom_parameters=custom_parameters_for(provider.custom_parameters),
         )
     except WorkloadTokenUnavailableError as err:
         logger.warning("Status check without workload context: %s", err)
@@ -399,6 +391,22 @@ async def complete_consent(
         await disconnect_repo.clear_disconnected(
             current_user.user_id, body.provider_id
         )
+
+        # A fresh grant is the ONLY thing that resumes reauth-paused KB
+        # sync policies (docs/specs/assistant-kb-sync.md §7.6). Resumed
+        # policies come due immediately. Best-effort: a hook failure must
+        # never fail the consent completion itself.
+        try:
+            from apis.shared.sync_policies.service import resume_reauth_policies
+
+            await resume_reauth_policies(current_user.user_id, body.provider_id)
+        except Exception as resume_err:
+            logger.warning(
+                "Failed to resume reauth-paused sync policies for user=%s provider=%s: %s",
+                current_user.user_id,
+                scrub_log(body.provider_id),
+                resume_err,
+            )
 
     logger.info(
         "Completed OAuth consent for user=%s provider=%s",
