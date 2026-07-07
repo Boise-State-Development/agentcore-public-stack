@@ -53,6 +53,7 @@ import { ArtifactsDataConstruct } from './constructs/artifacts/artifacts-data-co
 import { ArtifactRenderLambdaConstruct } from './constructs/artifacts/artifact-render-lambda-construct';
 import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts-distribution-construct';
 import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
+import { MemorySpacesConstruct } from './constructs/memory/memory-spaces-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -203,6 +204,10 @@ export class PlatformStack extends cdk.Stack {
 
   // ── Skills (admin-managed) — S3-backed reference files (PR-4)
   public readonly skillResourcesBucket: s3.IBucket;
+
+  // ── Memory Spaces — S3 content bucket + DynamoDB single-table
+  public readonly memorySpacesBucket: s3.IBucket;
+  public readonly memorySpacesTable: dynamodb.ITable;
 
   // ── Fine-tuning
   public readonly fineTuningJobsTable: dynamodb.ITable;
@@ -437,6 +442,19 @@ export class PlatformStack extends cdk.Stack {
       { config },
     ).bucket;
 
+    // ============================================================
+    // Memory Spaces — S3 content bucket + DynamoDB single-table.
+    // Threaded to the compute roles via PlatformComputeRefs
+    // .memorySpacesBucket / .memorySpacesTable below.
+    // ============================================================
+    const memorySpaces = new MemorySpacesConstruct(
+      this,
+      'MemorySpaces',
+      { config },
+    );
+    this.memorySpacesBucket = memorySpaces.bucket;
+    this.memorySpacesTable = memorySpaces.table;
+
     const artifactsDomainName = config.domainName!;
     this.artifactsFrameAncestors = [
       `https://${artifactsDomainName}`,
@@ -663,6 +681,8 @@ export class PlatformStack extends cdk.Stack {
       artifactRenderTokenSecret: this.artifactRenderTokenSecret,
       artifactsOriginUrl: this.artifactsOriginUrl,
       skillResourcesBucket: this.skillResourcesBucket,
+      memorySpacesBucket: this.memorySpacesBucket,
+      memorySpacesTable: this.memorySpacesTable,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,

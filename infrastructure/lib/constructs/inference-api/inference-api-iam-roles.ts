@@ -257,6 +257,25 @@ export function createRuntimeExecutionRole(
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
   }));
 
+  // ── Memory Spaces (S3 + DynamoDB, readwrite) ──
+  // The runtime writes memory in a later PR; provisioned readwrite now so
+  // that PR needs no infra change (apis/shared/memory/*).
+  const memorySpacesBucketArn = refs.memorySpacesBucket.bucketArn;
+  const memorySpacesTableArn = refs.memorySpacesTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'MemorySpacesBucketReadWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
+    resources: [memorySpacesBucketArn, `${memorySpacesBucketArn}/*`],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'MemorySpacesTableReadWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem',
+              'dynamodb:Query', 'dynamodb:BatchWriteItem'],
+    resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
+  }));
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
   const vectorIndexName = refs.ragVectorIndexName;

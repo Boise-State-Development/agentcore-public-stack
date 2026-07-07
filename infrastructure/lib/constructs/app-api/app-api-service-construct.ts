@@ -184,6 +184,10 @@ export class AppApiServiceConstruct extends Construct {
     // apis/shared/skills/resource_store.py via S3_SKILL_RESOURCES_BUCKET_NAME.
     environment['S3_SKILL_RESOURCES_BUCKET_NAME'] = props.refs.skillResourcesBucket.bucketName;
 
+    // Memory Spaces storage. Read by apis/shared/memory/* via these env vars.
+    environment['S3_MEMORY_SPACES_BUCKET_NAME'] = props.refs.memorySpacesBucket.bucketName;
+    environment['DYNAMODB_MEMORY_SPACES_TABLE_NAME'] = props.refs.memorySpacesTable.tableName;
+
     // Fine-tuning env vars (always-on). Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env
     // var names Python reads via os.environ.get(...).

@@ -341,6 +341,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         // files at dispatch time; no code consumes it yet.
         S3_SKILL_RESOURCES_BUCKET_NAME: props.refs.skillResourcesBucket.bucketName,
 
+        // Memory Spaces storage. The runtime writes memory in a later PR
+        // (readwrite grant below); read by apis/shared/memory/*.
+        S3_MEMORY_SPACES_BUCKET_NAME: props.refs.memorySpacesBucket.bucketName,
+        DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
+        MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
+
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 

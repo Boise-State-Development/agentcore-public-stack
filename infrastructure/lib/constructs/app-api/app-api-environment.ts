@@ -277,6 +277,8 @@ export function buildAppApiEnvironment(
     // (scheduled-runs PR-1). Cohort access is RBAC (`scheduled-runs`
     // capability); this only gates feature existence per environment.
     SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
+    // Kill switch for the Memory Spaces feature (default off per env).
+    MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

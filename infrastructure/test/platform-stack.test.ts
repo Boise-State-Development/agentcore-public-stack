@@ -101,21 +101,23 @@ describe('PlatformStack', () => {
 
   describe('DynamoDB tables', () => {
     it('creates all shared tables', () => {
-      // 24 tables. Was 23 — the system-prompts table was added for
-      // admin-managed Conversation Modes (custom system prompt catalog).
-      // Previously was 24 before the standalone "assistants" table
-      // was decommissioned (the python app uses rag-assistants for
-      // both assistant config and document metadata via
+      // 25 tables. Was 24 — the memory-spaces table was added for the
+      // Memory Spaces feature. Prior note: the system-prompts table was
+      // added for admin-managed Conversation Modes (custom system prompt
+      // catalog); previously 24 before the standalone "assistants" table
+      // was decommissioned (the python app uses rag-assistants for both
+      // assistant config and document metadata via
       // DYNAMODB_ASSISTANTS_TABLE_NAME).
-      template.resourceCountIs('AWS::DynamoDB::Table', 24);
+      template.resourceCountIs('AWS::DynamoDB::Table', 25);
     });
   });
 
   describe('S3 buckets', () => {
     it('creates all data buckets', () => {
       // file-uploads, SPA static, mcp-sandbox, rag-documents, fine-tuning-data,
-      // artifacts-content, skill-resources (admin-managed Skills reference files)
-      template.resourceCountIs('AWS::S3::Bucket', 7);
+      // artifacts-content, skill-resources (admin-managed Skills reference files),
+      // memory-spaces (Memory Spaces feature content bucket)
+      template.resourceCountIs('AWS::S3::Bucket', 8);
     });
   });
 

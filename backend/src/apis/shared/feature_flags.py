@@ -44,3 +44,20 @@ def scheduled_runs_enabled() -> bool:
     (``apis.shared.rbac.capabilities``) — two independent controls.
     """
     return os.environ.get("SCHEDULED_RUNS_ENABLED", "").strip().lower() != "false"
+
+
+def memory_spaces_enabled() -> bool:
+    """Whether the Memory Spaces feature is enabled for this environment.
+
+    Covers the user-owned/shareable markdown "second brain" surface (F5):
+    the app-api ``/memory/spaces`` CRUD, the runtime read/write tools, and
+    the SPA Memory panel. **Defaults off** (the ``SKILLS_ENABLED`` pattern):
+    set ``MEMORY_SPACES_ENABLED=true`` to turn it on. While off, the surfaces
+    are unmounted / hidden but all data and code remain intact. The feature
+    ships incrementally across several PRs, so it stays dark until complete.
+
+    Note this flag gates *feature existence* per environment; *who* can use it
+    will be an RBAC capability — two independent controls (mirroring
+    ``scheduled_runs_enabled``).
+    """
+    return os.environ.get("MEMORY_SPACES_ENABLED", "false").lower() == "true"

@@ -51,6 +51,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     scheduledRuns: {
       enabled: false,
     },
+    memorySpaces: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,

@@ -218,11 +218,22 @@ S3 (content-addressed, one bucket):
 ```
 
 ```
-DynamoDB (single-table, existing platform table):
-  PK=SPACE#{space_id}  SK=META                     # space name, template, owner_id, created, flags
+DynamoDB (dedicated `memory-spaces` table — the project uses per-domain tables,
+not one global table; a dedicated table avoids GSI-number collisions and lets the
+MemorySpacesConstruct own both the bucket and the table):
+  PK=SPACE#{space_id}  SK=META                     # space name, template, owner_id, created, index pointer
   PK=SPACE#{space_id}  SK=INDEX                     # manifest: [{slug,type,description,content_hash,size,updated,updated_by,indexed:{...}}]
-  PK=SPACE#{space_id}  SK=MEMBER#{user_id}          # role: owner|editor|viewer, granted_by, granted_at
-        GSI (UserSpacesIndex): PK=USER#{user_id}  SK=SPACE#{space_id}   # list a user's owned + shared-in spaces
+  PK=SPACE#{space_id}  SK=MEMBER#{email}            # role: viewer|editor (owner lives on the META row)
+```
+
+Owned vs. shared-in are listed via **two GSIs** unioned in code — mirroring
+assistant sharing (owner index + share-by-email index), rather than one combined
+index (the proven pattern; a single `USER#`-keyed index can't cover both an
+`owner_id` and an invited-by-`email` grant):
+
+```
+  OwnerIndex   GSI1PK=OWNER#{owner_id}   GSI1SK=SPACE#{space_id}   # list owned spaces
+  MemberIndex  GSI2PK=MEMBER#{email}     GSI2SK=SPACE#{space_id}   # list shared-in spaces
 ```
 
 Each entry file carries frontmatter (mirrors the coding-agent memory shape; adds type + author):
@@ -367,8 +378,10 @@ S3 bucket (encryption **matching the platform's sessions/artifacts standard** �
 special-case memory), block public access, enforce SSL, **no auto-expiry** (memory is durable;
 deletion is explicit/user-driven — see [Data governance](#data-governance-proportionate--not-a-special-category) on the dedup-aware purge). Thread the bucket to compute roles via
 `PlatformComputeRefs` (typed ref, not SSM), per the construct rules. Read+write grant to
-inference-api runtime role and app-api role. The manifest/membership rows reuse the existing
-single-table DynamoDB with the new `UserSpacesIndex` GSI.
+inference-api runtime role and app-api role. The **same construct also owns a dedicated
+`memory-spaces` DynamoDB table** (PK/SK, PAY_PER_REQUEST, PITR) with the `OwnerIndex` +
+`MemberIndex` GSIs — a per-domain table (the project's actual pattern) rather than a GSI grafted
+onto `sessions-metadata`, threaded to both roles as `DYNAMODB_MEMORY_SPACES_TABLE_NAME`.
 
 ### 8. User-facing surface (app-api + SPA)
 
@@ -502,10 +515,12 @@ sentence, not a gate.
 
 ## Phasing (proposed PRs)
 
-- **PR-1 — Data layer.** `apis/shared/memory/` (`MemorySpaceStore` + `MemorySpaceService` +
-  `MemoryEntryRef`/`MemorySpace` models + manifest/membership repo, space-keyed, `resolve_permission`).
-  `MemorySpacesConstruct` (CDK) + `UserSpacesIndex` GSI. Unit tests. No runtime wiring. Flag
-  `MEMORY_SPACES_ENABLED` added, default off.
+- **PR-1 — Data layer.** ✅ `apis/shared/memory/` (`MemorySpaceStore` + `MemorySpaceService` +
+  `MemoryEntryRef`/`MemorySpace`/`MemoryIndex`/`SpaceMember` models + space-keyed repo +
+  `resolve_permission` + Blank/Chief-of-Staff/Research-Notebook templates).
+  `MemorySpacesConstruct` (CDK) = the S3 bucket + a dedicated `memory-spaces` table with
+  `OwnerIndex`/`MemberIndex` GSIs, wired to both compute roles (readwrite). Unit tests (moto).
+  No runtime wiring. Flag `MEMORY_SPACES_ENABLED` added, default off.
 - **PR-2 — Templates + read path.** Space templates (Chief of Staff / Research Notebook / Blank).
   Index injection (strategy A) + `memory_read` + `memory_query` tools + `memory` partition in
   `contextBreakdown`. Gated by the flag.

@@ -97,6 +97,10 @@ export interface PlatformComputeRefs {
   // ── Skills (admin-managed) — S3-backed reference files (PR-4)
   skillResourcesBucket: s3.IBucket;
 
+  // ── Memory Spaces — S3 content bucket + DynamoDB single-table
+  memorySpacesBucket: s3.IBucket;
+  memorySpacesTable: dynamodb.ITable;
+
   // ── Fine-tuning
   fineTuningJobsTable: dynamodb.ITable;
   fineTuningAccessTable: dynamodb.ITable;

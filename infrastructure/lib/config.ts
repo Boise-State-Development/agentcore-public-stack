@@ -50,6 +50,7 @@ export interface AppConfig {
   ragIngestion: RagIngestionConfig;
   kbSync: KbSyncConfig;
   scheduledRuns: ScheduledRunsConfig;
+  memorySpaces: MemorySpacesConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -154,6 +155,16 @@ export interface KbSyncConfig {
  * surface is governed separately by the `scheduled-runs` RBAC capability.
  */
 export interface ScheduledRunsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Memory Spaces feature flag. Default OFF with an on switch — the feature
+ * is opt-in per environment, enabled with CDK_MEMORY_SPACES_ENABLED=true
+ * (or a `memorySpaces.enabled: true` cdk.json context). Sets the
+ * MEMORY_SPACES_ENABLED env var on app-api and inference-api.
+ */
+export interface MemorySpacesConfig {
   enabled: boolean;
 }
 
@@ -303,6 +314,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SCHEDULED_RUNS_ENABLED
         ? process.env.CDK_SCHEDULED_RUNS_ENABLED !== 'false'
         : scope.node.tryGetContext('scheduledRuns')?.enabled ?? true,
+    },
+    memorySpaces: {
+      // Default OFF with an on switch: the feature is opt-in per
+      // environment, enabled only when explicitly turned on. The workflow
+      // forwards an EMPTY STRING when the variable is unset, so treat
+      // empty/unset as "use the default (off)" and only the literal "true"
+      // as the on switch. A `memorySpaces.enabled` cdk.json context can
+      // also force it on.
+      enabled: process.env.CDK_MEMORY_SPACES_ENABLED
+        ? process.env.CDK_MEMORY_SPACES_ENABLED === 'true'
+        : scope.node.tryGetContext('memorySpaces')?.enabled ?? false,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
