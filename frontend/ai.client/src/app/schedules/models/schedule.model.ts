@@ -7,8 +7,12 @@
  * docs/specs/scheduled-agent-runs.md §3.
  */
 
-export type ScheduleCadence = 'daily' | 'weekday' | 'weekly';
+export type ScheduleCadence = 'daily' | 'weekday' | 'weekly' | 'interval';
+export type IntervalUnit = 'minutes' | 'hours';
 export type ScheduledPromptState = 'active' | 'paused' | 'paused_error';
+
+/** Floor for the custom "every N" cadence (mirrors backend MIN_INTERVAL_MINUTES). */
+export const MIN_INTERVAL_MINUTES = 15;
 
 /** Public view of a scheduled prompt (backend ScheduledPromptResponse). */
 export interface ScheduledPrompt {
@@ -19,6 +23,8 @@ export interface ScheduledPrompt {
   cadence: ScheduleCadence;
   hourLocal: number;
   weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
   timezone: string;
   state: ScheduledPromptState;
   stateReason?: string | null;
@@ -42,6 +48,8 @@ export interface CreateScheduleRequest {
   cadence: ScheduleCadence;
   hourLocal: number;
   weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
   timezone: string;
   assistantId?: string | null;
   enabledTools?: string[] | null;
@@ -68,6 +76,8 @@ export interface UpdateScheduleRequest {
   cadence?: ScheduleCadence;
   hourLocal?: number;
   weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
   timezone?: string;
   assistantId?: string | null;
   enabledTools?: string[] | null;
@@ -84,4 +94,26 @@ export interface UpdateScheduleRequest {
 /** Response from GET /schedules. */
 export interface ScheduledPromptsListResponse {
   schedules: ScheduledPrompt[];
+}
+
+/**
+ * Request body for POST /runs/now — fire one attended agent turn immediately
+ * through the headless harness (the "Run now" button). Distinct surface from
+ * schedules: it does not create a saved schedule, it just executes once.
+ */
+export interface RunNowRequest {
+  prompt: string;
+  title?: string | null;
+  enabledTools?: string[] | null;
+}
+
+/** Response from POST /runs/now. The run also lands as a session. */
+export interface RunNowResponse {
+  runId: string;
+  sessionId: string;
+  status: string;
+  finalMessage: string;
+  stopReason?: string | null;
+  error?: string | null;
+  title?: string | null;
 }

@@ -21,9 +21,14 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Union
 from zoneinfo import ZoneInfo
 
-from .models import DUE_INDEX_PK, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
+from .models import DUE_INDEX_PK, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
 
 logger = logging.getLogger(__name__)
+
+#: Floor for the custom "every N" cadence. Below this a schedule fires faster
+#: than the runaway guard (``max_runs_per_day``) tolerates and just self-pauses;
+#: 15 minutes keeps the smallest interval useful without inviting a hot loop.
+MIN_INTERVAL_MINUTES = 15
 
 
 class _Unset:
@@ -97,12 +102,25 @@ def max_schedules_per_user() -> int:
     return int(os.environ.get("SCHEDULED_RUNS_MAX_PER_USER", DEFAULT_MAX_SCHEDULES_PER_USER))
 
 
+def interval_to_minutes(value: Optional[int], unit: Optional[IntervalUnit]) -> Optional[int]:
+    """Canonicalize an interval value+unit to whole minutes.
+
+    Returns ``None`` when either half is missing so callers can pass a
+    schedule's interval fields through unconditionally (a non-interval
+    schedule carries ``None`` for both).
+    """
+    if value is None or unit is None:
+        return None
+    return value * 60 if unit == "hours" else value
+
+
 def compute_next_run_at(
     cadence: ScheduleCadence,
     hour_local: int,
     timezone_name: str,
     weekday: Optional[int] = None,
     from_time: Optional[datetime] = None,
+    interval_minutes: Optional[int] = None,
 ) -> str:
     """Compute the next due timestamp (ISO 8601 UTC) for a cadence.
 
@@ -112,8 +130,16 @@ def compute_next_run_at(
     at 9:05am local for "daily at 9am" fires tomorrow, not immediately.
 
     ``weekday`` is 0=Monday..6=Sunday (``datetime.weekday()`` convention) and
-    is required for cadence == "weekly"; ignored otherwise.
+    is required for cadence == "weekly"; ignored otherwise. ``interval_minutes``
+    is required for cadence == "interval" (a plain delta from ``from_time`` —
+    no wall-clock or timezone anchor); ignored otherwise.
     """
+    if cadence == "interval":
+        if interval_minutes is None or interval_minutes <= 0:
+            raise ValueError("interval_minutes is required and must be positive when cadence == 'interval'")
+        base_utc = (from_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        return _iso(base_utc + timedelta(minutes=interval_minutes))
+
     tz = ZoneInfo(timezone_name)
     base = (from_time or datetime.now(timezone.utc)).astimezone(tz)
 
@@ -148,6 +174,8 @@ async def create_scheduled_prompt(
     hour_local: int,
     timezone_name: str,
     weekday: Optional[int] = None,
+    interval_value: Optional[int] = None,
+    interval_unit: Optional[IntervalUnit] = None,
     assistant_id: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
     deliver_email: bool = False,
@@ -166,7 +194,13 @@ async def create_scheduled_prompt(
         )
 
     now = _get_current_timestamp()
-    next_run_at = compute_next_run_at(cadence, hour_local, timezone_name, weekday=weekday)
+    next_run_at = compute_next_run_at(
+        cadence,
+        hour_local,
+        timezone_name,
+        weekday=weekday,
+        interval_minutes=interval_to_minutes(interval_value, interval_unit),
+    )
     schedule = ScheduledPrompt(
         schedule_id=_generate_schedule_id(),
         user_id=user_id,
@@ -176,6 +210,8 @@ async def create_scheduled_prompt(
         cadence=cadence,
         hour_local=hour_local,
         weekday=weekday,
+        interval_value=interval_value,
+        interval_unit=interval_unit,
         timezone=timezone_name,
         state="active",
         next_run_at=next_run_at,
@@ -404,6 +440,8 @@ async def update_scheduled_prompt(
     cadence: Optional[ScheduleCadence] = None,
     hour_local: Optional[int] = None,
     weekday: Optional[int] = None,
+    interval_value: Optional[int] = None,
+    interval_unit: Optional[IntervalUnit] = None,
     timezone_name: Optional[str] = None,
     assistant_id: Union[str, None, _Unset] = UNSET,
     enabled_tools: Union[List[str], None, _Unset] = UNSET,
@@ -431,12 +469,16 @@ async def update_scheduled_prompt(
     new_cadence = cadence if cadence is not None else schedule.cadence
     new_hour_local = hour_local if hour_local is not None else schedule.hour_local
     new_weekday = weekday if weekday is not None else schedule.weekday
+    new_interval_value = interval_value if interval_value is not None else schedule.interval_value
+    new_interval_unit = interval_unit if interval_unit is not None else schedule.interval_unit
     new_timezone = timezone_name if timezone_name is not None else schedule.timezone
 
     cadence_changed = (
         new_cadence != schedule.cadence
         or new_hour_local != schedule.hour_local
         or new_weekday != schedule.weekday
+        or new_interval_value != schedule.interval_value
+        or new_interval_unit != schedule.interval_unit
         or new_timezone != schedule.timezone
     )
 
@@ -453,9 +495,21 @@ async def update_scheduled_prompt(
         if new_weekday is not None:
             set_parts.append("weekday = :weekday")
             values[":weekday"] = new_weekday
+        if new_interval_value is not None:
+            set_parts.append("intervalValue = :interval_value")
+            values[":interval_value"] = new_interval_value
+        if new_interval_unit is not None:
+            set_parts.append("intervalUnit = :interval_unit")
+            values[":interval_unit"] = new_interval_unit
 
         if schedule.state == "active":
-            next_run_at = compute_next_run_at(new_cadence, new_hour_local, new_timezone, weekday=new_weekday)
+            next_run_at = compute_next_run_at(
+                new_cadence,
+                new_hour_local,
+                new_timezone,
+                weekday=new_weekday,
+                interval_minutes=interval_to_minutes(new_interval_value, new_interval_unit),
+            )
             set_parts += ["nextRunAt = :next", "GSI3_PK = :gsipk", "GSI3_SK = :gsisk"]
             values[":next"] = next_run_at
             values[":gsipk"] = DUE_INDEX_PK

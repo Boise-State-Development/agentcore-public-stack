@@ -30,10 +30,12 @@ from apis.shared.feature_flags import scheduled_runs_enabled
 from apis.shared.rbac.capabilities import SCHEDULED_RUNS_CAPABILITY, user_has_capability
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
+    MIN_INTERVAL_MINUTES,
     UNSET,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
+    interval_to_minutes,
     delete_scheduled_prompt,
     get_scheduled_prompt,
     list_scheduled_prompts,
@@ -118,6 +120,8 @@ async def create_schedule(
             hour_local=request.hour_local,
             timezone_name=request.timezone,
             weekday=request.weekday,
+            interval_value=request.interval_value,
+            interval_unit=request.interval_unit,
             assistant_id=request.assistant_id,
             enabled_tools=enabled_tools,
             deliver_email=request.deliver_email,
@@ -173,6 +177,24 @@ async def update_schedule(
             detail="weekday is required when cadence is 'weekly'",
         )
 
+    effective_interval_value = (
+        request.interval_value if request.interval_value is not None else schedule.interval_value
+    )
+    effective_interval_unit = (
+        request.interval_unit if request.interval_unit is not None else schedule.interval_unit
+    )
+    if effective_cadence == "interval":
+        if effective_interval_value is None or effective_interval_unit is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="intervalValue and intervalUnit are required when cadence is 'interval'",
+            )
+        if interval_to_minutes(effective_interval_value, effective_interval_unit) < MIN_INTERVAL_MINUTES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"interval must be at least {MIN_INTERVAL_MINUTES} minutes",
+            )
+
     # Clear intent is explicit — a bare null means "leave unchanged", so the
     # service uses the UNSET sentinel for "untouched". Clearing the assistant
     # reverts to the default agent; clearing tools re-snapshots the caller's
@@ -201,6 +223,8 @@ async def update_schedule(
         cadence=request.cadence,
         hour_local=request.hour_local,
         weekday=request.weekday,
+        interval_value=request.interval_value,
+        interval_unit=request.interval_unit,
         timezone_name=request.timezone,
         assistant_id=assistant_arg,
         enabled_tools=tools_arg,
@@ -210,7 +234,11 @@ async def update_schedule(
     if request.state is not None and request.state != schedule.state:
         if request.state == "active":
             next_run_at = compute_next_run_at(
-                schedule.cadence, schedule.hour_local, schedule.timezone, weekday=schedule.weekday
+                schedule.cadence,
+                schedule.hour_local,
+                schedule.timezone,
+                weekday=schedule.weekday,
+                interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
             )
             await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=next_run_at)
         else:
@@ -247,7 +275,11 @@ async def resume_schedule(
         return ScheduledPromptResponse.from_schedule(schedule)
 
     next_run_at = compute_next_run_at(
-        schedule.cadence, schedule.hour_local, schedule.timezone, weekday=schedule.weekday
+        schedule.cadence,
+        schedule.hour_local,
+        schedule.timezone,
+        weekday=schedule.weekday,
+        interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
     )
     await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=next_run_at)
     schedule = await get_scheduled_prompt(user.user_id, schedule_id)

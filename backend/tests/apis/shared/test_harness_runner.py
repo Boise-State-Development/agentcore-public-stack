@@ -182,8 +182,10 @@ async def test_happy_path_completes_and_delivers(monkeypatch, delivery_spy):
     # Delivery: idempotent session ensure + explicit title override.
     assert delivery_spy["ensure"] == [(result.session_id, "user-1")]
     assert delivery_spy["title"] == [(result.session_id, "user-1", "My Briefing")]
-    # Attended trigger ("run_now") — the user is present, so no unread flag.
-    assert delivery_spy["unread"] == []
+    # "run_now" is a background/fire-and-forget surface — the user isn't
+    # watching the stream, so a completed run flags the session unread (a
+    # sidebar dot until they open it), same as a scheduled run.
+    assert delivery_spy["unread"] == [(result.session_id, "user-1", True)]
 
 
 @pytest.mark.asyncio
