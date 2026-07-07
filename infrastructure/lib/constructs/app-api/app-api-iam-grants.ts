@@ -326,6 +326,29 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Memory Spaces (S3 + DynamoDB) ──
+  // app-api is a readwriter of memory-space content and metadata
+  // (apis/shared/memory/*). Sourced from typed refs.
+  const memorySpacesBucketArn = props.refs.memorySpacesBucket.bucketArn;
+  const memorySpacesTableArn = props.refs.memorySpacesTable.tableArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'MemorySpacesBucketReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
+      resources: [memorySpacesBucketArn, `${memorySpacesBucketArn}/*`],
+    }),
+  );
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'MemorySpacesTableReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem',
+                'dynamodb:Query', 'dynamodb:BatchWriteItem'],
+      resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
+    }),
+  );
+
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
   const ftJobsTableArn = props.refs.fineTuningJobsTable.tableArn;
