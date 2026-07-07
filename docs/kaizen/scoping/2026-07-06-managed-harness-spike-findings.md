@@ -143,3 +143,31 @@ I supplied the return URL through **every** documented channel and the error per
 **Follow-ups worth a short AWS-support / re-probe pass:** ① correct channel for `ResourceOauth2ReturnUrl` on a managed Gateway 3LO exchange (or confirm the gap); ② harness-workload vs platform-workload token visibility (`scope-credential-provider-access`). **Pricing:** no separate harness charge — you pay only for the underlying AgentCore capabilities used (`harness.html`); note managed memory is on by default (an extra Memory cost dimension per harness).
 
 **Teardown:** probe harness `q2probe_cparams` deleted (its runtime + managed memory + auto-created workload identity `harness_q2probe_cparams-*` are removed with it); the reused runtime role, dev Gateway, and its `arxiv`/`policy-search` targets were never modified.
+
+---
+
+## `resourceOauth2ReturnUrl` — the parameter shape (added 2026-07-07)
+
+The blocker above was empirical ("supplied it four ways, all failed"). The API doc for the field now gives the **mechanism-level** reason, and it *confirms* the boundary decision rather than reopening it.
+
+**Shape (from the AWS API reference):**
+
+> **`resourceOauth2ReturnUrl`** — The callback URL to redirect to after the OAuth 2.0 token retrieval is complete. **This URL must be one of the provided URLs configured for the workload identity.**
+> Type: String · Length 1–2048 · Pattern `\w+:(\/?\/?)[^\s]+` · **Required: No**
+
+Three things fall out of this, and each is decision-relevant:
+
+1. **It is a direct request parameter of `GetResourceOauth2Token` itself** — not a harness/gateway config field. So on **our own** `get_token_for_user` call-site (`apis/shared/oauth/agentcore_identity.py:168`) we *can* pass it; on the **Harness-managed Gateway** path the Gateway is the caller of `GetResourceOauth2Token`, and — as the probe found — it exposes **no seam to inject this parameter** into that internal call (`defaultReturnUrl`, the `OAuth2CallbackUrl` header, and workload-identity registration all failed to thread through). This upgrades the boundary from "undocumented channel" to a **structural** one: the value belongs on a call we don't make on the managed path. **→ strengthens "keep 3LO on our own path."**
+2. **`Required: No`** — it is only needed when the flow must actually redirect the user for a *fresh* `AUTHORIZATION_CODE` consent. An **already-consented / cached** vault token resolves without it. This is exactly why F1's pre-consented `google-drive` token worked unattended and why plain-scopes/2LO providers are unaffected — the return URL matters *only* at initial consent, which on our lane happens through the SPA/BFF, not inside the run.
+3. **"must be one of the provided URLs configured for the workload identity"** — the allow-list linkage the probe attempted (`AllowedResourceOauth2ReturnUrl` via `UpdateWorkloadIdentity`) is the *right* registration mechanism, but it must be registered on **the workload identity that actually performs the exchange**. On the managed path that is the harness's **own** auto-created `harness_<agentName>-*` identity — which ties directly into the still-unreached **cross-workload visibility** residual (a token consented under our *platform* workload identity is registered against a *different* identity than the one the harness exchange runs under).
+
+### harness-security.html cross-check (2026-07-07)
+
+Reading the harness **security** page confirmed two supporting facts and surfaced one new documentary signal:
+
+- **SigV4 cannot carry per-user identity — verbatim:** *"When callers authenticate with SigV4 (AWS IAM), the harness does not propagate per-user identity into downstream tool calls … user-scoped OAuth token storage and on-behalf-of token exchange … only available when callers authenticate with a Bearer JWT via the OAuth inbound path. SigV4 support for per-user identity is planned for a future release."* Confirms the OAuth-inbound requirement (Q2) in AWS's own words.
+- **The intended pattern is on-behalf-of *exchange*, not consent *origination*.** The page describes threading an inbound user JWT into a downstream token exchange; it documents **no** interactive-consent origination from inside a run. That is consistent with `Required: No` above — a headless run is expected to exchange an *already-consented* token, not to start a redirect. Our decision (originate consent on our own SPA/BFF path, let the harness only exchange) is *aligned with the design*, not a workaround.
+- **New documentary signal — the harness runs under its own workload identity.** The page's "OAuth2 credential provider (OAuth-protected Gateway)" IAM policy scopes `bedrock-agentcore:GetResourceOauth2Token` to `…/workload-identity/harness_<agentName>-*`. This is written confirmation of the cross-workload residual: the harness's exchange authority is namespaced to its **own** identity, distinct from our platform workload identity where existing tokens were consented. Whether a platform-consented token is visible across that boundary (via `scope-credential-provider-access`) remains the **one** thing to test before any managed-Gateway 3LO adoption.
+- **`resourceOauth2ReturnUrl` appears nowhere on the security page** — no 3LO return-URL / callback documentation at all. Consistent with the probe's read that the correct channel on the managed-Gateway path is undocumented (or absent) in this GA build.
+
+**Net:** the return-URL shape and the security-page cross-check **do not change the GO-with-boundary verdict** — they re-label the open question. The blocker is best understood as *structural* (the return-URL param lives on a call the managed path makes internally, against the harness's own workload identity), and the sharpest next test is **cross-workload token visibility**, not chasing the return-URL channel. Follow-up ① above is refined accordingly: confirm with AWS whether a managed-Gateway 3LO exchange can ever accept a caller-supplied `resourceOauth2ReturnUrl`; if not, the "our own `get_token_for_user`" boundary is permanent-by-design, not a stopgap.
