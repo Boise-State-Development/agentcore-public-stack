@@ -1,0 +1,250 @@
+"""Memory Spaces user surface — CRUD over `/memory/spaces/*` (Workstream A2).
+
+The user-facing surface for the Memory Space primitive: a person creates,
+lists, reads, edits, and deletes their own (and shared-with-them) spaces,
+entries, and index. This is the "own your data" surface; the *agent*
+consumption of a space (tools, binding, prompt injection) is a separate
+workstream (Agent/Harness layer), not here.
+
+Gating: the router is mounted unconditionally but every route depends on
+``require_memory_spaces_user`` — a 404 when ``MEMORY_SPACES_ENABLED`` is off
+(the surface behaves as if unmounted). Auth is the standard SPA cookie
+dependency (``get_current_user_from_session``) per the CLAUDE.md app-api rule.
+Memory spaces are user-owned personal data (like sessions/assistants), so
+there is no cohort RBAC capability gate; access to a *specific* space is the
+identity-based ``resolve_permission`` check inside ``MemorySpaceService``.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.auth.models import User
+from apis.shared.feature_flags import memory_spaces_enabled
+from apis.shared.memory.models import EntryType
+from apis.shared.memory.service import (
+    MemorySpaceError,
+    MemorySpaceNotFoundError,
+    MemorySpacePermissionError,
+    MemorySpaceService,
+)
+
+from apis.app_api.memory_spaces.models import (
+    CreateSpaceRequest,
+    EntriesListResponse,
+    EntryContentResponse,
+    EntryRefResponse,
+    IndexContentResponse,
+    SpaceDetailResponse,
+    SpaceSummaryResponse,
+    SpacesListResponse,
+    UpdateIndexRequest,
+    UpsertEntryRequest,
+    all_templates,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/memory/spaces", tags=["memory-spaces"])
+
+_service: Optional[MemorySpaceService] = None
+
+
+def _svc() -> MemorySpaceService:
+    global _service
+    if _service is None:
+        _service = MemorySpaceService()
+    return _service
+
+
+async def require_memory_spaces_user(
+    user: User = Depends(get_current_user_from_session),
+) -> User:
+    """Cookie auth + the environment kill switch.
+
+    404 when ``MEMORY_SPACES_ENABLED`` is off, so the surface behaves as if
+    unmounted (mirrors the schedules/runs pattern).
+    """
+    if not memory_spaces_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return user
+
+
+def _translate(e: Exception) -> HTTPException:
+    """Map a service error to an HTTP status."""
+    if isinstance(e, MemorySpaceNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    if isinstance(e, MemorySpacePermissionError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    if isinstance(e, MemorySpaceError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    raise e
+
+
+# ---- spaces ------------------------------------------------------------
+
+
+@router.get("", response_model=SpacesListResponse)
+def list_spaces(user: User = Depends(require_memory_spaces_user)) -> SpacesListResponse:
+    svc = _svc()
+    summaries = [
+        SpaceSummaryResponse.from_space(space, role)
+        for space, role in svc.list_spaces_for_user(user.user_id, user.email)
+    ]
+    return SpacesListResponse(spaces=summaries, templates=all_templates())
+
+
+@router.post("", response_model=SpaceSummaryResponse, status_code=status.HTTP_201_CREATED)
+def create_space(
+    request: CreateSpaceRequest,
+    user: User = Depends(require_memory_spaces_user),
+) -> SpaceSummaryResponse:
+    try:
+        space = _svc().create_space(
+            owner_id=user.user_id,
+            owner_email=user.email,
+            name=request.name,
+            template=request.template,
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return SpaceSummaryResponse.from_space(space, "owner")
+
+
+@router.get("/{space_id}", response_model=SpaceDetailResponse)
+def get_space(
+    space_id: str, user: User = Depends(require_memory_spaces_user)
+) -> SpaceDetailResponse:
+    svc = _svc()
+    try:
+        space, role = svc.resolve_permission(space_id, user.user_id, user.email)
+        if space is None:
+            raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+        if role is None:
+            raise MemorySpacePermissionError(
+                f"'viewer' access required on memory space '{space_id}'"
+            )
+        index_text = svc.read_index(space_id, user.user_id, user.email)
+        entries = svc.list_entries(space_id, user.user_id, user.email)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return SpaceDetailResponse(
+        space_id=space.space_id,
+        name=space.name,
+        template=space.template,
+        role=role,
+        owner_id=space.owner_id,
+        created_at=space.created_at,
+        updated_at=space.updated_at,
+        index=index_text,
+        entries=[EntryRefResponse.from_ref(r) for r in entries],
+    )
+
+
+@router.delete("/{space_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_or_leave_space(
+    space_id: str, user: User = Depends(require_memory_spaces_user)
+) -> None:
+    """Owner deletes the whole space; a member drops their own grant (leave)."""
+    svc = _svc()
+    try:
+        _, role = svc.resolve_permission(space_id, user.user_id, user.email)
+        if role == "owner":
+            svc.delete_space(space_id, user.user_id, user.email)
+        else:
+            svc.leave_space(space_id, user.user_id, user.email)
+    except MemorySpaceError as e:
+        raise _translate(e)
+
+
+# ---- index (MEMORY.md) -------------------------------------------------
+
+
+@router.get("/{space_id}/index", response_model=IndexContentResponse)
+def read_index(
+    space_id: str, user: User = Depends(require_memory_spaces_user)
+) -> IndexContentResponse:
+    try:
+        text = _svc().read_index(space_id, user.user_id, user.email)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return IndexContentResponse(content=text)
+
+
+@router.put("/{space_id}/index", response_model=IndexContentResponse)
+def update_index(
+    space_id: str,
+    request: UpdateIndexRequest,
+    user: User = Depends(require_memory_spaces_user),
+) -> IndexContentResponse:
+    try:
+        _svc().update_index(space_id, user.user_id, user.email, request.content)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return IndexContentResponse(content=request.content)
+
+
+# ---- entries -----------------------------------------------------------
+
+
+@router.get("/{space_id}/entries", response_model=EntriesListResponse)
+def list_entries(
+    space_id: str,
+    user: User = Depends(require_memory_spaces_user),
+    entry_type: Optional[EntryType] = Query(None, alias="type"),
+) -> EntriesListResponse:
+    try:
+        entries = _svc().list_entries(
+            space_id, user.user_id, user.email, entry_type=entry_type
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return EntriesListResponse(entries=[EntryRefResponse.from_ref(r) for r in entries])
+
+
+@router.get("/{space_id}/entries/{slug}", response_model=EntryContentResponse)
+def read_entry(
+    space_id: str, slug: str, user: User = Depends(require_memory_spaces_user)
+) -> EntryContentResponse:
+    try:
+        content = _svc().read_entry(space_id, user.user_id, user.email, slug)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return EntryContentResponse(slug=slug, content=content)
+
+
+@router.put("/{space_id}/entries/{slug}", response_model=EntryRefResponse)
+def upsert_entry(
+    space_id: str,
+    slug: str,
+    request: UpsertEntryRequest,
+    user: User = Depends(require_memory_spaces_user),
+) -> EntryRefResponse:
+    try:
+        ref = _svc().write_entry(
+            space_id,
+            user.user_id,
+            user.email,
+            slug,
+            request.body,
+            entry_type=request.entry_type,
+            description=request.description,
+            indexed=request.indexed,
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return EntryRefResponse.from_ref(ref)
+
+
+@router.delete("/{space_id}/entries/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_entry(
+    space_id: str, slug: str, user: User = Depends(require_memory_spaces_user)
+) -> None:
+    try:
+        _svc().delete_entry(space_id, user.user_id, user.email, slug)
+    except MemorySpaceError as e:
+        raise _translate(e)

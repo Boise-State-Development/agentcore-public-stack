@@ -225,13 +225,15 @@ class TestCreateAndList:
         other = service.create_space(STRANGER, STRANGER_EMAIL, "Shared")
         service.share(other.space_id, STRANGER, STRANGER_EMAIL, FRIEND_EMAIL, "viewer")
 
-        owner_spaces = {s.space_id for s in service.list_spaces_for_user(OWNER, OWNER_EMAIL)}
+        owner_spaces = {
+            s.space_id for s, _ in service.list_spaces_for_user(OWNER, OWNER_EMAIL)
+        }
         assert owner_spaces == {a.space_id, b.space_id}
 
-        friend_spaces = {
-            s.space_id for s in service.list_spaces_for_user(FRIEND, FRIEND_EMAIL)
-        }
-        assert friend_spaces == {other.space_id}
+        friend = service.list_spaces_for_user(FRIEND, FRIEND_EMAIL)
+        assert {s.space_id for s, _ in friend} == {other.space_id}
+        # shared-in space carries the member's actual grant, not a placeholder
+        assert friend[0][1] == "viewer"
 
     def test_delete_space_owner_only(self, space, service):
         with pytest.raises(MemorySpacePermissionError):
@@ -296,6 +298,22 @@ class TestSharing:
         service.revoke(space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL)
         _, role = service.resolve_permission(space.space_id, FRIEND, FRIEND_EMAIL)
         assert role is None
+
+    def test_member_can_leave(self, space, service):
+        service.share(space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "editor")
+        service.leave_space(space.space_id, FRIEND, FRIEND_EMAIL)
+        _, role = service.resolve_permission(space.space_id, FRIEND, FRIEND_EMAIL)
+        assert role is None
+        # the space itself still exists for the owner
+        assert service.get_space(space.space_id, OWNER, OWNER_EMAIL) is not None
+
+    def test_owner_cannot_leave(self, space, service):
+        with pytest.raises(Exception):
+            service.leave_space(space.space_id, OWNER, OWNER_EMAIL)
+
+    def test_non_member_cannot_leave(self, space, service):
+        with pytest.raises(MemorySpacePermissionError):
+            service.leave_space(space.space_id, STRANGER, STRANGER_EMAIL)
 
 
 # ============================ service: index + entries ============================
