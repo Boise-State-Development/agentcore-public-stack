@@ -551,8 +551,13 @@ calls it.
   `OptimisticLockError`), and `write_entry`/`delete_entry` run a bounded read-modify-retry loop
   (`_mutate_index`) that converges on transient races and surfaces `MemorySpaceConcurrencyError`
   (→ 409) only on a sustained one. Access control is identity-based; no content gate.
-- **A5 — SPA Memory panel.** The Memory section: list, per-space view/edit/delete, create-from-
-  template, download `.zip`, share dialog (reuse the assistant-share component + `redesign-tokens`).
+- **A5 — SPA Memory panel.** ✅ The Memory section under `frontend/ai.client/src/app/memory-spaces/`:
+  a list page (owned + shared-in cards with role/template badges), a detail page (view/edit the
+  `MEMORY.md` index + entry list with view/edit/create/delete via a dialog), create-from-template
+  dialog, download `.zip` (blob → anchor), and a share dialog (add-by-email + per-row role + delta
+  save over the A4 endpoints). Signal facade + API service mirror the assistants/schedules pattern;
+  nav entry gated on a live `accessible$` probe (404 = kill switch off → hidden), redesign-tokens
+  throughout. Viewer = read-only. Facade spec green; dev build + tsc clean.
 - **A6 — Consolidation.** A maintenance job (scheduled per space, or on index-cap threshold) that
   merges duplicate entries, fixes stale ones, and prunes the index. Uses `MemorySpaceService`; runs
   on the shipped scheduler. Primitive-side corpus health, not a per-turn concern.

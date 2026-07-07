@@ -70,6 +70,16 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'memory-spaces/:id',
+        loadComponent: () => import('./memory-spaces/memory-space-detail.page').then(m => m.MemorySpaceDetailPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'memory-spaces',
+        loadComponent: () => import('./memory-spaces/memory-spaces.page').then(m => m.MemorySpacesPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'manage-sessions',
         loadComponent: () => import('./manage-sessions/manage-sessions.page').then(m => m.ManageSessionsPage),
         canActivate: [authGuard],

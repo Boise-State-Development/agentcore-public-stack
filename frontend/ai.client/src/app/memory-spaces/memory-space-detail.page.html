@@ -1,0 +1,183 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+    <!-- Back -->
+    <button
+      type="button"
+      (click)="goBack()"
+      class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-500 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-gray-400 dark:hover:text-white"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+      Memory Spaces
+    </button>
+
+    @if (loading()) {
+      <div class="mt-6 space-y-4" aria-hidden="true">
+        <div class="h-8 w-64 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        <div class="h-48 animate-pulse rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"></div>
+      </div>
+      <span class="sr-only" role="status">Loading memory space…</span>
+    } @else if (error() && !space()) {
+      <div class="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+        {{ error() }}
+      </div>
+    } @else if (space(); as sp) {
+      <!-- Header -->
+      <div class="mt-4 flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <h1 class="truncate text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">
+              {{ sp.name }}
+            </h1>
+            <span
+              class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize"
+              [class]="sp.role === 'owner'
+                ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
+            >
+              {{ sp.role }}
+            </span>
+          </div>
+          @if (!canEdit()) {
+            <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">You have read-only access to this space.</p>
+          }
+        </div>
+
+        <div class="flex items-center gap-1">
+          @if (isOwner()) {
+            <button
+              type="button"
+              (click)="onShare()"
+              class="flex size-9 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              aria-label="Share this space"
+            >
+              <ng-icon name="heroShare" class="size-5" aria-hidden="true" />
+            </button>
+          }
+          <button
+            type="button"
+            (click)="onDownload()"
+            [disabled]="exporting()"
+            class="flex size-9 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            aria-label="Download this space as a zip"
+          >
+            <ng-icon name="heroArrowDownTray" class="size-5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            (click)="onDeleteOrLeave()"
+            class="flex size-9 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+            [attr.aria-label]="isOwner() ? 'Delete this space' : 'Leave this space'"
+          >
+            <ng-icon name="heroTrash" class="size-5" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      @if (error()) {
+        <div class="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+          {{ error() }}
+        </div>
+      }
+
+      <!-- Index (MEMORY.md) -->
+      <section class="mt-6 rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Index (MEMORY.md)</h2>
+            <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+              The always-loaded catalog of one-line pointers into this space.
+            </p>
+          </div>
+          @if (canEdit()) {
+            <button
+              type="button"
+              (click)="onSaveIndex()"
+              [disabled]="savingIndex()"
+              class="shrink-0 rounded-2xl bg-blue-600 px-3.5 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              {{ savingIndex() ? 'Saving…' : 'Save index' }}
+            </button>
+          }
+        </div>
+        <textarea
+          [ngModel]="indexText()"
+          (ngModelChange)="indexText.set($event)"
+          [readonly]="!canEdit()"
+          rows="10"
+          class="mt-4 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 read-only:bg-gray-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:read-only:bg-gray-900/40"
+          aria-label="MEMORY.md index"
+        ></textarea>
+      </section>
+
+      <!-- Entries -->
+      <section class="mt-6">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+              Entries
+              <span class="ml-1 tabular-nums text-gray-400 dark:text-gray-500">{{ entries().length }}</span>
+            </h2>
+            <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+              Typed markdown files fetched on demand.
+            </p>
+          </div>
+          @if (canEdit()) {
+            <button
+              type="button"
+              (click)="onNewEntry()"
+              class="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-3.5 py-1.5 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+              New entry
+            </button>
+          }
+        </div>
+
+        @if (entries().length === 0) {
+          <div class="mt-4 rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
+            <p class="text-sm/6 text-gray-500 dark:text-gray-400">No entries yet.</p>
+          </div>
+        } @else {
+          <ul class="mt-4 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+            @for (entry of entries(); track entry.slug) {
+              <li
+                class="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                role="button"
+                tabindex="0"
+                (click)="onOpenEntry(entry)"
+                (keydown.enter)="onOpenEntry(entry)"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ entry.slug }}</p>
+                    <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium capitalize text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                      {{ entry.type }}
+                    </span>
+                  </div>
+                  @if (entry.description) {
+                    <p class="mt-0.5 truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ entry.description }}</p>
+                  }
+                </div>
+                <ng-icon
+                  [name]="canEdit() ? 'heroPencilSquare' : 'heroArrowDownTray'"
+                  class="size-4 shrink-0 text-gray-300 dark:text-gray-600"
+                  aria-hidden="true"
+                />
+                @if (canEdit()) {
+                  <button
+                    type="button"
+                    (click)="onDeleteEntry(entry, $event)"
+                    class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                    [attr.aria-label]="'Delete ' + entry.slug"
+                  >
+                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                  </button>
+                }
+              </li>
+            }
+          </ul>
+        }
+      </section>
+    }
+  </div>
+</div>
