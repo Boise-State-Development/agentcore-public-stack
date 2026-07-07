@@ -33,6 +33,7 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import memory_spaces_enabled
 from apis.shared.memory.models import EntryType
 from apis.shared.memory.service import (
+    MemorySpaceConcurrencyError,
     MemorySpaceError,
     MemorySpaceExport,
     MemorySpaceNotFoundError,
@@ -47,10 +48,14 @@ from apis.app_api.memory_spaces.models import (
     EntryContentResponse,
     EntryRefResponse,
     IndexContentResponse,
+    MemberResponse,
+    MembersListResponse,
+    ShareRequest,
     SpaceDetailResponse,
     SpaceSummaryResponse,
     SpacesListResponse,
     UpdateIndexRequest,
+    UpdateShareRequest,
     UpsertEntryRequest,
     all_templates,
 )
@@ -88,6 +93,8 @@ def _translate(e: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     if isinstance(e, MemorySpacePermissionError):
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    if isinstance(e, MemorySpaceConcurrencyError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     if isinstance(e, MemorySpaceError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     raise e
@@ -270,6 +277,73 @@ def delete_or_leave_space(
             svc.delete_space(space_id, user.user_id, user.email)
         else:
             svc.leave_space(space_id, user.user_id, user.email)
+    except MemorySpaceError as e:
+        raise _translate(e)
+
+
+# ---- sharing (A4) ------------------------------------------------------
+
+
+@router.get("/{space_id}/shares", response_model=MembersListResponse)
+def list_shares(
+    space_id: str, user: User = Depends(require_memory_spaces_user)
+) -> MembersListResponse:
+    """List a space's shared grants (editor+; the owner is implicit)."""
+    try:
+        members = _svc().list_members(space_id, user.user_id, user.email)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return MembersListResponse(
+        members=[MemberResponse.from_member(m) for m in members]
+    )
+
+
+@router.post(
+    "/{space_id}/shares",
+    response_model=MemberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_share(
+    space_id: str,
+    request: ShareRequest,
+    user: User = Depends(require_memory_spaces_user),
+) -> MemberResponse:
+    """Grant a user viewer/editor access to the space (owner only)."""
+    try:
+        member = _svc().share(
+            space_id, user.user_id, user.email, request.email, request.permission
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return MemberResponse.from_member(member)
+
+
+@router.patch("/{space_id}/shares/{email}", response_model=MemberResponse)
+def update_share(
+    space_id: str,
+    email: str,
+    request: UpdateShareRequest,
+    user: User = Depends(require_memory_spaces_user),
+) -> MemberResponse:
+    """Change an existing grant's role (owner only)."""
+    try:
+        member = _svc().update_share(
+            space_id, user.user_id, user.email, email, request.permission
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return MemberResponse.from_member(member)
+
+
+@router.delete(
+    "/{space_id}/shares/{email}", status_code=status.HTTP_204_NO_CONTENT
+)
+def remove_share(
+    space_id: str, email: str, user: User = Depends(require_memory_spaces_user)
+) -> None:
+    """Revoke a user's grant (owner only). Idempotent."""
+    try:
+        _svc().revoke(space_id, user.user_id, user.email, email)
     except MemorySpaceError as e:
         raise _translate(e)
 

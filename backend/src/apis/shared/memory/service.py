@@ -20,7 +20,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .models import (
     EntryType,
@@ -31,13 +31,21 @@ from .models import (
     ShareRole,
     SpaceMember,
 )
-from .repository import MemorySpaceRepository
+from .repository import MemorySpaceRepository, OptimisticLockError
 from .store import MemorySpaceStore, compute_content_hash, get_memory_space_store
 from .templates import DEFAULT_TEMPLATE_ID, get_template, is_valid_template
 
 logger = logging.getLogger(__name__)
 
 _ROLE_RANK: Dict[str, int] = {"viewer": 1, "editor": 2, "owner": 3}
+
+# Bounded read-modify-retry attempts when a shared space's manifest is being
+# edited concurrently. Entry writes touch a single slug, so re-reading the
+# fresh manifest and re-applying the change is safe; only a sustained race
+# exhausts this and surfaces as a conflict.
+_MAX_MANIFEST_RETRIES = 5
+
+_T = TypeVar("_T")
 
 
 class MemorySpaceError(RuntimeError):
@@ -50,6 +58,14 @@ class MemorySpaceNotFoundError(MemorySpaceError):
 
 class MemorySpacePermissionError(MemorySpaceError):
     """The caller lacks the required role on the space."""
+
+
+class MemorySpaceConcurrencyError(MemorySpaceError):
+    """A shared space's manifest kept changing under a bounded retry loop.
+
+    Surfaced to the API layer as ``409 Conflict`` — the write is safe to retry
+    from a fresh read.
+    """
 
 
 @dataclass
@@ -308,6 +324,36 @@ class MemorySpaceService:
         self._touch(space_id)
         return member
 
+    def update_share(
+        self,
+        space_id: str,
+        actor_id: str,
+        actor_email: Optional[str],
+        grantee_email: str,
+        permission: ShareRole,
+    ) -> SpaceMember:
+        """Change an existing grant's role (owner only), preserving its origin.
+
+        Distinct from :meth:`share` (upsert-create) so a PATCH gets proper
+        not-found semantics and keeps the original ``created_at``.
+        """
+        self._require(space_id, actor_id, actor_email, "owner")
+        if permission not in ("viewer", "editor"):
+            raise MemorySpaceError(f"invalid share permission '{permission}'")
+        existing = self.repository.get_member(space_id, grantee_email)
+        if existing is None:
+            raise MemorySpaceNotFoundError(
+                f"'{grantee_email}' is not a member of memory space '{space_id}'"
+            )
+        member = SpaceMember(
+            email=grantee_email.strip().lower(),
+            permission=permission,
+            created_at=existing.created_at,
+        )
+        self.repository.put_member(space_id, member)
+        self._touch(space_id)
+        return member
+
     def revoke(
         self,
         space_id: str,
@@ -436,19 +482,20 @@ class MemorySpaceService:
             indexed=indexed or {},
         )
 
-        index = self.repository.get_index(space_id)
-        old = [e for e in index.entries if e.slug == slug]
-        kept = [e for e in index.entries if e.slug != slug]
-        kept.append(ref)
-        kept.sort(key=lambda e: e.slug)
-        index.entries = kept
-        index.version += 1
-        self.repository.put_index(index)
+        def apply(index: MemoryIndex) -> List[MemoryEntryRef]:
+            old = [e for e in index.entries if e.slug == slug]
+            kept = [e for e in index.entries if e.slug != slug]
+            kept.append(ref)
+            kept.sort(key=lambda e: e.slug)
+            index.entries = kept
+            return old
+
+        old, final_index = self._mutate_index(space_id, apply)
 
         # GC any object the replaced entry uniquely referenced.
         for prev in old:
             if prev.s3_key != s3_key and not self._key_in_use(
-                space_id, prev.s3_key, index=index
+                space_id, prev.s3_key, index=final_index
             ):
                 self.store.delete(prev.s3_key)
         return ref
@@ -462,20 +509,52 @@ class MemorySpaceService:
     ) -> None:
         """Remove an entry from the manifest (editor+) and GC its object."""
         self._require(space_id, user_id, user_email, "editor")
-        index = self.repository.get_index(space_id)
-        removed = [e for e in index.entries if e.slug == slug]
-        if not removed:
-            raise MemorySpaceNotFoundError(
-                f"entry '{slug}' not found in space '{space_id}'"
-            )
-        index.entries = [e for e in index.entries if e.slug != slug]
-        index.version += 1
-        self.repository.put_index(index)
+
+        def apply(index: MemoryIndex) -> List[MemoryEntryRef]:
+            removed = [e for e in index.entries if e.slug == slug]
+            if not removed:
+                raise MemorySpaceNotFoundError(
+                    f"entry '{slug}' not found in space '{space_id}'"
+                )
+            index.entries = [e for e in index.entries if e.slug != slug]
+            return removed
+
+        removed, final_index = self._mutate_index(space_id, apply)
         for prev in removed:
-            if not self._key_in_use(space_id, prev.s3_key, index=index):
+            if not self._key_in_use(space_id, prev.s3_key, index=final_index):
                 self.store.delete(prev.s3_key)
 
     # ---- helpers -------------------------------------------------------
+
+    def _mutate_index(
+        self, space_id: str, apply: Callable[[MemoryIndex], "_T"]
+    ) -> Tuple["_T", MemoryIndex]:
+        """Read-modify-conditional-write the manifest with bounded retry.
+
+        ``apply(index)`` mutates ``index.entries`` in place and returns any
+        value the caller needs afterward (e.g. the replaced refs to GC). The
+        helper bumps the version and persists conditionally on the version it
+        read; on a concurrent change it re-reads and re-applies, converging
+        because entry writes touch a single slug. Exhausting the retries raises
+        :class:`MemorySpaceConcurrencyError`. Returns ``(apply_result, final_index)``.
+        """
+        for attempt in range(_MAX_MANIFEST_RETRIES):
+            index = self.repository.get_index(space_id)
+            expected = index.version
+            result = apply(index)  # may raise (e.g. NotFound) — propagate as-is
+            index.version = expected + 1
+            try:
+                self.repository.put_index(index, expected_version=expected)
+            except OptimisticLockError:
+                if attempt + 1 >= _MAX_MANIFEST_RETRIES:
+                    raise MemorySpaceConcurrencyError(
+                        f"memory space '{space_id}' is being edited concurrently; "
+                        "retry the write"
+                    )
+                continue
+            return result, index
+        # Unreachable: the loop either returns or raises above.
+        raise MemorySpaceConcurrencyError(space_id)
 
     def _find_ref(self, space_id: str, slug: str) -> Optional[MemoryEntryRef]:
         for ref in self.repository.get_index(space_id).entries:
