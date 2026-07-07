@@ -43,6 +43,8 @@ from apis.shared.memory.service import (
 from apis.shared.memory.store import MemorySpaceStoreError
 
 from apis.app_api.memory_spaces.models import (
+    ConsolidateRequest,
+    ConsolidationReportResponse,
     CreateSpaceRequest,
     EntriesListResponse,
     EntryContentResponse,
@@ -263,6 +265,39 @@ def export_space(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{root}.zip"'},
     )
+
+
+@router.post("/{space_id}/consolidate", response_model=ConsolidationReportResponse)
+def consolidate_space(
+    space_id: str,
+    request: ConsolidateRequest | None = None,
+    user: User = Depends(require_memory_spaces_user),
+) -> ConsolidationReportResponse:
+    """Run a deterministic consolidation (health) pass on a space (editor+, A6).
+
+    Auto-fixes storage hygiene (orphaned-object GC) and reports issues that
+    need judgment (duplicate content, dead ``[[slug]]`` links, over-cap). Never
+    merges or evicts entries. ``stripDeadLinks`` opts into unlinking dead
+    wikilinks from MEMORY.md.
+    """
+    req = request or ConsolidateRequest()
+    try:
+        report = _svc().consolidate(
+            space_id,
+            user.user_id,
+            user.email,
+            apply_gc=req.apply_gc,
+            strip_dead_links=req.strip_dead_links,
+        )
+    except MemorySpaceError as e:
+        raise _translate(e)
+    except MemorySpaceStoreError as e:
+        logger.error("memory-spaces: consolidate failed for space=%s: %s", space_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="failed to consolidate memory space storage",
+        )
+    return ConsolidationReportResponse.from_report(report)
 
 
 @router.delete("/{space_id}", status_code=status.HTTP_204_NO_CONTENT)

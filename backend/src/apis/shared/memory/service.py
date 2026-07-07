@@ -17,6 +17,8 @@ grant, consistent with how the platform treats every other shared entity.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,7 +47,26 @@ _ROLE_RANK: Dict[str, int] = {"viewer": 1, "editor": 2, "owner": 3}
 # exhausts this and surfaces as a conflict.
 _MAX_MANIFEST_RETRIES = 5
 
+# Default soft cap on the number of entries (≈ index lines). Consolidation
+# reports when a space is over it — it never auto-evicts (that's a judgment
+# call for the future LLM pass). ≈ 200 entries ≈ 4k always-loaded tokens/turn.
+_DEFAULT_INDEX_CAP = 200
+
+# Wikilinks in MEMORY.md: [[slug]] pointers into the entry set.
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+
 _T = TypeVar("_T")
+
+
+def _index_cap() -> int:
+    """Soft entry cap, overridable via ``MEMORY_SPACE_INDEX_CAP``."""
+    raw = os.environ.get("MEMORY_SPACE_INDEX_CAP")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning("invalid MEMORY_SPACE_INDEX_CAP=%r; using default", raw)
+    return _DEFAULT_INDEX_CAP
 
 
 class MemorySpaceError(RuntimeError):
@@ -83,6 +104,30 @@ class MemorySpaceExport:
     index_text: str
     files: List[Tuple[MemoryEntryRef, bytes]] = field(default_factory=list)
     members: List[SpaceMember] = field(default_factory=list)
+
+
+@dataclass
+class ConsolidationReport:
+    """Result of a deterministic consolidation (health) pass over a space (A6).
+
+    The pass auto-fixes only storage hygiene — orphaned content-addressed
+    objects with no manifest/index reference are deleted (``orphans_deleted``).
+    Everything that needs a judgment call is *reported*, not mutated:
+    ``duplicate_groups`` (entries sharing a content hash — which slug survives
+    is semantic), ``dead_links`` (``[[slug]]`` pointers in MEMORY.md with no
+    entry), and ``over_cap`` (entry count past the soft index cap — which entry
+    to drop is semantic). The LLM consolidation pass (Workstream B) extends this
+    seam to act on those reports.
+    """
+
+    space_id: str
+    entry_count: int
+    index_cap: int
+    over_cap: bool
+    orphans_deleted: int = 0
+    duplicate_groups: List[List[str]] = field(default_factory=list)
+    dead_links: List[str] = field(default_factory=list)
+    stripped_dead_links: bool = False
 
 
 def _now_iso() -> str:
@@ -300,6 +345,94 @@ class MemorySpaceService:
             )
         self.repository.delete_member(space_id, user_email)
         logger.info("memory-spaces: user=%s left space=%s", user_id, space_id)
+
+    # ---- consolidation (A6) --------------------------------------------
+
+    def consolidate(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str] = None,
+        *,
+        apply_gc: bool = True,
+        strip_dead_links: bool = False,
+    ) -> ConsolidationReport:
+        """Deterministic consolidation (health) pass over a space (editor+).
+
+        Auto-fixes storage hygiene — orphaned content-addressed objects (no
+        manifest/index reference) are deleted when ``apply_gc``. Everything that
+        needs judgment is reported, not mutated: duplicate content across slugs,
+        dead ``[[slug]]`` wikilinks in MEMORY.md, and over-cap entry counts. It
+        never merges or evicts entries — that's the LLM pass (Workstream B) that
+        extends this seam. ``strip_dead_links`` opts into one safe edit: unlink
+        dead ``[[slug]]`` pointers (they point nowhere), preserving the prose.
+        """
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        index = self.repository.get_index(space_id)
+        entries = index.entries
+        slugs = {e.slug for e in entries}
+
+        cap = _index_cap()
+
+        # Duplicate detection: more than one slug sharing a content hash.
+        by_hash: Dict[str, List[str]] = {}
+        for e in entries:
+            by_hash.setdefault(e.content_hash, []).append(e.slug)
+        duplicate_groups = sorted(
+            (sorted(s) for s in by_hash.values() if len(s) > 1),
+            key=lambda g: g[0],
+        )
+
+        # Dead-link detection over the MEMORY.md text.
+        index_text = ""
+        if space.index_s3_key:
+            index_text = self.store.get(space.index_s3_key).decode("utf-8")
+        referenced = {m.strip() for m in _WIKILINK_RE.findall(index_text)}
+        dead_links = sorted(ref for ref in referenced if ref and ref not in slugs)
+
+        stripped = False
+        if strip_dead_links and dead_links and space.index_s3_key:
+            new_text = index_text
+            for ref in dead_links:
+                new_text = new_text.replace(f"[[{ref}]]", ref)
+            if new_text != index_text:
+                self.update_index(space_id, user_id, user_email, new_text)
+                space = self.repository.get_space(space_id) or space
+                stripped = True
+
+        # Orphaned-object GC: keys under the space prefix that no entry or the
+        # index pointer references (leaks from crashed/raced writes). Safe —
+        # unreferenced content is invisible to every read path.
+        orphans_deleted = 0
+        if apply_gc:
+            referenced_keys = {e.s3_key for e in entries}
+            if space.index_s3_key:
+                referenced_keys.add(space.index_s3_key)
+            for key in self.store.list_keys(space_id):
+                if key not in referenced_keys:
+                    self.store.delete(key)
+                    orphans_deleted += 1
+
+        logger.info(
+            "memory-spaces: consolidated space=%s entries=%d orphans=%d "
+            "dups=%d dead_links=%d stripped=%s",
+            space_id,
+            len(entries),
+            orphans_deleted,
+            len(duplicate_groups),
+            len(dead_links),
+            stripped,
+        )
+        return ConsolidationReport(
+            space_id=space_id,
+            entry_count=len(entries),
+            index_cap=cap,
+            over_cap=len(entries) > cap,
+            orphans_deleted=orphans_deleted,
+            duplicate_groups=duplicate_groups,
+            dead_links=dead_links,
+            stripped_dead_links=stripped,
+        )
 
     # ---- sharing -------------------------------------------------------
 

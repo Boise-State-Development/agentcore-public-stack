@@ -22,6 +22,7 @@ from .models import (
 )
 from .repository import MemorySpaceRepository
 from .service import (
+    ConsolidationReport,
     MemorySpaceConcurrencyError,
     MemorySpaceError,
     MemorySpaceExport,
@@ -49,6 +50,7 @@ __all__ = [
     "MemorySpaceRepository",
     "MemorySpaceService",
     "MemorySpaceExport",
+    "ConsolidationReport",
     "MemorySpaceConcurrencyError",
     "MemorySpaceError",
     "MemorySpaceNotFoundError",

@@ -558,9 +558,16 @@ calls it.
   save over the A4 endpoints). Signal facade + API service mirror the assistants/schedules pattern;
   nav entry gated on a live `accessible$` probe (404 = kill switch off → hidden), redesign-tokens
   throughout. Viewer = read-only. Facade spec green; dev build + tsc clean.
-- **A6 — Consolidation.** A maintenance job (scheduled per space, or on index-cap threshold) that
-  merges duplicate entries, fixes stale ones, and prunes the index. Uses `MemorySpaceService`; runs
-  on the shipped scheduler. Primitive-side corpus health, not a per-turn concern.
+- **A6 — Consolidation.** ✅ (deterministic slice) `MemorySpaceService.consolidate(space_id)` +
+  `POST /memory/spaces/{id}/consolidate` (editor+) → a `ConsolidationReport`. Auto-fixes only
+  storage hygiene — orphaned content-addressed objects (no manifest/index ref, from crashed/raced
+  writes) are GC'd. Everything needing judgment is *reported, not mutated*: duplicate content
+  across slugs, dead `[[slug]]` wikilinks in MEMORY.md (opt-in `stripDeadLinks` unlinks them,
+  keeping prose), and over-cap entry counts (`MEMORY_SPACE_INDEX_CAP`, default 200). It never
+  merges or evicts entries — that's deferred to the **LLM consolidation pass (Workstream B era)**,
+  which extends this exact `consolidate()` seam once agentic writes create real duplication/staleness
+  to act on. (Deliberately not auto-run on a schedule/threshold yet — on-demand only; scheduler wiring
+  and SPA surfacing are follow-ups.)
 
 ### Workstream B — Agent / Harness consumption (binds the primitive)
 

@@ -19,6 +19,7 @@ from apis.shared.memory.models import (
     ShareRole,
     SpaceMember,
 )
+from apis.shared.memory.service import ConsolidationReport
 from apis.shared.memory.templates import TEMPLATES, SpaceTemplate
 
 
@@ -161,6 +162,39 @@ class MemberResponse(BaseModel):
 
 class MembersListResponse(BaseModel):
     members: List[MemberResponse]
+
+
+class ConsolidateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    apply_gc: bool = Field(True, alias="applyGc")
+    strip_dead_links: bool = Field(False, alias="stripDeadLinks")
+
+
+class ConsolidationReportResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    space_id: str = Field(..., alias="spaceId")
+    entry_count: int = Field(..., alias="entryCount")
+    index_cap: int = Field(..., alias="indexCap")
+    over_cap: bool = Field(..., alias="overCap")
+    orphans_deleted: int = Field(0, alias="orphansDeleted")
+    duplicate_groups: List[List[str]] = Field(default_factory=list, alias="duplicateGroups")
+    dead_links: List[str] = Field(default_factory=list, alias="deadLinks")
+    stripped_dead_links: bool = Field(False, alias="strippedDeadLinks")
+
+    @classmethod
+    def from_report(cls, r: "ConsolidationReport") -> "ConsolidationReportResponse":
+        return cls(
+            space_id=r.space_id,
+            entry_count=r.entry_count,
+            index_cap=r.index_cap,
+            over_cap=r.over_cap,
+            orphans_deleted=r.orphans_deleted,
+            duplicate_groups=r.duplicate_groups,
+            dead_links=r.dead_links,
+            stripped_dead_links=r.stripped_dead_links,
+        )
 
 
 def all_templates() -> List[TemplateResponse]:
