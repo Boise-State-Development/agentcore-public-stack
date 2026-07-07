@@ -1,76 +1,171 @@
-# Per-User Markdown Memory (Karpathy-style "second brain" on S3)
+# Memory Spaces — user-owned, shareable markdown "second brains" for agents
 
-**Status:** Draft / proposal
+**Status:** Draft / proposal (reframed 2026-07-07 from "per-user markdown memory" to the **Memory Space** primitive)
 **Author:** (drafted with Claude)
-**Date:** 2026-06-27
+**Date:** 2026-06-27 · reframed 2026-07-07
 **Targets branch:** `develop`
-**Related:** skills reference-file / progressive-disclosure pattern (`agents/main_agent/skills/`, `apis/shared/skills/resource_store.py`), AgentCore Memory write-only limitation (`agents/main_agent/session/turn_based_session_manager.py`), context attribution (`apis/shared/costs/`)
+**Related:** skills reference-file / progressive-disclosure pattern (`agents/main_agent/skills/`, `apis/shared/skills/resource_store.py`); AgentCore Memory write-only limitation (`agents/main_agent/session/turn_based_session_manager.py`); context attribution (`apis/shared/costs/`); assistant sharing / collaborative editing (issue #113, `resolve_assistant_permission`); agentic-platform primitives epic F5 (`docs/specs/agentic-platform-primitives.md`); scheduled runs (`apis/app_api/schedules/`)
 
 ## Summary
 
-Give every user a small, **human-readable markdown memory** that the agent reads at the
-start of a conversation and maintains over time — a per-user "second brain" backed by S3
-instead of a local filesystem. The shape is the one Karpathy popularized and the one this
-very repo's coding agent uses internally: a tiny always-loaded **index** (`MEMORY.md`) of
-one-line pointers, plus a set of **one-fact-per-file** markdown notes fetched on demand.
+Give every user one or more **Memory Spaces** — named, human-readable **markdown wikis** that
+agents read at the start of a conversation and maintain over time. A Memory Space is a
+per-owner (optionally **shared**) "second brain": a tiny always-loaded **index** (`MEMORY.md`)
+of one-line pointers, plus a set of **typed markdown entries** fetched on demand. The shape is
+the one Karpathy popularized and the one this very repo's coding agent uses internally.
 
-The architectural move is that we already ship this mechanism — it's the **skills
-reference-file / progressive-disclosure** path ([`skill_registry.read_resource`](../../backend/src/agents/main_agent/skills/skill_registry.py),
+The reframe from the original draft: memory is **not** "the user's one flat pile of facts." It
+is a **first-class, named, bindable primitive** — a Memory Space — that a user can have several
+of, that agents **bind** to declaratively, that ships with **templates** (Chief of Staff,
+Research Notebook, blank wiki), and that can be **shared** with other users. **Oliver is not a
+feature; Oliver is a "Chief of Staff" template + an agent bound to a space.**
+
+The architectural move is that we already ship this mechanism — it's the **skills reference-file
+/ progressive-disclosure** path ([`skill_registry.read_resource`](../../backend/src/agents/main_agent/skills/skill_registry.py),
 [`SkillResourceStore`](../../backend/src/apis/shared/skills/resource_store.py)): S3
 content-addressed storage, a lightweight DynamoDB manifest, **server-side read
-mid-conversation**, and a Level-1 catalog injected into the system prompt with Level-2+
-files fetched via a tool. Per-user memory is that mechanism **re-scoped from per-skill to
-per-user**, plus a write/consolidation path.
+mid-conversation**, and a Level-1 catalog injected into the system prompt with Level-2+ files
+fetched via a tool. A Memory Space is that mechanism **re-scoped from per-skill to per-space**,
+plus a **write/consolidation** path, a **binding** model, and a **sharing** model.
 
 This is the right design (vs. leaning on AgentCore Memory) because **AgentCore Memory is
-write-only in cloud** — the SDK restore branch never fires, so Memory cannot be the
-read-time source of truth today (see
+write-only in cloud** — the SDK restore branch never fires, so Memory cannot be the read-time
+source of truth today (see
 [`project_session_restore_writeonly_memory`](../../backend/src/agents/main_agent/session/turn_based_session_manager.py)
-analysis). An S3 markdown layer fills a real gap rather than competing with a working
-system.
+analysis). Managed AgentCore memory (on-by-default on a harness) covers the **opaque
+conversational-continuity** slice; a Memory Space covers the **inspectable, editable,
+entity-linked knowledge** slice. They are complementary, not competitors.
+
+---
+
+## The abstraction (the core of this spec)
+
+Oliver — a chief-of-staff agent with full institutional memory — decomposes into **three
+separable layers**. The middle one, generalized, is the primitive.
+
+```
+┌─ AGENT (persona + behavior) ──────────────────────────┐
+│  "You are Oliver… wake-up protocol… how you think"     │  ← instructions (assistant / harness config)
+│                                                        │     + bound tools (calendar, drive, …)
+└───────────────────┬───────────────────────────────────┘
+                    │  binds to (declarative)
+                    ▼
+┌─ MEMORY SPACE (the primitive) ────────────────────────┐
+│  MEMORY.md          ← always-on index / orientation    │
+│  entries/ people/ projects/   (entity, mutable)        │  ← markdown + frontmatter
+│           daily/ briefs/       (episodic, append-only)  │     + [[wikilinks]] = the graph edges
+│  manifest (DynamoDB)          ← indexed fields → query  │
+│  members            ← owner + shared grants (viewer/editor)
+└───────────────────┬───────────────────────────────────┘
+                    │  rendered by
+                    ▼
+     SPA "Memory" panel  ← view / edit / export / forget-me / share
+```
+
+### Two kinds of "connectedness" — and they live in different places
+
+A natural instinct is to put "how everything connects" into the agent's instructions plus a
+`MEMORY.md`. That is **half right**, and the correction is the whole point of making this a
+primitive rather than a prompt convention:
+
+| Kind | What it is | Where it lives | Enforced by |
+|---|---|---|---|
+| **Structural** | *which* space(s) an agent reads/writes, access mode, which entries always-load, entry schema, who may read/write | **Declarative config** on the agent record + the space record | **Platform** (RBAC, deterministic index hydration, edit UI, sharing) |
+| **Semantic** | what the wiki *means*, how entries relate, how to reason across them | **`MEMORY.md` index + `[[wikilinks]]` in entries + agent instructions** | The **LLM** reads it |
+
+Putting the *structural* wiring in freeform prose ("remember to read your people files") keeps it
+a brittle, unenforceable convention with no access control and no edit surface. Making the
+binding **declarative** turns it into a primitive: the platform can enforce who reads/writes,
+hydrate the index identically every wake-up, render the "what I remember" panel, and share the
+space. **`MEMORY.md` is the content map; instructions are the behavior; the binding is config.**
+
+### Memory Space is the fourth bindable primitive
+
+The platform already binds **tools**, **skills**, and **KBs** to assistants. A **Memory Space**
+binds the same way and is governed the same way:
+
+- **Registry / RBAC (F6):** spaces are catalogable and access-controlled exactly like tools and
+  skills — read vs. write grants, sharing, audit. (Sharing is F5 × F6.)
+- **Scheduler (Phase B, shipped):** binding a space to a *scheduled* run is what turns a passive
+  notebook into Oliver — a nightly run scans the manifest for stale commitments and surfaces
+  them unprompted. "Presence, not a tool" = Memory Space (F5) + proactive trigger (already built).
+
+---
+
+## Concepts (glossary)
+
+- **Memory Space** — a named, first-class container (`SPACE#{space_id}`) holding an index
+  (`MEMORY.md`), a set of typed entries, a DynamoDB manifest, and a member list. Owned by one
+  user; optionally shared with others (viewer/editor). A user may own/belong to many.
+- **Entry** — one markdown file with frontmatter. Three built-in **entry types**:
+  - `entity` — a mutable record keyed by subject (a person, a project). Updated in place.
+  - `episodic` — an append-only, dated record (a daily log, a brief). Latest N ride the index.
+  - `fact` — a flat distilled fact (the original spec's unit). The catch-all.
+- **Space Template** — a preset that seeds a new space: which entry types, always-load rules, and
+  a starter `MEMORY.md`. Ships: **Chief of Staff**, **Research Notebook**, **Blank Wiki**.
+- **Binding** — declarative config on an agent/assistant that lists the space(s) it reads/writes,
+  the access mode, and the always-load manifest (which entries hydrate at wake-up).
+- **Member / grant** — a `(user, role)` pair on a space. Roles: `owner`, `editor`, `viewer`
+  (mirrors assistant sharing, issue #113).
+
+---
 
 ### Prior art
 
 - **Karpathy's LLM Wiki / second brain** — agent-maintained markdown wiki: immutable raw
   sources, an AI-generated/-maintained wiki layer, and a schema file governing read/write/
-  reconcile. Core claim: LLMs don't get bored, so the wiki-maintenance burden that kills
-  human wikis disappears. ([gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f))
+  reconcile. Core claim: LLMs don't get bored, so the wiki-maintenance burden that kills human
+  wikis disappears. ([gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f))
 - **MRAgent — "Memory is Reconstructed, Not Retrieved"** ([arxiv 2606.06036](https://arxiv.org/abs/2606.06036),
-  [repo](https://github.com/Ji-shuo/MRAgent)) — interleaves LLM reasoning with memory access
-  (active reconstruction) rather than a static retrieve-then-reason step. The transferable
-  lesson: **don't pre-stuff context; let the agent fetch on demand inside its loop.**
-- **This repo's own coding-agent memory** — `MEMORY.md` index + one-fact-per-file markdown
-  with frontmatter (`name`/`description`/`type`), `[[wikilinks]]` between facts, a
-  consolidation pass. The cleanest reference implementation of exactly what we'd build.
+  [repo](https://github.com/Ji-shuo/MRAgent)) — interleaves reasoning with memory access rather
+  than a static retrieve-then-reason step. Transferable lesson: **don't pre-stuff context; let
+  the agent fetch on demand inside its loop.**
+- **This repo's own coding-agent memory** — `MEMORY.md` index + one-fact-per-file markdown with
+  frontmatter (`name`/`description`/`type`), `[[wikilinks]]`, a consolidation pass. The cleanest
+  reference implementation of exactly what we'd build.
+- **The Oliver skill** (`oliver:oliver`, `~/Documents/memory/`) — a *live, working* instance of
+  this exact pattern: `MEMORY.md` index + `people/` and `projects/` entity files + `daily/` and
+  `briefs/` episodic files, with a wake-up protocol that always-loads the index + latest daily +
+  latest brief, then pulls entries on demand. Oliver is the worked example this spec generalizes
+  (see [Oliver as a template](#oliver-as-a-worked-example)).
 
 ## Goals
 
-- A per-user, durable, **human-readable** markdown memory the agent reads at conversation
-  start and updates over time.
-- **Token-bounded**: steady-state cost is the index only; fact bodies are lazy.
-- Reuse the **skills reference-file mechanism** (S3 store + DynamoDB manifest + on-demand
-  read tool) re-scoped to `USER#{user_id}`, with minimal new infrastructure.
-- **User-visible & user-editable**: "here's what I remember about you," with delete/export.
-  This is a feature, not overhead — and likely a compliance requirement.
-- Ship **dark behind a flag** (`USER_MEMORY_ENABLED`, default off), per-environment enable,
+- A **Memory Space** primitive: named, durable, **human-readable** markdown a user can own several
+  of, that agents read at conversation start and update over time.
+- **Templated** — new spaces seed from Chief of Staff / Research Notebook / Blank so ergonomics
+  come for free without hardcoding any one use case.
+- **Bindable** — an agent/assistant declares which space(s) it uses and how, as config.
+- **Token-bounded**: steady-state cost is the index only; entry bodies are lazy.
+- **User-visible & user-editable** — "here's what I remember," with edit / delete / export. This
+  is a product feature (control over what's remembered), and it's how agent-written memory stays
+  correctable.
+- **Shareable** — a space can be shared with other users (viewer/editor), enabling team wikis and
+  shared institutional memory (phased; see [Sharing](#sharing--access-control)).
+- Reuse the **skills reference-file mechanism** (S3 store + DynamoDB manifest + on-demand read
+  tool) re-scoped to `SPACE#{space_id}`, with minimal new infrastructure.
+- Ship **dark behind a flag** (`MEMORY_SPACES_ENABLED`, default off), per-environment enable,
   mirroring `SKILLS_ENABLED`.
 
 ## Non-goals (v1)
 
-- A graph/vector memory (MRAgent's full Cue–Tag–Content graph). v1 is flat markdown +
-  an index; the *reconstruction* lesson is adopted (on-demand fetch), the graph is not.
-- Importing raw source documents into a wiki (Karpathy's "raw sources" layer). v1 memory
-  is distilled facts, not a document corpus — that overlaps the existing RAG/assistant KB.
-- Cross-user / org-shared memory. Memory is strictly `USER#{user_id}`-scoped.
-- Memory inside assistant-backed or shared conversations (see [Open questions](#open-questions)).
+- A graph/vector memory (MRAgent's full Cue–Tag–Content graph). v1 is markdown + an index +
+  a few indexed manifest fields; the *reconstruction* lesson is adopted (on-demand fetch), the
+  graph store is not. Wikilinks are the edges.
+- Importing raw source documents into a wiki (Karpathy's "raw sources" layer). A space holds
+  distilled entries, not a document corpus — that overlaps the existing RAG/assistant KB.
+- Cross-space linking. A `[[wikilink]]` resolves **within** its space in v1.
+- **Full org-shared memory in the first release** — the storage is *keyed for sharing from day
+  one* (see below), but the grant/collaboration surface is a distinct later phase (PR-6). Sequencing,
+  not a governance gate — access control is identity-based and inherits the platform posture.
 - Replacing AgentCore Memory or the compaction/summary path — this is additive.
 
 ---
 
 ## Background: the pattern we're extending
 
-Skills already do per-skill progressive disclosure end-to-end. The whole of this spec is
-re-pointing it at users and adding writes.
+Skills already do per-skill progressive disclosure end-to-end. Much of this spec is re-pointing
+it at spaces and adding writes + binding + sharing.
 
 ```
 SkillResourceRef (DynamoDB manifest row)        ← lightweight pointer, no bytes
@@ -91,194 +186,333 @@ Concrete anchors:
 - Runtime disclosure: [`skill_registry.py`](../../backend/src/agents/main_agent/skills/skill_registry.py) (`get_catalog`, `get_resource_names`, `read_resource`)
 - Bucket construct: [`skill-resources-construct.ts`](../../infrastructure/lib/constructs/skills/skill-resources-construct.ts)
 - System-prompt assembly: [`system_prompt_builder.py`](../../backend/src/agents/main_agent/core/system_prompt_builder.py), per-turn resolution in [`system_prompt_resolver.py`](../../backend/src/apis/inference_api/chat/system_prompt_resolver.py)
-- Per-user DynamoDB scoping: `PK=USER#{user_id}, SK=...` (sessions, artifacts, preferences)
+- Sharing chokepoint to mirror: `resolve_assistant_permission` (issue #113, assistant viewer/editor)
 - Token accounting we'll reuse: `contextBreakdown` partitions in [`costs/models.py`](../../backend/src/apis/shared/costs/models.py)
 
-**The asymmetry that matters:** skill resources are **read-only and admin-authored**;
-user memory is **read-write and agent/user-authored**. The store, manifest, and read tool
-transfer directly. The new work is the **write + consolidation** path and the
-**prompt-cache-safe injection** of the index.
+**The asymmetries that matter:** skill resources are **read-only, admin-authored, per-skill**; a
+Memory Space is **read-write, user/agent-authored, per-space, and shareable**. The store,
+manifest, and read tool transfer directly. The new work is (1) the **write + consolidation**
+path, (2) the **binding** model, and (3) the **sharing / access-control** model.
 
 ---
 
 ## Design
 
-### 1. Storage layout (S3 + DynamoDB manifest)
+### 1. Storage layout — keyed by **space**, not by user
 
-Reuse the skill-resources bucket pattern under a per-user prefix (or a dedicated
-`user-memory` bucket — see [CDK](#5-infrastructure)):
+Sharing forces the identity decision up front: a shared space **cannot** live under any one
+user's partition. The space is its own entity; ownership and membership are records *about* it.
 
 ```
-memory/users/{user_id}/MEMORY.md              # the index — small, always-loaded
-memory/users/{user_id}/facts/{slug}.md        # one fact per file, fetched on demand
+S3 (content-addressed, one bucket):
+  spaces/{space_id}/MEMORY.md                   # the index — small, always-loaded
+  spaces/{space_id}/entries/{type}/{slug}.md    # one entry per file, fetched on demand
+      entries/entity/jane-doe.md
+      entries/project/agentcore-v2.md
+      entries/episodic/2026-07-07-daily.md
 ```
 
-Each fact file carries frontmatter (mirrors the coding-agent memory shape):
+```
+DynamoDB (single-table, existing platform table):
+  PK=SPACE#{space_id}  SK=META                     # space name, template, owner_id, created, flags
+  PK=SPACE#{space_id}  SK=INDEX                     # manifest: [{slug,type,description,content_hash,size,updated,updated_by,indexed:{...}}]
+  PK=SPACE#{space_id}  SK=MEMBER#{user_id}          # role: owner|editor|viewer, granted_by, granted_at
+        GSI (UserSpacesIndex): PK=USER#{user_id}  SK=SPACE#{space_id}   # list a user's owned + shared-in spaces
+```
+
+Each entry file carries frontmatter (mirrors the coding-agent memory shape; adds type + author):
 
 ```markdown
 ---
-name: prefers-concise-answers
-description: User wants terse, direct responses; skip preamble
-type: user | feedback | project | reference
-updated: 2026-06-27
+name: jane-doe
+type: entity            # entity | episodic | fact
+description: VP Research; owns the NSF AI grant relationship
+subject: Jane Doe       # entity key (entity type)
+status: active
+commitments:            # indexed → manifest, so "who owes what" is a query not a scan
+  - { owed_by: phil, desc: "send grant draft", due: 2026-07-12, open: true }
+updated: 2026-07-07
+updated_by: 18419330-…  # write attribution (essential for shared spaces + forget-me)
 ---
 
-User has repeatedly asked for shorter answers... Link related facts with [[other-slug]].
+Jane cares about defensible governance… Link related entries with [[agentcore-v2]].
 ```
 
-Manifest: a small DynamoDB row `PK=USER#{user_id}, SK=MEMORY#INDEX` holding the file list
-(`slug`, `description`, `content_hash`, `size`, `updated`) — structurally a list of
-`SkillResourceRef`. **No bodies in DynamoDB** (400 KB item-limit rule, same reason skills
-went to S3). The index `MEMORY.md` itself lives in S3; the manifest row is the
-fast-path pointer + cache-key input.
+**No bodies in DynamoDB** (400 KB item-limit rule, same reason skills went to S3). The manifest
+row is the fast-path pointer + cache-key input + the **indexed-field query surface** (a small
+allowlist of frontmatter fields — e.g. `type`, `status`, `commitments.due`, `updated` — copied
+into `indexed` so aggregate/temporal queries don't load every body).
 
-### 2. New shared service: `UserMemoryStore`
+### 2. New shared service: `MemorySpaceStore` + `MemorySpaceService`
 
-New package `apis/shared/memory/` (a shared concern: both app-api and inference-api
-consume it, so it lives in `apis.shared` per the import-boundary rule).
+New package `apis/shared/memory/` (a shared concern: both app-api and inference-api consume it,
+so it lives in `apis.shared` per the import-boundary rule).
 
 ```python
-# apis/shared/memory/store.py
-class UserMemoryStore:
-    def read_index(self, user_id: str) -> str: ...                  # MEMORY.md text
-    def list_facts(self, user_id: str) -> list[MemoryFactRef]: ...  # manifest, no bodies
-    def read_fact(self, user_id: str, slug: str) -> str: ...        # one fact body
-    def write_fact(self, user_id: str, slug: str, body: str) -> MemoryFactRef: ...
-    def update_index(self, user_id: str, body: str) -> None: ...
-    def delete_fact(self, user_id: str, slug: str) -> None: ...
+# apis/shared/memory/store.py  — space-keyed, mirrors SkillResourceStore
+class MemorySpaceStore:
+    def read_index(self, space_id: str) -> str: ...
+    def list_entries(self, space_id: str, *, type: str | None = None,
+                     where: dict | None = None) -> list[MemoryEntryRef]: ...   # manifest query
+    def read_entry(self, space_id: str, slug: str) -> str: ...
+    def write_entry(self, space_id: str, slug: str, body: str, *, author: str) -> MemoryEntryRef: ...
+    def update_index(self, space_id: str, body: str) -> None: ...
+    def delete_entry(self, space_id: str, slug: str) -> None: ...
+
+# apis/shared/memory/service.py — space lifecycle + access control
+class MemorySpaceService:
+    def create_space(self, owner: str, name: str, template: str) -> MemorySpace: ...
+    def list_spaces_for_user(self, user_id: str) -> list[MemorySpace]: ...      # owned + shared-in (GSI)
+    def resolve_permission(self, space_id: str, user_id: str) -> Role | None: ...# THE chokepoint
+    def share(self, space_id: str, actor: str, grantee: str, role: Role) -> None: ...
+    def revoke(self, space_id: str, actor: str, grantee: str) -> None: ...
 ```
 
-Mirror `SkillResourceStore`: lazy boto3 init, content-addressed objects, raise loudly on
-miss (no silent failures), best-effort delete. Env var `S3_USER_MEMORY_BUCKET_NAME`.
+Mirror `SkillResourceStore`: lazy boto3 init, content-addressed objects, raise loudly on miss,
+best-effort delete. Env var `S3_MEMORY_SPACES_BUCKET_NAME`. **Every read/write path routes
+through `resolve_permission`** — the single chokepoint, exactly like `resolve_assistant_permission`.
 
-### 3. Read path — index in prompt, facts on demand
+### 3. Binding — how an agent knows which space(s) it uses
 
-**Index injection (Level 1).** At conversation start, inject `MEMORY.md` into the system
-prompt as a bounded block. This is the MRAgent discipline applied: only the index is
-pre-loaded; fact bodies are reconstructed on demand.
+Declarative, on the assistant/agent record (not in prose):
 
-> **Prompt-cache constraint (decide here, not later).** Per-user content in the system
-> prefix gives each user a distinct cache key and interacts badly with the shared-prefix
-> caching [`system_prompt_resolver.py`](../../backend/src/apis/inference_api/chat/system_prompt_resolver.py)
-> relies on (it deliberately *gates* injection on continuation/prompt-cache turns).
-> Two viable strategies:
-> - **(A) Dedicated cache block.** Append the memory index as its own
->   `cache_control` breakpoint after the shared platform prefix, so the platform prefix
->   stays globally cached and the per-user index caches *within* that user's session.
->   Preferred — keeps both caches working.
-> - **(B) Tool-loaded on turn 1.** Skip the prefix entirely; the agent calls a
->   `memory_index()` tool on the first turn. Zero prefix-cache disruption, costs one
->   extra tool round-trip per conversation.
+```jsonc
+// assistant / agent config
+"memorySpaces": [
+  { "spaceId": "spc_oliver", "access": "readwrite",
+    "alwaysLoad": ["MEMORY.md", "latest:episodic/daily", "latest:episodic/brief"] }
+]
+```
+
+- `access`: `read` | `readwrite`. Enforced against the invoking user's grant on the space (a
+  `readwrite` binding still requires the *user* to hold `editor`+; see [Sharing](#sharing--access-control)).
+- `alwaysLoad`: which entries hydrate at wake-up. `latest:episodic/daily` is the Oliver rule
+  ("most recent daily + brief"), resolved from the manifest at bind time.
+- Default binding = the user's **personal** space (auto-created on first use), read-write, index-only
+  always-load. An assistant can bind additional/other spaces.
+
+### 4. Read path — index in prompt, entries on demand
+
+**Index injection (Level 1).** At conversation start, inject each bound space's `MEMORY.md`
+(plus `alwaysLoad` entries) as a bounded block. Only the index is pre-loaded; bodies are
+reconstructed on demand (MRAgent discipline).
+
+> **Prompt-cache constraint (decide here).** Per-owner content in the system prefix gives each
+> user a distinct cache key and interacts badly with shared-prefix caching
+> ([`system_prompt_resolver.py`](../../backend/src/apis/inference_api/chat/system_prompt_resolver.py)).
+> - **(A) Dedicated cache block.** Append the memory index as its own `cache_control` breakpoint
+>   after the shared platform prefix. Platform prefix stays globally cached; the index caches
+>   *within* the session. **Preferred.** *Bonus for shared spaces:* a shared space's index is
+>   byte-identical across members, so its cache block can be reused across all members of the
+>   space — a caching **win** unique to shared spaces.
+> - **(B) Tool-loaded on turn 1.** Agent calls `memory_index(space)` on turn 1. Zero prefix
+>   disruption, one extra round-trip.
 >
 > Recommend **(A)**; spike both and measure with `contextBreakdown`.
 
-**Fact fetch (Level 2).** A `memory_read(slug)` tool fetches one fact body server-side
-from S3 — a direct analog of `read_resource`. The agent fetches only what the current
-turn needs.
+**Entry fetch (Level 2).** `memory_read(space, slug)` fetches one entry body server-side from S3
+— a direct analog of `read_resource`. `memory_query(space, where)` runs a manifest query (e.g.
+`{type: entity, "commitments.open": true}`) returning refs, not bodies — this is how "who owes
+what" and staleness scans avoid a full-corpus load.
 
-### 4. Write path
+### 5. Write path
 
-Two mechanisms, not mutually exclusive:
+- **(W1) Synchronous agentic write** — `memory_write(space, slug, body)` /
+  `memory_update(space, slug, patch)` tools the model calls mid-turn, stamping `updated_by` with
+  the invoking user, plus an index-update step. Transparent, matches the coding-agent model.
+  **v1 default.**
+- **(W2) Async post-turn reflection** — a background job reads the completed turn and proposes
+  edits, hung off [`turn_based_session_manager.update_after_turn`](../../backend/src/agents/main_agent/session/turn_based_session_manager.py)
+  (the seam compaction uses). Reliable, no in-loop discipline needed, adds an LLM call/turn.
+  **Phase 2.**
 
-- **(W1) Synchronous agentic write** — `memory_write(slug, body)` / `memory_update(slug, body)`
-  tools the model calls mid-turn when it learns something durable, plus an index-update
-  step. Transparent, simple, matches the coding-agent memory model. Risk: relies on the
-  model remembering to write. **v1 default.**
-- **(W2) Async post-turn reflection** — a background job reads the completed turn and
-  proposes memory edits, hung off the existing post-turn hook in
-  [`turn_based_session_manager.update_after_turn`](../../backend/src/agents/main_agent/session/turn_based_session_manager.py)
-  (same seam compaction uses). Reliable, no reliance on in-loop discipline, but adds an
-  LLM call per turn. **Phase 2.**
+**Consolidation.** A periodic pass (Karpathy's insight — LLMs don't get bored) that merges
+duplicate entries, fixes stale ones, prunes the index, enforces the index cap. Run as a
+**scheduled job per space** (the shipped scheduler) or lazily on threshold. Mirrors the repo's
+`consolidate-memory` skill.
 
-**Consolidation.** A periodic pass (Karpathy's core insight — LLMs don't get bored) that
-merges duplicate facts, fixes stale ones, prunes the index, and enforces the index cap.
-Run as a scheduled job per active user (or lazily, when the index crosses a size
-threshold). Mirrors the repo's `consolidate-memory` skill conceptually.
+### 6. Sharing & access control
 
-### 5. Infrastructure
+The reason the storage is space-keyed. A space is shared by granting other users a role on it,
+mirroring assistant sharing (issue #113) so the model, API shape, and SPA dialog are familiar.
 
-New `UserMemoryConstruct` (clone of [`skill-resources-construct.ts`](../../infrastructure/lib/constructs/skills/skill-resources-construct.ts)):
-S3 bucket (AES256 or **CMK — see PII below**), block public access, enforce SSL, no
-auto-expiry (memory is durable; deletion is explicit/user-driven). Thread the bucket to
-compute roles via `PlatformComputeRefs` (typed ref, not SSM), per the construct rules.
-Read+write grant to inference-api runtime role and app-api role.
+- **Roles:** `owner` (full control + manage members + delete space), `editor` (read + write
+  entries + index), `viewer` (read only). `resolve_permission` is the chokepoint every route and
+  every agent tool passes through — no write path bypasses it.
+- **Agent writes in a shared space carry the invoking user's identity.** The run-as-user model
+  (headless-grant / act-as-user, already built for scheduled runs) means an agent's
+  `memory_write` executes *as* the invoking user; the platform checks that user holds `editor`+.
+  A scheduled Oliver run writing to a shared team space writes as its owner, audited by
+  `updated_by`.
+- **Write attribution + audit.** Every entry and manifest row carries `updated_by`; shared-space
+  edits are attributable. This is both a collaboration affordance ("Jane last edited this") and
+  the audit trail.
+- **Concurrency.** Multi-writer becomes real in shared spaces. Content-addressed entry writes +
+  **optimistic concurrency on the manifest row** (conditional update on a version attribute);
+  last-write-wins on individual entries with a visible "edited by X at T" so overwrites are
+  legible, not silent.
+- **Membership API** (mirrors #113): `POST /spaces/{id}/shares`, `PATCH /spaces/{id}/shares`
+  (upgrade viewer↔editor), `DELETE /spaces/{id}/shares/{user}`. `sharedWith` is a
+  `ShareEntry[]` (role-carrying), not `string[]`.
 
-### 6. User-facing surface (app-api + SPA)
+### 7. Infrastructure
 
-Because memory is human-readable markdown, expose it. `app-api` routes under
-`/memory/` (user-facing, `Depends(get_current_user_from_session)` — **not** Bearer, per
-the auth-dependency rule):
+New `MemorySpacesConstruct` (clone of [`skill-resources-construct.ts`](../../infrastructure/lib/constructs/skills/skill-resources-construct.ts)):
+S3 bucket (encryption **matching the platform's sessions/artifacts standard** — don't
+special-case memory), block public access, enforce SSL, **no auto-expiry** (memory is durable;
+deletion is explicit/user-driven — see [Data governance](#data-governance-proportionate--not-a-special-category) on the dedup-aware purge). Thread the bucket to compute roles via
+`PlatformComputeRefs` (typed ref, not SSM), per the construct rules. Read+write grant to
+inference-api runtime role and app-api role. The manifest/membership rows reuse the existing
+single-table DynamoDB with the new `UserSpacesIndex` GSI.
 
-- `GET /memory` — list facts (manifest) + index
-- `GET /memory/{slug}` — read one fact
-- `PUT /memory/{slug}` / `DELETE /memory/{slug}` — user edits/deletes a fact
-- `DELETE /memory` — wipe (compliance "forget me")
+### 8. User-facing surface (app-api + SPA)
 
-SPA: a "What I remember about you" panel — view, edit, delete, export. This is the
-differentiator vector RAG can't offer and the FERPA control surface.
+Because a space is human-readable markdown, expose it. `app-api` routes under `/memory/spaces/`
+(user-facing, `Depends(get_current_user_from_session)` — **not** Bearer, per the auth rule; every
+handler calls `resolve_permission`):
+
+- `GET /memory/spaces` — list the user's spaces (owned + shared-in)
+- `POST /memory/spaces` — create from a template
+- `GET /memory/spaces/{id}` — index + entry manifest
+- `GET /memory/spaces/{id}/entries/{slug}` — read one entry
+- `PUT` / `DELETE /memory/spaces/{id}/entries/{slug}` — user edits/deletes an entry (editor+)
+- `POST|PATCH|DELETE /memory/spaces/{id}/shares[...]` — manage members (owner)
+- `GET /memory/spaces/{id}/export` — export the space as a markdown bundle
+- `DELETE /memory/spaces/{id}` — delete (owner) / for a shared-in space, **leave** (drop own grant)
+
+SPA: a **Memory** section — a list of spaces, and per space a "what I remember" panel (view,
+edit, delete, export), a **share dialog** (reuse the assistant-share component + `redesign-tokens`),
+and a **create-from-template** flow. This is the differentiator vector RAG can't offer — and the
+user's control surface over what's remembered.
+
+---
+
+## Oliver as a worked example
+
+Oliver is **not** special-cased. It is:
+
+1. A **space** created from the **Chief of Staff** template, which seeds:
+   - entry types: `entity` (people, projects), `episodic` (daily, briefs)
+   - `alwaysLoad`: `[MEMORY.md, latest:episodic/daily, latest:episodic/brief]`
+   - a starter `MEMORY.md` with sections for strategic priorities, key people, active projects,
+     open commitments.
+2. An **assistant** ("Oliver") whose **instructions** carry the persona + wake-up protocol +
+   how-to-think, **bound** to that space `readwrite`.
+3. Optional: the space **shared** `viewer` with a chief-of-staff's delegate, or a scheduled run
+   bound to it that scans `memory_query(space, {"commitments.open": true, "commitments.due": "<7d"})`
+   nightly and surfaces stale commitments — the proactive behavior, built from primitives.
+
+Every capability Oliver has ("who owes what," "prep me for my 2pm," "someone's owed Phil for two
+weeks — flag it") maps to: index always-load + `memory_query` over indexed commitment fields +
+entity entries + the scheduler. **A "Research Notebook" space with a different template and a
+different bound assistant reuses all of it.**
 
 ---
 
 ## Token efficiency analysis
 
-The model's headline advantage, and it's quantifiable.
+- **Steady-state overhead = index only.** ~1 line (~15–25 tokens) per entry. 50 entries ≈
+  **~1k tok/turn**; 200 ≈ **~4k tok/turn**. Bounded/tunable via the consolidation cap. Entry
+  bodies cost **zero** unless fetched.
+- **Lazy bodies (MRAgent discipline).** You pay a body's tokens only on turns that fetch it.
+- **Indexed queries beat scans.** "Who owes what" is a manifest query over `commitments.open`,
+  not a load of every person file — the difference between O(1 row set) and O(all bodies).
+- **Shared-space cache win.** A shared index caches once across all members (strategy A block),
+  unlike per-user memory.
+- **Versus alternatives:** transcript replay is unbounded (what compaction fights); vector RAG
+  pays embedding + opaque chunk injection and isn't user-inspectable; AgentCore summaries are
+  unusable for read in cloud.
+- **Measurement.** Add a `memory` partition to `contextBreakdown` (same method skills PR-7 used to
+  confirm `toolTokens` dropped).
 
-- **Steady-state overhead = index only.** ~1 line (~15–25 tokens) per fact. 50 facts ≈
-  **~1k tokens/turn**; 200 facts ≈ **~4k tokens/turn**. Bounded and tunable via the
-  consolidation cap. Fact bodies cost **zero** unless fetched.
-- **Lazy bodies (MRAgent discipline).** You pay a fact's body tokens only on turns where
-  the agent fetches it, not every turn.
-- **Versus alternatives:**
-  - *Transcript replay* (today's agent-cache continuity): unbounded, grows every turn —
-    exactly what compaction fights.
-  - *Vector RAG*: pays embedding + opaque chunk injection per query; not user-inspectable.
-  - *AgentCore summaries*: unusable for read in cloud (write-only path).
-- **Measurement.** Add a `memory` partition to `contextBreakdown` so the index cost is
-  visible per turn and we can validate the cap empirically (same method the skills PR-7
-  used to confirm `toolTokens` dropped).
+**Net:** capped index + lazy fetch + indexed queries ⇒ **~1–4k tok/turn steady-state**, far
+cheaper and more controllable than replay or RAG. The one cost risk is prompt-cache disruption,
+mitigated by strategy (A).
 
-**Net:** capped index + lazy fetch ⇒ **~1–4k tokens/turn steady-state**, far cheaper and
-more controllable than replay or RAG. The one cost risk is prompt-cache disruption, fully
-mitigated by strategy (A) above.
+---
+
+## Data governance (proportionate — not a special category)
+
+**A Memory Space is the same data class as the content the platform already stores** — session
+transcripts, artifacts, assistant KBs, uploaded docs — behind the same **Entra-backed JWT + RBAC**.
+It is durable, sometimes model-derived, and (when shared) cross-user, but every one of those
+properties is already true of stored conversations. Memory introduces **no new legal boundary**
+that transcripts don't already cross, so it **inherits the platform's existing data-governance
+posture** rather than needing a bespoke one. Access control is the whole of the exposure story,
+and identity claims already own it: `resolve_permission` gates every read/write, exactly like the
+rest of the app.
+
+Governance is enforced by **identity, not by content inspection.** There is no agentic-write
+redaction / content-scrubbing pass — a shared space is a *deliberate grant*, and the sharing user
+is responsible for its contents, exactly as when they share an assistant or a document today. Do
+not add friction the rest of the platform doesn't have.
+
+What *is* worth doing — three cheap defaults, none of which gate the build:
+
+- **Encryption at rest = inherit the platform standard.** Use whatever the sessions/artifacts
+  buckets use (CMK or AES256); don't special-case memory.
+- **Deletion must actually purge.** The one genuine operational wrinkle: memory is durable by
+  design (no TTL) and the store is content-addressed/deduped, so a delete/offboarding path must
+  really remove the bytes (mind the dedup — a shared object may back multiple entries). This is a
+  "make delete work" engineering detail, not a compliance project.
+- **Agent-write visibility = the feature you already want.** Because the model writes memory, the
+  user can see and correct what's remembered via the "what I remember" panel (§8). The governance
+  win falls out of the feature for free — zero added friction.
+
+Plus one UX line: the **share dialog states the scope** ("sharing includes current and future
+entries, including ones the agent writes later"), since entries accrue after the grant. That's a
+sentence, not a gate.
 
 ---
 
 ## Phasing (proposed PRs)
 
-- **PR-1 — Data layer.** `apis/shared/memory/` (`UserMemoryStore` + `MemoryFactRef` model +
-  manifest repo). `UserMemoryConstruct` (CDK). Unit tests. No runtime wiring. Flag added,
-  default off.
-- **PR-2 — Read path.** Index injection (strategy A) into the system prompt + `memory_read`
-  tool + `memory` partition in `contextBreakdown`. Gated by `USER_MEMORY_ENABLED`.
-- **PR-3 — Write path (agentic, W1).** `memory_write` / `memory_update` tools + index
-  maintenance. Round-trips through the existing tool RBAC/registry.
-- **PR-4 — User surface.** `app-api` `/memory/` CRUD + SPA "What I remember" panel
-  (view/edit/delete/export).
-- **PR-5 — Consolidation.** Scheduled/threshold consolidation pass + index cap enforcement.
-- **PR-6 — Reflection writes (W2), optional.** Post-turn reflection job on the
-  `update_after_turn` seam. Defer until W1 reliability is measured.
+- **PR-1 — Data layer.** `apis/shared/memory/` (`MemorySpaceStore` + `MemorySpaceService` +
+  `MemoryEntryRef`/`MemorySpace` models + manifest/membership repo, space-keyed, `resolve_permission`).
+  `MemorySpacesConstruct` (CDK) + `UserSpacesIndex` GSI. Unit tests. No runtime wiring. Flag
+  `MEMORY_SPACES_ENABLED` added, default off.
+- **PR-2 — Templates + read path.** Space templates (Chief of Staff / Research Notebook / Blank).
+  Index injection (strategy A) + `memory_read` + `memory_query` tools + `memory` partition in
+  `contextBreakdown`. Gated by the flag.
+- **PR-3 — Binding.** `memorySpaces` on the assistant/agent record; wake-up hydration
+  (`alwaysLoad`, `latest:` resolution); default personal space auto-create.
+- **PR-4 — Write path (agentic, W1).** `memory_write` / `memory_update` + index maintenance +
+  `updated_by` attribution. Round-trips through tool RBAC/registry.
+- **PR-5 — User surface.** `app-api` `/memory/spaces/` CRUD + SPA Memory section (list, per-space
+  panel, create-from-template, export).
+- **PR-6 — Sharing.** Membership API + `resolve_permission` on all paths + share dialog (with the
+  scope note) + shared concurrency (optimistic manifest). Access control is identity-based; no
+  content-inspection gate.
+- **PR-7 — Consolidation.** Scheduled/threshold consolidation per space + index cap.
+- **PR-8 — Reflection writes (W2), optional.** Post-turn reflection on `update_after_turn`. Defer
+  until W1 reliability is measured.
 
 ---
 
 ## Open questions
 
-- **FERPA / student PII (biggest risk).** Durable plaintext per-user memory of an academic
-  chatbot will capture sensitive student data. Need a position *before code*: CMK
-  encryption, retention/TTL policy, a write-side redaction/allowlist policy, and the
-  "forget me" wipe. This shapes the design more than the storage mechanics.
-- **Prompt-cache placement** — confirm strategy (A) vs (B) with a spike + `contextBreakdown`.
-- **Assistant / shared conversations** — whose memory applies, if any? Likely "user memory
-  off when assistant-backed" in v1 (matches skills-mode exclusion precedent).
-- **Write-trigger reliability** — measure how often W1 actually fires before committing to
-  whether W2 is needed.
-- **Index cap & eviction policy** — hard cap on index lines; consolidation decides what to
-  merge vs. drop. What's the cap? (Start ~150 facts / ~3k tokens.)
-- **Multi-device / concurrency** — two concurrent sessions writing memory. Content-addressed
-  writes + last-write-wins on the index, or optimistic-concurrency on the manifest row?
+- **Deletion / offboarding purge** — confirm the dedup-aware delete path (a content-addressed
+  object may back multiple entries or spaces); and forget-me on a *shared-in* space = leave (drop
+  own grant) vs. the owner deleting the whole space. Inherit the platform's retention posture;
+  don't invent a memory-specific one.
+- **Prompt-cache placement** — confirm (A) vs (B) with a spike + `contextBreakdown`; verify the
+  shared-index cross-member cache win holds in practice.
+- **Assistant / shared conversations** — whose space(s) apply when a conversation is
+  assistant-backed or itself shared? Likely: the assistant's bound spaces, resolved against the
+  *invoking* user's grants.
+- **Indexed-field allowlist** — which frontmatter fields get copied into the manifest `indexed`
+  map? Start small (`type`, `status`, `updated`, `commitments.due`/`.open`); expand on evidence.
+- **Write-trigger reliability** — measure how often W1 actually fires before committing to W2.
+- **Index cap & eviction** — hard cap on index lines; consolidation decides merge vs. drop.
+  Start ~150 entries / ~3k tokens.
+- **Cross-space linking** — deferred; when does a `[[wikilink]]` ever need to resolve across
+  spaces (e.g. a personal space referencing a shared team space)?
+- **Concurrency depth** — is optimistic-concurrency on the manifest row enough, or do hot shared
+  spaces need per-entry locking / CRDT-ish merge?
 
 ## Validation note
 
-Before/while building PR-2, walk the repo's **own** coding-agent memory
-(`MEMORY.md` + per-fact files + consolidation) end-to-end as the reference behavior — it is
-the exact pattern, already proven, and surfaces the index-maintenance and wikilink edge
-cases early.
+Before/while building PR-2, walk the repo's **own** coding-agent memory (`MEMORY.md` + per-fact
+files + consolidation) **and the live Oliver skill** (`~/Documents/memory/`) end-to-end as the
+reference behavior — both are the exact pattern, already proven, and surface the
+index-maintenance, entry-typing, and wikilink edge cases early.
