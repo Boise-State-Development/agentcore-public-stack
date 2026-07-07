@@ -17,6 +17,7 @@ from apis.shared.memory.models import (
     MemorySpace,
     Role,
     ShareRole,
+    SpaceMember,
 )
 from apis.shared.memory.templates import TEMPLATES, SpaceTemplate
 
@@ -40,6 +41,15 @@ class UpsertEntryRequest(BaseModel):
 
 class UpdateIndexRequest(BaseModel):
     content: str = Field(..., description="The MEMORY.md index text")
+
+
+class ShareRequest(BaseModel):
+    email: str = Field(..., min_length=1, description="Grantee email")
+    permission: ShareRole = Field("viewer", description="viewer | editor")
+
+
+class UpdateShareRequest(BaseModel):
+    permission: ShareRole = Field(..., description="viewer | editor")
 
 
 # ---- responses ---------------------------------------------------------
@@ -135,6 +145,22 @@ class IndexContentResponse(BaseModel):
 
 class EntriesListResponse(BaseModel):
     entries: List[EntryRefResponse]
+
+
+class MemberResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str
+    permission: ShareRole = "viewer"
+    created_at: str = Field("", alias="createdAt")
+
+    @classmethod
+    def from_member(cls, m: SpaceMember) -> "MemberResponse":
+        return cls(email=m.email, permission=m.permission, created_at=m.created_at)
+
+
+class MembersListResponse(BaseModel):
+    members: List[MemberResponse]
 
 
 def all_templates() -> List[TemplateResponse]:

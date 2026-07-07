@@ -248,6 +248,102 @@ class TestAccessControl:
         assert owner_client.get(f"/memory/spaces/{sid}").status_code == 200
 
 
+class TestSharing:
+    def _make_space(self, service, monkeypatch):
+        owner = _client(service, monkeypatch, user=OWNER)
+        sid = owner.post("/memory/spaces", json={"name": "Shared"}).json()["spaceId"]
+        return owner, sid
+
+    def test_owner_shares_lists_updates_revokes(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+
+        added = owner.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": STRANGER.email, "permission": "viewer"},
+        )
+        assert added.status_code == 201
+        assert added.json()["email"] == STRANGER.email
+        assert added.json()["permission"] == "viewer"
+
+        listed = owner.get(f"/memory/spaces/{sid}/shares").json()["members"]
+        assert [(m["email"], m["permission"]) for m in listed] == [
+            (STRANGER.email, "viewer")
+        ]
+        created_at = listed[0]["createdAt"]
+
+        upgraded = owner.patch(
+            f"/memory/spaces/{sid}/shares/{STRANGER.email}",
+            json={"permission": "editor"},
+        )
+        assert upgraded.status_code == 200
+        assert upgraded.json()["permission"] == "editor"
+        # PATCH preserves the original grant timestamp.
+        assert upgraded.json()["createdAt"] == created_at
+
+        assert (
+            owner.delete(f"/memory/spaces/{sid}/shares/{STRANGER.email}").status_code
+            == 204
+        )
+        assert owner.get(f"/memory/spaces/{sid}/shares").json()["members"] == []
+
+    def test_shared_member_gains_access(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+        owner.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": STRANGER.email, "permission": "editor"},
+        )
+        member = _client(service, monkeypatch, user=STRANGER)
+        # editor can now read and write entries
+        assert member.get(f"/memory/spaces/{sid}").status_code == 200
+        assert (
+            member.put(
+                f"/memory/spaces/{sid}/entries/note", json={"body": "hi"}
+            ).status_code
+            == 200
+        )
+
+    def test_non_owner_cannot_share(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+        owner.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": STRANGER.email, "permission": "editor"},
+        )
+        # an editor is not an owner — cannot manage grants
+        member = _client(service, monkeypatch, user=STRANGER)
+        r = member.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": "third@example.edu", "permission": "viewer"},
+        )
+        assert r.status_code == 403
+
+    def test_viewer_cannot_list_members(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+        owner.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": STRANGER.email, "permission": "viewer"},
+        )
+        member = _client(service, monkeypatch, user=STRANGER)
+        # listing members requires editor+
+        assert member.get(f"/memory/spaces/{sid}/shares").status_code == 403
+
+    def test_patch_unknown_member_404(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+        r = owner.patch(
+            f"/memory/spaces/{sid}/shares/nobody@example.edu",
+            json={"permission": "editor"},
+        )
+        assert r.status_code == 404
+
+    def test_share_rejects_owner_role(self, service, monkeypatch):
+        owner, sid = self._make_space(service, monkeypatch)
+        r = owner.post(
+            f"/memory/spaces/{sid}/shares",
+            json={"email": STRANGER.email, "permission": "owner"},
+        )
+        # "owner" is not a grantable ShareRole → 422 at the request model
+        assert r.status_code == 422
+
+
 class TestExport:
     def _seed(self, service, monkeypatch):
         client = _client(service, monkeypatch, user=OWNER)

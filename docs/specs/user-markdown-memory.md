@@ -545,8 +545,12 @@ calls it.
   `MemorySpaceService.export_space` gathers the corpus (viewer+, members only for editor+); the
   route builds the zip in a `SpooledTemporaryFile` (spills to disk so a large space never pins
   memory) and streams it. Archive path components are sanitized against zip-slip. Route tests.
-- **A4 — Sharing.** Membership API (`POST|PATCH|DELETE .../shares`) over the `MEMBER#` rows +
-  shared concurrency (optimistic manifest). Access control is identity-based; no content gate.
+- **A4 — Sharing.** ✅ Membership API (`GET|POST|PATCH|DELETE .../shares`) over the `MEMBER#` rows
+  (owner grants/updates/revokes viewer|editor; editor+ lists) + shared concurrency: the manifest
+  `INDEX` row now takes a **conditional write** on `version` (`put_index(expected_version=…)` →
+  `OptimisticLockError`), and `write_entry`/`delete_entry` run a bounded read-modify-retry loop
+  (`_mutate_index`) that converges on transient races and surfaces `MemorySpaceConcurrencyError`
+  (→ 409) only on a sustained one. Access control is identity-based; no content gate.
 - **A5 — SPA Memory panel.** The Memory section: list, per-space view/edit/delete, create-from-
   template, download `.zip`, share dialog (reuse the assistant-share component + `redesign-tokens`).
 - **A6 — Consolidation.** A maintenance job (scheduled per space, or on index-cap threshold) that

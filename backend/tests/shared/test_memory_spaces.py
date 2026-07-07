@@ -11,8 +11,9 @@ import pytest
 from moto import mock_aws
 
 from apis.shared.memory.models import MemoryIndex, MemorySpace, SpaceMember
-from apis.shared.memory.repository import MemorySpaceRepository
+from apis.shared.memory.repository import MemorySpaceRepository, OptimisticLockError
 from apis.shared.memory.service import (
+    MemorySpaceConcurrencyError,
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
     MemorySpaceService,
@@ -299,6 +300,31 @@ class TestSharing:
         _, role = service.resolve_permission(space.space_id, FRIEND, FRIEND_EMAIL)
         assert role is None
 
+    def test_update_share_changes_role_preserving_origin(self, space, service):
+        created = service.share(
+            space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "viewer"
+        )
+        updated = service.update_share(
+            space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "editor"
+        )
+        assert updated.permission == "editor"
+        assert updated.created_at == created.created_at
+        _, role = service.resolve_permission(space.space_id, FRIEND, FRIEND_EMAIL)
+        assert role == "editor"
+
+    def test_update_share_unknown_member_raises(self, space, service):
+        with pytest.raises(MemorySpaceNotFoundError):
+            service.update_share(
+                space.space_id, OWNER, OWNER_EMAIL, STRANGER_EMAIL, "editor"
+            )
+
+    def test_update_share_requires_owner(self, space, service):
+        service.share(space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "editor")
+        with pytest.raises(MemorySpacePermissionError):
+            service.update_share(
+                space.space_id, FRIEND, FRIEND_EMAIL, FRIEND_EMAIL, "viewer"
+            )
+
     def test_member_can_leave(self, space, service):
         service.share(space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "editor")
         service.leave_space(space.space_id, FRIEND, FRIEND_EMAIL)
@@ -415,3 +441,48 @@ class TestIndexAndEntries:
             service.read_entry(space.space_id, FRIEND, FRIEND_EMAIL, "n")
             == "shared body"
         )
+
+
+# ==================== service: manifest concurrency (A4) ====================
+
+
+class TestManifestConcurrency:
+    def test_version_increments_per_write(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "b", "2")
+        service.delete_entry(space.space_id, OWNER, OWNER_EMAIL, "a")
+        # three manifest mutations from the seeded version 0
+        assert service.repository.get_index(space.space_id).version == 3
+
+    def test_repository_rejects_stale_conditional_write(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")  # -> v1
+        stale = service.repository.get_index(space.space_id)
+        # a writer that read v0 tries to commit against the now-v1 row
+        with pytest.raises(OptimisticLockError):
+            service.repository.put_index(stale, expected_version=0)
+
+    def test_write_retries_and_converges_on_transient_conflict(self, space, service):
+        real_put = service.repository.put_index
+        calls = {"n": 0}
+
+        def flaky(index, *, expected_version=None):
+            calls["n"] += 1
+            if calls["n"] == 1:  # first attempt loses the race, then converges
+                raise OptimisticLockError("transient")
+            return real_put(index, expected_version=expected_version)
+
+        service.repository.put_index = flaky
+        ref = service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        assert ref.slug == "a"
+        assert calls["n"] >= 2
+        assert [
+            e.slug for e in service.list_entries(space.space_id, OWNER, OWNER_EMAIL)
+        ] == ["a"]
+
+    def test_write_gives_up_after_max_retries(self, space, service):
+        def always_conflict(index, *, expected_version=None):
+            raise OptimisticLockError("perpetual")
+
+        service.repository.put_index = always_conflict
+        with pytest.raises(MemorySpaceConcurrencyError):
+            service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")

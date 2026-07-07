@@ -23,13 +23,26 @@ from typing import Any, List, Optional
 try:  # boto3 is absent in some local-dev setups
     import boto3
     from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
 except ImportError:  # pragma: no cover - exercised only without boto3
     boto3 = None
     Key = None  # type: ignore[assignment]
+    ClientError = Exception  # type: ignore[assignment, misc]
 
 from .models import MemoryEntryRef, MemoryIndex, MemorySpace, SpaceMember
 
 logger = logging.getLogger(__name__)
+
+
+class OptimisticLockError(RuntimeError):
+    """A conditional manifest write failed because the row moved under us.
+
+    Raised by :meth:`MemorySpaceRepository.put_index` when a caller supplies an
+    ``expected_version`` that no longer matches the stored one. The service
+    translates this into a re-read-and-retry loop (and ultimately a
+    ``MemorySpaceConcurrencyError`` if it can't converge). Kept repository-local
+    so this layer stays free of the service's error taxonomy.
+    """
 
 _META_SK = "META"
 _INDEX_SK = "INDEX"
@@ -224,8 +237,36 @@ class MemorySpaceRepository:
             return MemoryIndex(space_id=space_id, entries=[], version=0)
         return self._item_to_index(item, space_id)
 
-    def put_index(self, index: MemoryIndex) -> None:
-        self._table.put_item(Item=self._index_to_item(index))
+    def put_index(
+        self, index: MemoryIndex, *, expected_version: Optional[int] = None
+    ) -> None:
+        """Persist the manifest row.
+
+        With ``expected_version`` the write is conditional on the stored
+        ``version`` still matching it — optimistic concurrency for shared
+        spaces. On a mismatch it raises :class:`OptimisticLockError` so the
+        service can re-read and retry. The ``attribute_not_exists`` branch
+        admits the very first write (``create_space`` seeds version 0, so this
+        is a safety net rather than the common path).
+        """
+        item = self._index_to_item(index)
+        if expected_version is None:
+            self._table.put_item(Item=item)
+            return
+        try:
+            self._table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(PK) OR #v = :expected",
+                ExpressionAttributeNames={"#v": "version"},
+                ExpressionAttributeValues={":expected": int(expected_version)},
+            )
+        except ClientError as e:  # narrow to the conditional-failure case
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "ConditionalCheckFailedException":
+                raise OptimisticLockError(
+                    f"manifest for space '{index.space_id}' changed concurrently"
+                ) from e
+            raise
 
     # ---- members -------------------------------------------------------
 
