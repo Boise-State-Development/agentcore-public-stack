@@ -7,6 +7,7 @@ import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ScheduleService } from '../../schedules/services/schedule.service';
+import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -15,6 +16,7 @@ describe('Sidenav', () => {
   let mockSidenavService: any;
   let mockUserService: any;
   let mockScheduleService: any;
+  let mockMemorySpaceService: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -39,6 +41,10 @@ describe('Sidenav', () => {
       accessible$: signal<boolean | null>(null),
       loadSchedules: vi.fn().mockResolvedValue(undefined),
     };
+    mockMemorySpaceService = {
+      accessible$: signal<boolean | null>(null),
+      loadSpaces: vi.fn().mockResolvedValue(undefined),
+    };
 
     TestBed.configureTestingModule({
       providers: [
@@ -48,6 +54,7 @@ describe('Sidenav', () => {
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: UserService, useValue: mockUserService },
         { provide: ScheduleService, useValue: mockScheduleService },
+        { provide: MemorySpaceService, useValue: mockMemorySpaceService },
       ],
     });
   });
@@ -121,5 +128,30 @@ describe('Sidenav', () => {
     component.navigateToSchedules();
     expect(mockSidenavService.close).toHaveBeenCalled();
     expect(mockRouter.navigate).toHaveBeenCalledWith(['/schedules']);
+  });
+
+  it('probes memory-space accessibility once a user is authenticated', async () => {
+    mockUserService.currentUser.set({ user_id: 'u1', email: 'u1@example.com' });
+    await createComponent();
+    expect(mockMemorySpaceService.loadSpaces).toHaveBeenCalled();
+  });
+
+  it('does not probe memory-space accessibility while unauthenticated', async () => {
+    mockUserService.currentUser.set(null);
+    await createComponent();
+    expect(mockMemorySpaceService.loadSpaces).not.toHaveBeenCalled();
+  });
+
+  it('hides the Memory Spaces nav entry until accessibility resolves true', async () => {
+    const component = await createComponent();
+
+    mockMemorySpaceService.accessible$.set(null);
+    expect(component.showMemorySpaces()).toBe(false);
+
+    mockMemorySpaceService.accessible$.set(false);
+    expect(component.showMemorySpaces()).toBe(false);
+
+    mockMemorySpaceService.accessible$.set(true);
+    expect(component.showMemorySpaces()).toBe(true);
   });
 });
