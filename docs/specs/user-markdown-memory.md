@@ -574,6 +574,11 @@ calls it.
 These are **not** part of the memory epic; they are how an agent surface reads/writes a bound space.
 They plug into `inference-api` today and ride whatever run surface a given lane uses.
 
+> **Superseded framing (2026-07-07):** B1's binding no longer "extends the Assistant." It lands as a
+> `memory_space` **Binding** on the new unified **Agent** record — see
+> [`agent-designer.md`](agent-designer.md). B1 = that spec's Phase-1 memory binding kind; B2/B3 = its
+> Phase-3 harness resolution.
+
 - **B1 — Binding.** `memorySpaces` declarative config on the assistant/agent record (`spaceId`,
   `access`, `alwaysLoad`); resolution against the invoking user's grant; default personal-space
   auto-create. This is the seam that connects an agent to a space.
