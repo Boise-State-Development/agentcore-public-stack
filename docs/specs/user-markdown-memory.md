@@ -540,8 +540,11 @@ calls it.
   (`Depends(get_current_user_from_session)`, router mounted behind the flag): list / create-from-
   template / get / delete-or-leave, entry read/list/upsert/delete, index read/update. Error
   translation (`NotFound→404`, `Permission→403`). Route tests.
-- **A3 — Export / download (§9).** `GET /memory/spaces/{id}/export` → streamed `.zip` of the raw
-  markdown (index + entries + `metadata.json`). The "own your data" leg.
+- **A3 — Export / download (§9).** ✅ `GET /memory/spaces/{id}/export` → streamed `.zip` of the raw
+  markdown (index + `entries/<type>/*.md` + `metadata.json`). The "own your data" leg.
+  `MemorySpaceService.export_space` gathers the corpus (viewer+, members only for editor+); the
+  route builds the zip in a `SpooledTemporaryFile` (spills to disk so a large space never pins
+  memory) and streams it. Archive path components are sanitized against zip-slip. Route tests.
 - **A4 — Sharing.** Membership API (`POST|PATCH|DELETE .../shares`) over the `MEMBER#` rows +
   shared concurrency (optimistic manifest). Access control is identity-based; no content gate.
 - **A5 — SPA Memory panel.** The Memory section: list, per-space view/edit/delete, create-from-

@@ -8,6 +8,10 @@ end-to-end through the shared service.
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+
 import boto3
 import pytest
 from fastapi import FastAPI
@@ -219,6 +223,12 @@ class TestAccessControl:
         stranger_client = _client(service, monkeypatch, user=STRANGER)
         assert stranger_client.get("/memory/spaces").json()["spaces"] == []
 
+    def test_stranger_cannot_export_space(self, service, monkeypatch):
+        owner_client = _client(service, monkeypatch, user=OWNER)
+        sid = owner_client.post("/memory/spaces", json={"name": "P"}).json()["spaceId"]
+        stranger_client = _client(service, monkeypatch, user=STRANGER)
+        assert stranger_client.get(f"/memory/spaces/{sid}/export").status_code == 403
+
     def test_member_leaves_via_delete(self, service, monkeypatch):
         owner_client = _client(service, monkeypatch, user=OWNER)
         sid = owner_client.post("/memory/spaces", json={"name": "Shared"}).json()[
@@ -236,3 +246,99 @@ class TestAccessControl:
         assert member_client.get(f"/memory/spaces/{sid}").status_code == 403
         # the space still exists for the owner
         assert owner_client.get(f"/memory/spaces/{sid}").status_code == 200
+
+
+class TestExport:
+    def _seed(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post(
+            "/memory/spaces", json={"name": "My Brain", "template": "chief-of-staff"}
+        ).json()["spaceId"]
+        client.put(
+            f"/memory/spaces/{sid}/entries/jane-doe",
+            json={
+                "body": "---\ntype: entity\n---\n# Jane\nVP Research",
+                "type": "entity",
+                "description": "VP Research",
+            },
+        )
+        client.put(
+            f"/memory/spaces/{sid}/entries/q3-goal",
+            json={"body": "# Q3\nShip memory spaces", "type": "fact"},
+        )
+        return client, sid
+
+    def _open_zip(self, resp) -> zipfile.ZipFile:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/zip"
+        assert 'filename="My-Brain.zip"' in resp.headers["content-disposition"]
+        return zipfile.ZipFile(io.BytesIO(resp.content))
+
+    def test_owner_export_layout_and_contents(self, service, monkeypatch):
+        client, sid = self._seed(service, monkeypatch)
+        zf = self._open_zip(client.get(f"/memory/spaces/{sid}/export"))
+
+        names = set(zf.namelist())
+        assert "My-Brain/MEMORY.md" in names
+        assert "My-Brain/entries/entity/jane-doe.md" in names
+        assert "My-Brain/entries/fact/q3-goal.md" in names
+        assert "My-Brain/metadata.json" in names
+
+        # Entry bytes are verbatim, frontmatter intact.
+        assert b"VP Research" in zf.read("My-Brain/entries/entity/jane-doe.md")
+        assert b"type: entity" in zf.read("My-Brain/entries/entity/jane-doe.md")
+        # The index text is the seeded template's MEMORY.md.
+        assert b"Strategic priorities" in zf.read("My-Brain/MEMORY.md")
+
+        meta = json.loads(zf.read("My-Brain/metadata.json"))
+        assert meta["spaceId"] == sid
+        assert meta["name"] == "My Brain"
+        assert meta["template"] == "chief-of-staff"
+        assert meta["entryCount"] == 2
+        assert meta["owner"]["email"] == OWNER.email
+        assert meta["exportedAt"]
+
+    def test_owner_metadata_lists_members(self, service, monkeypatch):
+        client, sid = self._seed(service, monkeypatch)
+        service.share(sid, OWNER.user_id, OWNER.email, STRANGER.email, "viewer")
+        zf = self._open_zip(client.get(f"/memory/spaces/{sid}/export"))
+        meta = json.loads(zf.read("My-Brain/metadata.json"))
+        assert meta["members"] == [
+            {"email": STRANGER.email, "permission": "viewer", "createdAt": meta["members"][0]["createdAt"]}
+        ]
+
+    def test_viewer_can_export_without_member_list(self, service, monkeypatch):
+        owner_client, sid = self._seed(service, monkeypatch)
+        service.share(sid, OWNER.user_id, OWNER.email, STRANGER.email, "viewer")
+        viewer_client = _client(service, monkeypatch, user=STRANGER)
+        resp = viewer_client.get(f"/memory/spaces/{sid}/export")
+        assert resp.status_code == 200
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        meta = json.loads(zf.read("My-Brain/metadata.json"))
+        # A viewer exports the corpus but not the grant list (list_members gate).
+        assert meta["members"] == []
+        assert meta["entryCount"] == 2
+
+    def test_export_missing_space_404(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        assert client.get("/memory/spaces/spc_missing/export").status_code == 404
+
+    def test_export_404_when_flag_off(self, service, monkeypatch):
+        client, sid = self._seed(service, monkeypatch)
+        monkeypatch.setenv("MEMORY_SPACES_ENABLED", "false")
+        assert client.get(f"/memory/spaces/{sid}/export").status_code == 404
+
+    def test_export_sanitizes_hostile_slug(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        # Seed a traversal slug directly through the service (the route path
+        # converter would never carry one) — the export must not let it escape
+        # its archive folder (zip-slip).
+        service.write_entry(
+            sid, OWNER.user_id, OWNER.email, "../../evil", "nope", entry_type="fact"
+        )
+        resp = client.get(f"/memory/spaces/{sid}/export")
+        assert resp.status_code == 200
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        assert all(not n.startswith("..") and "/../" not in n for n in zf.namelist())
+        assert "X/entries/fact/evil.md" in zf.namelist()

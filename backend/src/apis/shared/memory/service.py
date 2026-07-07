@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,6 +50,23 @@ class MemorySpaceNotFoundError(MemorySpaceError):
 
 class MemorySpacePermissionError(MemorySpaceError):
     """The caller lacks the required role on the space."""
+
+
+@dataclass
+class MemorySpaceExport:
+    """The full readable corpus of a space, gathered for a `.zip` download (§9).
+
+    Loss-free snapshot: the space metadata, the ``MEMORY.md`` index text, and
+    every entry paired with its raw bytes (frontmatter intact). ``members`` is
+    populated only for editor+ callers — a viewer gets the corpus without the
+    grant list, mirroring the ``list_members`` gate.
+    """
+
+    space: MemorySpace
+    role: Role
+    index_text: str
+    files: List[Tuple[MemoryEntryRef, bytes]] = field(default_factory=list)
+    members: List[SpaceMember] = field(default_factory=list)
 
 
 def _now_iso() -> str:
@@ -197,6 +215,36 @@ class MemorySpaceService:
                 result.append((shared, member.permission if member else "viewer"))
                 seen.add(space_id)
         return sorted(result, key=lambda t: t[0].created_at)
+
+    def export_space(
+        self, space_id: str, user_id: str, user_email: Optional[str] = None
+    ) -> MemorySpaceExport:
+        """Gather the full readable corpus of a space for download (viewer+).
+
+        Reads the manifest once and pulls every entry's bytes from the
+        content-addressed store — the loss-free "own your data" export (§9).
+        The app-api layer turns this into a streamed ``.zip``. Members are
+        included only for editor+ callers (mirrors :meth:`list_members`); a
+        viewer exports the content they can read without the grant list.
+        """
+        space, role = self._require(space_id, user_id, user_email, "viewer")
+        index_text = ""
+        if space.index_s3_key:
+            index_text = self.store.get(space.index_s3_key).decode("utf-8")
+        index = self.repository.get_index(space_id)
+        files = [(ref, self.store.get(ref.s3_key)) for ref in index.entries]
+        members = (
+            self.repository.list_members(space_id)
+            if _ROLE_RANK[role] >= _ROLE_RANK["editor"]
+            else []
+        )
+        return MemorySpaceExport(
+            space=space,
+            role=role,
+            index_text=index_text,
+            files=files,
+            members=members,
+        )
 
     def delete_space(
         self, space_id: str, user_id: str, user_email: Optional[str] = None
