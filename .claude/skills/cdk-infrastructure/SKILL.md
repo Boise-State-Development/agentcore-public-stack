@@ -82,6 +82,29 @@ new AlbConstruct(this, 'Alb', { config, vpc: network.vpc });
 
 SSM parameters are published **only for runtime consumption** by ECS tasks and Lambdas — never for CDK-to-CDK references within the same stack.
 
+### Wire a resource's name to every compute that reads it
+
+When a construct exposes a table/bucket that backend code reads via
+`os.environ.get("X_NAME", "default")`, you must set `X_NAME` in the container
+environment of **every** compute that runs that code — thread the typed ref
+through that compute's env builder (e.g. `buildAppApiEnvironment` for app-api,
+the inference-agentcore construct's `environment` for inference-api). Wiring one
+does **not** wire the other.
+
+**Why this bites (silent 502):** the backend's default fallback hides the
+omission. If the env var is missing, the code queries the *default* name
+(e.g. `"memory-spaces"` instead of `{prefix}-memory-spaces`), the resource
+isn't found, boto3 raises `ResourceNotFoundException`, and the centralized
+handler (`apis/shared/security/error_handler.py`) maps it to a generic
+**502 `{"detail":"Upstream service error."}`**. Nothing in `cdk synth` or CI
+catches it — the stack is valid, the IAM grant may even exist; only a runtime
+read fails. (Real instance: PR #588 — memory-spaces names were wired to
+inference-api but not app-api, which owns the CRUD routes.)
+
+**Guard it:** add an env-map unit test asserting the key is emitted (see
+`test/app-api-environment.test.ts`). **Mind the boundary:** app-api owns
+user-facing CRUD; granting IAM or wiring inference-api does not cover it.
+
 ## DynamoDB Tables
 
 - Always use PK + SK for flexibility
