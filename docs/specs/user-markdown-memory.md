@@ -140,6 +140,11 @@ binds the same way and is governed the same way:
 - **User-visible & user-editable** — "here's what I remember," with edit / delete / export. This
   is a product feature (control over what's remembered), and it's how agent-written memory stays
   correctable.
+- **User-owned & portable** — a user can **download the entire space as a `.zip`** of its raw
+  markdown (index + all entries, directory structure preserved) at any time. Full ownership, zero
+  lock-in: the export is the complete, human-readable, re-importable corpus — the same property
+  `agentcore export harness` gives on the run side, and something vector RAG can't offer. See
+  [Export / download](#9-export--download-full-ownership).
 - **Shareable** — a space can be shared with other users (viewer/editor), enabling team wikis and
   shared institutional memory (phased; see [Sharing](#sharing--access-control)).
 - Reuse the **skills reference-file mechanism** (S3 store + DynamoDB manifest + on-demand read
@@ -377,13 +382,43 @@ handler calls `resolve_permission`):
 - `GET /memory/spaces/{id}/entries/{slug}` — read one entry
 - `PUT` / `DELETE /memory/spaces/{id}/entries/{slug}` — user edits/deletes an entry (editor+)
 - `POST|PATCH|DELETE /memory/spaces/{id}/shares[...]` — manage members (owner)
-- `GET /memory/spaces/{id}/export` — export the space as a markdown bundle
+- `GET /memory/spaces/{id}/export` — **download the whole space as a `.zip`** (see §9)
 - `DELETE /memory/spaces/{id}` — delete (owner) / for a shared-in space, **leave** (drop own grant)
 
 SPA: a **Memory** section — a list of spaces, and per space a "what I remember" panel (view,
-edit, delete, export), a **share dialog** (reuse the assistant-share component + `redesign-tokens`),
-and a **create-from-template** flow. This is the differentiator vector RAG can't offer — and the
-user's control surface over what's remembered.
+edit, delete, **download `.zip`**), a **share dialog** (reuse the assistant-share component +
+`redesign-tokens`), and a **create-from-template** flow. This is the differentiator vector RAG
+can't offer — and the user's control surface over what's remembered.
+
+### 9. Export / download (full ownership)
+
+A user can download the **entire space** as a single `.zip` of its raw markdown at any time —
+the concrete expression of "you own this data." Because a space *is* human-readable markdown,
+the export is loss-free: it is the complete corpus, not a rendering of it.
+
+- **Contents.** The zip mirrors the S3 layout so it is self-contained and re-importable:
+  ```
+  {space-name}/
+    MEMORY.md                        # the index, verbatim
+    entries/entity/*.md              # every entry, with frontmatter intact
+    entries/episodic/*.md
+    entries/fact/*.md
+    metadata.json                    # space name, template, created, members (roles), export timestamp
+  ```
+  Entry frontmatter (`type`, `updated`, `updated_by`, `[[wikilinks]]`, indexed fields) **is** the
+  source of truth; the DynamoDB manifest is a derived cache and is *not* needed in the export —
+  it can be rebuilt from the files on import. `metadata.json` carries the small amount of
+  space-level state the files don't.
+- **Access.** Any member with read (viewer+) may export the content they can already read; the
+  owner exports the full space. Routes through `resolve_permission` like every other path.
+- **Mechanics.** Built server-side in `app-api`: read the manifest → `get` each object from the
+  content-addressed store → stream a zip response (`Content-Disposition: attachment`). Stream
+  rather than buffer so large spaces don't pin memory; the entry count is bounded by the
+  consolidation cap so this stays modest.
+- **Round-trip (future, non-goal v1).** The export format is deliberately import-friendly — a
+  later `POST /memory/spaces/import` could reconstruct a space (and rebuild the manifest) from
+  this exact zip, giving true portability between environments/accounts. Symmetry now, import
+  later.
 
 ---
 
@@ -479,7 +514,7 @@ sentence, not a gate.
 - **PR-4 — Write path (agentic, W1).** `memory_write` / `memory_update` + index maintenance +
   `updated_by` attribution. Round-trips through tool RBAC/registry.
 - **PR-5 — User surface.** `app-api` `/memory/spaces/` CRUD + SPA Memory section (list, per-space
-  panel, create-from-template, export).
+  panel, create-from-template) + **zip export** (`GET .../export`, streamed, §9).
 - **PR-6 — Sharing.** Membership API + `resolve_permission` on all paths + share dialog (with the
   scope note) + shared concurrency (optimistic manifest). Access control is identity-based; no
   content-inspection gate.
