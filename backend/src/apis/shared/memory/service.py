@@ -174,18 +174,29 @@ class MemorySpaceService:
 
     def list_spaces_for_user(
         self, user_id: str, user_email: Optional[str] = None
-    ) -> List[MemorySpace]:
-        """List spaces the user owns plus spaces shared with them (deduped)."""
-        owned = self.repository.list_owned(user_id)
-        spaces: Dict[str, MemorySpace] = {s.space_id: s for s in owned}
+    ) -> List[Tuple[MemorySpace, Role]]:
+        """List ``(space, role)`` for spaces the user owns plus shared-in (deduped).
+
+        Owned spaces resolve to ``owner``; shared-in carry the member's actual
+        ``viewer``/``editor`` grant, so the SPA can render accurate affordances
+        without a follow-up call per space.
+        """
+        result: List[Tuple[MemorySpace, Role]] = []
+        seen: set[str] = set()
+        for s in self.repository.list_owned(user_id):
+            result.append((s, "owner"))
+            seen.add(s.space_id)
         if user_email:
             for space_id in self.repository.list_member_space_ids(user_email):
-                if space_id in spaces:
+                if space_id in seen:
                     continue
                 shared = self.repository.get_space(space_id)
-                if shared is not None:
-                    spaces[space_id] = shared
-        return sorted(spaces.values(), key=lambda s: s.created_at)
+                if shared is None:
+                    continue
+                member = self.repository.get_member(space_id, user_email)
+                result.append((shared, member.permission if member else "viewer"))
+                seen.add(space_id)
+        return sorted(result, key=lambda t: t[0].created_at)
 
     def delete_space(
         self, space_id: str, user_id: str, user_email: Optional[str] = None
@@ -202,6 +213,29 @@ class MemorySpaceService:
             self.store.delete(space.index_s3_key)
         self.repository.delete_space(space_id)
         logger.info("memory-spaces: deleted space=%s by user=%s", space_id, user_id)
+
+    def leave_space(
+        self, space_id: str, user_id: str, user_email: Optional[str] = None
+    ) -> None:
+        """Drop the caller's own grant on a space shared with them.
+
+        A member removes *their own* access — no owner action required (the
+        "forget-me on a shared-in space = leave" case from the governance
+        section). The owner cannot leave; they delete the space instead.
+        """
+        space, role = self.resolve_permission(space_id, user_id, user_email)
+        if space is None:
+            raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+        if role == "owner":
+            raise MemorySpaceError(
+                "the owner cannot leave a space; delete it instead"
+            )
+        if role is None or not user_email:
+            raise MemorySpacePermissionError(
+                f"you are not a member of memory space '{space_id}'"
+            )
+        self.repository.delete_member(space_id, user_email)
+        logger.info("memory-spaces: user=%s left space=%s", user_id, space_id)
 
     # ---- sharing -------------------------------------------------------
 
