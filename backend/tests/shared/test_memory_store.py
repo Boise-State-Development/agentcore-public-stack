@@ -93,6 +93,21 @@ class TestPutGetDelete:
         store.delete("spaces/s/missing")
 
 
+class TestListKeys:
+    def test_lists_only_the_space_prefix(self, store):
+        k1 = store.put(space_id="s1", content=b"a", content_type="text/markdown")
+        k2 = store.put(space_id="s1", content=b"b", content_type="text/markdown")
+        store.put(space_id="s2", content=b"c", content_type="text/markdown")
+        assert set(store.list_keys("s1")) == {k1, k2}
+
+    def test_empty_space_returns_empty(self, store):
+        assert store.list_keys("nope") == []
+
+    def test_disabled_returns_empty(self, monkeypatch):
+        monkeypatch.delenv("S3_MEMORY_SPACES_BUCKET_NAME", raising=False)
+        assert MemorySpaceStore(bucket_name=None).list_keys("s") == []
+
+
 class TestNotConfigured:
     def test_disabled_when_no_bucket(self, monkeypatch):
         monkeypatch.delenv("S3_MEMORY_SPACES_BUCKET_NAME", raising=False)

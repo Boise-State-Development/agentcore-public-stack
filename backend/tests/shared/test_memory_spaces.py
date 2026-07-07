@@ -446,6 +446,87 @@ class TestIndexAndEntries:
 # ==================== service: manifest concurrency (A4) ====================
 
 
+class TestConsolidation:
+    def test_reports_healthy_space(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "one")
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.entry_count == 1
+        assert report.over_cap is False
+        assert report.duplicate_groups == []
+        assert report.dead_links == []
+        assert report.orphans_deleted == 0
+
+    def test_gc_deletes_orphaned_objects(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "one")
+        # Simulate a leaked object (crashed write) directly in the store.
+        orphan_key = service.store.put(
+            space_id=space.space_id, content=b"leaked", content_type="text/markdown"
+        )
+        assert orphan_key in service.store.list_keys(space.space_id)
+
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.orphans_deleted == 1
+        assert orphan_key not in service.store.list_keys(space.space_id)
+        # the live entry's object is untouched
+        assert service.read_entry(space.space_id, OWNER, OWNER_EMAIL, "a") == "one"
+
+    def test_gc_can_be_skipped(self, space, service):
+        service.store.put(
+            space_id=space.space_id, content=b"leaked", content_type="text/markdown"
+        )
+        report = service.consolidate(
+            space.space_id, OWNER, OWNER_EMAIL, apply_gc=False
+        )
+        assert report.orphans_deleted == 0
+
+    def test_reports_duplicate_content_without_merging(self, space, service):
+        # Two different slugs, byte-identical bodies → same content hash.
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "same body")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "b", "same body")
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.duplicate_groups == [["a", "b"]]
+        # both entries still exist — consolidation never auto-merges
+        assert len(service.list_entries(space.space_id, OWNER, OWNER_EMAIL)) == 2
+
+    def test_reports_dead_wikilinks(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "jane", "hi")
+        service.update_index(
+            space.space_id, OWNER, OWNER_EMAIL, "- [[jane]]\n- [[ghost]]\n"
+        )
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.dead_links == ["ghost"]
+        assert report.stripped_dead_links is False
+        # index untouched unless stripping is requested
+        assert "[[ghost]]" in service.read_index(space.space_id, OWNER, OWNER_EMAIL)
+
+    def test_strip_dead_links_unlinks_but_keeps_prose(self, space, service):
+        service.update_index(
+            space.space_id, OWNER, OWNER_EMAIL, "See [[ghost]] for details.\n"
+        )
+        report = service.consolidate(
+            space.space_id, OWNER, OWNER_EMAIL, strip_dead_links=True
+        )
+        assert report.stripped_dead_links is True
+        text = service.read_index(space.space_id, OWNER, OWNER_EMAIL)
+        assert "[[ghost]]" not in text
+        assert "See ghost for details." in text
+
+    def test_over_cap_flag(self, space, service, monkeypatch):
+        monkeypatch.setenv("MEMORY_SPACE_INDEX_CAP", "2")
+        for slug in ("a", "b", "c"):
+            service.write_entry(space.space_id, OWNER, OWNER_EMAIL, slug, slug)
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.index_cap == 2
+        assert report.over_cap is True
+        # over-cap is reported, never auto-evicted
+        assert len(service.list_entries(space.space_id, OWNER, OWNER_EMAIL)) == 3
+
+    def test_requires_editor(self, space, service):
+        service.share(space.space_id, OWNER, OWNER_EMAIL, STRANGER_EMAIL, "viewer")
+        with pytest.raises(MemorySpacePermissionError):
+            service.consolidate(space.space_id, STRANGER, STRANGER_EMAIL)
+
+
 class TestManifestConcurrency:
     def test_version_increments_per_write(self, space, service):
         service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")

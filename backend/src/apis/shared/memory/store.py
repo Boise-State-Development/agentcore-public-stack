@@ -175,6 +175,36 @@ class MemorySpaceStore:
                 f"failed to read memory file at key '{s3_key}'"
             ) from e
 
+    def list_keys(self, space_id: str) -> list[str]:
+        """List every object key stored under a space's prefix.
+
+        Used by the consolidation pass to find orphaned objects (keys no
+        manifest entry or index pointer references) for garbage collection.
+        Returns an empty list when storage is not configured.
+        """
+        if not self.enabled:
+            return []
+        client = self._client()
+        prefix = f"spaces/{space_id}/"
+        keys: list[str] = []
+        token: Optional[str] = None
+        while True:
+            kwargs = {"Bucket": self.bucket_name, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            try:
+                resp = client.list_objects_v2(**kwargs)
+            except ClientError as e:  # pragma: no cover - network/permission path
+                logger.error("memory-spaces: list failed for space=%s: %s", space_id, e)
+                raise MemorySpaceStoreError(
+                    f"failed to list memory objects for space '{space_id}'"
+                ) from e
+            keys.extend(obj["Key"] for obj in resp.get("Contents", []))
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+        return keys
+
     def delete(self, s3_key: str) -> None:
         """Delete an object key. Best-effort — never raises on the storage
         miss path (deleting an already-absent object is a no-op in S3)."""

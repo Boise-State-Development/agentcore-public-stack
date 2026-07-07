@@ -344,6 +344,42 @@ class TestSharing:
         assert r.status_code == 422
 
 
+class TestConsolidate:
+    def test_owner_consolidate_returns_report(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        client.put(f"/memory/spaces/{sid}/entries/a", json={"body": "one"})
+        # leak an orphan object to prove GC runs through the route
+        service.store.put(space_id=sid, content=b"leaked", content_type="text/markdown")
+
+        resp = client.post(f"/memory/spaces/{sid}/consolidate", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["spaceId"] == sid
+        assert body["entryCount"] == 1
+        assert body["orphansDeleted"] == 1
+        assert body["overCap"] is False
+        assert body["duplicateGroups"] == []
+
+    def test_consolidate_no_body(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        assert client.post(f"/memory/spaces/{sid}/consolidate").status_code == 200
+
+    def test_viewer_cannot_consolidate(self, service, monkeypatch):
+        owner = _client(service, monkeypatch, user=OWNER)
+        sid = owner.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        service.share(sid, OWNER.user_id, OWNER.email, STRANGER.email, "viewer")
+        member = _client(service, monkeypatch, user=STRANGER)
+        assert member.post(f"/memory/spaces/{sid}/consolidate", json={}).status_code == 403
+
+    def test_consolidate_404_when_flag_off(self, service, monkeypatch):
+        client = _client(service, monkeypatch, user=OWNER)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        monkeypatch.setenv("MEMORY_SPACES_ENABLED", "false")
+        assert client.post(f"/memory/spaces/{sid}/consolidate", json={}).status_code == 404
+
+
 class TestExport:
     def _seed(self, service, monkeypatch):
         client = _client(service, monkeypatch, user=OWNER)
