@@ -97,7 +97,7 @@ def _next_run_at(schedule: ScheduledPrompt, now: datetime) -> str:
     (`compute_next_run_at`) so a daily/weekday/weekly schedule advances
     correctly — no cron strings, no engine-side interval table.
     """
-    from apis.shared.scheduled_prompts.service import compute_next_run_at
+    from apis.shared.scheduled_prompts.service import compute_next_run_at, interval_to_minutes
 
     try:
         return compute_next_run_at(
@@ -106,6 +106,7 @@ def _next_run_at(schedule: ScheduledPrompt, now: datetime) -> str:
             schedule.timezone,
             weekday=schedule.weekday,
             from_time=now,
+            interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
         )
     except Exception as e:
         # Defensive fallback — should never trigger for a valid schedule,

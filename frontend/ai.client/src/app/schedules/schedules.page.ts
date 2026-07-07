@@ -171,6 +171,12 @@ export class SchedulesPage implements OnInit {
           : '';
         return `Every ${day} at ${time}`;
       }
+      case 'interval': {
+        const value = schedule.intervalValue ?? 0;
+        const unit = schedule.intervalUnit ?? 'hours';
+        const singular = value === 1 ? unit.replace(/s$/, '') : unit;
+        return value === 1 ? `Every ${singular}` : `Every ${value} ${singular}`;
+      }
       default:
         return time;
     }

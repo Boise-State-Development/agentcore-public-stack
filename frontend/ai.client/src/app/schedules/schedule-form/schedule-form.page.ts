@@ -11,10 +11,18 @@ import { FormBuilder, FormControl, ReactiveFormsModule, Validators } from '@angu
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft } from '@ng-icons/heroicons/outline';
 import { ScheduleService } from '../services/schedule.service';
+import { RunNowService } from '../services/run-now.service';
 import { AssistantService } from '../../assistants/services/assistant.service';
 import { Assistant } from '../../assistants/models/assistant.model';
 import { ToolService } from '../../services/tool/tool.service';
-import { CreateScheduleRequest, ScheduleCadence, UpdateScheduleRequest } from '../models/schedule.model';
+import {
+  CreateScheduleRequest,
+  IntervalUnit,
+  MIN_INTERVAL_MINUTES,
+  RunNowRequest,
+  ScheduleCadence,
+  UpdateScheduleRequest,
+} from '../models/schedule.model';
 import { ToastService } from '../../services/toast/toast.service';
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -83,6 +91,7 @@ export class ScheduleFormPage implements OnInit {
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
   private readonly scheduleService = inject(ScheduleService);
+  private readonly runNowService = inject(RunNowService);
   private readonly assistantService = inject(AssistantService);
   private readonly toolService = inject(ToolService);
   private readonly toast = inject(ToastService);
@@ -92,6 +101,9 @@ export class ScheduleFormPage implements OnInit {
   readonly saving = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly loadingSchedule = signal(false);
+
+  readonly minIntervalMinutes = MIN_INTERVAL_MINUTES;
+  readonly intervalUnitOptions: IntervalUnit[] = ['minutes', 'hours'];
 
   readonly assistants = this.assistantService.assistants$;
   readonly tools = this.toolService.tools;
@@ -116,11 +128,15 @@ export class ScheduleFormPage implements OnInit {
     cadence: ['daily' as ScheduleCadence, [Validators.required]],
     hourLocal: [7, [Validators.required]],
     weekday: new FormControl<number | null>(null),
+    intervalValue: new FormControl<number | null>(null),
+    intervalUnit: ['hours' as IntervalUnit, [Validators.required]],
     timezone: [this.guessTimezone(), [Validators.required]],
     assistantId: new FormControl<string | null>(null),
   });
 
-  readonly isWeekly = computed(() => this.form.controls.cadence.value === 'weekly');
+  private readonly cadenceValue = signal<ScheduleCadence>('daily');
+  readonly isWeekly = computed(() => this.cadenceValue() === 'weekly');
+  readonly isInterval = computed(() => this.cadenceValue() === 'interval');
 
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('scheduleId');
@@ -135,10 +151,19 @@ export class ScheduleFormPage implements OnInit {
       void this.loadSchedule(id);
     }
 
-    // "weekly" requires a weekday — default to Monday the first time it's chosen.
+    // Keep the cadence-driven signals in sync (form values aren't signals, so
+    // the isWeekly/isInterval computeds read this instead of the control).
+    this.cadenceValue.set(this.form.controls.cadence.value ?? 'daily');
     this.form.controls.cadence.valueChanges.subscribe((cadence) => {
+      this.cadenceValue.set(cadence ?? 'daily');
+      // "weekly" requires a weekday — default to Monday the first time it's chosen.
       if (cadence === 'weekly' && this.form.controls.weekday.value === null) {
         this.form.controls.weekday.setValue(1);
+      }
+      // "interval" needs a magnitude — default to every 6 hours the first time.
+      if (cadence === 'interval' && this.form.controls.intervalValue.value === null) {
+        this.form.controls.intervalValue.setValue(6);
+        this.form.controls.intervalUnit.setValue('hours');
       }
     });
   }
@@ -158,9 +183,12 @@ export class ScheduleFormPage implements OnInit {
         cadence: schedule.cadence,
         hourLocal: schedule.hourLocal,
         weekday: schedule.weekday ?? null,
+        intervalValue: schedule.intervalValue ?? null,
+        intervalUnit: schedule.intervalUnit ?? 'hours',
         timezone: schedule.timezone,
         assistantId: schedule.assistantId ?? null,
       });
+      this.cadenceValue.set(schedule.cadence);
       this.selectedToolIds.set(new Set(schedule.enabledTools ?? []));
     } catch {
       this.loadError.set('Failed to load this schedule.');
@@ -236,6 +264,11 @@ export class ScheduleFormPage implements OnInit {
       this.form.controls.weekday.setErrors({ required: true });
       return;
     }
+    if (value.cadence === 'interval' && !this.isIntervalValid(value.intervalValue, value.intervalUnit)) {
+      this.form.controls.intervalValue.setErrors({ min: true });
+      this.form.controls.intervalValue.markAsTouched();
+      return;
+    }
 
     this.saving.set(true);
     try {
@@ -247,6 +280,8 @@ export class ScheduleFormPage implements OnInit {
           cadence: value.cadence!,
           hourLocal: value.hourLocal!,
           weekday: value.cadence === 'weekly' ? value.weekday : null,
+          intervalValue: value.cadence === 'interval' ? value.intervalValue : null,
+          intervalUnit: value.cadence === 'interval' ? value.intervalUnit : null,
           timezone: value.timezone!,
           assistantId: value.assistantId ?? null,
           enabledTools: toolIds.length > 0 ? toolIds : null,
@@ -285,6 +320,8 @@ export class ScheduleFormPage implements OnInit {
       cadence: value.cadence!,
       hourLocal: value.hourLocal!,
       weekday: value.cadence === 'weekly' ? value.weekday : null,
+      intervalValue: value.cadence === 'interval' ? value.intervalValue : null,
+      intervalUnit: value.cadence === 'interval' ? value.intervalUnit : null,
       timezone: value.timezone!,
     };
     if (this.clearAssistant()) {
@@ -298,6 +335,39 @@ export class ScheduleFormPage implements OnInit {
       request.enabledTools = toolIds;
     }
     return request;
+  }
+
+  /** True when value+unit clear the backend's minimum-interval floor. */
+  private isIntervalValid(value: number | null, unit: IntervalUnit | null): boolean {
+    if (value === null || value < 1 || unit === null) {
+      return false;
+    }
+    const minutes = unit === 'hours' ? value * 60 : value;
+    return minutes >= this.minIntervalMinutes;
+  }
+
+  /**
+   * Fire the prompt once immediately via POST /runs/now — the attended test
+   * surface. Does NOT save a schedule and does NOT change the view: the run is
+   * handed to `RunNowService`, which tracks it as a persistent background-task
+   * toast and, when it finishes, links to the session-detail conversation
+   * where the result renders with full formatting. Only the prompt is required.
+   */
+  runNow(): void {
+    const promptText = this.form.controls.promptText.value?.trim();
+    if (!promptText) {
+      this.form.controls.promptText.setErrors({ required: true });
+      this.form.controls.promptText.markAsTouched();
+      return;
+    }
+
+    const toolIds = Array.from(this.selectedToolIds());
+    const request: RunNowRequest = {
+      prompt: promptText,
+      title: this.form.controls.label.value?.trim() || null,
+      enabledTools: toolIds.length > 0 ? toolIds : null,
+    };
+    this.runNowService.run(request);
   }
 
   onCancel(): void {

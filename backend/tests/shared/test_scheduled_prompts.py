@@ -22,6 +22,7 @@ from apis.shared.scheduled_prompts.service import (
     create_scheduled_prompt,
     delete_scheduled_prompt,
     get_scheduled_prompt,
+    interval_to_minutes,
     list_due_schedules,
     list_scheduled_prompts,
     max_schedules_per_user,
@@ -122,6 +123,41 @@ class TestComputeNextRunAt:
         with pytest.raises(ValueError, match="Unknown cadence"):
             compute_next_run_at("monthly", 9, "America/Boise")  # type: ignore[arg-type]
 
+    def test_interval_adds_a_plain_delta_from_now(self):
+        # "every 90 minutes" is a fixed delta off from_time — no hour/tz anchor.
+        from_time = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+        result = compute_next_run_at(
+            "interval", 9, "America/Boise", from_time=from_time, interval_minutes=90
+        )
+        expected = datetime(2026, 7, 5, 13, 30, tzinfo=timezone.utc)
+        assert result == expected.isoformat().replace("+00:00", "Z")
+
+    def test_interval_ignores_hour_and_timezone(self):
+        # hour_local/timezone are meaningless for interval; two different zones
+        # produce the same UTC delta.
+        from_time = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+        a = compute_next_run_at("interval", 3, "America/Boise", from_time=from_time, interval_minutes=360)
+        b = compute_next_run_at("interval", 21, "Asia/Tokyo", from_time=from_time, interval_minutes=360)
+        assert a == b == "2026-07-05T18:00:00Z"
+
+    def test_interval_requires_positive_minutes(self):
+        with pytest.raises(ValueError, match="interval_minutes is required"):
+            compute_next_run_at("interval", 9, "America/Boise")
+        with pytest.raises(ValueError, match="interval_minutes is required"):
+            compute_next_run_at("interval", 9, "America/Boise", interval_minutes=0)
+
+
+class TestIntervalToMinutes:
+    def test_hours_convert(self):
+        assert interval_to_minutes(6, "hours") == 360
+
+    def test_minutes_passthrough(self):
+        assert interval_to_minutes(45, "minutes") == 45
+
+    def test_missing_half_is_none(self):
+        assert interval_to_minutes(None, "hours") is None
+        assert interval_to_minutes(6, None) is None
+
     def test_different_timezone_produces_different_utc_time(self):
         from_time = datetime(2026, 7, 5, 0, 0, tzinfo=timezone.utc)
         boise = compute_next_run_at("daily", 9, "America/Boise", from_time=from_time)
@@ -178,6 +214,18 @@ class TestCreateAndGet:
     async def test_weekly_requires_weekday_at_creation(self, sessions_metadata_table):
         with pytest.raises(ValueError):
             await _make_schedule(cadence="weekly", weekday=None)
+
+    async def test_interval_persists_value_and_unit(self, sessions_metadata_table):
+        schedule = await _make_schedule(
+            cadence="interval", interval_value=6, interval_unit="hours"
+        )
+        assert schedule.cadence == "interval"
+        assert schedule.next_run_at is not None
+
+        fetched = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert fetched is not None
+        assert fetched.interval_value == 6
+        assert fetched.interval_unit == "hours"
 
     async def test_per_user_cap_enforced(self, sessions_metadata_table, monkeypatch):
         monkeypatch.setenv("SCHEDULED_RUNS_MAX_PER_USER", "2")

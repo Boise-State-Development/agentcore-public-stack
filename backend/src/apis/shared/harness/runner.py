@@ -241,13 +241,16 @@ async def run_agent_headless(
             await update_session_title(session_id, user_id, title)
             result.title = title
 
-        # A scheduled (unattended) run produced a response the user wasn't
-        # watching — flag the session unread so the sidebar shows a dot until
-        # they open it. Runs *after* the SK-rotating writes above, on the row's
-        # final SK. Gated on a successful completion (no dot for a failed or
-        # consent-blocked run) and on the unattended trigger (attended "Run
-        # now" / manual invocations don't mark unread — the user is present).
-        if trigger == "schedule" and result.status == "completed":
+        # A background run produced a response the user wasn't watching — flag
+        # the session unread so the sidebar shows a dot until they open it. Runs
+        # *after* the SK-rotating writes above, on the row's final SK. Gated on a
+        # successful completion (no dot for a failed or consent-blocked run) and
+        # on the background triggers: "schedule" (unattended) and "run_now",
+        # which is now fire-and-forget — the SPA hands the run to a background
+        # tracker and the user keeps working elsewhere, so the result arrives
+        # asynchronously in the sidebar just like a scheduled run. "manual" (the
+        # default, used where a caller drains the result itself) stays excluded.
+        if trigger in ("schedule", "run_now") and result.status == "completed":
             await set_session_unread(session_id, user_id, True)
     except Exception:
         logger.error(

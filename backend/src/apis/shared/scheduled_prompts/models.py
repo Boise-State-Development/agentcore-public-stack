@@ -19,7 +19,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ScheduleCadence = Literal["daily", "weekday", "weekly"]
+ScheduleCadence = Literal["daily", "weekday", "weekly", "interval"]
+IntervalUnit = Literal["minutes", "hours"]
 ScheduledPromptState = Literal["active", "paused", "paused_error"]
 
 #: Sentinel partition key for the sparse due index. Single logical partition
@@ -40,9 +41,18 @@ class ScheduledPrompt(BaseModel):
     label: str = Field(..., min_length=1, max_length=200, description="Human-readable schedule name, e.g. 'Morning Briefing'")
     prompt_text: str = Field(..., alias="promptText", min_length=1, max_length=20_000, description="The prompt to run")
     cadence: ScheduleCadence = Field(..., description="Re-run cadence (bounded enum — no cron)")
-    hour_local: int = Field(..., alias="hourLocal", ge=0, le=23, description="Local hour of day to run, 0-23")
+    hour_local: int = Field(..., alias="hourLocal", ge=0, le=23, description="Local hour of day to run, 0-23; ignored for 'interval'")
     weekday: Optional[int] = Field(
         None, ge=0, le=6, description="0=Monday..6=Sunday; required when cadence == 'weekly'"
+    )
+    # Custom "every N" cadence: interpreted as a fixed delta from the previous
+    # fire (no wall-clock anchor). Stored as value + unit so the UI can render
+    # "every 6 hours" losslessly; the engine converts to minutes on demand.
+    interval_value: Optional[int] = Field(
+        None, alias="intervalValue", ge=1, description="Magnitude of the custom interval; required when cadence == 'interval'"
+    )
+    interval_unit: Optional["IntervalUnit"] = Field(
+        None, alias="intervalUnit", description="Unit for interval_value ('minutes'|'hours'); required when cadence == 'interval'"
     )
     timezone: str = Field(..., description="IANA timezone, e.g. 'America/Boise'")
     state: ScheduledPromptState = Field("active", description="Lifecycle state; only 'active' schedules appear in DueScheduleIndex")

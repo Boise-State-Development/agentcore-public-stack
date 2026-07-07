@@ -1,10 +1,11 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { provideRouter, ActivatedRoute } from '@angular/router';
+import { provideRouter, ActivatedRoute, Router } from '@angular/router';
 import { ReactiveFormsModule } from '@angular/forms';
 import { signal } from '@angular/core';
 import { ScheduleFormPage } from './schedule-form.page';
 import { ScheduleService } from '../services/schedule.service';
+import { RunNowService } from '../services/run-now.service';
 import { AssistantService } from '../../assistants/services/assistant.service';
 import { ToolService } from '../../services/tool/tool.service';
 import { ToastService } from '../../services/toast/toast.service';
@@ -58,12 +59,17 @@ describe('ScheduleFormPage', () => {
     loadTools: vi.fn().mockResolvedValue(undefined),
   };
 
-  const mockToast = { success: vi.fn(), error: vi.fn() };
+  const mockToast = { success: vi.fn(), error: vi.fn(), info: vi.fn() };
+
+  const mockRunNow = {
+    run: vi.fn().mockReturnValue('bgtask-1'),
+  };
 
   function configure(routeParams: Record<string, string> = {}) {
     TestBed.resetTestingModule();
     vi.clearAllMocks();
     mockScheduleService.getSchedule.mockResolvedValue(undefined);
+    mockRunNow.run.mockReturnValue('bgtask-1');
 
     TestBed.configureTestingModule({
       imports: [ReactiveFormsModule],
@@ -74,6 +80,7 @@ describe('ScheduleFormPage', () => {
         // rejection after the test body, failing the whole vitest process.
         provideRouter([{ path: 'schedules', children: [] }]),
         { provide: ScheduleService, useValue: mockScheduleService },
+        { provide: RunNowService, useValue: mockRunNow },
         { provide: AssistantService, useValue: mockAssistantService },
         { provide: ToolService, useValue: mockToolService },
         { provide: ToastService, useValue: mockToast },
@@ -154,6 +161,75 @@ describe('ScheduleFormPage', () => {
 
       expect(mockScheduleService.createSchedule).not.toHaveBeenCalled();
       expect(component.form.controls.weekday.errors).toEqual({ required: true });
+    });
+
+    it('defaults the interval to every 6 hours the first time interval is chosen', () => {
+      expect(component.isInterval()).toBe(false);
+      component.form.controls.cadence.setValue('interval');
+      expect(component.isInterval()).toBe(true);
+      expect(component.form.controls.intervalValue.value).toBe(6);
+      expect(component.form.controls.intervalUnit.value).toBe('hours');
+    });
+
+    it('creates an interval schedule with value and unit', async () => {
+      component.form.patchValue({
+        label: 'Every 6h',
+        promptText: 'Check in',
+        cadence: 'interval',
+        intervalValue: 6,
+        intervalUnit: 'hours',
+      });
+
+      await component.onSubmit();
+
+      expect(mockScheduleService.createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cadence: 'interval',
+          intervalValue: 6,
+          intervalUnit: 'hours',
+        }),
+      );
+    });
+
+    it('rejects an interval below the minimum floor', async () => {
+      component.form.patchValue({
+        label: 'Too frequent',
+        promptText: 'Check in',
+        cadence: 'interval',
+        intervalValue: 5,
+        intervalUnit: 'minutes',
+      });
+
+      await component.onSubmit();
+
+      expect(mockScheduleService.createSchedule).not.toHaveBeenCalled();
+      expect(component.form.controls.intervalValue.errors).toEqual({ min: true });
+    });
+
+    it('run now hands the prompt to the background runner without saving or navigating', () => {
+      const router = TestBed.inject(Router);
+      const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+      component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
+      component.toggleTool('class_search');
+
+      component.runNow();
+
+      expect(mockRunNow.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'Do the thing',
+          title: 'Test',
+          enabledTools: ['class_search'],
+        }),
+      );
+      expect(mockScheduleService.createSchedule).not.toHaveBeenCalled();
+      // The view must not change — tracking happens in the corner toast.
+      expect(navigateSpy).not.toHaveBeenCalled();
+    });
+
+    it('run now requires a prompt', () => {
+      component.runNow();
+      expect(mockRunNow.run).not.toHaveBeenCalled();
+      expect(component.form.controls.promptText.errors).toEqual({ required: true });
     });
   });
 

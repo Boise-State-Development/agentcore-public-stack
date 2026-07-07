@@ -262,6 +262,66 @@ class TestCreateSchedule:
         )
         assert response.status_code == 422
 
+    def test_interval_happy_path(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        created = _make_schedule(cadence="interval", intervalValue=6, intervalUnit="hours", weekday=None)
+        create_mock = AsyncMock(return_value=created)
+        monkeypatch.setattr(schedules_routes, "create_scheduled_prompt", create_mock)
+
+        response = client.post(
+            "/schedules",
+            json={
+                "label": "Every 6 hours",
+                "promptText": "Check in",
+                "cadence": "interval",
+                "hourLocal": 9,
+                "timezone": "America/Boise",
+                "intervalValue": 6,
+                "intervalUnit": "hours",
+            },
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["cadence"] == "interval"
+        assert body["intervalValue"] == 6
+        assert body["intervalUnit"] == "hours"
+
+        (call,) = create_mock.call_args_list
+        assert call.kwargs["interval_value"] == 6
+        assert call.kwargs["interval_unit"] == "hours"
+
+    def test_interval_without_value_is_422(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        response = client.post(
+            "/schedules",
+            json={
+                "label": "Interval",
+                "promptText": "Go",
+                "cadence": "interval",
+                "hourLocal": 9,
+                "timezone": "America/Boise",
+                "intervalUnit": "hours",
+            },
+        )
+        assert response.status_code == 422
+
+    def test_interval_below_floor_is_422(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        response = client.post(
+            "/schedules",
+            json={
+                "label": "Too frequent",
+                "promptText": "Go",
+                "cadence": "interval",
+                "hourLocal": 9,
+                "timezone": "America/Boise",
+                "intervalValue": 5,
+                "intervalUnit": "minutes",
+            },
+        )
+        assert response.status_code == 422
+
     def test_over_cap_is_400(self, monkeypatch):
         client = _make_client(monkeypatch)
         monkeypatch.setattr(
