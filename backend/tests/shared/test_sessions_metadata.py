@@ -530,6 +530,23 @@ class TestSessionUnread:
         assert (await get_session_metadata("s1", "u1")).unread is False
 
     @pytest.mark.asyncio
+    async def test_mark_unread_then_read_roundtrip(self, sessions_metadata_table):
+        """The manual mark_session_unread wrapper sets the flag; read clears it."""
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists,
+            mark_session_unread,
+            mark_session_read,
+            get_session_metadata,
+        )
+        await ensure_session_metadata_exists("s1", "u1")
+
+        await mark_session_unread("s1", "u1")
+        assert (await get_session_metadata("s1", "u1")).unread is True
+
+        await mark_session_read("s1", "u1")
+        assert (await get_session_metadata("s1", "u1")).unread is False
+
+    @pytest.mark.asyncio
     async def test_survives_sk_rotation(self, sessions_metadata_table):
         """Unread set post-run must survive a later per-turn SK rotation."""
         from apis.shared.sessions.metadata import (

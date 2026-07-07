@@ -5,7 +5,7 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
+import { heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
 import { SessionService } from '../../session/services/session/session.service';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../session/components/share-modal';
@@ -18,7 +18,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../confirma
 @Component({
   selector: 'app-topnav',
   imports: [NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp })],
+  providers: [provideIcons({ heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
   templateUrl: './topnav.html',
   styleUrl: './topnav.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -188,6 +188,33 @@ export class Topnav {
     } else if (event.key === 'Escape') {
       event.preventDefault();
       this.onRenameCancel();
+    }
+  }
+
+  /** True when the active session currently carries the durable unread flag. */
+  protected readonly isCurrentUnread = computed(() => this.currentSession().unread === true);
+
+  /**
+   * Toggles the session's durable unread flag from the options menu. When
+   * unread, marks it read (clears the sidebar dot); otherwise marks it unread
+   * ("remind me to revisit"), which re-surfaces the dot.
+   */
+  protected onToggleReadClick(event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const session = this.currentSession();
+    if (session.unread) {
+      void this.sessionService.markSessionRead(session);
+      this.chatStateService.clearSessionUnread(session.sessionId);
+      // markSessionRead relies on the watermark (no refetch); kick the sidebar
+      // list to re-render so its dot clears too, not just this header's menu.
+      this.sessionService.refreshSessions();
+    } else {
+      // markSessionUnread already refetches the list; the client-side flag
+      // surfaces the sidebar dot immediately (server flag is eventually
+      // consistent), and clears when the session is next opened.
+      void this.sessionService.markSessionUnread(session);
+      this.chatStateService.markSessionUnread(session.sessionId);
     }
   }
 

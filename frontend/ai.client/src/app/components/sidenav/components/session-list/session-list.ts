@@ -5,7 +5,7 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -20,7 +20,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -379,6 +379,46 @@ export class SessionList {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
       } as ShareModalData,
+    });
+  }
+
+  /**
+   * Toggles a session's unread state from the options menu, keyed on the
+   * currently visible dot. When unread, marks it read — clearing both the
+   * durable server flag and the transient client-side (background-stream)
+   * flag, so the dot vanishes without opening the conversation. Otherwise
+   * marks it unread ("remind me to revisit"), re-surfacing the server dot.
+   *
+   * @param event - Click event (stopped to prevent navigation)
+   * @param session - The session to toggle
+   */
+  protected onToggleReadClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Defer past the CDK menu's synchronous close. Mutating unread state inside
+    // the menu-item click is swallowed by the overlay teardown's change-
+    // detection pass (zoneless), so the dot wouldn't update until the next
+    // interaction. Running after the menu closes — as the delete flow does via
+    // its confirmation dialog — lets the signal updates re-render the row.
+    queueMicrotask(() => {
+      if (this.shouldShowUnreadDot(session)) {
+        void this.sessionService.markSessionRead(session);
+        this.chatStateService.clearSessionUnread(session.sessionId);
+        // markSessionRead relies on the watermark (no refetch); sync the list
+        // row's server flag too so it's not left stale.
+        this.sessionService.refreshSessions();
+      } else {
+        // markSessionUnread only refetches the list AFTER its POST resolves, so
+        // the OnPush row wouldn't re-render to insert the dot until then. Kick a
+        // synchronous refresh here — exactly as the mark-read branch does — so
+        // the row re-evaluates right away; the dot reads true off the client
+        // signal immediately, even while the server flag is eventually
+        // consistent, and clears when the session is next opened.
+        void this.sessionService.markSessionUnread(session);
+        this.chatStateService.markSessionUnread(session.sessionId);
+        this.sessionService.refreshSessions();
+      }
     });
   }
 

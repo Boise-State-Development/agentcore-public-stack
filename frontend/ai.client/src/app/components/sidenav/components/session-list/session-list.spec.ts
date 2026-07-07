@@ -34,6 +34,8 @@ describe('SessionList', () => {
       sessionsResource: { value: vi.fn().mockReturnValue(null), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
       isLocallyRead: vi.fn().mockReturnValue(false),
       markSessionRead: vi.fn().mockResolvedValue(undefined),
+      markSessionUnread: vi.fn().mockResolvedValue(undefined),
+      refreshSessions: vi.fn(),
     };
     mockSidenavService = { close: vi.fn() };
     mockToastService = { success: vi.fn(), error: vi.fn() };
@@ -135,6 +137,44 @@ describe('SessionList', () => {
 
     component['onSessionClick']({ ...mockSession, unread: true });
     expect(mockSessionService.markSessionRead).toHaveBeenCalledOnce();
+  });
+
+  it('marks a read session unread from the options menu and shows the dot optimistically', async () => {
+    const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+    const chatState = TestBed.inject(ChatStateService);
+    const markSpy = vi.spyOn(chatState, 'markSessionUnread');
+    const component = await createComponent();
+
+    // mockSession has no dot → the toggle marks it unread.
+    component['onToggleReadClick'](new Event('click'), mockSession);
+    // The mutation is deferred past the menu close (queueMicrotask).
+    await Promise.resolve();
+
+    expect(mockSessionService.markSessionUnread).toHaveBeenCalledWith(mockSession);
+    // Optimistic client-side flag surfaces the dot without waiting on the refetch.
+    expect(markSpy).toHaveBeenCalledWith(mockSession.sessionId);
+    expect(component['shouldShowUnreadDot'](mockSession)).toBe(true);
+    // markSessionUnread only refetches after its POST resolves, so the row is
+    // kicked to re-render synchronously — mirroring the mark-read branch.
+    expect(mockSessionService.refreshSessions).toHaveBeenCalled();
+    expect(mockSessionService.markSessionRead).not.toHaveBeenCalled();
+  });
+
+  it('marks an unread session read and clears the client-side dot', async () => {
+    const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+    const chatState = TestBed.inject(ChatStateService);
+    const clearSpy = vi.spyOn(chatState, 'clearSessionUnread');
+    const component = await createComponent();
+    const unreadSession = { ...mockSession, unread: true }; // server dot shows
+
+    component['onToggleReadClick'](new Event('click'), unreadSession);
+    await Promise.resolve();
+
+    expect(mockSessionService.markSessionRead).toHaveBeenCalledWith(unreadSession);
+    expect(clearSpy).toHaveBeenCalledWith(unreadSession.sessionId);
+    // markSessionRead skips the refetch, so the list is kicked to re-render.
+    expect(mockSessionService.refreshSessions).toHaveBeenCalled();
+    expect(mockSessionService.markSessionUnread).not.toHaveBeenCalled();
   });
 
   it('marks the title pending only for a titleless session that is streaming', async () => {

@@ -238,6 +238,39 @@ describe('SessionService', () => {
     });
   });
 
+  describe('markSessionRead / markSessionUnread', () => {
+    it('markSessionRead POSTs /read, sets a read watermark, and clears currentSession.unread', async () => {
+      service.currentSession.set({ ...mockSession, unread: true });
+
+      const promise = service.markSessionRead({ ...mockSession, unread: true });
+      const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/read');
+      expect(req.request.method).toBe('POST');
+      req.flush(null);
+      await promise;
+
+      expect(service.isLocallyRead(mockSession)).toBe(true);
+      expect(service.currentSession().unread).toBe(false);
+    });
+
+    it('markSessionUnread POSTs /unread, lifts the read watermark, and sets currentSession.unread', async () => {
+      service.currentSession.set({ ...mockSession, unread: false });
+      // Seed a read watermark first so we can prove the unread path lifts it.
+      const readPromise = service.markSessionRead(mockSession);
+      httpMock.expectOne('http://localhost:8000/sessions/test-session-id/read').flush(null);
+      await readPromise;
+      expect(service.isLocallyRead(mockSession)).toBe(true);
+
+      const promise = service.markSessionUnread(mockSession);
+      const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/unread');
+      expect(req.request.method).toBe('POST');
+      req.flush(null);
+      await promise;
+
+      expect(service.isLocallyRead(mockSession)).toBe(false);
+      expect(service.currentSession().unread).toBe(true);
+    });
+  });
+
   describe('hasCurrentSession', () => {
     it('should return true when sessionId is set', () => {
       service.currentSession.set({ ...mockSession, sessionId: 'test-id' });

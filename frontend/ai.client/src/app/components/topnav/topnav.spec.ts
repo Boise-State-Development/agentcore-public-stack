@@ -21,10 +21,15 @@ describe('Topnav', () => {
     mockSessionService = {
       currentSession: signal({ sessionId: 'test-session', title: 'Test Session' }),
       sessionMetadataResource: { isLoading: metadataLoading },
+      markSessionRead: vi.fn(),
+      markSessionUnread: vi.fn(),
+      refreshSessions: vi.fn(),
     };
     loadingSessionIds = new Set<string>();
     mockChatStateService = {
       isSessionLoading: (id: string) => loadingSessionIds.has(id),
+      markSessionUnread: vi.fn(),
+      clearSessionUnread: vi.fn(),
     };
     mockSidenavService = { open: vi.fn() };
 
@@ -91,6 +96,33 @@ describe('Topnav', () => {
       const component = await createComponent();
       expect((component as any).titlePending()).toBe(false);
       expect((component as any).displayTitle()).toBe('Untitled Session');
+    });
+  });
+
+  describe('mark as read/unread toggle', () => {
+    it('marks a read session unread and surfaces the sidebar dot optimistically', async () => {
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: 'T', unread: false });
+      const component = await createComponent();
+
+      expect((component as any).isCurrentUnread()).toBe(false);
+      (component as any).onToggleReadClick(new Event('click'));
+
+      expect(mockSessionService.markSessionUnread).toHaveBeenCalled();
+      expect(mockChatStateService.markSessionUnread).toHaveBeenCalledWith('sess-1');
+      expect(mockSessionService.markSessionRead).not.toHaveBeenCalled();
+    });
+
+    it('marks an unread session read, clears the client dot, and refreshes the sidebar', async () => {
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: 'T', unread: true });
+      const component = await createComponent();
+
+      expect((component as any).isCurrentUnread()).toBe(true);
+      (component as any).onToggleReadClick(new Event('click'));
+
+      expect(mockSessionService.markSessionRead).toHaveBeenCalled();
+      expect(mockChatStateService.clearSessionUnread).toHaveBeenCalledWith('sess-1');
+      expect(mockSessionService.refreshSessions).toHaveBeenCalled();
+      expect(mockSessionService.markSessionUnread).not.toHaveBeenCalled();
     });
   });
 });

@@ -854,3 +854,30 @@ class TestMarkSessionRead:
         client = unauthenticated_client(app)
         resp = client.post("/sessions/sess-001/read")
         assert resp.status_code == 401
+
+
+class TestMarkSessionUnread:
+    """POST /sessions/{session_id}/unread sets the durable unread flag.
+
+    The manual counterpart to /read — lets a user re-flag a conversation so
+    the sidebar dot returns. Cookie-auth via get_current_user_from_session.
+    """
+
+    def test_returns_204_and_sets_unread(self, app, make_user, authenticated_client):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        recorder = AsyncMock()
+        with patch(
+            "apis.app_api.sessions.routes.mark_session_unread",
+            recorder,
+        ):
+            resp = client.post("/sessions/sess-001/unread")
+
+        assert resp.status_code == 204
+        recorder.assert_awaited_once_with(session_id="sess-001", user_id=user.user_id)
+
+    def test_returns_401_for_unauthenticated(self, app, unauthenticated_client):
+        client = unauthenticated_client(app)
+        resp = client.post("/sessions/sess-001/unread")
+        assert resp.status_code == 401
