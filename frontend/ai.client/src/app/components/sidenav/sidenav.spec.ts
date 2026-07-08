@@ -8,6 +8,7 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ScheduleService } from '../../schedules/services/schedule.service';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
+import { AgentService } from '../../agents/services/agent.service';
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -17,6 +18,7 @@ describe('Sidenav', () => {
   let mockUserService: any;
   let mockScheduleService: any;
   let mockMemorySpaceService: any;
+  let mockAgentService: any;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -45,6 +47,10 @@ describe('Sidenav', () => {
       accessible$: signal<boolean | null>(null),
       loadSpaces: vi.fn().mockResolvedValue(undefined),
     };
+    mockAgentService = {
+      accessible$: signal<boolean | null>(null),
+      loadAgents: vi.fn().mockResolvedValue(undefined),
+    };
 
     TestBed.configureTestingModule({
       providers: [
@@ -55,6 +61,7 @@ describe('Sidenav', () => {
         { provide: UserService, useValue: mockUserService },
         { provide: ScheduleService, useValue: mockScheduleService },
         { provide: MemorySpaceService, useValue: mockMemorySpaceService },
+        { provide: AgentService, useValue: mockAgentService },
       ],
     });
   });
@@ -153,5 +160,30 @@ describe('Sidenav', () => {
 
     mockMemorySpaceService.accessible$.set(true);
     expect(component.showMemorySpaces()).toBe(true);
+  });
+
+  it('probes agent accessibility once a user is authenticated', async () => {
+    mockUserService.currentUser.set({ user_id: 'u1', email: 'u1@example.com' });
+    await createComponent();
+    expect(mockAgentService.loadAgents).toHaveBeenCalled();
+  });
+
+  it('does not probe agent accessibility while unauthenticated', async () => {
+    mockUserService.currentUser.set(null);
+    await createComponent();
+    expect(mockAgentService.loadAgents).not.toHaveBeenCalled();
+  });
+
+  it('hides the Agents nav entry until accessibility resolves true', async () => {
+    const component = await createComponent();
+
+    mockAgentService.accessible$.set(null);
+    expect(component.showAgents()).toBe(false);
+
+    mockAgentService.accessible$.set(false);
+    expect(component.showAgents()).toBe(false);
+
+    mockAgentService.accessible$.set(true);
+    expect(component.showAgents()).toBe(true);
   });
 });
