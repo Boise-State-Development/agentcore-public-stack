@@ -404,6 +404,36 @@ def _build_artifact_tools(
     return tools
 
 
+def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
+    """Context-bound Memory-Space tools for an Agent's resolved memory binding.
+
+    ``agent_memory`` is the resolver's ``ResolvedMemoryBinding`` (or ``None``). No binding
+    → no tools. Read tools (list + read) are always exposed; the write tool only when the
+    binding grants ``readwrite`` — and the service re-checks ``editor+`` on every call, so
+    this is a UX gate, not the security boundary. Not gated on ``enabled_tools``: the
+    governing capability is the Agent's binding, not the user's tool picker.
+    """
+    if agent_memory is None:
+        return []
+
+    from agents.builtin_tools.memory_spaces import (
+        make_memory_list_tool,
+        make_memory_read_tool,
+        make_memory_write_tool,
+    )
+
+    space_id, space_name = agent_memory.space_id, agent_memory.space_name
+    tools = [
+        make_memory_list_tool(space_id, space_name, user_id, user_email),
+        make_memory_read_tool(space_id, space_name, user_id, user_email),
+    ]
+    if agent_memory.access == "readwrite":
+        tools.append(make_memory_write_tool(space_id, space_name, user_id, user_email))
+
+    logger.info(f"Created {len(tools)} memory-space tools for bound space")
+    return tools
+
+
 # ============================================================
 # Attachment Partitioning (#206)
 # ============================================================
@@ -1606,6 +1636,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=input_data.enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
+            ) + _build_memory_tools(
+                agent_memory=agent_memory,
+                user_id=user_id,
+                user_email=current_user.email,
             )
 
             agent = await get_agent(
