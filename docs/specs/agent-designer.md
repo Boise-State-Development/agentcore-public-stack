@@ -194,14 +194,28 @@ No big-bang: legacy ids and the compat mapping keep everything running throughou
 ## Phasing
 
 ```
-Phase 0  This spec — contracts, term map, AWS-federation decision            ← here
-Phase 1  Agent record + uniform binding model + compat mapping (back-compat)  ← memory binding DEFINED here
-Phase 2  Bindable-primitives catalog API (Registry-lite, RBAC-composed)       ← the palette
+Phase 0  This spec — contracts, term map, AWS-federation decision            ✅ done (#590)
+Phase 1  Agent record + uniform binding model + compat mapping (back-compat)  ✅ done (#591, #592, + flag plumbing)
+Phase 2  Bindable-primitives catalog API (Registry-lite, RBAC-composed)       ← the palette (next)
 Phase 3  Harness resolution: memory index injection + memory_* tools + model   ← Workstream B payoff (thin slice, D6)
 Phase 4  Agent Designer page (Agent Harness Editor)                            ← the headline UI, on P1–P2 contracts
 Phase 5  Assistant deprecation + migration
 Later    Federate AgentCore Registry / managed Harness as catalog+run backends (D1)
 ```
+
+**Phase 1 status (implemented).** The Agent contract (`modelConfig` + uniform `bindings[]`),
+the D2 compat mapping (legacy Assistant → Agent, KB binding synthesized on read), design-time
+`binding_validation` composing the existing per-primitive RBAC checks (D4), and the governed
+`/agents/*` surface (dark behind `AGENTS_API_ENABLED`, default off) all landed. Two Phase-1
+refinements vs this spec's sketch: (a) `knowledge_base` bindings are **synthesized on read but
+rejected on write** — the KB index isn't user-configurable and the agent id doesn't exist at
+create time, so an author-settable KB binding is meaningless until F4; (b) `modelConfig` is
+**optional in storage** (absent = resolve the model exactly as today) and required only at
+Designer write-time — no legacy assistant carries a model, so a "required singleton" invariant
+would force a fabricated backfill. `tool`/`skill` binding kinds are enum-valid but **inert**
+(stored, not resolved) until Phase 2/3. **The live Oliver dogfood (D6) is gated on Phase 3
+harness resolution + Memory Spaces being deployed to the target environment** — the binding is
+storable now but nothing consumes it at invocation yet.
 
 **Relationship to Workstream B (memory spec):** B's binding (`memorySpaces` declarative config) now
 lands as a `memory_space` **Binding** on the Agent's uniform model rather than a bespoke field. B1 =
