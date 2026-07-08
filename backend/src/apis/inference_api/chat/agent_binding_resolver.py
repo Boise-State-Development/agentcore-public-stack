@@ -21,12 +21,17 @@ Phase 3 lands incrementally:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 from apis.shared.assistants.models import Assistant
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import memory_spaces_enabled
+from apis.shared.memory.service import MemorySpaceService
 from apis.shared.rbac.service import get_app_role_service
+
+_ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
 
 class AgentBindingBlockedError(Exception):
@@ -50,14 +55,33 @@ class ResolvedModel:
 
 
 @dataclass
+class ResolvedMemoryBinding:
+    """A ``memory_space`` binding resolved for the invoking user.
+
+    ``role``/``access`` decide what the Harness may do: ``access`` is the *authored*
+    intent (``read``|``readwrite``), ``role`` is the invoker's actual grant. A
+    ``readwrite`` binding requires the invoker to be ``editor+`` (else the resolver
+    blocks — no silent read-only downgrade, D5). ``always_load`` drives prompt injection.
+    """
+
+    space_id: str
+    space_name: str
+    role: str
+    access: str
+    always_load: Optional[List[str]] = None
+
+
+@dataclass
 class AgentInvocationPlan:
     """What the Harness should apply for this turn after resolving the Agent.
 
     ``model_override`` is ``None`` when the Agent pins no model — the caller then
-    resolves the model exactly as today. (Memory resolution lands in a later PR.)
+    resolves the model exactly as today. ``memory`` is ``None`` when the Agent binds no
+    Memory Space.
     """
 
     model_override: Optional[ResolvedModel] = None
+    memory: Optional[ResolvedMemoryBinding] = None
 
 
 async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> AgentInvocationPlan:
@@ -84,4 +108,52 @@ async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> Agent
             params=model_settings.params,
         )
 
+    plan.memory = await _resolve_memory(assistant, invoker)
     return plan
+
+
+async def _resolve_memory(assistant: Assistant, invoker: User) -> Optional[ResolvedMemoryBinding]:
+    """Resolve the Agent's ``memory_space`` binding for ``invoker`` (D5); raise on block.
+
+    v1 supports one Memory Space per Agent (Phase-1 UI writes at most one); any extras are
+    ignored. Reads permission via ``MemorySpaceService`` (the same identity-based
+    ``resolve_permission`` the app-api surface uses — D4), wrapped in a thread since it's
+    sync boto3.
+    """
+    memory_bindings = [b for b in (assistant.bindings or []) if b.kind == "memory_space"]
+    if not memory_bindings:
+        return None
+
+    if not memory_spaces_enabled():
+        # Design-time validation refuses to create these while the flag is off, so
+        # hitting this means environment drift — block rather than silently drop (D5).
+        raise AgentBindingBlockedError(
+            "This agent uses Memory, which isn't enabled in this environment."
+        )
+
+    binding = memory_bindings[0]
+    access = (binding.config or {}).get("access", "read")
+
+    service = MemorySpaceService()
+    space, role = await asyncio.to_thread(
+        service.resolve_permission, binding.ref, invoker.user_id, invoker.email
+    )
+    if space is None:
+        raise AgentBindingBlockedError(
+            "This agent's Memory Space no longer exists. Ask its owner to reconnect it."
+        )
+
+    required = "editor" if access == "readwrite" else "viewer"
+    if role is None or _ROLE_RANK[role] < _ROLE_RANK[required]:
+        raise AgentBindingBlockedError(
+            f"This agent needs **{required}** access to its Memory Space "
+            f'"{space.name}", which your account doesn\'t have.'
+        )
+
+    return ResolvedMemoryBinding(
+        space_id=binding.ref,
+        space_name=space.name,
+        role=role,
+        access=access,
+        always_load=(binding.config or {}).get("alwaysLoad"),
+    )

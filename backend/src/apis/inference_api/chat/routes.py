@@ -1138,10 +1138,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     context_chunks = None
     augmented_message = input_data.message
     system_prompt = input_data.system_prompt  # Start with provided system prompt
-    # Agent Designer Phase 3: governed model override resolved per invoking user
-    # (D5). None ⇒ the model resolves exactly as today. Set in the assistant block
-    # below, consumed at model resolution; stays None on resume/continuation.
+    # Agent Designer Phase 3: governed capabilities resolved per invoking user
+    # (D5). None ⇒ resolve exactly as today. Set in the assistant block below,
+    # consumed at model resolution / prompt assembly; None on resume/continuation.
     agent_model_override = None
+    agent_memory = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1266,6 +1267,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             try:
                 agent_plan = await resolve_agent_invocation(assistant, current_user)
                 agent_model_override = agent_plan.model_override
+                agent_memory = agent_plan.memory
             except AgentBindingBlockedError as block:
                 blocked_event = ConversationalErrorEvent(
                     code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
@@ -1347,6 +1349,31 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
             )
+
+        # 5b. Agent Designer Phase 3: inject the bound Memory Space content (read-only)
+        # after instructions, in either branch. Hydration re-reads via the invoker
+        # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
+        if agent_memory is not None:
+            from apis.shared.memory.hydration import render_memory_block, resolve_always_load
+            from apis.shared.memory.service import MemorySpaceService
+
+            try:
+                fragments = await asyncio.to_thread(
+                    resolve_always_load,
+                    MemorySpaceService(),
+                    agent_memory.space_id,
+                    user_id,
+                    current_user.email,
+                    agent_memory.always_load,
+                )
+                memory_block = render_memory_block(agent_memory.space_name, fragments)
+                if memory_block:
+                    system_prompt = f"{system_prompt}\n\n{memory_block}" if system_prompt else memory_block
+                    logger.info("Injected bound Memory Space content into system prompt")
+            except Exception:
+                # Never fail a turn on a memory-read hiccup — the permission was already
+                # resolved; injection is best-effort context.
+                logger.error("Failed to hydrate bound Memory Space; continuing", exc_info=True)
 
         # 6. Save assistant_id to session preferences (persist for future loads)
         # Skip persistence for preview sessions
