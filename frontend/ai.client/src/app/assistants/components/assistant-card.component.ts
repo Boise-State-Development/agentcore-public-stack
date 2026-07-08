@@ -4,6 +4,7 @@ import {
   input,
   computed,
   output,
+  signal,
 } from '@angular/core';
 
 /**
@@ -51,24 +52,45 @@ import {
 
         @if (starters().length > 0) {
           <div class="mt-6 w-full max-w-sm">
-            <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500 mb-2.5">
-              Try asking
-            </p>
-            <div class="flex flex-col gap-1.5">
-              @for (starter of starters(); track $index) {
-                <button
-                  type="button"
-                  (click)="onStarterClick(starter)"
-                  class="starter-btn group"
-                >
-                  <span class="starter-accent" [style.background]="avatarGradient()"></span>
-                  <span class="flex-1 text-left">{{ starter }}</span>
-                  <svg class="size-4 shrink-0 text-gray-300 dark:text-gray-600 group-hover:text-gray-500 dark:group-hover:text-gray-300 transition-all group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                  </svg>
-                </button>
-              }
-            </div>
+            <!-- Accordion header -->
+            <button
+              type="button"
+              (click)="toggleStarters()"
+              class="starters-header group"
+              [attr.aria-expanded]="startersExpanded()"
+              aria-controls="starters-panel"
+            >
+              <span class="text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500">
+                Conversation starters
+              </span>
+              <svg
+                class="size-4 shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200"
+                [class.rotate-180]="startersExpanded()"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+                aria-hidden="true"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+
+            <!-- Accordion panel -->
+            @if (startersExpanded()) {
+              <div id="starters-panel" class="starters-panel flex flex-col gap-1.5">
+                @for (starter of starters(); track $index) {
+                  <button
+                    type="button"
+                    (click)="onStarterClick(starter)"
+                    class="starter-btn group"
+                  >
+                    <span class="starter-accent" [style.background]="avatarGradient()"></span>
+                    <span class="flex-1 text-left">{{ starter }}</span>
+                    <svg class="size-4 shrink-0 text-gray-300 dark:text-gray-600 group-hover:text-gray-500 dark:group-hover:text-gray-300 transition-all group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                    </svg>
+                  </button>
+                }
+              </div>
+            }
           </div>
         }
       </div>
@@ -142,6 +164,42 @@ import {
       padding: 0.75rem 1.5rem 1.5rem;
     }
 
+    .starters-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 0.375rem 0.25rem;
+      margin-bottom: 0.25rem;
+      border-radius: 0.375rem;
+      cursor: pointer;
+      transition: opacity 150ms ease;
+    }
+
+    .starters-header:hover {
+      opacity: 0.8;
+    }
+
+    .starters-header:focus-visible {
+      outline: 2px solid rgb(59 130 246); /* blue-500 */
+      outline-offset: 2px;
+    }
+
+    .starters-panel {
+      animation: starters-reveal 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes starters-reveal {
+      from {
+        opacity: 0;
+        transform: translateY(-4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
     .starter-btn {
       display: flex;
       align-items: center;
@@ -202,6 +260,13 @@ export class AssistantCardComponent {
 
   // Outputs
   readonly starterSelected = output<string>();
+
+  // Accordion state for the conversation starters (expanded by default).
+  readonly startersExpanded = signal(true);
+
+  toggleStarters(): void {
+    this.startersExpanded.update((expanded) => !expanded);
+  }
 
   // Computed: Get first letter of name for avatar
   readonly firstLetter = computed(() => {

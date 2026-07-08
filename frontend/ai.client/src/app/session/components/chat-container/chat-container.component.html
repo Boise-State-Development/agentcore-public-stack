@@ -6,7 +6,13 @@
     class="chat-topnav-wrapper"
     [class.sidenav-expanded]="!isSidenavCollapsed()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <app-topnav />
+    <app-topnav
+      [assistant]="assistant()"
+      [isAssistantOwner]="isAssistantOwner()"
+      [isLoadingAssistant]="isLoadingAssistant()"
+      (assistantNewSession)="onAssistantNewSession()"
+      (assistantEdit)="onAssistantEdit()"
+      (assistantShare)="onAssistantShare()" />
   </div>
 }
 
@@ -117,17 +123,6 @@
         [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
         <div class="mx-auto px-4 max-w-[720px]">
-          <!-- Skeleton indicator chip -->
-          <div class="flex justify-center mb-2">
-            <div class="animate-pulse inline-flex items-center gap-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pr-3 h-10">
-              <div class="w-9 h-full rounded-l-xl bg-gray-200 dark:bg-gray-700"></div>
-              <div class="flex flex-col gap-1">
-                <div class="h-3 w-32 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-                <div class="h-2 w-16 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              </div>
-              <div class="h-3 w-3 rounded-full bg-gray-200 dark:bg-gray-700"></div>
-            </div>
-          </div>
           <app-chat-input
             [sessionId]="sessionId()"
             [isChatLoading]="isChatLoading()"
@@ -137,7 +132,7 @@
             (messageSubmitted)="onMessageSubmitted($event)"
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"
-  
+
             (settingsToggled)="onSettingsToggled()">
           </app-chat-input>
         </div>
@@ -334,30 +329,6 @@
       [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
       <div class="mx-auto px-4 max-w-[720px]">
-        <!-- Assistant Indicator (floating badge above input) -->
-        @if (isLoadingAssistant()) {
-          <div class="flex justify-center mb-2">
-            <div class="animate-pulse inline-flex items-center gap-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pr-3 h-10">
-              <div class="w-9 h-full rounded-l-xl bg-gray-200 dark:bg-gray-700"></div>
-              <div class="flex flex-col gap-1">
-                <div class="h-3 w-32 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-                <div class="h-2 w-16 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              </div>
-              <div class="h-3 w-3 rounded-full bg-gray-200 dark:bg-gray-700"></div>
-            </div>
-          </div>
-        } @else if (assistant()) {
-          <div class="assistant-indicator-input-wrapper">
-            <app-assistant-indicator
-              [name]="assistant()!.name"
-              [emoji]="assistant()!.emoji ?? ''"
-              [ownerName]="assistant()!.ownerName"
-              [isOwner]="isAssistantOwner()"
-              (newSessionClicked)="onAssistantNewSession()"
-              (editClicked)="onAssistantEdit()"
-              (shareClicked)="onAssistantShare()" />
-          </div>
-        }
         <div class="flex justify-end pb-1 pr-[10px]">
           <app-session-cost-badge />
         </div>

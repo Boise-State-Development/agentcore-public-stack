@@ -1,4 +1,4 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector, input, output } from '@angular/core';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
@@ -14,10 +14,12 @@ import { UserService } from '../../auth/user.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../confirmation-dialog';
+import { Assistant } from '../../assistants/models/assistant.model';
+import { AssistantIndicatorComponent } from '../../session/components/assistant-indicator/assistant-indicator.component';
 
 @Component({
   selector: 'app-topnav',
-  imports: [NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem],
+  imports: [NgIcon, CdkMenuTrigger, CdkMenu, CdkMenuItem, AssistantIndicatorComponent],
   providers: [provideIcons({ heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen })],
   templateUrl: './topnav.html',
   styleUrl: './topnav.css',
@@ -34,6 +36,21 @@ export class Topnav {
   private injector = inject(Injector);
 
   readonly currentSession = this.sessionService.currentSession;
+
+  /**
+   * The assistant/agent attached to the active conversation, surfaced as a
+   * chip beside the session title. Null when the conversation has no assistant.
+   * Owned by the session page and threaded through the chat container.
+   */
+  readonly assistant = input<Assistant | null>(null);
+  /** Whether the current user owns the assistant (gates Edit/Share actions). */
+  readonly isAssistantOwner = input<boolean>(false);
+  /** True while the attached assistant is still being fetched. */
+  readonly isLoadingAssistant = input<boolean>(false);
+
+  readonly assistantNewSession = output<void>();
+  readonly assistantEdit = output<void>();
+  readonly assistantShare = output<void>();
 
   /**
    * True while the active session's metadata is being fetched (e.g. on a hard
