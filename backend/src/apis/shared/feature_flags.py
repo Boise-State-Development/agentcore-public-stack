@@ -61,3 +61,19 @@ def memory_spaces_enabled() -> bool:
     ``scheduled_runs_enabled``).
     """
     return os.environ.get("MEMORY_SPACES_ENABLED", "false").lower() == "true"
+
+
+def agents_enabled() -> bool:
+    """Whether the Agent Designer surface is enabled for this environment.
+
+    Gates the ``/agents/*`` alias router (the governed Agent read/write surface over
+    the evolved assistant store). **Defaults off** (the ``MEMORY_SPACES_ENABLED``
+    pattern): set ``AGENTS_API_ENABLED=true`` to turn it on. The feature ships
+    incrementally across several PRs (contract → surface → resolution → Designer UI),
+    so it stays dark until complete — the assistant store and its ``/assistants/*``
+    surface are unaffected while off.
+
+    Gates *feature existence* per environment; *who* may use a specific agent is the
+    identity-based access check already enforced by the assistant service.
+    """
+    return os.environ.get("AGENTS_API_ENABLED", "false").lower() == "true"
