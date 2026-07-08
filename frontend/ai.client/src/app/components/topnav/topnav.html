@@ -130,6 +130,27 @@
         </ng-template>
       }
 
+      <!-- Assistant indicator (agent attached to this conversation) -->
+      @if (isLoadingAssistant()) {
+        <div
+          class="h-6 w-28 animate-pulse rounded-lg bg-gray-100 dark:bg-white/5"
+          role="status"
+          aria-label="Loading assistant"
+        ></div>
+      } @else if (assistant()) {
+        <app-assistant-indicator
+          class="min-w-0"
+          variant="compact"
+          [name]="assistant()!.name"
+          [emoji]="assistant()!.emoji ?? ''"
+          [ownerName]="assistant()!.ownerName"
+          [isOwner]="isAssistantOwner()"
+          menuPlacement="down"
+          (newSessionClicked)="assistantNewSession.emit()"
+          (editClicked)="assistantEdit.emit()"
+          (shareClicked)="assistantShare.emit()" />
+      }
+
       <!-- Separator -->
       <div aria-hidden="true" class="h-6 w-px bg-gray-200 lg:hidden dark:bg-gray-700"></div>
 

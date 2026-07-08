@@ -12,11 +12,16 @@ would break the import boundary). It reuses the harness's existing per-primitive
 checks; it invents no new RBAC (D4).
 
 Phase 3 lands incrementally:
-- **PR-A (here):** ``modelConfig`` → ``model_override``, reusing the exact
-  ``AppRoleService.can_access_model`` gate the harness already enforces (R2). Absent
-  ``modelConfig`` ⇒ no override ⇒ today's model-resolution chain is untouched.
-- **Later:** ``memory_space`` bindings → index injection + ``memory_*`` tools (PR-C+).
-  ``knowledge_base`` stays with the existing RAG path; ``tool``/``skill`` are inert.
+- ``modelConfig`` → ``model_override``, reusing the exact ``AppRoleService.can_access_model``
+  gate the harness already enforces (R2). Absent ``modelConfig`` ⇒ no override ⇒ today's
+  model-resolution chain is untouched.
+- ``memory_space`` bindings → index injection + ``memory_*`` tools.
+- ``tool`` bindings → the effective tool allowlist (**replace**, mirroring the model
+  override): when an Agent binds tools they *are* its toolset, re-resolved per invoker via
+  the same ``AppRoleService.can_access_tool`` gate; a bound tool the invoker lacks blocks the
+  turn (D5). Absent tool bindings ⇒ the request's ``enabled_tools`` drive the turn as today.
+- ``knowledge_base`` stays with the existing RAG path; ``skill`` bindings are still inert
+  here (their runtime fold interacts with ``agent_type``/skill resolution — a later slice).
 """
 
 from __future__ import annotations
@@ -72,16 +77,34 @@ class ResolvedMemoryBinding:
 
 
 @dataclass
+class ResolvedTools:
+    """The Agent's ``tool`` bindings resolved to an effective allowlist for the invoker.
+
+    ``tool_ids`` **replaces** the request's ``enabled_tools`` for this turn (an Agent that
+    binds tools owns its toolset, like ``modelConfig`` owns the model). Every id has already
+    passed the invoker's ``AppRoleService.can_access_tool`` gate; a bound tool the invoker
+    could not access blocks the turn before this is constructed (D5), so the list is safe to
+    hand straight to the tool filter. An empty ``tool_ids`` is meaningful — the Agent
+    deliberately runs with *no* tools — and is distinct from ``plan.tools is None`` (no tool
+    binding, fall through to the request).
+    """
+
+    tool_ids: List[str]
+
+
+@dataclass
 class AgentInvocationPlan:
     """What the Harness should apply for this turn after resolving the Agent.
 
     ``model_override`` is ``None`` when the Agent pins no model — the caller then
     resolves the model exactly as today. ``memory`` is ``None`` when the Agent binds no
-    Memory Space.
+    Memory Space. ``tools`` is ``None`` when the Agent binds no tools — the caller then
+    uses the request's ``enabled_tools`` unchanged.
     """
 
     model_override: Optional[ResolvedModel] = None
     memory: Optional[ResolvedMemoryBinding] = None
+    tools: Optional[ResolvedTools] = None
 
 
 async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> AgentInvocationPlan:
@@ -109,7 +132,37 @@ async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> Agent
         )
 
     plan.memory = await _resolve_memory(assistant, invoker)
+    plan.tools = await _resolve_tools(assistant, invoker)
     return plan
+
+
+async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[ResolvedTools]:
+    """Resolve the Agent's ``tool`` bindings to an effective allowlist for ``invoker`` (D5).
+
+    Each bound tool is re-checked against the invoker with the same
+    ``AppRoleService.can_access_tool`` gate the harness already enforces (R2), so an author
+    cannot compose a tool the invoker is later denied. A single missing tool blocks the turn
+    (block-with-message, no silent drop — D5). Returns ``None`` when the Agent binds no tools,
+    leaving the request's ``enabled_tools`` in force. The RBAC service is fetched lazily (only
+    when the Agent actually binds tools) — mirroring how ``_resolve_memory`` builds its own.
+    """
+    tool_bindings = [b for b in (assistant.bindings or []) if b.kind == "tool"]
+    if not tool_bindings:
+        return None
+
+    app_role_service = get_app_role_service()
+    resolved: List[str] = []
+    for binding in tool_bindings:
+        ref = binding.ref
+        if not await app_role_service.can_access_tool(invoker, ref):
+            raise AgentBindingBlockedError(
+                f"This agent uses the tool **{ref}**, which isn't available to your account. "
+                "Ask an administrator for access, or use a different agent."
+            )
+        if ref not in resolved:
+            resolved.append(ref)
+
+    return ResolvedTools(tool_ids=resolved)
 
 
 async def _resolve_memory(assistant: Assistant, invoker: User) -> Optional[ResolvedMemoryBinding]:

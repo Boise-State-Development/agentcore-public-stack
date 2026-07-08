@@ -38,43 +38,66 @@ import {
   },
   template: `
     <div class="indicator-wrapper">
-      <button
-        type="button"
-        (click)="toggleMenu()"
-        class="assistant-indicator"
-        [attr.aria-label]="'Assistant: ' + name() + '. Click for options.'"
-        [attr.aria-expanded]="menuOpen()"
-        aria-haspopup="menu"
-      >
-        <!-- Avatar -->
-        <div class="indicator-avatar" [style.background]="avatarGradient()">
+      @if (variant() === 'compact') {
+        <!-- Compact pill: subtle badge, name only, opens the actions menu -->
+        <button
+          type="button"
+          (click)="toggleMenu()"
+          class="assistant-pill"
+          [class.open]="menuOpen()"
+          [attr.aria-label]="'Assistant: ' + name() + '. Click for options.'"
+          [attr.aria-expanded]="menuOpen()"
+          aria-haspopup="menu"
+        >
           @if (emoji()) {
-            <span class="text-lg leading-none">{{ emoji() }}</span>
-          } @else {
-            <span class="text-sm font-bold leading-none text-white">{{ firstLetter() }}</span>
+            <span class="pill-emoji leading-none">{{ emoji() }}</span>
           }
-        </div>
+          <span class="pill-name">{{ name() }}</span>
+        </button>
+      } @else {
+        <button
+          type="button"
+          (click)="toggleMenu()"
+          class="assistant-indicator"
+          [attr.aria-label]="'Assistant: ' + name() + '. Click for options.'"
+          [attr.aria-expanded]="menuOpen()"
+          aria-haspopup="menu"
+        >
+          <!-- Avatar -->
+          <div class="indicator-avatar" [style.background]="avatarGradient()">
+            @if (emoji()) {
+              <span class="text-lg leading-none">{{ emoji() }}</span>
+            } @else {
+              <span class="text-sm font-bold leading-none text-white">{{ firstLetter() }}</span>
+            }
+          </div>
 
-        <!-- Name + owner -->
-        <div class="indicator-text">
-          <span class="indicator-name">{{ name() }}</span>
-          @if (ownerName()) {
-            <span class="indicator-owner">by {{ ownerName() }}</span>
-          }
-        </div>
+          <!-- Name + owner -->
+          <div class="indicator-text">
+            <span class="indicator-name">{{ name() }}</span>
+            @if (ownerName()) {
+              <span class="indicator-owner">by {{ ownerName() }}</span>
+            }
+          </div>
 
-        <!-- Chevron -->
-        <ng-icon
-          name="heroChevronDown"
-          class="indicator-chevron"
-          [class.rotated]="menuOpen()"
-          aria-hidden="true"
-        />
-      </button>
+          <!-- Chevron -->
+          <ng-icon
+            name="heroChevronDown"
+            class="indicator-chevron"
+            [class.rotated]="menuOpen()"
+            aria-hidden="true"
+          />
+        </button>
+      }
 
       <!-- Dropdown menu -->
       @if (menuOpen()) {
-        <div class="indicator-menu" role="menu" aria-label="Assistant actions">
+        <div
+          class="indicator-menu"
+          [class.placement-down]="menuPlacement() === 'down'"
+          role="menu"
+          aria-label="Assistant actions"
+        >
           <button
             type="button"
             class="menu-item"
@@ -113,6 +136,62 @@ import {
   styles: [`
     @import "tailwindcss";
     @custom-variant dark (&:where(.dark, .dark *));
+
+    :host {
+      display: inline-flex;
+      min-width: 0;
+    }
+
+    /* ── Compact pill (top nav) ── */
+    .assistant-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      max-width: 100%;
+      padding: 0.1875rem 0.5rem;
+      border-radius: 0.5rem;
+      background: var(--color-gray-100);
+      color: var(--color-gray-600);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+
+      &:hover,
+      &.open {
+        background: var(--color-gray-200);
+        color: var(--color-gray-800);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--color-blue-500);
+        outline-offset: 2px;
+      }
+    }
+
+    :host-context(html.dark) .assistant-pill {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--color-gray-300);
+
+      &:hover,
+      &.open {
+        background: rgba(255, 255, 255, 0.14);
+        color: var(--color-gray-100);
+      }
+    }
+
+    .pill-emoji {
+      font-size: 0.875rem;
+      flex-shrink: 0;
+    }
+
+    .pill-name {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
     .indicator-wrapper {
       position: relative;
@@ -265,6 +344,15 @@ import {
         0 1px 4px rgba(0, 0, 0, 0.2);
     }
 
+    /* Open below the chip instead of above (e.g. in the top nav). */
+    .indicator-menu.placement-down {
+      top: calc(100% + 0.375rem);
+      bottom: auto;
+      left: 0;
+      transform: none;
+      animation: menu-enter-down 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
     .menu-item {
       display: flex;
       align-items: center;
@@ -331,6 +419,17 @@ import {
         transform: translateX(-50%) translateY(0) scale(1);
       }
     }
+
+    @keyframes menu-enter-down {
+      0% {
+        opacity: 0;
+        transform: translateY(-4px) scale(0.96);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
   `],
 })
 export class AssistantIndicatorComponent {
@@ -342,6 +441,13 @@ export class AssistantIndicatorComponent {
   readonly imageUrl = input<string | null>(null);
   readonly ownerName = input<string>('');
   readonly isOwner = input<boolean>(false);
+  /** Direction the actions dropdown opens. Use 'down' in the top nav. */
+  readonly menuPlacement = input<'up' | 'down'>('up');
+  /**
+   * Visual style. 'card' is the full chip (avatar + owner); 'compact' is a
+   * subtle name-only pill for dense contexts like the top nav.
+   */
+  readonly variant = input<'card' | 'compact'>('card');
 
   // Outputs
   readonly newSessionClicked = output<void>();
