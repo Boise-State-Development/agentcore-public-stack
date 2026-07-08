@@ -46,8 +46,8 @@
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
         </a>
 
-        <!-- Agents (Agent Designer — hidden until the accessibility probe resolves true; kill switch off = no entry) -->
-        @if (showAgents()) {
+        <!-- Agents (Agent Designer — preview: system-admin only, plus the accessibility probe) -->
+        @if (showAgents() && isAdmin()) {
             <a
                 routerLink="/agents"
                 routerLinkActive="bg-gray-200/80 dark:bg-white/10"
@@ -59,11 +59,12 @@
                     </svg>
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
             </a>
         }
 
-        <!-- Memory Spaces (hidden until the accessibility probe resolves true — kill switch off = no entry) -->
-        @if (showMemorySpaces()) {
+        <!-- Memory Spaces (preview: system-admin only, plus the accessibility probe) -->
+        @if (showMemorySpaces() && isAdmin()) {
             <a
                 routerLink="/memory-spaces"
                 routerLinkActive="bg-gray-200/80 dark:bg-white/10"
@@ -75,10 +76,11 @@
                     </svg>
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Memory Spaces</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
             </a>
         }
 
-        <!-- Scheduled runs (system-admin only, plus the capability gate — hidden until the accessibility probe resolves true) -->
+        <!-- Scheduled runs (preview: system-admin only, plus the capability gate) -->
         @if (showSchedules() && isAdmin()) {
             <a
                 routerLink="/schedules"
@@ -91,6 +93,7 @@
                     </svg>
                 </div>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Scheduled Runs</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
             </a>
         }
     </div>
