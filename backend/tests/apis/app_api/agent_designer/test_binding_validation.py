@@ -25,8 +25,10 @@ def _user() -> User:
 
 
 def _model_svc(allowed: bool) -> MagicMock:
+    # Mirror the catalog: design-time validation filters the single model via
+    # ``filter_accessible_models`` (accessible → the model is returned, else []).
     svc = MagicMock()
-    svc.can_access_model = AsyncMock(return_value=allowed)
+    svc.filter_accessible_models = AsyncMock(side_effect=lambda user, models: list(models) if allowed else [])
     return svc
 
 
@@ -75,6 +77,27 @@ class TestModelValidation:
                 _user(), model_settings=AgentModelConfig(model_id="m1"), model_access_service=_model_svc(False)
             )
         assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_membership_grant_without_allowed_app_roles_passes(self, monkeypatch):
+        """Regression: a model granted via the user's AppRole ``permissions.models`` but
+        with an empty ``allowed_app_roles`` is listed by the catalog and must save.
+
+        ``filter_accessible_models`` grants it (membership); the old ``can_access_model``
+        path would have rejected it (its membership check is gated on a non-empty
+        ``allowed_app_roles``), so the picker showed it but the write 403'd.
+        """
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1", allowed_app_roles=[])]),
+        )
+        svc = MagicMock()
+        # Catalog-style filter: this model is in the accessible subset.
+        svc.filter_accessible_models = AsyncMock(side_effect=lambda user, models: list(models))
+        await validate_agent_write(
+            _user(), model_settings=AgentModelConfig(model_id="m1"), model_access_service=svc
+        )
+        svc.filter_accessible_models.assert_awaited_once()
 
 
 # --------------------------------------------------------------------------- inert

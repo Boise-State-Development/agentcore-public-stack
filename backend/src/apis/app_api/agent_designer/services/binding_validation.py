@@ -74,7 +74,14 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
     model = next((m for m in await list_all_managed_models() if m.model_id == cfg.model_id), None)
     if model is None:
         raise BindingValidationError(f"Model '{cfg.model_id}' is not available.", status_code=400)
-    if not await svc.can_access_model(user, model):
+    # Use the SAME predicate the ``/agents/bindable`` catalog uses (``filter_accessible_models``),
+    # not ``can_access_model``: the latter only honors an AppRole model grant when the model
+    # record also carries a non-empty ``allowed_app_roles``, so a model granted purely via the
+    # user's AppRole ``permissions.models`` (empty ``allowed_app_roles``) is *listed* by the
+    # palette but would be *rejected* here — the picker shows it, saving 403s. Filtering the
+    # single model guarantees "if the palette offers it, the write accepts it", and matches the
+    # runtime's membership grant.
+    if not await svc.filter_accessible_models(user, [model]):
         raise BindingValidationError(
             f"You do not have access to model '{cfg.model_id}'.", status_code=403
         )
