@@ -11,11 +11,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.app_api.agents.routes import router
+from apis.app_api.agent_designer.routes import router
 from apis.shared.assistants.models import AgentBinding, AgentModelConfig, Assistant
 from tests.routes.conftest import mock_auth_user
 
-ROUTES_MODULE = "apis.app_api.agents.routes"
+ROUTES_MODULE = "apis.app_api.agent_designer.routes"
 
 
 def _make_assistant(**overrides) -> Assistant:
@@ -135,7 +135,7 @@ class TestAgentWrites:
         v.assert_awaited_once()
 
     def test_create_surfaces_validation_403(self, app, make_user, _flag_on):
-        from apis.app_api.agents.services.binding_validation import BindingValidationError
+        from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 
         mock_auth_user(app, make_user())
         with patch(

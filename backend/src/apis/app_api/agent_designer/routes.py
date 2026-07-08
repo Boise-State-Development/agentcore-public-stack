@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from apis.app_api.agents.services.binding_validation import (
+from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
 )
