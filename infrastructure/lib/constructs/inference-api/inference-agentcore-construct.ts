@@ -347,6 +347,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
 
+        // Agent Designer harness resolution (Phase 3): the runtime resolves an
+        // Agent's bindings + modelConfig at invocation. Gates that resolution;
+        // default off, mirrors the app-api flag. Without it the harness ignores
+        // bindings entirely (today's behavior).
+        AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
+
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 
