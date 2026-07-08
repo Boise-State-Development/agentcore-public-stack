@@ -61,6 +61,16 @@ export class StreamingTextComponent implements OnDestroy {
   private displayedLength = 0;
   private lastAnimationTime = 0;
 
+  /**
+   * True once the first effect run has seeded the display state. Text that
+   * already exists when the component mounts is shown immediately — the
+   * typewriter only animates text that arrives WHILE mounted. Without this,
+   * navigating away from a streaming conversation and back (which recreates
+   * the message components) would replay the entire accumulated response
+   * from character zero instead of picking up from its current state.
+   */
+  private seeded = false;
+
   constructor() {
     effect(() => {
       const currentText = this.text();
@@ -68,6 +78,15 @@ export class StreamingTextComponent implements OnDestroy {
 
       if (!this.isBrowser) {
         // SSR: show full text immediately
+        this.displayedText.set(currentText);
+        return;
+      }
+
+      if (!this.seeded) {
+        // First run: catch up to whatever has already streamed (empty for
+        // a brand-new message, the full partial response on a remount).
+        this.seeded = true;
+        this.displayedLength = currentText.length;
         this.displayedText.set(currentText);
         return;
       }

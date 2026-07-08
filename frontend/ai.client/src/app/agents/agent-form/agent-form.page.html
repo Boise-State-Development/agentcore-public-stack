@@ -1,0 +1,260 @@
+<div class="min-h-dvh bg-gray-50 dark:bg-gray-900">
+  <!-- Sticky header -->
+  <header class="sticky top-0 z-10 border-b border-gray-200/80 bg-white/80 backdrop-blur dark:border-gray-700/60 dark:bg-gray-900/80">
+    <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-3">
+        <a routerLink="/agents" class="rounded-md p-1.5 text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800" [attr.aria-label]="'Back to agents'">
+          <ng-icon name="heroArrowLeft" class="size-5" aria-hidden="true" />
+        </a>
+        <h1 class="text-base/7 font-semibold text-gray-900 dark:text-white">
+          {{ mode() === 'create' ? 'New Agent' : 'Edit Agent' }}
+        </h1>
+      </div>
+      <div class="flex items-center gap-2">
+        @if (mode() === 'edit' && userPermission() === 'owner') {
+          <button type="button" (click)="openShareDialog()" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+            <ng-icon name="heroShare" class="size-4" aria-hidden="true" />
+            Share
+          </button>
+        }
+        <button type="button" (click)="onCancel()" class="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800">
+          Cancel
+        </button>
+        <button type="button" (click)="onSubmit()" [disabled]="saving() || isViewer()" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-500 px-4 py-2 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50">
+          <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
+          {{ saving() ? 'Saving…' : 'Save Agent' }}
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
+    @if (isViewer()) {
+      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+        You have viewer access to this agent — changes can't be saved.
+      </div>
+    }
+
+    <!-- Persona -->
+    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+      <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Persona</h2>
+      <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Name, description and the system instructions that define this agent.</p>
+
+      <div class="mt-5 flex items-start gap-4">
+        <!-- Emoji -->
+        <div class="shrink-0">
+          <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Emoji</label>
+          <div class="relative mt-1">
+            <button type="button" cdkOverlayOrigin #emojiTrigger="cdkOverlayOrigin" (click)="toggleEmojiPicker()" class="flex size-10 items-center justify-center rounded-2xl border border-gray-300 bg-white text-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700">
+              @if (form.get('emoji')?.value) {
+                <span>{{ form.get('emoji')?.value }}</span>
+              } @else {
+                <ng-icon name="heroFaceSmile" class="size-5 text-gray-400" />
+              }
+            </button>
+            <ng-template cdkConnectedOverlay [cdkConnectedOverlayOrigin]="emojiTrigger" [cdkConnectedOverlayOpen]="isEmojiPickerOpen()" [cdkConnectedOverlayPositions]="emojiPickerPositions" [cdkConnectedOverlayHasBackdrop]="true" cdkConnectedOverlayBackdropClass="cdk-overlay-transparent-backdrop" (backdropClick)="closeEmojiPicker()" (detach)="closeEmojiPicker()">
+              <div class="overflow-hidden rounded-2xl shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+                <div class="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
+                  <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Select Emoji</span>
+                  <button type="button" (click)="closeEmojiPicker()" class="rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200">
+                    <ng-icon name="heroXMark" class="size-4" />
+                  </button>
+                </div>
+                <emoji-mart [darkMode]="isDarkMode() === 'dark'" [perLine]="8" [emojiSize]="24" [showPreview]="false" (emojiSelect)="onEmojiSelect($event)" />
+              </div>
+            </ng-template>
+          </div>
+          @if (form.get('emoji')?.value) {
+            <button type="button" (click)="clearEmoji()" class="mt-1 text-xs/5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">Clear</button>
+          }
+        </div>
+
+        <!-- Name -->
+        <div class="flex-1">
+          <label for="name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
+          <input id="name" type="text" formControlName="name" placeholder="e.g. Research Assistant" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+          @if (getFieldError('name'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+        </div>
+      </div>
+
+      <!-- Description -->
+      <div class="mt-4">
+        <label for="description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Description</label>
+        <input id="description" type="text" formControlName="description" placeholder="A short summary shown on the agent card" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+        @if (getFieldError('description'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+      </div>
+
+      <!-- Instructions -->
+      <div class="mt-4">
+        <label for="instructions" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Instructions</label>
+        <textarea id="instructions" formControlName="instructions" rows="6" placeholder="You are a helpful assistant that…" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"></textarea>
+        @if (getFieldError('instructions'); as e) { <p class="mt-1 text-xs/5 text-red-600 dark:text-red-400">{{ e }}</p> }
+      </div>
+
+      <!-- Visibility + tags -->
+      <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label for="visibility" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Visibility</label>
+          <select id="visibility" formControlName="visibility" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+            <option value="PRIVATE">Private</option>
+            <option value="SHARED">Shared</option>
+            <option value="PUBLIC">Public</option>
+          </select>
+        </div>
+        <div>
+          <label for="tag-input" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Tags</label>
+          <input id="tag-input" #tagInput type="text" (keydown.enter)="$event.preventDefault(); addTag(tagInput.value); tagInput.value=''" placeholder="Type a tag and press Enter" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+          @if (tags.length) {
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              @for (tag of tags; track tag) {
+                <span class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                  {{ tag }}
+                  <button type="button" (click)="removeTag(tag)" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><ng-icon name="heroXMark" class="size-3" /></button>
+                </span>
+              }
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Conversation starters -->
+      <div class="mt-4" formArrayName="starters">
+        <div class="flex items-center justify-between">
+          <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation starters</label>
+          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+            <ng-icon name="heroPlus" class="size-3.5" /> Add
+          </button>
+        </div>
+        @for (starter of starters.controls; track $index) {
+          <div class="mt-2 flex items-center gap-2">
+            <input [formControlName]="$index" type="text" placeholder="Suggested first message" class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+            <button type="button" (click)="removeStarter($index)" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-red-600 dark:hover:bg-gray-700"><ng-icon name="heroTrash" class="size-4" /></button>
+          </div>
+        }
+      </div>
+    </section>
+
+    <!-- Model (governed single-select, D3) -->
+    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+      <div class="flex items-center gap-2">
+        <ng-icon name="heroCpuChip" class="size-5 text-primary-500" aria-hidden="true" />
+        <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Model</h2>
+        <span class="text-xs/5 text-red-500">required</span>
+      </div>
+      <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">The agent runs on this model. Only models your role allows are shown.</p>
+
+      @if (models().length === 0) {
+        <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
+      } @else {
+        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          @for (m of models(); track m.ref) {
+            <button type="button" (click)="selectModel(m.ref)" class="flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition" [class.border-primary-500]="selectedModelId() === m.ref" [class.ring-1]="selectedModelId() === m.ref" [class.ring-primary-500]="selectedModelId() === m.ref" [class.bg-primary-50]="selectedModelId() === m.ref" [class.dark:bg-primary-500/10]="selectedModelId() === m.ref" [class.border-gray-200]="selectedModelId() !== m.ref" [class.dark:border-gray-700]="selectedModelId() !== m.ref" [class.hover:border-gray-300]="selectedModelId() !== m.ref">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{{ m.label }}</p>
+                <p class="truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ m.description }}</p>
+              </div>
+              @if (selectedModelId() === m.ref) {
+                <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-500" aria-hidden="true" />
+              }
+            </button>
+          }
+        </div>
+      }
+    </section>
+
+    <!-- Tools -->
+    @if (tools().length) {
+      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-center gap-2">
+          <ng-icon name="heroWrenchScrewdriver" class="size-5 text-blue-500" aria-hidden="true" />
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</h2>
+        </div>
+        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call.</p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          @for (t of tools(); track t.ref) {
+            <button type="button" (click)="toggleTool(t.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-blue-500]="isToolSelected(t.ref)" [class.bg-blue-50]="isToolSelected(t.ref)" [class.text-blue-700]="isToolSelected(t.ref)" [class.dark:bg-blue-900/30]="isToolSelected(t.ref)" [class.dark:text-blue-300]="isToolSelected(t.ref)" [class.border-gray-200]="!isToolSelected(t.ref)" [class.text-gray-700]="!isToolSelected(t.ref)" [class.dark:border-gray-700]="!isToolSelected(t.ref)" [class.dark:text-gray-300]="!isToolSelected(t.ref)" [appTooltip]="t.description" appTooltipPosition="top">
+              @if (isToolSelected(t.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
+              {{ t.label }}
+            </button>
+          }
+        </div>
+      </section>
+    }
+
+    <!-- Skills -->
+    @if (skills().length) {
+      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-center gap-2">
+          <ng-icon name="heroSparkles" class="size-5 text-purple-500" aria-hidden="true" />
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Skills</h2>
+        </div>
+        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles with their own bound tools.</p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          @for (s of skills(); track s.ref) {
+            <button type="button" (click)="toggleSkill(s.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-purple-500]="isSkillSelected(s.ref)" [class.bg-purple-50]="isSkillSelected(s.ref)" [class.text-purple-700]="isSkillSelected(s.ref)" [class.dark:bg-purple-900/30]="isSkillSelected(s.ref)" [class.dark:text-purple-300]="isSkillSelected(s.ref)" [class.border-gray-200]="!isSkillSelected(s.ref)" [class.text-gray-700]="!isSkillSelected(s.ref)" [class.dark:border-gray-700]="!isSkillSelected(s.ref)" [class.dark:text-gray-300]="!isSkillSelected(s.ref)" [appTooltip]="s.description" appTooltipPosition="top">
+              @if (isSkillSelected(s.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
+              {{ s.label }}
+            </button>
+          }
+        </div>
+      </section>
+    }
+
+    <!-- Memory spaces -->
+    @if (spaces().length) {
+      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-center gap-2">
+          <ng-icon name="heroCircleStack" class="size-5 text-emerald-500" aria-hidden="true" />
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Memory spaces</h2>
+        </div>
+        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">A persistent "second brain" the agent reads from — and can write to with editor access.</p>
+        <div class="mt-4 space-y-2">
+          @for (space of spaces(); track space.ref) {
+            <div class="rounded-xl border px-4 py-3 transition" [class.border-emerald-500]="isSpaceSelected(space.ref)" [class.bg-emerald-50]="isSpaceSelected(space.ref)" [class.dark:bg-emerald-900/20]="isSpaceSelected(space.ref)" [class.border-gray-200]="!isSpaceSelected(space.ref)" [class.dark:border-gray-700]="!isSpaceSelected(space.ref)">
+              <label class="flex cursor-pointer items-center justify-between gap-3">
+                <span class="min-w-0">
+                  <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ space.label }}</span>
+                  <span class="block text-xs/5 text-gray-500 dark:text-gray-400">your role: {{ space.meta['role'] }}</span>
+                </span>
+                <input type="checkbox" [checked]="isSpaceSelected(space.ref)" (change)="toggleSpace(space)" class="size-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+              </label>
+
+              @if (isSpaceSelected(space.ref)) {
+                @for (sel of memorySelections(); track sel.ref) {
+                  @if (sel.ref === space.ref) {
+                    <div class="mt-3 flex flex-wrap items-center gap-4 border-t border-emerald-200/60 pt-3 dark:border-emerald-800/40">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs/5 font-medium text-gray-600 dark:text-gray-300">Access:</span>
+                        <div class="flex rounded-lg border border-gray-300 p-0.5 dark:border-gray-600">
+                          <button type="button" (click)="setAccess(sel.ref, 'read')" class="rounded-md px-2.5 py-1 text-xs/5 font-medium transition" [class.bg-white]="sel.access === 'read'" [class.shadow-xs]="sel.access === 'read'" [class.text-gray-900]="sel.access === 'read'" [class.dark:bg-gray-700]="sel.access === 'read'" [class.dark:text-white]="sel.access === 'read'" [class.text-gray-500]="sel.access !== 'read'">Read</button>
+                          <button type="button" (click)="setAccess(sel.ref, 'readwrite')" [disabled]="!canWrite(sel)" class="rounded-md px-2.5 py-1 text-xs/5 font-medium transition disabled:cursor-not-allowed disabled:opacity-40" [class.bg-white]="sel.access === 'readwrite'" [class.shadow-xs]="sel.access === 'readwrite'" [class.text-gray-900]="sel.access === 'readwrite'" [class.dark:bg-gray-700]="sel.access === 'readwrite'" [class.dark:text-white]="sel.access === 'readwrite'" [class.text-gray-500]="sel.access !== 'readwrite'" [appTooltip]="canWrite(sel) ? '' : 'Editor access on the space is required to write'" appTooltipPosition="top">Read + write</button>
+                        </div>
+                      </div>
+                      <label class="flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-300">
+                        <input type="checkbox" [checked]="sel.alwaysLoadIndex" (change)="toggleAlwaysLoad(sel.ref)" class="size-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+                        Always load MEMORY.md into the prompt
+                      </label>
+                    </div>
+                  }
+                }
+              }
+            </div>
+          }
+        </div>
+      </section>
+    }
+
+    <!-- Knowledge base (welded, read-only) -->
+    @if (kbBinding()) {
+      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-center gap-2">
+          <ng-icon name="heroBookOpen" class="size-5 text-gray-400" aria-hidden="true" />
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
+        </div>
+        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+          This agent's document knowledge base is managed automatically and is edited from the classic assistant view.
+        </p>
+      </section>
+    }
+  </form>
+</div>

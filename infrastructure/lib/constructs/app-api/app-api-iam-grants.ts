@@ -326,6 +326,29 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Memory Spaces (S3 + DynamoDB) ──
+  // app-api is a readwriter of memory-space content and metadata
+  // (apis/shared/memory/*). Sourced from typed refs.
+  const memorySpacesBucketArn = props.refs.memorySpacesBucket.bucketArn;
+  const memorySpacesTableArn = props.refs.memorySpacesTable.tableArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'MemorySpacesBucketReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
+      resources: [memorySpacesBucketArn, `${memorySpacesBucketArn}/*`],
+    }),
+  );
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'MemorySpacesTableReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:DeleteItem',
+                'dynamodb:Query', 'dynamodb:BatchWriteItem'],
+      resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
+    }),
+  );
+
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
   const ftJobsTableArn = props.refs.fineTuningJobsTable.tableArn;
@@ -439,6 +462,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Bedrock control-plane model browsing ──
+  // GET /admin/bedrock/models calls the Bedrock control plane's
+  // ListFoundationModels (apis/app_api/admin/routes.py). These are
+  // account-level list/read actions that do NOT support resource-level
+  // permissions, so they must be granted on `*`. Without this, the deployed
+  // task role gets AccessDeniedException and the endpoint 502s (works locally
+  // only because local dev runs with the developer's broader AWS credentials).
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'BedrockListFoundationModels',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModel'],
+      resources: ['*'],
+    }),
+  );
+
   // ── Bedrock Mantle model browsing ──
   // GET /admin/mantle/models authenticates against the OpenAI-compatible
   // Bedrock Mantle endpoint with a short-term bearer token presigned by this
@@ -515,6 +554,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         'bedrock-agentcore:UpdateGatewayTarget',
         'bedrock-agentcore:DeleteGatewayTarget',
         'bedrock-agentcore:ListGatewayTargets',
+        'bedrock-agentcore:SynchronizeGatewayTargets',
         // GetGateway resolves the gateway execution-role ARN, which the per-
         // target Lambda grant names as the invoke principal.
         'bedrock-agentcore:GetGateway',

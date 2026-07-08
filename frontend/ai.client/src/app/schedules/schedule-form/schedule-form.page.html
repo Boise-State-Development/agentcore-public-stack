@@ -1,0 +1,293 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+    <div class="mb-8">
+      <a
+        routerLink="/schedules"
+        class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+      >
+        <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+        Back to schedules
+      </a>
+      <div class="mt-3 flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">
+            {{ mode() === 'create' ? 'New scheduled run' : 'Edit scheduled run' }}
+          </h1>
+          <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
+            Run a prompt automatically on a cadence you choose. Results land in your conversation list.
+          </p>
+        </div>
+
+        @if (!loadingSchedule() && !loadError()) {
+          <div class="flex shrink-0 flex-col items-end gap-1">
+            <button
+              type="button"
+              (click)="runNow()"
+              [disabled]="saving()"
+              class="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+            >
+              Run now
+            </button>
+            <span class="text-xs/5 text-gray-500 dark:text-gray-400">Runs once now — doesn’t create a schedule</span>
+          </div>
+        }
+      </div>
+    </div>
+
+    @if (loadingSchedule()) {
+      <div class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading…</p>
+      </div>
+    } @else if (loadError()) {
+      <div class="rounded-2xl border border-red-200 bg-red-50 p-6 dark:border-red-900/40 dark:bg-red-900/10">
+        <p class="text-sm/6 text-red-700 dark:text-red-300">{{ loadError() }}</p>
+      </div>
+    } @else {
+      <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-8">
+        <!-- Basics -->
+        <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Basics</h2>
+
+          <div class="mt-4">
+            <label for="label" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Label
+            </label>
+            <input
+              id="label"
+              type="text"
+              formControlName="label"
+              placeholder="Morning Briefing"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+            />
+            @if (getFieldError('label'); as error) {
+              <p class="mt-1.5 text-xs/5 text-red-600 dark:text-red-400">{{ error }}</p>
+            }
+          </div>
+
+          <div class="mt-4">
+            <label for="promptText" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Prompt
+            </label>
+            <textarea
+              id="promptText"
+              formControlName="promptText"
+              rows="5"
+              placeholder="Summarize what happened in my classes yesterday and flag anything urgent."
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+            ></textarea>
+            @if (getFieldError('promptText'); as error) {
+              <p class="mt-1.5 text-xs/5 text-red-600 dark:text-red-400">{{ error }}</p>
+            }
+          </div>
+        </section>
+
+        <!-- Cadence -->
+        <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">When it runs</h2>
+          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+            Daily, weekdays, a specific day each week, or a custom interval.
+          </p>
+
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <label for="cadence" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                Cadence
+              </label>
+              <select
+                id="cadence"
+                formControlName="cadence"
+                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              >
+                <option value="daily">Every day</option>
+                <option value="weekday">Every weekday</option>
+                <option value="weekly">Weekly on a day</option>
+                <option value="interval">Custom interval</option>
+              </select>
+            </div>
+
+            @if (isWeekly()) {
+              <div>
+                <label for="weekday" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                  Day of week
+                </label>
+                <select
+                  id="weekday"
+                  formControlName="weekday"
+                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                >
+                  @for (label of weekdayLabels; track label; let idx = $index) {
+                    <option [value]="idx">{{ label }}</option>
+                  }
+                </select>
+              </div>
+            }
+
+            @if (isInterval()) {
+              <div>
+                <label for="intervalValue" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                  Every
+                </label>
+                <input
+                  id="intervalValue"
+                  type="number"
+                  min="1"
+                  formControlName="intervalValue"
+                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label for="intervalUnit" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                  Unit
+                </label>
+                <select
+                  id="intervalUnit"
+                  formControlName="intervalUnit"
+                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                >
+                  @for (unit of intervalUnitOptions; track unit) {
+                    <option [value]="unit">{{ unit }}</option>
+                  }
+                </select>
+              </div>
+            } @else {
+              <div>
+                <label for="hourLocal" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                  Time of day
+                </label>
+                <select
+                  id="hourLocal"
+                  formControlName="hourLocal"
+                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                >
+                  @for (hour of hourOptions; track hour.value) {
+                    <option [value]="hour.value">{{ hour.label }}</option>
+                  }
+                </select>
+              </div>
+            }
+          </div>
+
+          @if (isInterval()) {
+            @if (form.controls.intervalValue.touched && form.controls.intervalValue.errors?.['min']) {
+              <p class="mt-2 text-xs/5 text-red-600 dark:text-red-400">
+                Interval must be at least {{ minIntervalMinutes }} minutes.
+              </p>
+            }
+            <p class="mt-3 text-xs/5 text-gray-500 dark:text-gray-400">
+              Runs on a fixed interval from the previous run — no fixed clock time. Minimum
+              {{ minIntervalMinutes }} minutes between runs.
+            </p>
+          } @else {
+            <div class="mt-4">
+              <label for="timezone" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                Timezone
+              </label>
+              <select
+                id="timezone"
+                formControlName="timezone"
+                class="mt-2 block w-full max-w-sm rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              >
+                @for (tz of timezoneOptions; track tz) {
+                  <option [value]="tz">{{ tz }}</option>
+                }
+              </select>
+            </div>
+          }
+        </section>
+
+        <!-- Target config -->
+        <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Target (optional)</h2>
+          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+            Point this run at a specific assistant, and/or limit which tools it may use. Leave both
+            unset to use your normal defaults.
+          </p>
+
+          <div class="mt-4">
+            <label for="assistantId" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Assistant
+            </label>
+            <select
+              id="assistantId"
+              formControlName="assistantId"
+              [attr.disabled]="clearAssistant() ? true : null"
+              class="mt-2 block w-full max-w-sm rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+            >
+              <option [value]="null">Default agent</option>
+              @for (assistant of assistants(); track assistant.assistantId) {
+                <option [value]="assistant.assistantId">{{ assistant.name }}</option>
+              }
+            </select>
+
+            @if (mode() === 'edit') {
+              <label class="mt-2 flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-400">
+                <input
+                  type="checkbox"
+                  [checked]="clearAssistant()"
+                  (change)="onClearAssistantChange($any($event.target).checked)"
+                  class="size-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700"
+                />
+                Detach assistant (use the default agent)
+              </label>
+            }
+          </div>
+
+          <div class="mt-5">
+            <div class="flex items-center justify-between">
+              <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Tools</span>
+              @if (mode() === 'edit') {
+                <label class="flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-400">
+                  <input
+                    type="checkbox"
+                    [checked]="clearTools()"
+                    (change)="onClearToolsChange($any($event.target).checked)"
+                    class="size-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700"
+                  />
+                  Reset to all my tools
+                </label>
+              }
+            </div>
+            <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              The tool set is snapshotted when the schedule is created — later changes to your tool
+              access won't silently expand what a sleeping schedule can do.
+            </p>
+            <div class="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-2xl border border-gray-200 p-2 dark:border-gray-700">
+              @for (tool of tools(); track tool.toolId) {
+                <label class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm/6 text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/40">
+                  <input
+                    type="checkbox"
+                    [checked]="isToolSelected(tool.toolId)"
+                    [disabled]="clearTools()"
+                    (change)="toggleTool(tool.toolId)"
+                    class="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-500 dark:bg-gray-700"
+                  />
+                  {{ tool.displayName }}
+                </label>
+              } @empty {
+                <p class="px-2 py-1.5 text-xs/5 text-gray-500 dark:text-gray-400">No tools available.</p>
+              }
+            </div>
+          </div>
+        </section>
+
+        <!-- Actions -->
+        <div class="flex items-center justify-end gap-3">
+          <button
+            type="button"
+            (click)="onCancel()"
+            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            [disabled]="saving()"
+            class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-600"
+          >
+            {{ saving() ? 'Saving…' : mode() === 'create' ? 'Create schedule' : 'Save changes' }}
+          </button>
+        </div>
+      </form>
+    }
+  </div>
+</div>

@@ -92,6 +92,25 @@ export class MessageListComponent implements OnDestroy {
     );
   }
 
+  /** The interruption reason to surface on this message, or null. Only the
+   *  final message of an interrupted turn gets the chip, and only while no
+   *  new response is streaming — mirrors `canContinueFor`, and the
+   *  last-message gate sanity-checks against the "completed anyway" race
+   *  (a new turn clears the flag). `connection_lost` also drives a Continue
+   *  affordance; `user_stopped` shows the chip without one. */
+  protected interruptedReasonFor(messageId: string): 'user_stopped' | 'connection_lost' | null {
+    if (
+      !this.chatStateService.lastTurnInterrupted() ||
+      this.isChatLoading() ||
+      messageId !== this.lastMessageId()
+    ) {
+      return null;
+    }
+    return this.chatStateService.lastTurnInterruptReason() === 'user_stopped'
+      ? 'user_stopped'
+      : 'connection_lost';
+  }
+
   /** Session artifacts, newest first. Anchored ones render inline after
    *  their producing assistant message (`producedByMessageIndex` matches
    *  the `msg-{sessionId}-{index}` id); the rest fall back to the
@@ -232,24 +251,29 @@ export class MessageListComponent implements OnDestroy {
   /**
    * Calculates the height needed for the bottom spacer
    * This ensures there's enough space for user messages to scroll to the top
+   *
+   * Set synchronously (it only reads window.innerHeight, no DOM measurement)
+   * so the extra scrollable height exists in the same layout pass as the
+   * messages — the navigation scroll restore in ConversationPage relies on
+   * the full scroll height being available right after render.
    */
   private calculateSpacerHeight(): void {
     if (!this.isBrowser) return;
 
-    // Wait for next frame to ensure DOM is updated
-    requestAnimationFrame(() => {
-      const viewportHeight = window.innerHeight;
-      const spacerHeight = viewportHeight - this.HEADER_HEIGHT;
-      this.spacerHeight.set(spacerHeight);
-    });
+    const viewportHeight = window.innerHeight;
+    this.spacerHeight.set(viewportHeight - this.HEADER_HEIGHT);
   }
 
   /**
    * Scrolls to a specific message by ID
    * Call this explicitly when user submits a message
    * Works in both full-page mode (window scroll) and embedded mode (container scroll)
+   *
+   * @param behavior 'smooth' for user-visible animation (submit affordance),
+   *   'auto' for instant positioning (navigation restore — animating a jump
+   *   across a whole conversation would be noise).
    */
-  scrollToMessage(messageId: string): void {
+  scrollToMessage(messageId: string, behavior: ScrollBehavior = 'smooth'): void {
     if (!this.isBrowser) return;
 
     const element = document.getElementById(`message-${messageId}`);
@@ -257,7 +281,7 @@ export class MessageListComponent implements OnDestroy {
 
     if (this.embeddedMode()) {
       // In embedded mode, use scrollIntoView which works with any scroll container
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      element.scrollIntoView({ behavior, block: 'start' });
     } else {
       // In full-page mode, use window scroll with offset for fixed header
       const elementRect = element.getBoundingClientRect();
@@ -266,7 +290,7 @@ export class MessageListComponent implements OnDestroy {
 
       window.scrollTo({
         top: absoluteElementTop - offset,
-        behavior: 'smooth'
+        behavior
       });
     }
   }
@@ -274,11 +298,11 @@ export class MessageListComponent implements OnDestroy {
   /**
    * Scrolls to the last user message
    */
-  scrollToLastUserMessage(): void {
+  scrollToLastUserMessage(behavior: ScrollBehavior = 'smooth'): void {
     const msgs = this.messages();
     const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user');
     if (lastUserMsg) {
-      this.scrollToMessage(lastUserMsg.id);
+      this.scrollToMessage(lastUserMsg.id, behavior);
     }
   }
 

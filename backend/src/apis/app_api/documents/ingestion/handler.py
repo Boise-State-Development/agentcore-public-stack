@@ -302,5 +302,18 @@ async def _process_document_pipeline(bucket: str, key: str, assistant_id: str, d
     await status_manager.mark_complete(assistant_id=assistant_id, document_id=document_id, vector_store_id=vector_store_id)
     logger.info("Embeddings stored, processing complete")
 
+    # KB sync shrinkage cleanup: vectors are overwritten in place, so a
+    # re-ingested document that produced FEWER chunks strands its old tail
+    # ({doc_id}#{new..prev-1}). The kb-sync worker stashes the pre-sync
+    # chunk count; pop it (atomic) and delete the tail if we shrank. Uses
+    # len(chunks) post-split — the true vector count this run wrote (the
+    # stored chunkCount predates validate_and_split, same as other delete
+    # paths).
+    previous_count = await status_manager.pop_previous_chunk_count(assistant_id=assistant_id, document_id=document_id)
+    if previous_count and previous_count > len(chunks):
+        from embeddings.bedrock_embeddings import delete_vector_tail
+        deleted = await delete_vector_tail(document_id, len(chunks), previous_count)
+        logger.info(f"Shrinkage cleanup: removed {deleted} stale tail vectors for document {document_id}")
+
     # Test s3vector dump (Optional debugging)
     # await test_s3vector_dump()

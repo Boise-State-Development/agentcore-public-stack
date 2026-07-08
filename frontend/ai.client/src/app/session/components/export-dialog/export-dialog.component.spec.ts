@@ -117,9 +117,9 @@ describe('ExportDialogComponent', () => {
     await vi.waitFor(() => expect((component['targets'] as () => unknown[])()).toHaveLength(1));
 
     const include = () => (component['include'] as () => Record<string, boolean>)();
-    expect(include()['citations']).toBe(true);
-    (component['toggleInclude'] as (k: string) => void)('citations');
     expect(include()['citations']).toBe(false);
+    (component['toggleInclude'] as (k: string) => void)('citations');
+    expect(include()['citations']).toBe(true);
   });
 
   it('runs the consent flow when saving to an unconnected destination', async () => {

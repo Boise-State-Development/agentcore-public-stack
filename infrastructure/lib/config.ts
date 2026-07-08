@@ -48,6 +48,10 @@ export interface AppConfig {
   appApi: AppApiConfig;
   inferenceApi: InferenceApiConfig;
   ragIngestion: RagIngestionConfig;
+  kbSync: KbSyncConfig;
+  scheduledRuns: ScheduledRunsConfig;
+  memorySpaces: MemorySpacesConfig;
+  agents: AgentsConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -123,6 +127,59 @@ export interface RagIngestionConfig {
   embeddingModel: string;        // Bedrock model ID (default: "amazon.titan-embed-text-v2")
   vectorDimension: number;       // Embedding dimension (default: 1024)
   vectorDistanceMetric: string;  // Distance metric (default: "cosine")
+}
+
+/**
+ * KB sync — scheduled re-index of assistant knowledge-base sources
+ * (docs/specs/assistant-kb-sync.md).
+ *
+ * `enabled` gates the whole feature: it sets the EventBridge rule's
+ * enabled state AND the KB_SYNC_ENABLED env var on both kb-sync
+ * Lambdas. Default ON with a kill switch — the feature runs unless it's
+ * explicitly turned off with CDK_KB_SYNC_ENABLED=false (or a
+ * `kbSync.enabled: false` cdk.json context).
+ */
+export interface KbSyncConfig {
+  enabled: boolean;
+}
+
+/**
+ * Scheduled runs — headless agent runs as a user (the Harness primitive,
+ * docs/specs/scheduled-agent-runs.md).
+ *
+ * `enabled` is the global kill switch: it sets the SCHEDULED_RUNS_ENABLED
+ * env var on app-api (gating the "Run now" + headless-grant routes), and
+ * will gate the Phase-B EventBridge dispatcher rule when the scheduler
+ * lands. Default ON with a kill switch — the feature runs unless it's
+ * explicitly turned off with CDK_SCHEDULED_RUNS_ENABLED=false (or a
+ * `scheduledRuns.enabled: false` cdk.json context). *Who* can use the
+ * surface is governed separately by the `scheduled-runs` RBAC capability.
+ */
+export interface ScheduledRunsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Memory Spaces feature flag. Default ON with a kill switch — the feature is
+ * complete and ships enabled for every deployer (opt-out), disabled per
+ * environment with CDK_MEMORY_SPACES_ENABLED=false (or a
+ * `memorySpaces.enabled: false` cdk.json context). Sets the
+ * MEMORY_SPACES_ENABLED env var on app-api and inference-api. The table + bucket
+ * are provisioned unconditionally, so this only gates route mounting at runtime.
+ */
+export interface MemorySpacesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Agent Designer feature flag. Default OFF with an on switch — the governed
+ * `/agents/*` surface is opt-in per environment, enabled with
+ * CDK_AGENTS_API_ENABLED=true (or an `agents.enabled: true` cdk.json context).
+ * Sets the AGENTS_API_ENABLED env var on app-api. The feature ships
+ * incrementally, so it stays dark until complete; `/assistants/*` is unaffected.
+ */
+export interface AgentsConfig {
+  enabled: boolean;
 }
 
 export interface FineTuningConfig {
@@ -250,6 +307,48 @@ export function loadConfig(scope: cdk.App): AppConfig {
       embeddingModel: process.env.CDK_RAG_EMBEDDING_MODEL || scope.node.tryGetContext('ragIngestion')?.embeddingModel,
       vectorDimension: parseIntEnv(process.env.CDK_RAG_VECTOR_DIMENSION) || scope.node.tryGetContext('ragIngestion')?.vectorDimension,
       vectorDistanceMetric: process.env.CDK_RAG_DISTANCE_METRIC || scope.node.tryGetContext('ragIngestion')?.vectorDistanceMetric,
+    },
+    kbSync: {
+      // Default ON with a kill switch: enabled unless explicitly disabled.
+      // The workflow forwards `${{ vars.CDK_KB_SYNC_ENABLED }}`, which is an
+      // EMPTY STRING when the variable is unset — so treat empty/unset as
+      // "use the default (on)" and only the literal "false" as the off
+      // switch. A `kbSync.enabled` cdk.json context can also force it off.
+      enabled: process.env.CDK_KB_SYNC_ENABLED
+        ? process.env.CDK_KB_SYNC_ENABLED !== 'false'
+        : scope.node.tryGetContext('kbSync')?.enabled ?? true,
+    },
+    scheduledRuns: {
+      // Default ON with a kill switch: enabled unless explicitly disabled.
+      // The workflow forwards `${{ vars.CDK_SCHEDULED_RUNS_ENABLED }}`,
+      // which is an EMPTY STRING when the variable is unset — so treat
+      // empty/unset as "use the default (on)" and only the literal "false"
+      // as the off switch. A `scheduledRuns.enabled` cdk.json context can
+      // also force it off. (Same ternary as kbSync above — keep in sync.)
+      enabled: process.env.CDK_SCHEDULED_RUNS_ENABLED
+        ? process.env.CDK_SCHEDULED_RUNS_ENABLED !== 'false'
+        : scope.node.tryGetContext('scheduledRuns')?.enabled ?? true,
+    },
+    memorySpaces: {
+      // Default ON with a kill switch: Memory Spaces is a complete feature and
+      // ships enabled for every deployer (opt-out, not opt-in — matches kbSync /
+      // scheduledRuns). The table + bucket are provisioned unconditionally, so this
+      // only toggles the runtime MEMORY_SPACES_ENABLED env var. The workflow forwards
+      // an EMPTY STRING when the variable is unset, so treat empty/unset as the
+      // default (on) and only the literal "false" as the kill switch. A
+      // `memorySpaces.enabled: false` cdk.json context can also disable it.
+      enabled: process.env.CDK_MEMORY_SPACES_ENABLED
+        ? process.env.CDK_MEMORY_SPACES_ENABLED !== 'false'
+        : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
+    },
+    agents: {
+      // Default OFF with an on switch (same pattern as memorySpaces): opt-in per
+      // environment. The workflow forwards an EMPTY STRING when unset, so treat
+      // empty/unset as the default (off) and only the literal "true" as on. An
+      // `agents.enabled` cdk.json context can also force it on.
+      enabled: process.env.CDK_AGENTS_API_ENABLED
+        ? process.env.CDK_AGENTS_API_ENABLED === 'true'
+        : scope.node.tryGetContext('agents')?.enabled ?? false,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,

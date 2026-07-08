@@ -176,6 +176,16 @@ export class SessionService {
   private localSessionsCache = signal<SessionMetadata[]>([]);
 
   /**
+   * Optimistic read-watermark: sessionId → the `lastMessageAt` the user has
+   * locally acknowledged as read. Suppresses the server-driven `unread` dot
+   * the instant a session is opened, before `POST /read` round-trips and the
+   * next list refetch reflects `unread=false`. Keyed by `lastMessageAt` (not a
+   * bare id) so a *later* scheduled run — which advances `lastMessageAt` —
+   * correctly re-surfaces the dot instead of being permanently suppressed.
+   */
+  private readonly readWatermarks = signal<ReadonlyMap<string, string>>(new Map());
+
+  /**
    * Signal for the session ID used by the session metadata resource.
    * Update this signal to trigger a refetch with new session ID.
    * Set to null to disable the resource.
@@ -858,6 +868,26 @@ export class SessionService {
     });
   }
 
+  /**
+   * Applies a server-generated title everywhere the UI reads one: the
+   * sidebar list cache AND — when it's the session being viewed — the
+   * `currentSession` signal that drives the top-nav header.
+   *
+   * The cache→currentSession sync effect in the constructor only covers
+   * sessions still in `newSessionIds`, and `updateSessionTitleInCache`
+   * removes the id from that set before the effect can run — so callers
+   * that only update the cache never rename the header. The top-nav's
+   * inline-rename path patches `currentSession` itself for the same
+   * reason. Use this for titles arriving from the server (the mid-stream
+   * `session_title` SSE event and the post-stream metadata fallback).
+   */
+  applyServerTitle(sessionId: string, title: string): void {
+    this.updateSessionTitleInCache(sessionId, title);
+    if (this.currentSession().sessionId === sessionId) {
+      this.currentSession.update(current => ({ ...current, title }));
+    }
+  }
+
 
   /**
    * Clears the local session cache.
@@ -865,6 +895,87 @@ export class SessionService {
    */
   clearSessionCache(): void {
     this.localSessionsCache.set([]);
+  }
+
+  /**
+   * Reloads the session list from the API if loading is enabled. Called when
+   * the tab regains focus so a session that a scheduled (server-side) run left
+   * `unread` surfaces its dot without polling. No-op before auth is ready.
+   */
+  refreshSessions(): void {
+    if (this.sessionsRequest()) {
+      this.sessionsResource.reload();
+    }
+  }
+
+  /**
+   * Whether the session's current activity has been locally acknowledged as
+   * read (see `readWatermarks`). The session list uses this to suppress the
+   * server `unread` dot immediately on open, before the server round-trips.
+   */
+  isLocallyRead(session: SessionMetadata): boolean {
+    return this.readWatermarks().get(session.sessionId) === session.lastMessageAt;
+  }
+
+  /**
+   * Marks a session as read: clears the durable server-side `unread` flag via
+   * `POST /sessions/{id}/read`, and optimistically suppresses the dot locally
+   * (keyed to the activity being acknowledged) so it vanishes instantly.
+   * Best-effort — a failed POST leaves the durable flag set, so the dot simply
+   * re-appears on the next list load rather than being silently lost.
+   */
+  async markSessionRead(session: SessionMetadata): Promise<void> {
+    this.readWatermarks.update(watermarks => {
+      const next = new Map(watermarks);
+      next.set(session.sessionId, session.lastMessageAt);
+      return next;
+    });
+    this.syncCurrentSessionUnread(session.sessionId, false);
+
+    try {
+      await firstValueFrom(
+        this.http.post<void>(`${this.baseUrl()}/${session.sessionId}/read`, {})
+      );
+    } catch (error) {
+      console.error('Failed to mark session read:', error);
+    }
+  }
+
+  /**
+   * Marks a session as unread — the manual counterpart to `markSessionRead`.
+   * Lifts the local read-watermark (so the dot's server-side suppression is
+   * released), sets the durable flag via `POST /sessions/{id}/unread`, then
+   * refetches the list so the row carries `unread=true` and the sidebar dot
+   * returns. Best-effort — a failed POST leaves the flag clear, so the dot
+   * simply won't appear rather than being silently wrong.
+   */
+  async markSessionUnread(session: SessionMetadata): Promise<void> {
+    this.readWatermarks.update(watermarks => {
+      const next = new Map(watermarks);
+      next.delete(session.sessionId);
+      return next;
+    });
+    this.syncCurrentSessionUnread(session.sessionId, true);
+
+    try {
+      await firstValueFrom(
+        this.http.post<void>(`${this.baseUrl()}/${session.sessionId}/unread`, {})
+      );
+      // The dot reads off the list row's `unread` field — refetch so it flips.
+      this.refreshSessions();
+    } catch (error) {
+      console.error('Failed to mark session unread:', error);
+    }
+  }
+
+  /**
+   * Mirror an unread change onto `currentSession` when it's the active session,
+   * so a menu toggle keyed on `currentSession().unread` flips label instantly.
+   */
+  private syncCurrentSessionUnread(sessionId: string, unread: boolean): void {
+    if (this.currentSession().sessionId === sessionId) {
+      this.currentSession.update(current => ({ ...current, unread }));
+    }
   }
 
   constructor() {

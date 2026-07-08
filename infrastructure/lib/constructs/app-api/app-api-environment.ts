@@ -92,6 +92,9 @@ export interface AppApiSsmParams {
   sharedConversationsTableName: string;
   sharedConversationsTableArn: string;
   memoryId: string;
+  // Memory Spaces
+  memorySpacesTableName: string;
+  memorySpacesBucketName: string;
   // Workload identity
   workloadIdentityName: string;
 }
@@ -204,6 +207,9 @@ export function resolveAppApiParams(
     sharedConversationsTableName: refs.sharedConversationsTable.tableName,
     sharedConversationsTableArn: refs.sharedConversationsTable.tableArn,
     memoryId: overrides.memoryId,
+    // Memory Spaces
+    memorySpacesTableName: refs.memorySpacesTable.tableName,
+    memorySpacesBucketName: refs.memorySpacesBucket.bucketName,
     // Workload identity
     workloadIdentityName: refs.platformWorkloadIdentity.name,
   };
@@ -273,6 +279,23 @@ export function buildAppApiEnvironment(
       ? `https://${config.domainName}/`
       : 'http://localhost:4200/',
     INFERENCE_API_URL: params.inferenceApiRuntimeEndpointUrl,
+    // Kill switch for the headless "Run now" + headless-grant routes
+    // (scheduled-runs PR-1). Cohort access is RBAC (`scheduled-runs`
+    // capability); this only gates feature existence per environment.
+    SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
+    // Memory Spaces feature (default ON with a kill switch per env).
+    // The table/bucket names are always wired (the service reads them lazily);
+    // only MEMORY_SPACES_ENABLED gates whether the routes are mounted. Without
+    // these two, app-api falls back to the default "memory-spaces" name and
+    // every read 502s (ResourceNotFoundException). inference-api already sets
+    // the identical trio — app-api owns the CRUD surface, so it needs them too.
+    MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
+    DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
+    S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Kill switch for the Agent Designer /agents surface (default off per env).
+    // Gates only whether the routes 404; the assistant store it reads is always
+    // present, so no extra table/bucket wiring is needed here.
+    AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

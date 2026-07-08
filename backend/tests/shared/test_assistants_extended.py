@@ -125,3 +125,66 @@ class TestRAGServiceExtended:
         ]
         result = augment_prompt_with_context("Q?", chunks, max_context_length=80)
         assert "[Context 1]" in result
+
+
+class TestBumpLastUsedAt:
+    """KB-sync inactivity signal: throttled conditional write on METADATA."""
+
+    @pytest.fixture(autouse=True)
+    def _set_env(self, assistants_table, monkeypatch):
+        monkeypatch.setenv("S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME", "test-index")
+        self.table = assistants_table
+
+    async def _create(self):
+        from apis.shared.assistants.service import create_assistant
+        return await create_assistant(
+            owner_id="u1", owner_name="Alice", name="Bot",
+            description="d", instructions="hi",
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_bump_wins_and_stamps(self):
+        from apis.shared.assistants.service import bump_last_used_at
+        assistant = await self._create()
+
+        assert await bump_last_used_at(assistant.assistant_id) is True
+
+        item = self.table.get_item(
+            Key={"PK": f"AST#{assistant.assistant_id}", "SK": "METADATA"}
+        )["Item"]
+        assert "lastUsedAt" in item
+
+    @pytest.mark.asyncio
+    async def test_second_bump_within_throttle_loses(self):
+        from apis.shared.assistants.service import bump_last_used_at
+        assistant = await self._create()
+        assert await bump_last_used_at(assistant.assistant_id) is True
+
+        # Fresh stamp: concurrent chat turns must not stampede the row —
+        # only the caller that advances a stale timestamp gets True.
+        assert await bump_last_used_at(assistant.assistant_id) is False
+
+    @pytest.mark.asyncio
+    async def test_stale_stamp_bumps_again(self):
+        from apis.shared.assistants.service import bump_last_used_at
+        assistant = await self._create()
+        self.table.update_item(
+            Key={"PK": f"AST#{assistant.assistant_id}", "SK": "METADATA"},
+            UpdateExpression="SET lastUsedAt = :old",
+            ExpressionAttributeValues={":old": "2000-01-01T00:00:00+00:00Z"},
+        )
+
+        assert await bump_last_used_at(assistant.assistant_id) is True
+
+    @pytest.mark.asyncio
+    async def test_missing_assistant_returns_false(self):
+        from apis.shared.assistants.service import bump_last_used_at
+        # attribute_exists(PK) guard: a bump must never create a phantom row
+        assert await bump_last_used_at("ast-missing") is False
+        assert "Item" not in self.table.get_item(Key={"PK": "AST#ast-missing", "SK": "METADATA"})
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_table_returns_false(self, monkeypatch):
+        from apis.shared.assistants.service import bump_last_used_at
+        monkeypatch.delenv("DYNAMODB_ASSISTANTS_TABLE_NAME", raising=False)
+        assert await bump_last_used_at("ast-any") is False

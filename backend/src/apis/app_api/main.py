@@ -184,9 +184,11 @@ from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
+from apis.app_api.memory_spaces.routes import router as memory_spaces_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
+from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
@@ -194,11 +196,14 @@ from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.file_sources.routes import router as file_sources_router
 from apis.app_api.export_targets.routes import router as export_targets_router
 from apis.app_api.web_sources.routes import router as web_sources_router
+from apis.app_api.sync_policies.routes import router as sync_policies_router
 from apis.app_api.system.routes import router as system_router
 from apis.app_api.shares.routes import conversations_share_router, shares_router, shared_view_router
 from apis.app_api.voice import router as voice_router
 from apis.app_api.user_menu_links.routes import router as user_menu_links_router
 from apis.app_api.system_prompts.routes import router as system_prompts_router
+from apis.app_api.runs.routes import router as runs_router
+from apis.app_api.schedules.routes import router as schedules_router
 
 # Include routers
 app.include_router(health_router)
@@ -208,6 +213,7 @@ app.include_router(api_keys_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)
 app.include_router(assistants_router)
+app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
 app.include_router(documents_router)
 app.include_router(users_router)
 app.include_router(user_settings_router)
@@ -217,6 +223,7 @@ app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # Proxies to Inference API for cost accounting
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
+app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs
@@ -224,6 +231,7 @@ app.include_router(connectors_router)  # User-facing connector catalog + consent
 app.include_router(file_sources_router)  # File-source catalog + browse/search over connectors
 app.include_router(export_targets_router)  # Export-target catalog + save-a-conversation to a connector
 app.include_router(web_sources_router)  # Web-crawl ingestion: URL -> documents via BFS + S3 staging
+app.include_router(sync_policies_router)  # KB sync schedules: scheduled re-index of assistant sources
 app.include_router(system_router)  # System status and first-boot endpoints
 app.include_router(conversations_share_router)  # Share conversations endpoints
 app.include_router(shares_router)  # Share management (update, revoke, export)
@@ -231,6 +239,8 @@ app.include_router(shared_view_router)  # Shared conversation read-only view
 app.include_router(voice_router)  # Cookie-authenticated WS proxy for Nova Sonic voice mode (#211)
 app.include_router(user_menu_links_router)  # Public read of admin-managed user-menu links
 app.include_router(system_prompts_router)   # Public read of admin-managed system prompts
+app.include_router(runs_router)  # Headless "Run now" + grant lifecycle (scheduled-runs PR-1; SCHEDULED_RUNS_ENABLED + RBAC gated at runtime)
+app.include_router(schedules_router)  # Schedule CRUD (scheduled-runs B1; inert — SCHEDULED_RUNS_ENABLED + RBAC gated, nothing fires yet)
 
 # Conditionally register fine-tuning routes
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

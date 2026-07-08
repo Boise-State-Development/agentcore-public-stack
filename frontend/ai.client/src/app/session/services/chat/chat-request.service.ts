@@ -18,7 +18,6 @@ import {
   ToolApprovalService,
 } from '../../../services/tool-approval/tool-approval.service';
 import { ErrorService } from '../../../services/error/error.service';
-import { StreamParserService } from './stream-parser.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { HttpErrorResponse } from '@angular/common/http';
 
@@ -46,7 +45,6 @@ export class ChatRequestService implements OnDestroy {
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
-  private streamParserService = inject(StreamParserService);
   private errorService = inject(ErrorService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
@@ -74,12 +72,20 @@ export class ChatRequestService implements OnDestroy {
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
-    // Any new send (including a "Continue") retires the previous turn's
-    // max_tokens "Continue" affordance immediately, before the stream starts.
-    this.chatStateService.setLastTurnContinuable(false);
-
     const isNewSession = !sessionId;
     sessionId = sessionId || uuidv4();
+
+    // Any new send (including a "Continue") retires the previous turn's
+    // max_tokens "Continue" affordance and any interrupted-turn chip
+    // immediately, before the stream starts.
+    this.chatStateService.setLastTurnContinuable(sessionId, false);
+    this.chatStateService.setLastTurnInterrupted(sessionId, false);
+
+    // We're about to navigate to this session; point the viewed-session
+    // facades at it eagerly so the composer's loading state flips before
+    // the (async) route change lands.
+    this.chatStateService.setViewedSession(sessionId);
+    this.chatStateService.setChatLoading(sessionId, true);
 
     // If this is a new session, add it to the session cache optimistically
     // IMPORTANT: This must happen BEFORE navigation to prevent a race condition
@@ -111,21 +117,22 @@ export class ChatRequestService implements OnDestroy {
     // Start streaming for this conversation
     this.messageMapService.startStreaming(sessionId);
 
-    // Build and send request with file upload IDs and assistant ID
-    const requestObject = this.buildChatRequestObject(
-      userInput,
-      sessionId,
-      fileUploadIds,
-      assistantId,
-    );
-
     try {
+      // Build and send request with file upload IDs and assistant ID.
+      // Built inside the try so a synchronous failure (e.g. no model
+      // selected) still clears this session's loading state.
+      const requestObject = this.buildChatRequestObject(
+        userInput,
+        sessionId,
+        fileUploadIds,
+        assistantId,
+      );
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
       // TODO: Replace with proper logging service
       // logger.error('Chat request failed', { error, conversationId: sessionId });
-      this.chatStateService.setChatLoading(false);
-      this.messageMapService.endStreaming();
+      this.chatStateService.setChatLoading(sessionId, false);
+      this.messageMapService.endStreaming(sessionId);
       throw error; // Re-throw to allow caller to handle
     }
   }
@@ -147,8 +154,10 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    // Hide the affordance immediately; retire any stale continuable state.
-    this.chatStateService.setLastTurnContinuable(false);
+    // Hide the affordance immediately; retire any stale continuable /
+    // interrupted state (a Continue resumes the interrupted partial too).
+    this.chatStateService.setLastTurnContinuable(sessionId, false);
+    this.chatStateService.setLastTurnInterrupted(sessionId, false);
 
     // Continuation streaming: pins the existing messages (history +
     // truncated partial + error bubble) as a stable prefix and appends the
@@ -157,21 +166,21 @@ export class ChatRequestService implements OnDestroy {
     // resets the parser (with the correct starting count) so the resumed
     // stream is treated as a fresh batch.
     this.messageMapService.beginContinuationStreaming(sessionId);
-    this.chatStateService.createNewAbortController();
-    this.chatStateService.setChatLoading(true);
-
-    // Reuse the normal request shape so the backend rebuilds the same
-    // model/tools/assistant agent, but with an empty message and the
-    // continuation flag. No addUserMessage call → no user bubble.
-    const requestObject = this.buildChatRequestObject('', sessionId, undefined, assistantId);
-    requestObject['message'] = '';
-    requestObject['continue_truncated'] = true;
+    this.chatStateService.setChatLoading(sessionId, true);
 
     try {
+      // Reuse the normal request shape so the backend rebuilds the same
+      // model/tools/assistant agent, but with an empty message and the
+      // continuation flag. No addUserMessage call → no user bubble. Built
+      // inside the try so a synchronous failure clears loading state.
+      const requestObject = this.buildChatRequestObject('', sessionId, undefined, assistantId);
+      requestObject['message'] = '';
+      requestObject['continue_truncated'] = true;
+
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
-      this.chatStateService.setChatLoading(false);
-      this.messageMapService.endStreaming();
+      this.chatStateService.setChatLoading(sessionId, false);
+      this.messageMapService.endStreaming(sessionId);
       throw error;
     }
   }
@@ -288,13 +297,22 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    // Reset the parser so the resumed stream is treated as a fresh batch
-    // of events. Without this, the parser stays in Completed state from
-    // the prior `done` and ignores everything.
-    this.streamParserService.reset(sessionId);
-    this.messageMapService.startStreaming(sessionId);
-    this.chatStateService.createNewAbortController();
-    this.chatStateService.setChatLoading(true);
+    // A resume turn has NO new user message and the resumed stream does not
+    // replay the interrupted `tool_use` block (Strands emits only the
+    // `tool_result` + the final assistant text). Continuation streaming pins
+    // the existing messages — including the assistant message holding the
+    // paused tool card — as a stable prefix and appends the resume after
+    // them, instead of the normal sync which truncates back to the last user
+    // message and would discard the tool card. It also resets the parser
+    // (with the correct starting count) so the resumed stream is a fresh
+    // batch; without that the parser stays Completed from the prior `done`
+    // and ignores everything.
+    //
+    // Loading is keyed to the resumed session — the user may have navigated
+    // to a different conversation before completing the consent popup, and
+    // the resume must not hijack that conversation's composer.
+    this.messageMapService.beginContinuationStreaming(sessionId);
+    this.chatStateService.setChatLoading(sessionId, true);
 
     const resumeRequest: Record<string, unknown> = {
       session_id: sessionId,
@@ -313,9 +331,14 @@ export class ChatRequestService implements OnDestroy {
 
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
+      // The live parser could not attach the resumed `tool_result` to the
+      // paused tool card (its `tool_use` block is in the pinned prefix, not
+      // in the fresh parser). Reconcile from persisted memory so the card
+      // flips from "Running…" to its completed result.
+      await this.messageMapService.reloadMessagesForSession(sessionId);
     } catch (error) {
-      this.chatStateService.setChatLoading(false);
-      this.messageMapService.endStreaming();
+      this.chatStateService.setChatLoading(sessionId, false);
+      this.messageMapService.endStreaming(sessionId);
 
       // 400 from the resume route means either the persisted snapshot is
       // missing/expired, or the agent's `_interrupt_state` doesn't recognize
@@ -346,10 +369,13 @@ export class ChatRequestService implements OnDestroy {
       return;
     }
 
-    this.streamParserService.reset(sessionId);
-    this.messageMapService.startStreaming(sessionId);
-    this.chatStateService.createNewAbortController();
-    this.chatStateService.setChatLoading(true);
+    // Same shape as the OAuth resume: no new user message and the resumed
+    // stream carries only the `tool_result` + final text, not the paused
+    // `tool_use` block. Pin the existing messages (with the tool card) as a
+    // prefix and append the resume after them. Loading keyed to the resumed
+    // session (see resumeFromOAuthConsent).
+    this.messageMapService.beginContinuationStreaming(sessionId);
+    this.chatStateService.setChatLoading(sessionId, true);
 
     const resumeRequest: Record<string, unknown> = {
       session_id: sessionId,
@@ -364,9 +390,12 @@ export class ChatRequestService implements OnDestroy {
 
     try {
       await this.chatHttpService.sendChatRequest(resumeRequest);
+      // Reconcile from persisted memory so the approved/declined tool card
+      // shows its result (the live parser can't attach it — see above).
+      await this.messageMapService.reloadMessagesForSession(sessionId);
     } catch (error) {
-      this.chatStateService.setChatLoading(false);
-      this.messageMapService.endStreaming();
+      this.chatStateService.setChatLoading(sessionId, false);
+      this.messageMapService.endStreaming(sessionId);
 
       if (this.isExpiredInterruptError(error)) {
         this.errorService.addError(

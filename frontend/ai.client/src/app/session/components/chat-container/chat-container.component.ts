@@ -147,6 +147,25 @@ export class ChatContainerComponent {
   protected readonly showSkeleton = computed(
     () => this.isLoadingSession() && !this.hasMessages()
   );
+  /** The greeting/empty state (new chat, nothing loading). No top bar here. */
+  protected readonly isEmptyState = computed(
+    () =>
+      !this.showSkeleton() &&
+      !this.hasMessages() &&
+      this.resolvedConfig().showEmptyState
+  );
+  /**
+   * Whether the fixed top bar should render. Kept as a single computed so one
+   * persistent <app-topnav> spans the skeleton→loaded transition instead of
+   * remounting — a remount restarts the fixed wrapper's `left` transition,
+   * which reads as the whole bar sweeping across the screen.
+   */
+  protected readonly showChatTopnav = computed(
+    () =>
+      this.resolvedConfig().fullPageMode &&
+      this.resolvedConfig().showTopnav &&
+      !this.isEmptyState()
+  );
   protected readonly canCloseAssistant = computed(
     () =>
       this.resolvedConfig().allowCloseAssistant &&
@@ -168,6 +187,16 @@ export class ChatContainerComponent {
     // isSharedWithMe is true when the assistant belongs to someone else.
     return !a.isSharedWithMe;
   });
+
+  /**
+   * Anchor the latest user message at the top of the viewport. Exposed for
+   * the session page's navigation scroll policy (first open of a
+   * conversation lands on its latest turn, instantly); the composer submit
+   * path below uses the same anchor with smooth scrolling.
+   */
+  scrollToLastUserMessage(behavior: ScrollBehavior = 'smooth'): void {
+    this.messageListComponent()?.scrollToLastUserMessage(behavior);
+  }
 
   // Event handlers
   onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[] }) {

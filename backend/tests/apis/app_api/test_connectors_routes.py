@@ -405,55 +405,57 @@ class TestForceReauthLifecycle:
 
     def test_status_matches_initiate_consent_custom_parameters(self, app_with_deps):
         # AgentCore factors customParameters into whether get_resource_oauth2_token
-        # short-circuits to a vaulted token. Connector consent always runs through
-        # initiate_consent, which sends Google `prompt=consent`; a status read that
-        # omits it is treated as a fresh request and reports consent-required even
-        # when a usable token is vaulted. So /status MUST send the same
-        # customParameters initiate_consent uses.
+        # short-circuits to a vaulted token. Both /initiate-consent and /status
+        # forward the connector's configured customParameters verbatim, so the
+        # maps match and a usable vaulted token isn't mistaken for a fresh
+        # request that reports consent-required.
+        configured = {"access_type": "offline", "prompt": "consent"}
         app, identity, _ = app_with_deps(
             "alice",
-            provider=_make_provider(),  # default is OAuthProviderType.GOOGLE
+            provider=_make_provider(custom_parameters=configured),
             identity_result=TokenResult(access_token="vault-token"),
         )
         TestClient(app).get("/connectors/google/status")
 
         identity.get_token_for_user.assert_called_once()
-        assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
-            "access_type": "offline",
-            "prompt": "consent",
-        }
+        assert (
+            identity.get_token_for_user.call_args.kwargs["custom_parameters"]
+            == configured
+        )
 
-    def test_initiate_consent_forwards_google_access_type_offline_and_prompt_consent(
+    def test_initiate_consent_forwards_configured_custom_parameters(
         self, app_with_deps
     ):
-        # initiate_consent is a "walk me through consent" path, so for Google
-        # we always send `prompt=consent` (in addition to `access_type=offline`).
-        # Without it, Google sees a previously-consented user, skips the consent
-        # screen, and re-issues an access_token without a refresh_token —
+        # initiate_consent forwards the connector's configured customParameters
+        # verbatim. For a Google connector configured with access_type=offline
+        # + prompt=consent, that's exactly what reaches AgentCore — without
+        # prompt=consent Google skips the consent screen for a previously-
+        # consented user and re-issues an access token with no refresh token,
         # putting the user back in the hourly-reconsent loop.
+        configured = {"access_type": "offline", "prompt": "consent"}
         app, identity, _ = app_with_deps(
             "alice",
-            provider=_make_provider(),
+            provider=_make_provider(custom_parameters=configured),
             identity_result=TokenResult(access_token="vault-token"),
         )
         TestClient(app).post("/connectors/google/initiate-consent")
 
         identity.get_token_for_user.assert_called_once()
-        assert identity.get_token_for_user.call_args.kwargs["custom_parameters"] == {
-            "access_type": "offline",
-            "prompt": "consent",
-        }
+        assert (
+            identity.get_token_for_user.call_args.kwargs["custom_parameters"]
+            == configured
+        )
 
-    def test_admin_custom_parameters_merge_with_google_baseline(self, app_with_deps):
-        # Admin set Workspace domain restriction. The route must merge
-        # admin extras with the hardcoded baseline before forwarding to
-        # AgentCore — and the baseline still wins on key conflict.
+    def test_custom_parameters_forwarded_verbatim(self, app_with_deps):
+        # No hardcoded baseline is injected or allowed to override — the
+        # connector's configured params reach AgentCore exactly as the admin
+        # set them (including access_type=online, if that's their choice).
         app, identity, _ = app_with_deps(
             "alice",
             provider=_make_provider(
                 custom_parameters={
                     "hd": "mycompany.com",
-                    "access_type": "online",  # admin tries to override; ignored
+                    "access_type": "online",
                 },
             ),
             identity_result=TokenResult(access_token="vault-token"),
@@ -462,8 +464,7 @@ class TestForceReauthLifecycle:
 
         kwargs = identity.get_token_for_user.call_args.kwargs
         assert kwargs["custom_parameters"] == {
-            "access_type": "offline",  # baseline wins
-            "prompt": "consent",  # matches the consent flow's customParameters
+            "access_type": "online",
             "hd": "mycompany.com",
         }
 

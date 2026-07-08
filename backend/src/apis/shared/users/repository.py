@@ -11,6 +11,18 @@ from .models import UserProfile, UserListItem, UserStatus
 logger = logging.getLogger(__name__)
 
 
+def _heal_iso(value: str) -> str:
+    """Repair legacy ``…+00:00Z`` timestamps persisted before the sync fix.
+
+    Rows written by the old ``isoformat() + "Z"`` code carry both an offset and
+    a ``Z``, which is invalid ISO 8601 and parses to ``Invalid Date`` in strict
+    engines (Safari). ``last_login_at`` self-heals on next login, but
+    ``created_at`` is preserved forever — so normalize on read to a single
+    trailing ``Z`` (a no-op for already-valid values).
+    """
+    return value.replace("+00:00Z", "Z") if value else value
+
+
 class UserRepository:
     """DynamoDB repository for user operations.
 
@@ -289,7 +301,7 @@ class UserRepository:
 
     def _item_to_profile(self, item: dict) -> UserProfile:
         """Convert DynamoDB item to UserProfile."""
-        created_at = item.get("createdAt", "")
+        created_at = _heal_iso(item.get("createdAt", ""))
         return UserProfile(
             user_id=item["userId"],
             email=item["email"],
@@ -298,14 +310,14 @@ class UserRepository:
             picture=item.get("picture"),
             email_domain=item.get("emailDomain", ""),
             created_at=created_at,
-            last_login_at=item.get("lastLoginAt", created_at),
+            last_login_at=_heal_iso(item.get("lastLoginAt", "")) or created_at,
             status=item.get("status", "active")
         )
 
     def _item_to_list_item(self, item: dict) -> UserListItem:
         """Convert DynamoDB item to UserListItem."""
         # GSI queries may not project lastLoginAt, but GSI2SK/GSI3SK contain the same value
-        last_login = (
+        last_login = _heal_iso(
             item.get("lastLoginAt")
             or item.get("GSI3SK")  # StatusLoginIndex sort key
             or item.get("GSI2SK")  # EmailDomainIndex sort key

@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { provideHttpClient } from '@angular/common/http';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageMapService } from './message-map.service';
+import { StreamParserService } from '../chat/stream-parser.service';
 import { SessionService } from './session.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -98,6 +99,52 @@ describe('MessageMapService', () => {
     expect(messagesSignal()).toEqual(mockMessages);
   });
 
+  it('reloadMessagesForSession re-fetches even when messages already exist and does not flip loading state', async () => {
+    // Seed an existing (stale) message so the load guard would normally skip.
+    service.addUserMessage('session-reload', 'search');
+
+    // Server holds the authoritative post-resume state: the assistant's
+    // tool_use plus its matching tool_result (in a following user message).
+    const serverMessages = [
+      { id: 'msg-reload-0', role: 'user', content: [{ type: 'text', text: 'search' }] },
+      {
+        id: 'msg-reload-1',
+        role: 'assistant',
+        content: [
+          { type: 'toolUse', toolUse: { toolUseId: 'tu-1', name: 'search_messages', input: {} } },
+        ],
+      },
+      {
+        id: 'msg-reload-2',
+        role: 'user',
+        content: [
+          { type: 'toolResult', toolResult: { toolUseId: 'tu-1', status: 'success', content: [{ text: 'ok' }] } },
+        ],
+      },
+    ];
+    mockSessionService.getMessages.mockResolvedValue({ messages: serverMessages });
+
+    await service.reloadMessagesForSession('session-reload');
+
+    // Bypassed the "already loaded" guard and hit the API.
+    expect(mockSessionService.getMessages).toHaveBeenCalledWith('session-reload');
+    // Never surfaced the skeleton loading state during a live reconcile.
+    expect(service.isLoadingSession()).toBe(null);
+
+    // The tool_use card now carries its result (status flipped to complete).
+    const reloaded = service.getMessagesForSession('session-reload')();
+    const assistant = reloaded.find((m) => m.id === 'msg-reload-1')!;
+    const toolBlock = assistant.content[0] as any;
+    expect(toolBlock.toolUse.status).toBe('complete');
+    expect(toolBlock.toolUse.result).toBeDefined();
+  });
+
+  it('reloadMessagesForSession swallows fetch errors (best-effort reconcile)', async () => {
+    mockSessionService.getMessages.mockRejectedValue(new Error('API error'));
+    await expect(service.reloadMessagesForSession('session-reload-err')).resolves.toBeUndefined();
+    expect(service.isLoadingSession()).toBe(null);
+  });
+
   it('should hydrate pending OAuth interrupts from camelCase wire response', async () => {
     // Regression: backend serializes with by_alias=True so the wire payload uses
     // camelCase (pendingInterrupts, interruptId, providerId, ...). If the consumer
@@ -148,10 +195,60 @@ describe('MessageMapService', () => {
     // Verify session exists in map
     const messagesSignal = service.getMessagesForSession('session-1');
     expect(messagesSignal).toBeTruthy();
+    expect(service.isStreaming('session-1')).toBe(true);
 
-    service.endStreaming();
-    // Service should handle end streaming gracefully
-    expect(service).toBeTruthy();
+    service.endStreaming('session-1');
+    expect(service.isStreaming('session-1')).toBe(false);
+  });
+
+  it('syncs two concurrent streams into their own sessions', () => {
+    const parser = TestBed.inject(StreamParserService);
+
+    service.addUserMessage('conc-a', 'question A');
+    service.addUserMessage('conc-b', 'question B');
+
+    service.startStreaming('conc-a');
+    service.startStreaming('conc-b');
+
+    // Interleave the two sessions' SSE events, as two live fetches would.
+    parser.parseEventSourceMessage('conc-a', 'message_start', { role: 'assistant' });
+    parser.parseEventSourceMessage('conc-b', 'message_start', { role: 'assistant' });
+    parser.parseEventSourceMessage('conc-a', 'content_block_delta', {
+      contentBlockIndex: 0,
+      text: 'answer A',
+    });
+    parser.parseEventSourceMessage('conc-b', 'content_block_delta', {
+      contentBlockIndex: 0,
+      text: 'answer B',
+    });
+    parser.parseEventSourceMessage('conc-a', 'message_stop', { stopReason: 'end_turn' });
+    parser.parseEventSourceMessage('conc-b', 'message_stop', { stopReason: 'end_turn' });
+
+    // endStreaming performs the final imperative sync for its session only.
+    service.endStreaming('conc-a');
+    service.endStreaming('conc-b');
+
+    const aMessages = service.getMessagesForSession('conc-a')();
+    const bMessages = service.getMessagesForSession('conc-b')();
+
+    expect(aMessages.map(m => m.role)).toEqual(['user', 'assistant']);
+    expect(aMessages[1].content).toEqual([{ type: 'text', text: 'answer A' }]);
+    expect(bMessages.map(m => m.role)).toEqual(['user', 'assistant']);
+    expect(bMessages[1].content).toEqual([{ type: 'text', text: 'answer B' }]);
+  });
+
+  it('endStreaming for one session leaves another session streaming', () => {
+    service.startStreaming('conc-c');
+    service.startStreaming('conc-d');
+
+    service.endStreaming('conc-c');
+
+    expect(service.isStreaming('conc-c')).toBe(false);
+    expect(service.isStreaming('conc-d')).toBe(true);
+  });
+
+  it('endStreaming is a no-op for a session without an active stream', () => {
+    expect(() => service.endStreaming('never-streamed')).not.toThrow();
   });
 
   it('should clear session', () => {

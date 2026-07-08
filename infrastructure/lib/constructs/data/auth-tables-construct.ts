@@ -54,6 +54,18 @@ export class AuthTablesConstruct extends Construct {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
+    // HeadlessGrantUserIndex — sparse reverse lookup of headless-run grants
+    // by owner. Grant items (PK=HEADLESS-GRANT#{id}) are the only rows that
+    // carry `grant_user_id`, so ordinary session rows never project here.
+    // Backs apis/shared/harness/grants.py (scheduled-runs PR-1): the
+    // per-owner grant query that replaced the spike's full-table Scan.
+    this.bffSessionsTable.addGlobalSecondaryIndex({
+      indexName: 'HeadlessGrantUserIndex',
+      partitionKey: { name: 'grant_user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'created_at', type: dynamodb.AttributeType.NUMBER },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
 
 
     // Users Table - User profiles synced from JWT

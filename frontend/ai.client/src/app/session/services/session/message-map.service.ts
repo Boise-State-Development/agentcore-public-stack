@@ -1,5 +1,5 @@
 // services/message-map.service.ts (updated integration)
-import { Injectable, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
+import { EffectRef, Injectable, Injector, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
 import { ContentBlock, FileAttachmentData, Message } from '../models/message.model';
 import { StreamParserService } from '../chat/stream-parser.service';
 import { PendingInterrupt, SessionService } from './session.service';
@@ -20,18 +20,27 @@ interface MessageMap {
 })
 export class MessageMapService {
   private messageMap = signal<MessageMap>({});
-  private activeStreamSessionId = signal<string | null>(null);
 
   /**
-   * Continuation-after-max_tokens state. A "Continue" turn has NO new user
-   * message, so the normal sync (which truncates back to the last user
-   * message and replaces everything after it) would discard the truncated
-   * partial + error bubbles and show only the continuation. In continuation
-   * mode we instead pin a stable prefix (the messages that existed when the
-   * continuation started) and append the continuation stream after it.
+   * Sessions with an in-flight stream. Multiple conversations can stream
+   * concurrently — each one syncs its own parser state into its own map
+   * entry via a dedicated effect (see {@link createSyncEffect}).
    */
-  private continuationSessionId: string | null = null;
-  private continuationPrefix: Message[] = [];
+  private activeStreamSessions = signal<ReadonlySet<string>>(new Set());
+
+  /** One live sync effect per streaming session, torn down on endStreaming. */
+  private syncEffects = new Map<string, EffectRef>();
+
+  /**
+   * Continuation-after-max_tokens state, per session. A "Continue" turn has
+   * NO new user message, so the normal sync (which truncates back to the
+   * last user message and replaces everything after it) would discard the
+   * truncated partial + error bubbles and show only the continuation. In
+   * continuation mode we instead pin a stable prefix (the messages that
+   * existed when the continuation started) and append the continuation
+   * stream after it.
+   */
+  private continuationPrefixes = new Map<string, Message[]>();
 
   /**
    * Tracks which session is currently loading messages from the API.
@@ -59,29 +68,15 @@ export class MessageMapService {
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private mcpAppState = inject(McpAppStateService);
-
-  constructor() {
-    // Reactive effect: automatically sync streaming messages to the message map
-    effect(() => {
-      const sessionId = this.activeStreamSessionId();
-      const streamMessages = this.streamParser.allMessages();
-
-      if (sessionId && streamMessages.length > 0) {
-        this.syncStreamingMessages(sessionId, streamMessages);
-      }
-    });
-  }
+  private injector = inject(Injector);
 
   /**
    * Start streaming for a session.
    * Call this before beginning to parse SSE events.
    */
   startStreaming(sessionId: string): void {
-    this.activeStreamSessionId.set(sessionId);
-
     // A normal turn uses the standard (truncate-to-last-user) sync.
-    this.continuationSessionId = null;
-    this.continuationPrefix = [];
+    this.continuationPrefixes.delete(sessionId);
 
     // Get current message count for this session to enable predictable ID generation
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
@@ -90,13 +85,7 @@ export class MessageMapService {
     // Reset stream parser with session context for predictable message IDs
     this.streamParser.reset(sessionId, messageCount);
 
-    // Ensure the session exists in the map
-    if (!this.messageMap()[sessionId]) {
-      this.messageMap.update(map => ({
-        ...map,
-        [sessionId]: signal<Message[]>([])
-      }));
-    }
+    this.beginStreamTracking(sessionId);
   }
 
   /**
@@ -108,40 +97,79 @@ export class MessageMapService {
    * the continuation's message IDs follow the prefix instead of colliding.
    */
   beginContinuationStreaming(sessionId: string): void {
-    this.activeStreamSessionId.set(sessionId);
-
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
-    this.continuationSessionId = sessionId;
-    this.continuationPrefix = [...currentMessages];
+    this.continuationPrefixes.set(sessionId, [...currentMessages]);
 
     this.streamParser.reset(sessionId, currentMessages.length);
 
+    this.beginStreamTracking(sessionId);
+  }
+
+  /**
+   * End streaming for a session.
+   * Finalizes its messages and clears its streaming state. No-op when the
+   * session has no active stream (e.g. a superseded stream's late cleanup),
+   * so it can never tear down a newer stream for the same session.
+   */
+  endStreaming(sessionId: string): void {
+    if (!this.activeStreamSessions().has(sessionId)) {
+      return;
+    }
+
+    // Ensure final messages are synced (continuation merge still active
+    // here so the final flush keeps the pinned prefix).
+    const finalMessages = this.streamParser.allMessagesFor(sessionId)();
+    if (finalMessages.length > 0) {
+      this.syncStreamingMessages(sessionId, finalMessages);
+    }
+
+    this.syncEffects.get(sessionId)?.destroy();
+    this.syncEffects.delete(sessionId);
+    this.continuationPrefixes.delete(sessionId);
+    this.activeStreamSessions.update(set => {
+      const next = new Set(set);
+      next.delete(sessionId);
+      return next;
+    });
+  }
+
+  /** Whether a session currently has an in-flight stream. */
+  isStreaming(sessionId: string): boolean {
+    return this.activeStreamSessions().has(sessionId);
+  }
+
+  /**
+   * Mark a session as streaming, ensure its map entry exists, and attach
+   * its live parser→map sync effect. Idempotent per session.
+   */
+  private beginStreamTracking(sessionId: string): void {
+    this.activeStreamSessions.update(set => {
+      if (set.has(sessionId)) return set;
+      const next = new Set(set);
+      next.add(sessionId);
+      return next;
+    });
+
+    // Ensure the session exists in the map
     if (!this.messageMap()[sessionId]) {
       this.messageMap.update(map => ({
         ...map,
         [sessionId]: signal<Message[]>([])
       }));
     }
-  }
 
-  /**
-   * End streaming for the current session.
-   * Finalizes messages and clears streaming state.
-   */
-  endStreaming(): void {
-    const sessionId = this.activeStreamSessionId();
-    if (sessionId) {
-      // Ensure final messages are synced (continuation merge still active
-      // here so the final flush keeps the pinned prefix).
-      const finalMessages = this.streamParser.allMessages();
-      if (finalMessages.length > 0) {
-        this.syncStreamingMessages(sessionId, finalMessages);
-      }
+    // Reactive per-session effect: sync this stream's messages into this
+    // session's map entry. Each concurrent stream gets its own effect, so
+    // conversation A keeps updating while the user views conversation B.
+    if (!this.syncEffects.has(sessionId)) {
+      const ref = effect(() => {
+        const streamMessages = this.streamParser.allMessagesFor(sessionId)();
+        if (streamMessages.length > 0) {
+          this.syncStreamingMessages(sessionId, streamMessages);
+        }
+      }, { injector: this.injector });
+      this.syncEffects.set(sessionId, ref);
     }
-
-    this.activeStreamSessionId.set(null);
-    this.continuationSessionId = null;
-    this.continuationPrefix = [];
   }
 
   /**
@@ -264,8 +292,9 @@ export class MessageMapService {
       // started (history + truncated partial + error bubble) and append the
       // continuation stream after it. Rebuilt from the stable prefix every
       // tick so repeated syncs stay idempotent.
-      if (this.continuationSessionId === sessionId) {
-        return [...this.continuationPrefix, ...streamMessages];
+      const continuationPrefix = this.continuationPrefixes.get(sessionId);
+      if (continuationPrefix) {
+        return [...continuationPrefix, ...streamMessages];
       }
 
       // Find the index of the last user message
@@ -304,8 +333,48 @@ export class MessageMapService {
       return;
     }
 
-    // Set loading state for this session
-    this._isLoadingSession.set(sessionId);
+    try {
+      await this.fetchAndApplyMessages(sessionId, /* showLoading */ true);
+    } catch (error) {
+      console.error('Failed to load messages for session:', sessionId, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Force a re-fetch of a session's messages from the server, replacing the
+   * in-memory copy with the authoritative persisted state.
+   *
+   * Unlike {@link loadMessagesForSession} this bypasses the
+   * "already loaded" guard and does NOT flip the skeleton loading state, so
+   * it can reconcile a live thread without a visible flash. It is used after
+   * an interrupt resume (OAuth consent / tool approval): the resumed stream
+   * carries only the `tool_result` + the final assistant text — Strands does
+   * not replay the interrupted `tool_use` block — so the live parser can't
+   * attach the result to the paused tool card. Re-reading persisted memory
+   * (where the backend stored both the `tool_use` and its `tool_result`)
+   * flips the card from "Running…" to its completed result.
+   *
+   * Best-effort: a failure leaves the live-streamed state untouched rather
+   * than disrupting the UI.
+   */
+  async reloadMessagesForSession(sessionId: string): Promise<void> {
+    try {
+      await this.fetchAndApplyMessages(sessionId, /* showLoading */ false);
+    } catch (error) {
+      console.error('Failed to reload messages for session:', sessionId, error);
+    }
+  }
+
+  /**
+   * Fetch a session's messages + file metadata, reconstruct tool results and
+   * file attachments, and replace the message map entry. Shared by the
+   * initial load and the post-resume reconcile.
+   */
+  private async fetchAndApplyMessages(sessionId: string, showLoading: boolean): Promise<void> {
+    if (showLoading) {
+      this._isLoadingSession.set(sessionId);
+    }
 
     try {
       // Fetch messages and file metadata in parallel
@@ -351,12 +420,10 @@ export class MessageMapService {
       // session.page resets McpAppStateService before this load, so the
       // non-clobbering seed lands cleanly.
       this.mcpAppState.seedFromHydration(messagesResponse.uiResources ?? []);
-    } catch (error) {
-      console.error('Failed to load messages for session:', sessionId, error);
-      throw error;
     } finally {
-      // Clear loading state
-      this._isLoadingSession.set(null);
+      if (showLoading) {
+        this._isLoadingSession.set(null);
+      }
     }
   }
 
@@ -605,9 +672,12 @@ export class MessageMapService {
   }
 
   /**
-   * Clear all data for a session.
+   * Clear all data for a session, including any in-flight stream sync and
+   * its parser state.
    */
   clearSession(sessionId: string): void {
+    this.endStreaming(sessionId);
+    this.streamParser.clearSession(sessionId);
     this.messageMap.update(map => {
       const { [sessionId]: _, ...rest } = map;
       return rest;

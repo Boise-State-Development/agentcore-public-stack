@@ -45,6 +45,18 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       vectorDimension: 1024,
       vectorDistanceMetric: 'cosine',
     },
+    kbSync: {
+      enabled: false,
+    },
+    scheduledRuns: {
+      enabled: false,
+    },
+    memorySpaces: {
+      enabled: false,
+    },
+    agents: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,

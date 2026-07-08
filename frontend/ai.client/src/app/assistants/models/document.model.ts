@@ -52,6 +52,19 @@ export interface Document {
   chunkCount?: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Import provenance — set only for documents imported from an external
+   * source (Google Drive, web crawl); all null/absent for device uploads.
+   * A document is a syncable Drive source when `sourceFileId` is present
+   * and `sourceConnectorId` is a real connector (web pages use the
+   * sentinel connector id 'web' and sync at the crawl level instead).
+   */
+  sourceConnectorId?: string | null;
+  sourceAdapterKey?: string | null;
+  sourceFileId?: string | null;
+  /** Back-pointer to the covering sync policy, when one exists. */
+  syncPolicyId?: string | null;
+  lastSyncedAt?: string | null;
 }
 
 /**

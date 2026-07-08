@@ -341,6 +341,18 @@ export class InferenceAgentCoreConstruct extends Construct {
         // files at dispatch time; no code consumes it yet.
         S3_SKILL_RESOURCES_BUCKET_NAME: props.refs.skillResourcesBucket.bucketName,
 
+        // Memory Spaces storage. The runtime writes memory in a later PR
+        // (readwrite grant below); read by apis/shared/memory/*.
+        S3_MEMORY_SPACES_BUCKET_NAME: props.refs.memorySpacesBucket.bucketName,
+        DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
+        MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
+
+        // Agent Designer harness resolution (Phase 3): the runtime resolves an
+        // Agent's bindings + modelConfig at invocation. Gates that resolution;
+        // default off, mirrors the app-api flag. Without it the harness ignores
+        // bindings entirely (today's behavior).
+        AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
+
         // Authentication
         ENABLE_QUOTA_ENFORCEMENT: 'true',
 

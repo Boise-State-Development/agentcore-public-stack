@@ -176,6 +176,24 @@ export interface ArtifactEvent {
 }
 
 /**
+ * Session title event — pushed mid-stream on a session's FIRST turn once
+ * the backend's concurrent title generation (Nova Micro, kicked off
+ * alongside the agent stream) finishes. Lets the sidebar and top-nav
+ * rename the conversation while the response is still pending instead of
+ * at stream end.
+ *
+ * Best-effort by design: a stream that finishes before generation does
+ * never emits this event, and the SPA's post-close metadata refresh
+ * (ChatHttpService.refreshTitleFromServer) remains the fallback. Never
+ * carries the "New Conversation" placeholder.
+ */
+export interface SessionTitleEvent {
+  type: 'session_title';
+  sessionId: string;
+  title: string;
+}
+
+/**
  * CSP domain allowlists declared by an MCP App resource (SEP-1865
  * `McpUiResourceCsp`). The sandbox proxy composes the inner iframe's CSP
  * from these plus the spec's deny-by-default fallbacks.
@@ -310,7 +328,8 @@ export type StreamEventType =
   | 'compaction'
   | 'artifact'
   | 'ui_resource'
-  | 'ui_tool_input_partial';
+  | 'ui_tool_input_partial'
+  | 'session_title';
 
 /**
  * Union type of all possible event data types
@@ -335,6 +354,7 @@ export type StreamEventData =
   | ArtifactEvent
   | UiResourceEvent
   | ToolInputPartialEvent
+  | SessionTitleEvent
   | null
   | undefined;
 

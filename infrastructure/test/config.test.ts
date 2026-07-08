@@ -308,6 +308,121 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // KB Sync feature flag — default ON with a kill switch
+  // ============================================================
+
+  describe('KB Sync feature flag', () => {
+    test('defaults to enabled when CDK_KB_SYNC_ENABLED is unset', () => {
+      delete process.env.CDK_KB_SYNC_ENABLED;
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      // `${{ vars.CDK_KB_SYNC_ENABLED }}` renders to "" when the var is unset.
+      process.env.CDK_KB_SYNC_ENABLED = '';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('CDK_KB_SYNC_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_KB_SYNC_ENABLED = 'false';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(false);
+    });
+
+    test('CDK_KB_SYNC_ENABLED="true" stays enabled', () => {
+      process.env.CDK_KB_SYNC_ENABLED = 'true';
+
+      expect(loadConfig(app).kbSync.enabled).toBe(true);
+    });
+
+    test('cdk.json context kbSync.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_KB_SYNC_ENABLED;
+      app.node.setContext('kbSync', { enabled: false });
+
+      expect(loadConfig(app).kbSync.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Scheduled Runs feature flag — default ON with a kill switch
+  // (same ternary as kbSync; empty workflow var must not disable)
+  // ============================================================
+
+  describe('Scheduled Runs feature flag', () => {
+    test('defaults to enabled when CDK_SCHEDULED_RUNS_ENABLED is unset', () => {
+      delete process.env.CDK_SCHEDULED_RUNS_ENABLED;
+
+      expect(loadConfig(app).scheduledRuns.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      // `${{ vars.CDK_SCHEDULED_RUNS_ENABLED }}` renders to "" when unset.
+      process.env.CDK_SCHEDULED_RUNS_ENABLED = '';
+
+      expect(loadConfig(app).scheduledRuns.enabled).toBe(true);
+    });
+
+    test('CDK_SCHEDULED_RUNS_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_SCHEDULED_RUNS_ENABLED = 'false';
+
+      expect(loadConfig(app).scheduledRuns.enabled).toBe(false);
+    });
+
+    test('CDK_SCHEDULED_RUNS_ENABLED="true" stays enabled', () => {
+      process.env.CDK_SCHEDULED_RUNS_ENABLED = 'true';
+
+      expect(loadConfig(app).scheduledRuns.enabled).toBe(true);
+    });
+
+    test('cdk.json context scheduledRuns.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_SCHEDULED_RUNS_ENABLED;
+      app.node.setContext('scheduledRuns', { enabled: false });
+
+      expect(loadConfig(app).scheduledRuns.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Memory Spaces feature flag — default ON with a kill switch
+  // (complete feature; ships enabled for forkers, empty var must not disable)
+  // ============================================================
+
+  describe('Memory Spaces feature flag', () => {
+    test('defaults to enabled when CDK_MEMORY_SPACES_ENABLED is unset', () => {
+      delete process.env.CDK_MEMORY_SPACES_ENABLED;
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = '';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('CDK_MEMORY_SPACES_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = 'false';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(false);
+    });
+
+    test('CDK_MEMORY_SPACES_ENABLED="true" stays enabled', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = 'true';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('cdk.json context memorySpaces.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_MEMORY_SPACES_ENABLED;
+      app.node.setContext('memorySpaces', { enabled: false });
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Configuration Validation Tests
   // ============================================================
 

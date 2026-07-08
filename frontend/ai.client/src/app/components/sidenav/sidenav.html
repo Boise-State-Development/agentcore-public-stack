@@ -45,6 +45,57 @@
             </div>
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assistants</span>
         </a>
+
+        <!-- Agents (Agent Designer — preview: system-admin only, plus the accessibility probe) -->
+        @if (showAgents() && isAdmin()) {
+            <a
+                routerLink="/agents"
+                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                (click)="sidenavService.close()"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
+            </a>
+        }
+
+        <!-- Memory Spaces (preview: system-admin only, plus the accessibility probe) -->
+        @if (showMemorySpaces() && isAdmin()) {
+            <a
+                routerLink="/memory-spaces"
+                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                (click)="sidenavService.close()"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Memory Spaces</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
+            </a>
+        }
+
+        <!-- Scheduled runs (preview: system-admin only, plus the capability gate) -->
+        @if (showSchedules() && isAdmin()) {
+            <a
+                routerLink="/schedules"
+                routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                (click)="sidenavService.close()"
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
+                </div>
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Scheduled Runs</span>
+                <span class="ml-auto rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold uppercase leading-4 tracking-wide text-amber-700 dark:bg-amber-400/15 dark:text-amber-300">Preview</span>
+            </a>
+        }
     </div>
 
     <nav class="flex-1 overflow-y-auto px-3 pb-4">

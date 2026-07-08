@@ -87,6 +87,25 @@ export class WebSourceService {
     }
   }
 
+  /**
+   * List every crawl for an assistant regardless of status. Completed
+   * crawls are the syncable web sources — a web_crawl sync policy's
+   * source is the terminal CrawlJob row.
+   */
+  async listCrawls(assistantId: string): Promise<CrawlJob[]> {
+    try {
+      const response = await firstValueFrom(
+        this.http.get<ActiveCrawlsResponse>(
+          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawls`,
+          this.requestOptions(),
+        ),
+      );
+      return response.crawls;
+    } catch (err) {
+      throw this.toError(err, 'Failed to load web sources');
+    }
+  }
+
   private toError(err: unknown, fallback: string): WebSourceError {
     if (err instanceof HttpErrorResponse) {
       const detail =

@@ -26,7 +26,7 @@ from apis.shared.errors import (
     ErrorCode,
     build_conversational_error_event,
 )
-from apis.shared.feature_flags import skills_enabled
+from apis.shared.feature_flags import agents_enabled, skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
@@ -41,6 +41,10 @@ from apis.shared.quota import (
 )
 
 from apis.shared.rbac.service import get_app_role_service
+from apis.inference_api.chat.agent_binding_resolver import (
+    AgentBindingBlockedError,
+    resolve_agent_invocation,
+)
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -400,6 +404,36 @@ def _build_artifact_tools(
     return tools
 
 
+def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
+    """Context-bound Memory-Space tools for an Agent's resolved memory binding.
+
+    ``agent_memory`` is the resolver's ``ResolvedMemoryBinding`` (or ``None``). No binding
+    → no tools. Read tools (list + read) are always exposed; the write tool only when the
+    binding grants ``readwrite`` — and the service re-checks ``editor+`` on every call, so
+    this is a UX gate, not the security boundary. Not gated on ``enabled_tools``: the
+    governing capability is the Agent's binding, not the user's tool picker.
+    """
+    if agent_memory is None:
+        return []
+
+    from agents.builtin_tools.memory_spaces import (
+        make_memory_list_tool,
+        make_memory_read_tool,
+        make_memory_write_tool,
+    )
+
+    space_id, space_name = agent_memory.space_id, agent_memory.space_name
+    tools = [
+        make_memory_list_tool(space_id, space_name, user_id, user_email),
+        make_memory_read_tool(space_id, space_name, user_id, user_email),
+    ]
+    if agent_memory.access == "readwrite":
+        tools.append(make_memory_write_tool(space_id, space_name, user_id, user_email))
+
+    logger.info(f"Created {len(tools)} memory-space tools for bound space")
+    return tools
+
+
 # ============================================================
 # Attachment Partitioning (#206)
 # ============================================================
@@ -494,6 +528,44 @@ def _build_attachment_guidance(
         )
 
     return "\n\n".join(parts)
+
+
+def _build_interruption_note(reason: str) -> str:
+    """Reason-driven note prepended to the next turn's prompt when the prior
+    turn was interrupted (see `clear_interrupted_turn`, whose popped reason
+    feeds this).
+
+    Why the note lives HERE and not on the interrupted turn itself: the
+    reason is not knowable at cancellation time — the client's `user_stopped`
+    signal (app-api) races the server-side cancellation backstop
+    (inference-api), and precedence only settles in the session record. By
+    the next turn the marker is authoritative.
+
+    The two reasons carry opposite signal, so the guidance differs:
+    `user_stopped` is deliberate feedback (don't barrel onward);
+    `connection_lost` (or unclassified) is a technical drop (the user likely
+    still wants the answer). The note is prepended to the persisted user
+    message (the `original_message`/displayText split keeps it out of the
+    UI), so it remains an honest in-history record that ages out via
+    compaction rather than a permanent synthetic system turn.
+    """
+    if reason == "user_stopped":
+        guidance = (
+            "The user deliberately stopped your previous response before it "
+            "finished (the last assistant message above is the partial that "
+            "was delivered). Treat that as meaningful feedback — do not "
+            "resume or repeat it on your own; let the user's message below "
+            "set the direction."
+        )
+    else:  # connection_lost / unknown — technical drop, no user intent
+        guidance = (
+            "Your previous response was cut off by a connection interruption "
+            "— the user did not stop it deliberately (the last assistant "
+            "message above is the partial that was delivered). If the user "
+            "asks you to continue, pick up where it left off instead of "
+            "starting over."
+        )
+    return f"<interruption_note>\n{guidance}\n</interruption_note>"
 
 
 async def _build_tabular_inventory(
@@ -1002,6 +1074,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # turn that isn't an interrupt-resume — both a fresh turn and a
     # continuation supersede it. If a continuation itself re-truncates, the
     # stream_coordinator intercept re-sets the marker.
+    interrupted_turn_reason: Optional[str] = None
     if not is_resume:
         try:
             from apis.shared.sessions.metadata import clear_truncated_turn
@@ -1009,12 +1082,28 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         except Exception as e:
             logger.error("Failed to clear stale truncated_turn on new turn: %s", e, exc_info=True)
 
+        # Same lifecycle for the interrupted-turn marker: any new non-resume
+        # turn supersedes a prior interruption, so a stale marker can't
+        # resurrect the "response interrupted" state against a turn the user
+        # has moved past. The pop returns the settled reason (user_stopped
+        # beats connection_lost via write precedence) so this same read+write
+        # also drives the one-turn interruption note prepended to the prompt
+        # in the stream generator below.
+        try:
+            from apis.shared.sessions.metadata import clear_interrupted_turn
+            interrupted_turn_reason = await clear_interrupted_turn(input_data.session_id, user_id)
+        except Exception as e:
+            logger.error("Failed to clear stale interrupted_turn on new turn: %s", e, exc_info=True)
+
     # First turn → kick off title generation concurrently with the stream.
     # Runs as a background task so it doesn't add latency to TTFT. The
     # targeted UpdateExpression in update_session_title is race-safe with
-    # the post-stream _update_session_metadata write.
+    # the post-stream _update_session_metadata write. The task handle is
+    # kept so stream_with_quota_warning can push the finished title to the
+    # client mid-stream as a `session_title` SSE event.
+    title_task: Optional["asyncio.Task[str]"] = None
     if is_new_session and input_data.message:
-        asyncio.create_task(
+        title_task = asyncio.create_task(
             generate_conversation_title(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -1079,6 +1168,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     context_chunks = None
     augmented_message = input_data.message
     system_prompt = input_data.system_prompt  # Start with provided system prompt
+    # Agent Designer Phase 3: governed capabilities resolved per invoking user
+    # (D5). None ⇒ resolve exactly as today. Set in the assistant block below,
+    # consumed at model resolution / prompt assembly; None on resume/continuation.
+    agent_model_override = None
+    agent_memory = None
+    # Agent Designer: an Agent's ``tool`` bindings, resolved per invoker (D5), replace
+    # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
+    # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
+    agent_tools_override = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1183,6 +1281,45 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         if assistant.owner_id != user_id:
             await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
 
+        # KB sync inactivity signal: any user's chat use counts. Throttled
+        # to one write/day inside bump_last_used_at (conditional update);
+        # the winning bump also wakes any inactivity-paused sync policies.
+        # Best-effort — a bookkeeping failure must never break a chat turn.
+        try:
+            from apis.shared.assistants.service import bump_last_used_at
+            from apis.shared.sync_policies.service import resume_inactive_policies
+
+            if await bump_last_used_at(input_data.rag_assistant_id):
+                await resume_inactive_policies(input_data.rag_assistant_id)
+        except Exception as bump_err:
+            logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+
+        # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
+        # for the INVOKING user (D5), before the expensive KB search. v1 blocks
+        # with a conversational message when the invoker lacks a required model.
+        if agents_enabled():
+            try:
+                agent_plan = await resolve_agent_invocation(assistant, current_user)
+                agent_model_override = agent_plan.model_override
+                agent_memory = agent_plan.memory
+                agent_tools_override = agent_plan.tools
+            except AgentBindingBlockedError as block:
+                blocked_event = ConversationalErrorEvent(
+                    code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
+                )
+                return StreamingResponse(
+                    stream_conversational_message(
+                        message=block.message,
+                        stop_reason="error",
+                        metadata_event=blocked_event,
+                        session_id=input_data.session_id,
+                        user_id=user_id,
+                        user_input=input_data.message,
+                    ),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
+                )
+
         # 3. Search assistant knowledge base
         logger.info("Starting knowledge base search for assistant...")
         try:
@@ -1247,6 +1384,31 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             logger.info(
                 "Assistant has no instructions - using fallback system prompt"
             )
+
+        # 5b. Agent Designer Phase 3: inject the bound Memory Space content (read-only)
+        # after instructions, in either branch. Hydration re-reads via the invoker
+        # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
+        if agent_memory is not None:
+            from apis.shared.memory.hydration import render_memory_block, resolve_always_load
+            from apis.shared.memory.service import MemorySpaceService
+
+            try:
+                fragments = await asyncio.to_thread(
+                    resolve_always_load,
+                    MemorySpaceService(),
+                    agent_memory.space_id,
+                    user_id,
+                    current_user.email,
+                    agent_memory.always_load,
+                )
+                memory_block = render_memory_block(agent_memory.space_name, fragments)
+                if memory_block:
+                    system_prompt = f"{system_prompt}\n\n{memory_block}" if system_prompt else memory_block
+                    logger.info("Injected bound Memory Space content into system prompt")
+            except Exception:
+                # Never fail a turn on a memory-read hiccup — the permission was already
+                # resolved; injection is best-effort context.
+                logger.error("Failed to hydrate bound Memory Space; continuing", exc_info=True)
 
         # 6. Save assistant_id to session preferences (persist for future loads)
         # Skip persistence for preview sessions
@@ -1418,6 +1580,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # saved preference is silently ignored at chat time (#161).
             effective_model_id = input_data.model_id
             effective_provider = input_data.provider
+            if agent_model_override is not None:
+                # The Agent's governed modelConfig wins over the request / user-default
+                # chain. Already access-checked against the invoker in the resolver (R2),
+                # so the earlier request-only gate at the top doesn't leave a hole.
+                effective_model_id = agent_model_override.model_id
+                effective_provider = agent_model_override.provider or effective_provider
             if not effective_model_id:
                 user_default_id, user_default_provider = await _resolve_user_default_model(user_id)
                 if user_default_id:
@@ -1435,6 +1603,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         logger.info(
                             "User default model exists but RBAC denies access; falling back to system default"
                         )
+
+            # Agent-authored params sit as defaults BENEATH explicit request params,
+            # then flow through _resolve_model_settings' admin bounds/locks like any
+            # other request params — an author can't smuggle out-of-bounds values.
+            if agent_model_override is not None and agent_model_override.params:
+                request_inference_params = {**agent_model_override.params, **request_inference_params}
 
             # Single registry lookup resolves caching + inference params +
             # the Mantle endpoint path, merging admin defaults with request
@@ -1458,22 +1632,36 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # keeps the assistant id in the URL for the whole session's
             # lifetime, so we can trust `input_data.rag_assistant_id`
             # directly; no preferences fallback needed.
+            # An Agent's tool bindings replace the request's enabled_tools for this
+            # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
+            # request drives the toolset exactly as today. Drives both the built-in
+            # extra tools (spreadsheet/artifact gate on specific ids) and get_agent.
+            effective_enabled_tools = (
+                agent_tools_override.tool_ids
+                if agent_tools_override is not None
+                else input_data.enabled_tools
+            )
+
             extra_tools = _build_spreadsheet_tools(
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 assistant_id=input_data.rag_assistant_id,
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_artifact_tools(
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
+            ) + _build_memory_tools(
+                agent_memory=agent_memory,
+                user_id=user_id,
+                user_email=current_user.email,
             )
 
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
                 auth_token=auth_token,
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 model_id=effective_model_id,
                 system_prompt=system_prompt,  # Use assistant's instructions if available
                 caching_enabled=caching_enabled,
@@ -1525,6 +1713,36 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # Create stream with optional quota warning injection
         async def stream_with_quota_warning() -> AsyncGenerator[str, None]:
             """Wrap agent stream to inject quota warning at start if needed"""
+            # One-shot `session_title` SSE: once the concurrent title task
+            # (kicked off before the quota check on first turns) finishes,
+            # push the title to the client so the sidebar/header rename in
+            # parallel with the pending response instead of at stream end.
+            # Checked between agent events — never awaited, so it adds no
+            # latency; a stream that outruns Nova Micro simply never emits
+            # and the SPA's post-close metadata refresh covers it.
+            title_emitted = False
+
+            def _session_title_sse() -> Optional[str]:
+                nonlocal title_emitted
+                if title_emitted or title_task is None or not title_task.done():
+                    return None
+                title_emitted = True
+                try:
+                    generated_title = title_task.result()
+                except Exception as title_err:  # noqa: BLE001 - cancelled/failed task must not break the stream
+                    logger.warning("Title task unavailable for SSE emit: %s", title_err)
+                    return None
+                # Generation failures return the "New Conversation"
+                # placeholder — nothing worth pushing over the wire.
+                if not generated_title or generated_title == "New Conversation":
+                    return None
+                payload = {
+                    "type": "session_title",
+                    "sessionId": input_data.session_id,
+                    "title": generated_title,
+                }
+                return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
+
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
@@ -1547,7 +1765,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
             attachment_guidance = _build_attachment_guidance(
-                diverted_tabular, oversized_inline, input_data.enabled_tools
+                diverted_tabular, oversized_inline, effective_enabled_tools
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -1555,7 +1773,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             tabular_inventory = await _build_tabular_inventory(
                 session_id=input_data.session_id,
                 assistant_id=input_data.rag_assistant_id,
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
             )
             # Bind to a new local so we don't trip Python's local-scope rules
             # inside this generator closure (augmented_message is defined in
@@ -1578,6 +1796,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 pending_ctx_block = merge_and_clear_pending_context(agent)
                 if pending_ctx_block:
                     final_message = f"{pending_ctx_block}\n\n{final_message}"
+
+                # Interrupted-turn context: the prior turn ended early (Stop /
+                # refresh / dropped connection) and its marker was popped at
+                # turn start — tell the model, with reason-appropriate
+                # guidance, before it reads the new message. Prepended last so
+                # the note sits topmost. Rides the same `original_message`
+                # displayText split as the ctx block, so the user never sees
+                # it while it stays an honest part of persisted history.
+                # Continuation turns skip this (Strands ignores the message
+                # there — the model just continues the persisted partial).
+                if interrupted_turn_reason:
+                    final_message = (
+                        f"{_build_interruption_note(interrupted_turn_reason)}\n\n{final_message}"
+                    )
 
             message_will_be_modified = (
                 final_message != input_data.message  # RAG augmentation / attachment guidance / inventory
@@ -1603,6 +1835,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 continue_truncated=is_continuation,
             ):
                 yield event
+                # Interleave the finished title between agent events (same
+                # non-blocking drain pattern as the MCP Apps broker in the
+                # stream coordinator). SSE events are self-delimited, so
+                # injecting between events is always frame-safe.
+                title_sse = _session_title_sse()
+                if title_sse:
+                    yield title_sse
 
             # Resume bookkeeping: any interrupt that was submitted in this
             # request and is no longer present in the agent's interrupt state

@@ -13,7 +13,8 @@ export interface CostTrackingTablesConstructProps {
  * and the admin cost dashboard.
  *
  *   - SessionsMetadataTable  — message-level metadata for cost tracking
- *                              (UserTimestampIndex + SessionLookupIndex)
+ *                              (UserTimestampIndex + SessionLookupIndex +
+ *                              DueScheduleIndex — sparse, scheduled-runs B1)
  *   - UserCostSummaryTable   — pre-aggregated user-level cost summaries
  *                              (PeriodCostIndex enables top-N queries)
  *   - SystemCostRollupTable  — pre-aggregated system-wide metrics
@@ -62,6 +63,20 @@ export class CostTrackingTablesConstruct extends Construct {
       indexName: 'SessionLookupIndex',
       partitionKey: { name: 'GSI_PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'GSI_SK', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // DueScheduleIndex — sparse due-sweep index for scheduled prompts
+    // (scheduled-runs B1: apis/shared/scheduled_prompts). GSI3 keys exist
+    // only while a ScheduledPrompt's state == "active"; pausing/deleting a
+    // schedule removes it from this index (mirrors DueSyncIndex/GSI4 on
+    // the RAG assistants table). Distinct GSI3_PK/GSI3_SK attribute names
+    // avoid colliding with SessionLookupIndex's GSI_PK/GSI_SK, which
+    // ordinary session rows already use.
+    this.sessionsMetadataTable.addGlobalSecondaryIndex({
+      indexName: 'DueScheduleIndex',
+      partitionKey: { name: 'GSI3_PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI3_SK', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
