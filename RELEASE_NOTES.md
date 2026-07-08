@@ -1,3 +1,194 @@
+# Release Notes — v1.1.0
+
+**Release Date:** July 8, 2026
+**Previous Release:** v1.0.4 (July 1, 2026)
+
+---
+
+> 🏗️ **This release adds new AWS infrastructure** (a dedicated Memory Spaces table + bucket, two new Lambda images, and several GSIs), so it ships through the **platform (CDK)** pipeline, not the API-only backend path. There is no data migration and no breaking change — existing deployments upgrade in place. See the Deployment notes at the end of this entry.
+
+---
+
+## Highlights
+
+v1.1.0 is the platform's first **feature** release since the 1.0 line, turning AgentCore from a reactive chat surface into an **agentic platform**. It lands four new capabilities on shared, RBAC-governed primitives:
+
+- **Scheduled Runs** — agents that run *unattended* on a cadence (or on demand) and deliver a session you can read later.
+- **Memory Spaces** — named, templated, shareable markdown "second brains" you fully own (export the whole thing as a `.zip`).
+- **Agent Designer** — an authoring surface that composes an Agent from governed primitives (model, tools, skills, knowledge bases, Memory Spaces).
+- **Knowledge Base Sync** — assistant knowledge sources (Google Drive + web crawls) that re-index themselves on a schedule.
+
+Alongside them is a **chat/session UX overhaul**: streaming is now isolated per conversation (concurrent chats no longer stomp each other), stopped or dropped turns persist their partial reply and cost, session titles stream in mid-response, and the top-nav gains a session-options menu and an active-assistant pill.
+
+Everything new is flag-gated and back-compatible. **Scheduled Runs, Memory Spaces, and KB Sync default on; the Agent Designer defaults off.** The three preview surfaces (Agents, Memory Spaces, Scheduled Runs) are gated to system-admins and marked with a "Preview" badge while they mature. **Operators must run a platform (CDK) deploy** for the new resources — see the deployment notes.
+
+---
+
+## Scheduled Runs
+
+Agents can now run **without a person watching** — on a schedule you set (daily, on weekdays, weekly, or every *N* minutes/hours) or on demand via "Run now." A run executes one agent turn as the owner, with the owner's RBAC, and delivers the result as a normal session that shows an unread dot in the sidebar until you open it. This is the keystone of the proactive-agent effort (F1–F3 in the primitives plan).
+
+The hard problem was **unattended auth**: a headless run has no live user session to sign requests. The chosen path is an explicit, revocable *headless-grant* record created when a user enables scheduled runs from an attended session; the worker mints a per-owner Cognito bearer from it at fire time (the workload-token and SigV4 front-door paths were both proven dead at the runtime gateway during the F1 spike).
+
+### Backend
+
+- `apis/shared/harness/` — `run_agent_headless()` mints a per-owner Cognito bearer, drives the runtime's `/invocations` endpoint, drains the SSE stream server-side, and lets the runtime materialize + title the delivered session. Ships with an audit-only, fail-closed governance floor and wired no-op guardrail/classification seams (#560, #561).
+- `apis/shared/harness/grants.py` — headless-grant lifecycle: create-on-enable, per-owner lookup via the sparse `HeadlessGrantUserIndex`, rotation-aware minting (a rotated refresh token is persisted before the mint returns), and revocation that deletes the stored credential. TTL is anchored to the login that issued the pinned refresh token ("must have logged in within 30 days") (#561).
+- `apis/shared/scheduled_prompts/` + `apis/app_api/runs/` and `.../schedules/` — `ScheduledPrompt` model and service (cadence → `next_run_at` computed timezone-aware), CRUD under `/schedules`, and the `/runs/now` + `/runs/grant` surfaces. Gated by the `SCHEDULED_RUNS_ENABLED` kill switch **and** a new `scheduled-runs` RBAC capability resolved through the mature tools grant axis (#561, #563, #578).
+- Dispatcher + worker (`rate(5m)` EventBridge → sweep the sparse `DueScheduleIndex` → runaway guard → conditional re-arm → fire-and-forget → per-owner mint → `run_agent_headless(trigger="schedule")` → record outcome, pausing on `reauth_required` / `oauth_required` / repeated failures). A persistent `consecutive_failures` counter trips the breaker at the production default of 3 (#565).
+- **Security:** client-supplied `enabled_tools` is intersected with the caller's resolved RBAC grant at schedule create, schedule update, and Run-now (`AppRoleService.filter_requested_tools`), so a scheduled run can never persist a tool outside the owner's role (#568). Schedule edits gained explicit `clearAssistant` / `clearTools` flags so a `null` no longer silently reads as "leave unchanged" (#569).
+
+### Frontend
+
+- `frontend/ai.client/src/app/schedules/` — a signal-based list/create/edit page (bounded cadence UI + IANA timezone, optional assistant + tool snapshot, pause/resume/delete with confirm), the enablement UX (status banner, "Enable scheduled runs", reauth affordances), and "Run now" wired to a new app-wide `BackgroundTaskService` + toast component mounted in `app.html` (#564, #578).
+- The "Scheduled Runs" nav entry is gated to system-admins (`showSchedules() && isAdmin()`) and carries a "Preview" badge (#574, #600).
+- Delivered runs surface an unread dot (durable server flag ORed with the in-tab signal); the session menus gained a Mark-as-read / Mark-as-unread toggle (#572, #577).
+
+### Infrastructure
+
+- Two new sparse GSIs on the sessions-metadata table — `DueScheduleIndex` (projected only while a schedule is active) and `HeadlessGrantUserIndex` (only `HEADLESS-GRANT#` items carry the partition attribute). App-api's existing table grant already covers `index/*`, so no IAM change was needed for the schedule surface (#561, #563).
+- `backend/Dockerfile.scheduled-runs` — a lean dispatcher+worker image (no ML deps) sharing one image via `ImageConfig.Command`, deployed via the platform-as-bootstrap pattern. Worker IAM scoped to sessions-metadata RW, the grant table, app-client secret read, and AgentCore vault token + oauth-secret read (#565).
+
+### Test Coverage
+
+Backend resolver/route/harness suites (schedule CRUD, cadence math, RBAC intersection, grant lifecycle, audit fail-closed ordering, MockTransport stream outcomes) plus an AST guard asserting the lean image never imports `agents`/`strands`; frontend schedule-form, run-now, and background-task specs.
+
+---
+
+## Memory Spaces
+
+Memory Spaces are named, first-class **markdown wikis** — a `MEMORY.md` index plus typed entries (entity / episodic / fact) — that a user owns, templates from, and shares. They're the bindable memory primitive behind the "Oliver / Chief-of-Staff" use case, but generalized: any user can create one, and any Agent can bind one. The headline ownership property is a **loss-free `.zip` export** of the entire space (structure preserved, re-importable), so there is zero lock-in.
+
+### Backend
+
+- `apis/shared/memory/` — an S3 content-addressed byte store (sibling of the skills store); `MemorySpace` / `MemoryIndex` / `MemoryEntryRef` / `SpaceMember` models; Blank / Chief-of-Staff / Research-Notebook templates; a dedicated memory-spaces table repository (META/INDEX/MEMBER rows, Decimal-safe); and a permission-gated service whose `resolve_permission` chokepoint enforces viewer-reads / editor-writes / owner-shares-and-deletes with content-addressed writes and GC-on-replace (#582).
+- `apis/app_api/memory_spaces/` — `/memory/spaces` CRUD (list with per-space role, create-from-template, entry/index I/O, delete-or-leave), `/shares` grant CRUD, `/export` (streams a `SpooledTemporaryFile` zip that spills to disk beyond 8 MiB, sanitized against zip-slip), and `/consolidate` (a deterministic health pass that GCs orphaned objects and *reports* dup/dead-link/over-cap findings without mutating durable memory). All 404 while `MEMORY_SPACES_ENABLED` is off (#584, #585, #586, #589).
+- **Optimistic concurrency** makes multi-editor spaces safe: `put_index(expected_version=…)` does a conditional DynamoDB write on the manifest version, and entry writes route through a bounded read-modify-conditional-write retry loop that converges on transient races and raises `409` only on a sustained one (#586).
+
+### Frontend
+
+- `frontend/ai.client/src/app/memory-spaces/` — a list page (owned + shared-in cards with role/template badges), a detail page (edit `MEMORY.md` and the entry list; entries open in a view/edit dialog), a create-from-template dialog, and a share dialog (add-by-email + per-row role, delta-on-save). Viewer access is read-only throughout (#587).
+- The "Memory Spaces" nav entry rides a live `accessible$` 404-probe, is gated to system-admins, and carries a "Preview" badge (#587, #600).
+
+### Infrastructure
+
+- `MemorySpacesConstruct` — a content-addressed S3 bucket + a dedicated `memory-spaces` DynamoDB table with `OwnerIndex` + `MemberIndex` GSIs, threaded to both compute roles (readwrite S3 + DynamoDB) with `S3_MEMORY_SPACES_BUCKET_NAME` / `DYNAMODB_MEMORY_SPACES_TABLE_NAME` / `MEMORY_SPACES_ENABLED` env vars. Provisioned unconditionally; only the runtime flag gates route mounting (#582, #588, #597).
+
+### Test Coverage
+
+47 moto-backed data-layer tests plus route suites covering CRUD, share matrices, zip layout/verbatim-frontmatter/hostile-slug, optimistic-lock convergence, and the consolidation report; frontend facade specs.
+
+---
+
+## Agent Designer
+
+The Agent Designer is a new authoring surface that composes an **Agent** from RBAC-governed primitives — a governed single-select model plus a uniform `bindings[]` array (`tool` | `skill` | `knowledge_base` | `memory_space`) — evolving the existing Assistant store *in place* rather than forking a parallel table. Legacy Assistants read as Agents through a compat mapping, and `/assistants/*` is unchanged. It ships **dark** (`AGENTS_API_ENABLED` default off) so environments can opt in for dogfooding.
+
+The governing design decision: RBAC is *composed* from the five existing per-primitive access checks, not reinvented, and bindings are resolved twice — filtered at design time against the author's palette, then re-resolved at run time against the **invoking** user with block-on-missing.
+
+### Backend
+
+- `apis/shared/assistants/` — `AgentModelConfig` (governed single-select; stored as `modelConfig`) and `AgentBinding[]`, both optional/additive; a compat mapping projecting a legacy Assistant to an Agent (synthesizing a `knowledge_base` binding, never fabricating a model); Decimal-safe serialization for `modelConfig.params` (#591).
+- `apis/app_api/agent_designer/` — the governed `/agents/*` surface (draft/create/list/get/update/delete + shares) returning the Agent shape, and `/agents/bindable?kind=…`, an RBAC-filtered palette composing the five per-primitive access services. Design-time `binding_validation` composes model access, memory `resolve_permission`, and shape-only checks; the model and tool write-checks use the *same* predicate the picker's catalog uses, so "if the palette offers it, the write accepts it" holds by construction (#592, #598, #600, #601). (Package renamed from `agents` to `agent_designer` to avoid shadowing the top-level `agents` package on the app-api `sys.path` — #595.)
+- **Phase 3 harness resolution** (in inference-api, importing `apis.shared` only): `resolve_agent_invocation()` re-resolves the Agent's `modelConfig`, bound Memory Space, and `tool` bindings against the invoking user. A pinned model / memory grant / bound tool is re-checked per invoker; a missing grant blocks the turn with a conversational message (no silent downgrade). Bound tools *replace* the request's `enabled_tools`; the bound Memory Space's `alwaysLoad` content is injected into the system prompt and exposes `memory_list` / `memory_read` (always) + `memory_write` (readwrite bindings) tools (#594, #596, #601).
+
+### Frontend
+
+- `frontend/ai.client/src/app/agents/` — an Agents list page and an agent-form (persona/emoji/tags/starters, required single-select model picker, tool/skill multi-select chips, a Memory Space picker with read / read+write access and an `alwaysLoad` toggle, read-only KB). Sharing reuses the assistants share dialog. The "Agents" nav entry is gated to system-admins with a "Preview" badge (#598, #599, #600).
+
+### Infrastructure
+
+- `AGENTS_API_ENABLED` wired through CDK config (`CDK_AGENTS_API_ENABLED`, default off) onto app-api and the inference runtime. No new AWS resources — the flag only gates whether the routes 404 (#593).
+
+### Test Coverage
+
+Contract/compat/persistence/router suites, the bindable-catalog matrix, and per-invoker resolver cases (override, block-on-missing, dedupe, passthrough) for model, memory, and tool bindings.
+
+---
+
+## Knowledge Base Sync
+
+Assistant knowledge sources previously indexed once, at import. KB Sync keeps them **fresh**: imported Google Drive files and web crawls can be put on a schedule (Daily/Weekly/Monthly) that re-checks the source, re-embeds only what actually changed, and pauses gracefully when a credential needs re-consent. It's a "sweeper, not scheduler" design — a periodic sweep of due policies with layered runaway guards.
+
+### Backend
+
+- `apis/shared/sync_policies/` — `SyncPolicy` model + repository (adjacency-list items on the assistants table) with a sparse `DueSyncIndex` (keyed only while active, so paused policies are invisible to the sweep), conditional re-arm for idempotent dispatch, and breaker counters. Assistant/document deletes cascade their policies (#542).
+- Dispatcher + worker (`rate(15m)`): the dispatcher applies guards in order (kill switch → liveness → circuit breaker → 30-day inactivity → in-flight skip → re-arm-with-backoff), then async-invokes the worker. The worker resolves the policy creator's Google token from the AgentCore Identity vault (no live session), does two-gate change detection (Drive `version` then content hash) for Drive files and conditional-GET/ETag + content-hash for web crawls, and stages changed bytes to the existing S3 key so the untouched ingestion pipeline re-chunks/re-embeds. Stale tail vectors are cleaned up on shrinkage (#543, #544, #545).
+- `/assistants/{id}/sync-policies` CRUD + run-now (202, atomic 10-min cooldown) + resume hooks: a `paused_reauth` policy resumes only on a fresh OAuth consent; a `paused_inactive` policy wakes on a throttled `lastUsedAt` bump from chat use (#546).
+
+### Frontend
+
+- Per-source "Keep in sync" controls on the assistant knowledge editor (interval select, status line with state/reason/last-and-next sync, pause/resume, cooldown-aware Sync now, and a Reconnect affordance that routes through the OAuth consent popup). Owner/editor-only; device uploads show no control (#547). Follow-on UX polish clarified the control copy, always shows last-synced, adds a saving indicator, and unifies skeleton loading (#552, #555).
+
+### Infrastructure
+
+- `backend/Dockerfile.kb-sync` — a lightweight dispatcher+worker image (boto3 + pydantic, no ML deps) sharing one image via `ImageConfig.Command`, deployed via platform-as-bootstrap; a `rate(15m)` EventBridge rule; error alarms; function-name SSM params for the code-deploy step. Worker IAM adds read on the vault's backing OAuth secrets (`…!default/oauth2/*`) — the same grant app-api/inference-api carry, minus the write lifecycle (#543, #549).
+
+### Test Coverage
+
+Dispatcher-guard ordering, Drive/web change-detection and pause-semantics matrices, TTL-rearm cases, and the import-surface simulation that keeps the lean image FastAPI-free.
+
+---
+
+## Chat & session UX
+
+A cluster of changes that make multi-conversation chat robust and legible.
+
+- **Per-conversation streaming (#535).** `ChatStateService` now holds per-session state (loading, stop reason, cost/context aggregates, Continue affordance, `AbortController`) behind a viewed-session facade; `StreamParserService` keys a `Map<sessionId, ParserSessionState>` and drops late events from a superseded stream. Asking in conversation A then navigating to B and asking again no longer crosses streams, and navigating away no longer aborts the in-flight turn (the backend still completes and persists it). Adds per-conversation scroll restore, a streaming-text replay fix, and a sidebar in-progress dot.
+- **Interrupted-turn persistence (#541, #548).** A Stop / refresh / dropped socket used to orphan the user turn (no assistant reply persisted). Now the in-flight partial text is persisted via `asyncio.shield`, an authoritative `POST /sessions/{id}/interrupt` carries the `user_stopped` reason, and `_persist_interruption` also writes per-message + session-aggregate metadata (with a context-attribution projection for input tokens when a cut turn never delivered Bedrock's usage event) — so cost badges and the reload "Continue" chip survive.
+- **Mid-stream session titles (#540).** inference-api interleaves a one-shot `session_title` SSE event once the concurrent title task resolves; the SPA applies it to both the sidebar and the top-nav header. Fixes a latent bug where title generation ran sync `boto3` on the event loop and stalled the live stream.
+- **Top-nav session menu + active-assistant pill (#538).** The top-nav title gains a dropdown (Rename / Share / Save / Delete) and an active-assistant pill moved out of the chat-input footer, with optimistic rename and a title-transition polish pass.
+- Other: conversation export defaults to messages-only (#537); OAuth consent state is cleared on session switch (#539); the tool card is preserved after an OAuth/tool-approval resume (#532); the assistant editor groups its Knowledge Base into an inset panel (#557).
+
+---
+
+## 🐛 Bug fixes
+
+- **Admin "Last login" / "Created" showed "Never" in Safari.** `UserSyncService` built timestamps as `datetime.isoformat() + "Z"`, yielding an invalid `…+00:00Z` (offset *and* Z) that strict engines parse to Invalid Date. Normalized write-path timestamps to a single trailing `Z` and added a read-path heal for legacy rows (#556).
+- **Admin model list returned a generic 502.** `GET /admin/bedrock/models` calls `ListFoundationModels`, but the app-api task role only had `InvokeModel`, so deployed environments hit `AccessDenied` (it only worked locally under broader dev credentials). Granted `bedrock:ListFoundationModels` + `bedrock:GetFoundationModel` (#571).
+- **OAuth consent banner leaked across sessions.** The root-singleton consent service was keyed by `providerId`, not `sessionId`, and wasn't reset on conversation change; now cleared fail-closed alongside the other per-session resets (#539).
+- **Tool card vanished after an OAuth/tool-approval resume.** The resumed stream omits the original `tool_use` block; both resume paths now pin the existing messages as a prefix and reconcile from persisted memory after the stream closes (#532).
+
+## 🏗️ Infrastructure
+
+- New dedicated `memory-spaces` DynamoDB table (`OwnerIndex` + `MemberIndex` GSIs) and content-addressed S3 bucket (`MemorySpacesConstruct`).
+- New sparse GSIs: `DueScheduleIndex` and `HeadlessGrantUserIndex` (sessions-metadata table), `DueSyncIndex` (assistants table).
+- Two new lean Lambda images with EventBridge sweeps, both platform-as-bootstrap: `Dockerfile.scheduled-runs` (`rate(5m)`) and `Dockerfile.kb-sync` (`rate(15m)`).
+- New empty-string-safe kill-switch flags forwarded via `platform.yml`: `SCHEDULED_RUNS_ENABLED`, `MEMORY_SPACES_ENABLED`, `KB_SYNC_ENABLED` (default on), `AGENTS_API_ENABLED` (default off).
+- IAM additions: `bedrock:ListFoundationModels`/`GetFoundationModel` on the app-api task role; kb-sync worker read on the vault-backing OAuth secrets; scheduled-runs worker scoped to sessions-metadata RW + grant table + app-client secret + AgentCore vault token/oauth-secret read.
+
+## 🔧 CI/CD
+
+- `backend.yml` gains per-image build + API-driven code-deploy jobs for the kb-sync (dispatcher/worker) and scheduled-runs (dispatcher/worker) images, each sharing one image tag; `deploy-image-lambda-one.sh` grows a first-deploy grace skip for the introducing PR. Nightly image-scan and supply-chain Dockerfile-pinning lists include both new Dockerfiles.
+
+## 📦 Dependency notes
+
+No core backend (`pyproject.toml`) or frontend (`package.json`) dependency versions changed in this release. The new pins live **only** in the two lean Lambda images:
+
+| Component | Package | Version |
+|---|---|---|
+| kb-sync (web re-crawl) | `beautifulsoup4` | 4.13.5 |
+| kb-sync (web re-crawl) | `trafilatura` | 2.0.0 |
+| kb-sync (web re-crawl) | `lxml` | 6.1.1 |
+| scheduled-runs (worker) | `cryptography` | 48.0.1 |
+| scheduled-runs (worker) | `cachetools` | 6.2.4 |
+| shared image runtime | `httpx` | 0.28.1 |
+| shared image runtime | `bedrock-agentcore` | 1.9.1 |
+| shared image runtime | `boto3` | 1.43.9 |
+| shared image runtime | `pydantic` | 2.12.5 |
+
+## 🚀 Deployment notes
+
+Unlike the recent 1.0.x patches, **this release requires a platform (CDK) deploy** — it creates a new DynamoDB table, a new S3 bucket, several GSIs, two new Lambda images, and two EventBridge rules. Run the `platform.yml` pipeline first, then the `backend.yml` pipeline ships the real kb-sync and scheduled-runs image code (platform-as-bootstrap). No data migration is needed and there are no breaking API changes; deployments on any 1.0.x upgrade in place.
+
+Feature enablement after deploy:
+
+- **Scheduled Runs, Memory Spaces, KB Sync** are **on by default** (empty/unset workflow vars = on; only the literal `false` disables). Their nav entries are visible only to system-admins and marked "Preview." Grant the `scheduled-runs` RBAC capability to the roles that should be able to schedule runs.
+- **Agent Designer** is **off by default**. Set `CDK_AGENTS_API_ENABLED=true` for an environment to dogfood the `/agents` surface (its full payoff needs Memory Spaces deployed in the same environment).
+- To dark-stop any preview surface in production, set the matching `CDK_*_ENABLED=false` and redeploy the platform.
+
+---
+
 # Release Notes — v1.0.4
 
 **Release Date:** July 1, 2026
