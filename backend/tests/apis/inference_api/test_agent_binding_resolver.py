@@ -64,6 +64,22 @@ def _patch_access(monkeypatch, allowed: bool) -> MagicMock:
     return svc
 
 
+def _patch_tool_access(monkeypatch, allowed) -> MagicMock:
+    """Patch the AppRole gate for tool resolution. ``allowed`` is a bool (uniform answer)
+    or a set of tool ids the invoker may access."""
+    svc = MagicMock()
+    if isinstance(allowed, bool):
+        svc.can_access_tool = AsyncMock(return_value=allowed)
+    else:
+        svc.can_access_tool = AsyncMock(side_effect=lambda user, tid: tid in allowed)
+    monkeypatch.setattr(f"{MODULE}.get_app_role_service", lambda: svc)
+    return svc
+
+
+def _tool_binding(ref: str) -> AgentBinding:
+    return AgentBinding(kind="tool", ref=ref)
+
+
 class TestModelResolution:
     @pytest.mark.asyncio
     async def test_no_modelconfig_is_empty_plan(self, monkeypatch):
@@ -159,3 +175,63 @@ class TestMemoryResolution:
         # resolve_permission(space_id, user_id, user_email) — invoker's identity.
         args = svc.resolve_permission.call_args.args
         assert args[0] == "spc_1" and args[1] == "u-bob" and args[2] == "bob@x.edu"
+
+
+class TestToolResolution:
+    @pytest.mark.asyncio
+    async def test_no_tool_binding_is_none(self, monkeypatch):
+        # No tool binding ⇒ plan.tools is None (request's enabled_tools stay in force) and
+        # we never even consult tool RBAC — the service is fetched lazily.
+        svc = _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
+        assert plan.tools is None
+        svc.can_access_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_accessible_tools_become_override(self, monkeypatch):
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("web_search"), _tool_binding("calculator")]),
+            _user(),
+        )
+        assert plan.tools is not None
+        assert plan.tools.tool_ids == ["web_search", "calculator"]
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_ids_distinct_from_none(self, monkeypatch):
+        # An Agent may bind tools but none of the other kinds — the resolved list drives the
+        # turn (replace). (A deliberately-empty toolset is expressed by binding no tools =>
+        # None; a non-empty binding list always yields a non-None ResolvedTools.)
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("web_search")]), _user()
+        )
+        assert plan.tools is not None and plan.tools.tool_ids == ["web_search"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_refs_deduped(self, monkeypatch):
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("web_search"), _tool_binding("web_search")]),
+            _user(),
+        )
+        assert plan.tools.tool_ids == ["web_search"]
+
+    @pytest.mark.asyncio
+    async def test_missing_tool_blocks_with_message(self, monkeypatch):
+        # Invoker has calculator but not web_search ⇒ block naming the missing tool (D5).
+        _patch_tool_access(monkeypatch, {"calculator"})
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(
+                _assistant(bindings=[_tool_binding("web_search"), _tool_binding("calculator")]),
+                _user(),
+            )
+        assert "web_search" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_tool_access_checked_against_invoker(self, monkeypatch):
+        svc = _patch_tool_access(monkeypatch, True)
+        await resolve_agent_invocation(_assistant(bindings=[_tool_binding("web_search")]), _user())
+        # can_access_tool(invoker, tool_id) — the INVOKING user, not the author.
+        args = svc.can_access_tool.await_args.args
+        assert args[0].user_id == "u-bob" and args[1] == "web_search"

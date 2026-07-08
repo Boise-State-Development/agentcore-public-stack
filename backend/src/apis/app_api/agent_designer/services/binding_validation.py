@@ -4,14 +4,18 @@ Composes the *existing* per-primitive access checks; invents no new RBAC (D4). R
 write time against the **author** (design-time half of D5); Phase 3 re-resolves each
 binding against the invoking user at run time.
 
-Phase 1 resolution scope:
+Resolution scope:
 - ``model``          → must exist + author passes ``ModelAccessService.can_access_model``.
+- ``tool``           → author must have the tool in the ``/agents/bindable`` palette
+  (``ToolCatalogService.get_user_accessible_tools``, the SAME source the picker fetches, so
+  "if the palette offers it, the write accepts it" — cf. the model check). Run-time then
+  re-resolves each bound tool against the *invoker* (``AppRoleService.can_access_tool``, D5).
 - ``memory_space``   → feature-flagged; author needs viewer+ (read) / editor+ (readwrite).
 - ``knowledge_base`` → **managed implicitly** (the KB is welded to the agent and its index
-  is not user-configurable), so it is NOT author-settable in Phase 1; the compat layer
-  synthesizes it on read. An explicit knowledge_base binding is rejected.
-- ``tool`` / ``skill`` → **inert**: shape-checked only, stored verbatim, no catalog lookup
-  and no RBAC (that lands with the Phase 2 catalog / Phase 3 resolution).
+  is not user-configurable), so it is NOT author-settable; the compat layer synthesizes it
+  on read. An explicit knowledge_base binding is rejected.
+- ``skill``          → **inert**: shape-checked only, stored verbatim, no catalog lookup and
+  no RBAC (its run-time fold interacts with ``agent_type``/skill resolution — a later slice).
 """
 
 import logging
@@ -24,10 +28,11 @@ from apis.shared.memory.service import MemorySpaceService
 from apis.shared.models.managed_models import list_all_managed_models
 
 from apis.app_api.admin.services.model_access import ModelAccessService
+from apis.app_api.tools.service import ToolCatalogService
 
 logger = logging.getLogger(__name__)
 
-_INERT_KINDS = ("tool", "skill")
+_INERT_KINDS = ("skill",)
 _ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
 
@@ -51,6 +56,7 @@ async def validate_agent_write(
     model_settings: Optional[AgentModelConfig] = None,
     model_access_service: Optional[ModelAccessService] = None,
     memory_service: Optional[MemorySpaceService] = None,
+    tool_service: Optional[ToolCatalogService] = None,
 ) -> None:
     """Validate an Agent write for ``user``; raise ``BindingValidationError`` on failure.
 
@@ -62,8 +68,15 @@ async def validate_agent_write(
 
     if bindings is not None:
         mem = memory_service or MemorySpaceService()
+        # Resolve the author's accessible tools ONCE (async) if any tool binding is present,
+        # then validate each binding synchronously against that set — same source the palette
+        # uses, so the picker and the write agree (cf. the model check).
+        accessible_tool_ids: Optional[set] = None
+        if any(b.kind == "tool" for b in bindings):
+            svc = tool_service or ToolCatalogService()
+            accessible_tool_ids = {t.tool_id for t in await svc.get_user_accessible_tools(user)}
         for binding in bindings:
-            _validate_binding(user, binding, mem)
+            _validate_binding(user, binding, mem, accessible_tool_ids)
 
 
 async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
@@ -87,7 +100,12 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
         )
 
 
-def _validate_binding(user: User, binding: AgentBinding, mem: MemorySpaceService) -> None:
+def _validate_binding(
+    user: User,
+    binding: AgentBinding,
+    mem: MemorySpaceService,
+    accessible_tool_ids: Optional[set] = None,
+) -> None:
     kind = binding.kind
     if kind not in KNOWN_BINDING_KINDS:
         raise BindingValidationError(f"Unsupported binding kind '{kind}'.", status_code=400)
@@ -99,13 +117,30 @@ def _validate_binding(user: User, binding: AgentBinding, mem: MemorySpaceService
         )
 
     if kind in _INERT_KINDS:
-        # Inert in Phase 1: shape only, no RBAC, no catalog lookup.
+        # Inert: shape only, no RBAC, no catalog lookup.
         if not binding.ref or not binding.ref.strip():
             raise BindingValidationError(f"{kind} binding requires a non-empty 'ref'.", status_code=400)
         return
 
+    if kind == "tool":
+        _validate_tool(binding, accessible_tool_ids or set())
+        return
+
     if kind == "memory_space":
         _validate_memory_space(user, binding, mem)
+
+
+def _validate_tool(binding: AgentBinding, accessible_tool_ids: set) -> None:
+    ref = (binding.ref or "").strip()
+    if not ref:
+        raise BindingValidationError("tool binding requires a non-empty 'ref'.", status_code=400)
+    # The tool id must be in the author's palette (get_user_accessible_tools) — the exact
+    # source the Designer picker fetches, so a bindable tool is always writable. Run-time
+    # re-resolves against the invoker via AppRoleService.can_access_tool (D5).
+    if ref not in accessible_tool_ids:
+        raise BindingValidationError(
+            f"You do not have access to tool '{ref}'.", status_code=403
+        )
 
 
 def _validate_memory_space(user: User, binding: AgentBinding, mem: MemorySpaceService) -> None:

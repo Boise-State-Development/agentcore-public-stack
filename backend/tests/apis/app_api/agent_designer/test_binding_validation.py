@@ -38,6 +38,15 @@ def _mem_svc(space, role) -> MagicMock:
     return svc
 
 
+def _tool_svc(*accessible_ids: str) -> MagicMock:
+    # Mirror the palette: get_user_accessible_tools returns objects carrying .tool_id.
+    svc = MagicMock()
+    svc.get_user_accessible_tools = AsyncMock(
+        return_value=[SimpleNamespace(tool_id=t) for t in accessible_ids]
+    )
+    return svc
+
+
 # --------------------------------------------------------------------------- model
 class TestModelValidation:
     @pytest.mark.asyncio
@@ -103,15 +112,13 @@ class TestModelValidation:
 # --------------------------------------------------------------------------- inert
 class TestInertKinds:
     @pytest.mark.asyncio
-    async def test_tool_and_skill_stored_without_rbac(self):
-        # The inert guarantee: no memory/model service is consulted for tool/skill.
+    async def test_skill_stored_without_rbac(self):
+        # The inert guarantee (skill only now — tool is governed): no memory service is
+        # consulted, and a skill binding is stored verbatim.
         mem = _mem_svc(space=None, role=None)
         await validate_agent_write(
             _user(),
-            bindings=[
-                AgentBinding(kind="tool", ref="gateway_x", config={"enabledTools": []}),
-                AgentBinding(kind="skill", ref="skill_1"),
-            ],
+            bindings=[AgentBinding(kind="skill", ref="skill_1")],
             memory_service=mem,
         )
         mem.resolve_permission.assert_not_called()
@@ -119,7 +126,7 @@ class TestInertKinds:
     @pytest.mark.asyncio
     async def test_inert_kind_requires_ref(self):
         with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(_user(), bindings=[AgentBinding(kind="tool", ref="  ")])
+            await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="  ")])
         assert ei.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -127,6 +134,58 @@ class TestInertKinds:
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(_user(), bindings=[AgentBinding(kind="bogus", ref="x")])
         assert ei.value.status_code == 400
+
+
+# --------------------------------------------------------------------------- tool
+class TestToolValidation:
+    @pytest.mark.asyncio
+    async def test_accessible_tool_passes(self):
+        # A tool in the author's palette (get_user_accessible_tools) is writable.
+        svc = _tool_svc("gateway_x", "web_search")
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="gateway_x", config={"enabledTools": []})],
+            tool_service=svc,
+        )
+        svc.get_user_accessible_tools.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_inaccessible_tool_403(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="tool", ref="secret_tool")],
+                tool_service=_tool_svc("web_search"),
+            )
+        assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_empty_ref_400(self):
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(), bindings=[AgentBinding(kind="tool", ref="  ")], tool_service=_tool_svc("web_search")
+            )
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_accessible_tools_fetched_once_for_many_bindings(self):
+        # The palette is resolved a single time, then each binding is checked against it.
+        svc = _tool_svc("a", "b", "c")
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="a"), AgentBinding(kind="tool", ref="b")],
+            tool_service=svc,
+        )
+        svc.get_user_accessible_tools.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_tool_binding_skips_tool_fetch(self):
+        # No tool binding ⇒ the tool service is never consulted (lazy palette resolution).
+        svc = _tool_svc("a")
+        await validate_agent_write(
+            _user(), bindings=[AgentBinding(kind="skill", ref="skill_1")], tool_service=svc
+        )
+        svc.get_user_accessible_tools.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- KB

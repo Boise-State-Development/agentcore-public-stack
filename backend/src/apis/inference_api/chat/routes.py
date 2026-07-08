@@ -1173,6 +1173,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # consumed at model resolution / prompt assembly; None on resume/continuation.
     agent_model_override = None
     agent_memory = None
+    # Agent Designer: an Agent's ``tool`` bindings, resolved per invoker (D5), replace
+    # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
+    # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
+    agent_tools_override = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1298,6 +1302,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_plan = await resolve_agent_invocation(assistant, current_user)
                 agent_model_override = agent_plan.model_override
                 agent_memory = agent_plan.memory
+                agent_tools_override = agent_plan.tools
             except AgentBindingBlockedError as block:
                 blocked_event = ConversationalErrorEvent(
                     code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
@@ -1627,13 +1632,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # keeps the assistant id in the URL for the whole session's
             # lifetime, so we can trust `input_data.rag_assistant_id`
             # directly; no preferences fallback needed.
+            # An Agent's tool bindings replace the request's enabled_tools for this
+            # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
+            # request drives the toolset exactly as today. Drives both the built-in
+            # extra tools (spreadsheet/artifact gate on specific ids) and get_agent.
+            effective_enabled_tools = (
+                agent_tools_override.tool_ids
+                if agent_tools_override is not None
+                else input_data.enabled_tools
+            )
+
             extra_tools = _build_spreadsheet_tools(
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 assistant_id=input_data.rag_assistant_id,
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_artifact_tools(
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_memory_tools(
@@ -1646,7 +1661,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 session_id=input_data.session_id,
                 user_id=user_id,
                 auth_token=auth_token,
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
                 model_id=effective_model_id,
                 system_prompt=system_prompt,  # Use assistant's instructions if available
                 caching_enabled=caching_enabled,
@@ -1750,7 +1765,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
             attachment_guidance = _build_attachment_guidance(
-                diverted_tabular, oversized_inline, input_data.enabled_tools
+                diverted_tabular, oversized_inline, effective_enabled_tools
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -1758,7 +1773,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             tabular_inventory = await _build_tabular_inventory(
                 session_id=input_data.session_id,
                 assistant_id=input_data.rag_assistant_id,
-                enabled_tools=input_data.enabled_tools,
+                enabled_tools=effective_enabled_tools,
             )
             # Bind to a new local so we don't trip Python's local-scope rules
             # inside this generator closure (augmented_message is defined in
