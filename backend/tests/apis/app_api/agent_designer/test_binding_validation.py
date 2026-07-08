@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from apis.app_api.agents.services.binding_validation import (
+from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
 )
 from apis.shared.assistants.models import AgentBinding, AgentModelConfig
 from apis.shared.auth.models import User
 
-MODULE = "apis.app_api.agents.services.binding_validation"
+MODULE = "apis.app_api.agent_designer.services.binding_validation"
 
 
 def _user() -> User:
