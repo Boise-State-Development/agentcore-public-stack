@@ -26,7 +26,7 @@ from apis.shared.errors import (
     ErrorCode,
     build_conversational_error_event,
 )
-from apis.shared.feature_flags import skills_enabled
+from apis.shared.feature_flags import agents_enabled, skills_enabled
 from apis.shared.files.file_resolver import get_file_resolver
 from apis.shared.models.managed_models import list_managed_models
 from apis.shared.platform_settings.models import DEFAULT_CHAT_MODE, ChatModeSettings
@@ -41,6 +41,10 @@ from apis.shared.quota import (
 )
 
 from apis.shared.rbac.service import get_app_role_service
+from apis.inference_api.chat.agent_binding_resolver import (
+    AgentBindingBlockedError,
+    resolve_agent_invocation,
+)
 from apis.shared.sessions.metadata import ensure_session_metadata_exists
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -1134,6 +1138,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     context_chunks = None
     augmented_message = input_data.message
     system_prompt = input_data.system_prompt  # Start with provided system prompt
+    # Agent Designer Phase 3: governed model override resolved per invoking user
+    # (D5). None ⇒ the model resolves exactly as today. Set in the assistant block
+    # below, consumed at model resolution; stays None on resume/continuation.
+    agent_model_override = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1250,6 +1258,30 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 await resume_inactive_policies(input_data.rag_assistant_id)
         except Exception as bump_err:
             logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+
+        # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
+        # for the INVOKING user (D5), before the expensive KB search. v1 blocks
+        # with a conversational message when the invoker lacks a required model.
+        if agents_enabled():
+            try:
+                agent_plan = await resolve_agent_invocation(assistant, current_user)
+                agent_model_override = agent_plan.model_override
+            except AgentBindingBlockedError as block:
+                blocked_event = ConversationalErrorEvent(
+                    code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
+                )
+                return StreamingResponse(
+                    stream_conversational_message(
+                        message=block.message,
+                        stop_reason="error",
+                        metadata_event=blocked_event,
+                        session_id=input_data.session_id,
+                        user_id=user_id,
+                        user_input=input_data.message,
+                    ),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
+                )
 
         # 3. Search assistant knowledge base
         logger.info("Starting knowledge base search for assistant...")
@@ -1486,6 +1518,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # saved preference is silently ignored at chat time (#161).
             effective_model_id = input_data.model_id
             effective_provider = input_data.provider
+            if agent_model_override is not None:
+                # The Agent's governed modelConfig wins over the request / user-default
+                # chain. Already access-checked against the invoker in the resolver (R2),
+                # so the earlier request-only gate at the top doesn't leave a hole.
+                effective_model_id = agent_model_override.model_id
+                effective_provider = agent_model_override.provider or effective_provider
             if not effective_model_id:
                 user_default_id, user_default_provider = await _resolve_user_default_model(user_id)
                 if user_default_id:
@@ -1503,6 +1541,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         logger.info(
                             "User default model exists but RBAC denies access; falling back to system default"
                         )
+
+            # Agent-authored params sit as defaults BENEATH explicit request params,
+            # then flow through _resolve_model_settings' admin bounds/locks like any
+            # other request params — an author can't smuggle out-of-bounds values.
+            if agent_model_override is not None and agent_model_override.params:
+                request_inference_params = {**agent_model_override.params, **request_inference_params}
 
             # Single registry lookup resolves caching + inference params +
             # the Mantle endpoint path, merging admin defaults with request
