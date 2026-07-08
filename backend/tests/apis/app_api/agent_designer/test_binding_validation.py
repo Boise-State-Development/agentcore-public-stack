@@ -109,31 +109,75 @@ class TestModelValidation:
         svc.filter_accessible_models.assert_awaited_once()
 
 
-# --------------------------------------------------------------------------- inert
-class TestInertKinds:
-    @pytest.mark.asyncio
-    async def test_skill_stored_without_rbac(self):
-        # The inert guarantee (skill only now — tool is governed): no memory service is
-        # consulted, and a skill binding is stored verbatim.
-        mem = _mem_svc(space=None, role=None)
-        await validate_agent_write(
-            _user(),
-            bindings=[AgentBinding(kind="skill", ref="skill_1")],
-            memory_service=mem,
-        )
-        mem.resolve_permission.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_inert_kind_requires_ref(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="  ")])
-        assert ei.value.status_code == 400
-
+# --------------------------------------------------------------------------- kinds
+class TestBindingKinds:
     @pytest.mark.asyncio
     async def test_unknown_kind_rejected(self):
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(_user(), bindings=[AgentBinding(kind="bogus", ref="x")])
         assert ei.value.status_code == 400
+
+
+# --------------------------------------------------------------------------- skill
+class TestSkillValidation:
+    @pytest.fixture(autouse=True)
+    def _flag_on(self, monkeypatch):
+        monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: True)
+
+    def _patch_palette(self, monkeypatch, *skill_ids: str):
+        # Mirror the palette: resolve_accessible_skill_ids returns the author's granted ids.
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=list(skill_ids)))
+
+    @pytest.mark.asyncio
+    async def test_accessible_skill_passes(self, monkeypatch):
+        self._patch_palette(monkeypatch, "skill_1", "skill_2")
+        await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="skill_1")])
+
+    @pytest.mark.asyncio
+    async def test_inaccessible_skill_403(self, monkeypatch):
+        self._patch_palette(monkeypatch, "skill_1")
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="secret")])
+        assert ei.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_empty_ref_400(self, monkeypatch):
+        self._patch_palette(monkeypatch, "skill_1")
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="  ")])
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_flag_off_400(self, monkeypatch):
+        monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: False)
+        # Palette isn't even consulted when the feature is off.
+        palette = AsyncMock(return_value=["skill_1"])
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", palette)
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(_user(), bindings=[AgentBinding(kind="skill", ref="skill_1")])
+        assert ei.value.status_code == 400
+        palette.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_palette_resolved_once_for_many_bindings(self, monkeypatch):
+        palette = AsyncMock(return_value=["a", "b"])
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", palette)
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="skill", ref="a"), AgentBinding(kind="skill", ref="b")],
+        )
+        palette.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_skill_binding_skips_palette(self, monkeypatch):
+        palette = AsyncMock(return_value=["a"])
+        monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", palette)
+        await validate_agent_write(
+            _user(),
+            bindings=[AgentBinding(kind="tool", ref="a")],
+            tool_service=_tool_svc("a"),
+        )
+        palette.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- tool
@@ -179,11 +223,15 @@ class TestToolValidation:
         svc.get_user_accessible_tools.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_no_tool_binding_skips_tool_fetch(self):
+    async def test_no_tool_binding_skips_tool_fetch(self, monkeypatch):
         # No tool binding ⇒ the tool service is never consulted (lazy palette resolution).
+        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: True)
         svc = _tool_svc("a")
         await validate_agent_write(
-            _user(), bindings=[AgentBinding(kind="skill", ref="skill_1")], tool_service=svc
+            _user(),
+            bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
+            memory_service=_mem_svc(space=object(), role="viewer"),
+            tool_service=svc,
         )
         svc.get_user_accessible_tools.assert_not_awaited()
 
