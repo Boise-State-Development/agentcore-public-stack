@@ -105,6 +105,9 @@ class CreateAssistantRequest(BaseModel):
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
+    # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
+    bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -121,6 +124,9 @@ class UpdateAssistantRequest(BaseModel):
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
     status: Optional[Literal["DRAFT", "COMPLETE"]] = Field(None, description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
+    # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
+    bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
 
 
 class AssistantResponse(BaseModel):
