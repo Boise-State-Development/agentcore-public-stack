@@ -169,6 +169,57 @@ class AssistantsListResponse(BaseModel):
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
 
 
+class AgentResponse(BaseModel):
+    """Agent read-shape (D3) — the projection served by the ``/agents/*`` surface.
+
+    Consumes ``compat.to_agent_view`` output directly. ``agentId`` aliases the
+    assistant id (legacy ids remain valid). Unlike ``AssistantResponse`` this carries
+    ``modelConfig`` + ``bindings`` — the whole point of the Agent surface.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier (== legacy assistant id)")
+    owner_name: str = Field(..., alias="ownerName", description="Owner display name")
+    name: str = Field(..., description="Agent display name")
+    description: str = Field(..., description="Short summary")
+    instructions: str = Field(..., description="System prompt")
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
+    bindings: List[AgentBinding] = Field(default_factory=list, description="Resolved bindings (legacy KB synthesized)")
+    visibility: Literal["PRIVATE", "PUBLIC", "SHARED"] = Field(..., description="Access control")
+    tags: Optional[List[str]] = Field(default_factory=list, description="Search keywords")
+    starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
+    emoji: Optional[str] = Field(None, description="Single emoji character for agent avatar")
+    image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to agent avatar/image")
+    usage_count: int = Field(..., alias="usageCount", description="Usage count")
+    status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Lifecycle status")
+    created_at: str = Field(..., alias="createdAt", description="ISO 8601 creation timestamp")
+    updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 update timestamp")
+
+    # Share metadata (parity with AssistantResponse; set post-projection)
+    first_interacted: Optional[bool] = Field(None, alias="firstInteracted")
+    is_shared_with_me: Optional[bool] = Field(None, alias="isSharedWithMe")
+    user_permission: Optional[Literal["owner", "editor", "viewer"]] = Field(None, alias="userPermission")
+
+
+class AgentsListResponse(BaseModel):
+    """Response for listing Agents."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agents: List[AgentResponse] = Field(..., description="Agents visible to the caller")
+    next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+
+
+class AgentSharesResponse(BaseModel):
+    """Share records for an Agent (agentId == assistantId; same underlying records)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    shared_with: List["ShareEntry"] = Field(..., alias="sharedWith", description="Share records (email + permission)")
+
+
 class AssistantTestChatRequest(BaseModel):
     """Request body for testing assistant chat with RAG"""
 

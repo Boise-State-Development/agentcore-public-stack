@@ -188,6 +188,7 @@ from apis.app_api.memory_spaces.routes import router as memory_spaces_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
 from apis.app_api.assistants.routes import router as assistants_router
+from apis.app_api.agents.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
@@ -212,6 +213,7 @@ app.include_router(api_keys_router)
 app.include_router(sessions_router)
 app.include_router(admin_router)
 app.include_router(assistants_router)
+app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
 app.include_router(documents_router)
 app.include_router(users_router)
 app.include_router(user_settings_router)
