@@ -160,10 +160,12 @@ export interface ScheduledRunsConfig {
 }
 
 /**
- * Memory Spaces feature flag. Default OFF with an on switch — the feature
- * is opt-in per environment, enabled with CDK_MEMORY_SPACES_ENABLED=true
- * (or a `memorySpaces.enabled: true` cdk.json context). Sets the
- * MEMORY_SPACES_ENABLED env var on app-api and inference-api.
+ * Memory Spaces feature flag. Default ON with a kill switch — the feature is
+ * complete and ships enabled for every deployer (opt-out), disabled per
+ * environment with CDK_MEMORY_SPACES_ENABLED=false (or a
+ * `memorySpaces.enabled: false` cdk.json context). Sets the
+ * MEMORY_SPACES_ENABLED env var on app-api and inference-api. The table + bucket
+ * are provisioned unconditionally, so this only gates route mounting at runtime.
  */
 export interface MemorySpacesConfig {
   enabled: boolean;
@@ -328,15 +330,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('scheduledRuns')?.enabled ?? true,
     },
     memorySpaces: {
-      // Default OFF with an on switch: the feature is opt-in per
-      // environment, enabled only when explicitly turned on. The workflow
-      // forwards an EMPTY STRING when the variable is unset, so treat
-      // empty/unset as "use the default (off)" and only the literal "true"
-      // as the on switch. A `memorySpaces.enabled` cdk.json context can
-      // also force it on.
+      // Default ON with a kill switch: Memory Spaces is a complete feature and
+      // ships enabled for every deployer (opt-out, not opt-in — matches kbSync /
+      // scheduledRuns). The table + bucket are provisioned unconditionally, so this
+      // only toggles the runtime MEMORY_SPACES_ENABLED env var. The workflow forwards
+      // an EMPTY STRING when the variable is unset, so treat empty/unset as the
+      // default (on) and only the literal "false" as the kill switch. A
+      // `memorySpaces.enabled: false` cdk.json context can also disable it.
       enabled: process.env.CDK_MEMORY_SPACES_ENABLED
-        ? process.env.CDK_MEMORY_SPACES_ENABLED === 'true'
-        : scope.node.tryGetContext('memorySpaces')?.enabled ?? false,
+        ? process.env.CDK_MEMORY_SPACES_ENABLED !== 'false'
+        : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
     },
     agents: {
       // Default OFF with an on switch (same pattern as memorySpaces): opt-in per
