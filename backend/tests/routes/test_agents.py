@@ -193,3 +193,42 @@ class TestAgentShares:
         with patch(f"{ROUTES_MODULE}.share_assistant", new_callable=AsyncMock, return_value=False):
             resp = TestClient(app).post("/agents/ast-001/shares", json={"emails": ["b@x.edu"], "permission": "viewer"})
         assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------- bindable
+class TestBindable:
+    def test_404_when_flag_off(self, app, make_user, monkeypatch):
+        monkeypatch.setenv("AGENTS_API_ENABLED", "false")
+        mock_auth_user(app, make_user())
+        resp = TestClient(app).get("/agents/bindable?kind=model")
+        assert resp.status_code == 404
+
+    def test_returns_projected_items(self, app, make_user, _flag_on):
+        from apis.shared.assistants.models import BindableItem
+
+        mock_auth_user(app, make_user())
+        items = [BindableItem(kind="model", ref="us.anthropic.claude", label="Claude", description="Bedrock")]
+        with patch(f"{ROUTES_MODULE}.list_bindable", new_callable=AsyncMock, return_value=items):
+            resp = TestClient(app).get("/agents/bindable?kind=model")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kind"] == "model"
+        assert body["items"][0]["ref"] == "us.anthropic.claude"
+
+    def test_unsupported_kind_400(self, app, make_user, _flag_on):
+        mock_auth_user(app, make_user())
+        resp = TestClient(app).get("/agents/bindable?kind=nonsense")
+        assert resp.status_code == 400
+
+    def test_bindable_not_captured_by_agent_id_route(self, app, make_user, _flag_on):
+        """The literal /bindable path must not be swallowed by /{agent_id}."""
+        from apis.shared.assistants.models import BindableItem
+
+        mock_auth_user(app, make_user())
+        with patch(f"{ROUTES_MODULE}.list_bindable", new_callable=AsyncMock, return_value=[]) as m, patch(
+            f"{ROUTES_MODULE}.assistant_exists", new_callable=AsyncMock
+        ) as exists:
+            resp = TestClient(app).get("/agents/bindable?kind=tool")
+        assert resp.status_code == 200
+        m.assert_awaited_once()
+        exists.assert_not_called()  # did NOT fall through to get_agent_endpoint
