@@ -14,7 +14,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from .models import Assistant
+from .models import AgentBinding, AgentModelConfig, Assistant
+from .serialization import from_ddb, to_ddb_safe
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,8 @@ async def create_assistant(
     tags: Optional[List[str]] = None,
     starters: Optional[List[str]] = None,
     emoji: Optional[str] = None,
+    bindings: Optional[List[AgentBinding]] = None,
+    model_settings: Optional[AgentModelConfig] = None,
 ) -> Assistant:
     """
     Create a complete assistant with all required fields
@@ -129,6 +132,8 @@ async def create_assistant(
         created_at=now,
         updated_at=now,
         status="COMPLETE",
+        bindings=bindings,
+        model_settings=model_settings,
     )
 
     # Store the assistant
@@ -156,7 +161,9 @@ async def _create_assistant_cloud(assistant: Assistant, table_name: str) -> None
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
-        item = assistant.model_dump(by_alias=True, exclude_none=True)
+        # to_ddb_safe: modelConfig.params / binding config may carry floats, which
+        # DynamoDB rejects — convert to Decimal on the whole item (strings pass through).
+        item = to_ddb_safe(assistant.model_dump(by_alias=True, exclude_none=True))
         item["PK"] = f"AST#{assistant.assistant_id}"
         item["SK"] = "METADATA"
 
@@ -385,7 +392,7 @@ async def _get_assistant_cloud(assistant_id: str, owner_id: str, table_name: str
             logger.warning(f"Access denied: assistant {assistant_id} not owned by user {owner_id}")
             return None
 
-        return Assistant.model_validate(item)
+        return Assistant.model_validate(from_ddb(item))
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
@@ -427,7 +434,7 @@ async def _get_assistant_cloud_without_ownership_check(assistant_id: str, table_
             return None
 
         item = response["Item"]
-        return Assistant.model_validate(item)
+        return Assistant.model_validate(from_ddb(item))
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
@@ -457,6 +464,8 @@ async def update_assistant(
     emoji: Optional[str] = None,
     status: Optional[str] = None,
     image_url: Optional[str] = None,
+    bindings: Optional[List[AgentBinding]] = None,
+    model_settings: Optional[AgentModelConfig] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
@@ -505,6 +514,12 @@ async def update_assistant(
         updates["status"] = status
     if image_url is not None:
         updates["image_url"] = image_url
+    # Phase 1: an explicit bindings list (incl. []) replaces the set; absent = untouched.
+    # Clearing modelConfig to null via merge isn't supported yet (exclude_none) — R5.
+    if bindings is not None:
+        updates["bindings"] = bindings
+    if model_settings is not None:
+        updates["model_settings"] = model_settings
 
     # Always update the updated_at timestamp
     updates["updated_at"] = _get_current_timestamp()
@@ -564,8 +579,9 @@ async def _update_assistant_cloud(assistant: Assistant, table_name: str) -> None
         update_parts.append("updatedAt = :updated_at")
         expression_attribute_values[":updated_at"] = assistant.updated_at
 
-        # Update all fields from assistant model (excluding immutable fields)
-        assistant_dict = assistant.model_dump(by_alias=True, exclude_none=True)
+        # Update all fields from assistant model (excluding immutable fields).
+        # to_ddb_safe converts any float in modelConfig.params / binding config to Decimal.
+        assistant_dict = to_ddb_safe(assistant.model_dump(by_alias=True, exclude_none=True))
 
         # DynamoDB reserved keywords that need to be escaped
         reserved_keywords = {"status", "name", "data", "size", "type", "value"}
@@ -797,7 +813,7 @@ async def _list_user_assistants_cloud(
         all_assistants = []
         for item in owner_response.get("Items", []):
             try:
-                all_assistants.append(Assistant.model_validate(item))
+                all_assistants.append(Assistant.model_validate(from_ddb(item)))
             except Exception as e:
                 logger.warning(f"Failed to parse assistant item: {e}")
                 continue

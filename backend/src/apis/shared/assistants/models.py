@@ -1,8 +1,49 @@
 """Assistants API request/response models"""
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Agent Designer Phase 1 (D3): the uniform binding kinds. Requests validate against
+# this set; storage tolerates unknown kinds on read so records written by newer code
+# survive a read/write round trip through older code (forward + rollback compat).
+KNOWN_BINDING_KINDS = ("knowledge_base", "tool", "skill", "memory_space")
+BindingKind = Literal["knowledge_base", "tool", "skill", "memory_space"]
+
+
+class AgentModelConfig(BaseModel):
+    """Governed single-select model for an Agent (D3).
+
+    The model is NOT a binding — it is a required singleton on the Agent record.
+    Optional in storage/compat, though: a legacy Assistant has no stored model, and
+    an absent ``modelConfig`` means "resolve the model exactly as today" (request →
+    user default → system default). The Agent Designer UI enforces single-select at
+    write time (Phase 4).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_id: str = Field(..., alias="modelId", description="Selected model identifier")
+    provider: Optional[str] = Field(None, description="Model provider (e.g. 'bedrock'); mirrors InvocationRequest.provider")
+    params: Optional[Dict[str, Any]] = Field(
+        None, description="Model parameters (temperature, maxTokens, …); floats stored via Decimal"
+    )
+
+
+class AgentBinding(BaseModel):
+    """A single primitive binding on an Agent (D3).
+
+    ``kind`` is an open string on read (unknown kinds pass through untouched); the
+    request layer validates it against ``KNOWN_BINDING_KINDS``. Phase 1 resolves only
+    ``memory_space`` and ``knowledge_base``; ``tool`` and ``skill`` are accepted and
+    stored but inert (not resolved) until Phase 2/3.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str = Field(..., description="Binding kind (see KNOWN_BINDING_KINDS)")
+    ref: str = Field(..., description="Primitive identifier this binding points at")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Kind-specific configuration")
 
 
 class Assistant(BaseModel):
@@ -32,6 +73,16 @@ class Assistant(BaseModel):
     status: Literal["DRAFT", "COMPLETE"] = Field(..., description="Assistant lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
 
+    # Agent Designer Phase 1 (D3): additive, optional. Absent on every legacy row.
+    # NOTE (R3): the model field cannot be named ``model_config`` — pydantic reserves
+    # that for ConfigDict — so it is ``model_settings`` with the ``modelConfig`` alias.
+    model_settings: Optional[AgentModelConfig] = Field(
+        None, alias="modelConfig", description="Governed single-select model (D3); absent = resolve as today"
+    )
+    bindings: Optional[List[AgentBinding]] = Field(
+        None, description="Uniform primitive bindings (D3); absent = synthesize legacy KB binding via compat"
+    )
+
 
 class CreateAssistantDraftRequest(BaseModel):
     """Request body for creating a draft assistant (minimal fields)"""
@@ -54,6 +105,9 @@ class CreateAssistantRequest(BaseModel):
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
+    # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
+    bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -70,6 +124,9 @@ class UpdateAssistantRequest(BaseModel):
     emoji: Optional[str] = Field(None, description="Single emoji character for assistant avatar")
     status: Optional[Literal["DRAFT", "COMPLETE"]] = Field(None, description="Lifecycle status")
     image_url: Optional[str] = Field(None, alias="imageUrl", description="URL to assistant avatar/image")
+    # Agent Designer Phase 1 (D3): additive, optional. Validated by binding_validation.
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig", description="Governed single-select model")
+    bindings: Optional[List[AgentBinding]] = Field(None, description="Uniform primitive bindings")
 
 
 class AssistantResponse(BaseModel):

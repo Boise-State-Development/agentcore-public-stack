@@ -12,6 +12,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from apis.app_api.agents.services.binding_validation import (
+    BindingValidationError,
+    validate_agent_write,
+)
 from apis.app_api.documents.services.document_service import list_assistant_documents
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import get_agent
@@ -121,6 +125,15 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
 
     logger.info(f"POST /assistants - User: {user_id}, Name: {request.name}")
 
+    # Design-time binding/model validation (D4/D5). Outside the try below so the
+    # 4xx it raises isn't swallowed into a 500 by the generic handler.
+    try:
+        await validate_agent_write(
+            current_user, bindings=request.bindings, model_settings=request.model_settings
+        )
+    except BindingValidationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
     try:
         # Create complete assistant
         # Note: vector_index_id is automatically set from S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME env var
@@ -134,6 +147,8 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             tags=request.tags,
             starters=request.starters,
             emoji=request.emoji,
+            bindings=request.bindings,
+            model_settings=request.model_settings,
         )
 
         # Convert to response model (excludes owner_id for privacy)
@@ -344,6 +359,14 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
                 detail="Only the owner can change assistant visibility",
             )
 
+        # Design-time binding/model validation (D4/D5), after the auth gate above.
+        try:
+            await validate_agent_write(
+                current_user, bindings=request.bindings, model_settings=request.model_settings
+            )
+        except BindingValidationError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+
         # Mutation functions are keyed on the assistant's real owner_id, not the requester
         updated_assistant = await update_assistant(
             assistant_id=assistant_id,
@@ -357,6 +380,8 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
             emoji=request.emoji,
             status=request.status,
             image_url=request.image_url,
+            bindings=request.bindings,
+            model_settings=request.model_settings,
         )
 
         if not updated_assistant:
