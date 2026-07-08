@@ -51,11 +51,20 @@ export class SkillService {
   private _error = signal<string | null>(null);
   private _initialized = signal(false);
 
+  // Agent Designer: when the active conversation is bound to an Agent that binds
+  // skills, the picker is locked to exactly that set — the backend governs skills
+  // (and forces skill-mode) at invocation regardless of the client. Holds the
+  // bound skill ids, or null when not agent-bound.
+  private readonly _agentLockedSkillIds = signal<string[] | null>(null);
+
   // Public readonly signals
   readonly skills = this._skills.asReadonly();
   readonly loading = this._loading.asReadonly();
   readonly error = this._error.asReadonly();
   readonly initialized = this._initialized.asReadonly();
+
+  /** True when the skill set is dictated by the active Agent and toggles are locked. */
+  readonly agentLocked = computed(() => this._agentLockedSkillIds() !== null);
 
   constructor() {
     // Load the user's skills once the feature is known to be enabled. While
@@ -78,13 +87,47 @@ export class SkillService {
   );
 
   /** Skill ids to send as `enabled_skills` on a skills-mode chat request. */
-  readonly enabledSkillIds = computed(() =>
-    this.enabledSkills().map(s => s.skillId)
-  );
+  readonly enabledSkillIds = computed(() => {
+    // Agent-bound: the Agent's skills are the effective set (the backend enforces
+    // the same, replace semantics, and forces skill-mode). Toggling is disabled.
+    const locked = this._agentLockedSkillIds();
+    if (locked !== null) {
+      return [...locked];
+    }
+    return this.enabledSkills().map(s => s.skillId);
+  });
 
-  readonly enabledCount = computed(() => this.enabledSkills().length);
+  readonly enabledCount = computed(() => {
+    const locked = this._agentLockedSkillIds();
+    if (locked !== null) {
+      return locked.length;
+    }
+    return this.enabledSkills().length;
+  });
 
   readonly hasSkills = computed(() => this._skills().length > 0);
+
+  /**
+   * Whether a skill row should render as ON. Agent-locked → membership in the
+   * bound set; otherwise the user's own enabled state.
+   */
+  isSkillShownEnabled(skill: UserSkill): boolean {
+    const locked = this._agentLockedSkillIds();
+    if (locked !== null) {
+      return locked.includes(skill.skillId);
+    }
+    return skill.isEnabled;
+  }
+
+  /** Lock the picker to an Agent's bound skills (Agent Designer). */
+  lockToAgentSkills(skillIds: string[]): void {
+    this._agentLockedSkillIds.set([...skillIds]);
+  }
+
+  /** Release an Agent skill lock. */
+  clearAgentLock(): void {
+    this._agentLockedSkillIds.set(null);
+  }
 
   /**
    * Fetch the user's accessible skills. Called on service construction;
@@ -114,6 +157,8 @@ export class SkillService {
 
   /** Toggle a skill's enabled state (optimistic, reverts on save failure). */
   async toggleSkill(skillId: string): Promise<void> {
+    // Agent-locked: the skill set is dictated by the Agent; ignore toggles.
+    if (this._agentLockedSkillIds() !== null) return;
     const skill = this._skills().find(s => s.skillId === skillId);
     if (!skill) return;
 

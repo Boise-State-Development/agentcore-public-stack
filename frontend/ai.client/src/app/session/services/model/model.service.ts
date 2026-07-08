@@ -55,6 +55,12 @@ export class ModelService {
   // Selected model (defaults to first model when available, or system default)
   private readonly _selectedModel = signal<ManagedModel | null>(null);
 
+  // Agent Designer: when the active conversation is bound to an Agent that pins
+  // a model, the picker is locked to it — the backend governs the model at
+  // invocation regardless of what the client sends, so a free-select picker
+  // would be dishonest. Holds the pinned modelId, or null when not agent-bound.
+  private readonly _agentLockedModelId = signal<string | null>(null);
+
   // Per-model canonical inference param overrides. Outer key = modelId, inner
   // key = canonical param name (temperature, top_p, thinking, ...). Sent on
   // each chat request as `inference_params`; backend layers them on top of
@@ -78,6 +84,9 @@ export class ModelService {
   });
   readonly modelsLoading = this.isLoading.asReadonly();
   readonly modelsError = this.error.asReadonly();
+
+  /** True when the model is dictated by the active Agent and the picker is locked. */
+  readonly agentModelLocked = computed(() => this._agentLockedModelId() !== null);
 
   /** Inference param overrides for the currently selected model. */
   readonly selectedModelOverrides = computed<Record<string, unknown>>(() => {
@@ -232,6 +241,24 @@ export class ModelService {
     }
 
     return false;
+  }
+
+  /**
+   * Lock the picker to an Agent's pinned model (Agent Designer). Selects the
+   * model by its modelId and marks it agent-locked so the dropdown disables.
+   * If the pinned model isn't in the user's available set, the lock is still
+   * recorded (dropdown disabled) but the selection is left unchanged — the
+   * backend blocks the turn with a message in that case (D5), so we don't
+   * silently pretend a different model.
+   */
+  lockToAgentModel(modelId: string): void {
+    this._agentLockedModelId.set(modelId);
+    this.setSelectedModelById(modelId);
+  }
+
+  /** Release an Agent model lock (e.g. navigating away from an agent conversation). */
+  clearAgentModelLock(): void {
+    this._agentLockedModelId.set(null);
   }
 
   /**

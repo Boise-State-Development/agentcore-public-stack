@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, input, output, signal, computed, effect, ElementRef } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath } from '@ng-icons/heroicons/outline';
+import { heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroLockClosed } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
 import { ToolService, Tool } from '../../services/tool/tool.service';
 import { SkillService } from '../../services/skill/skill.service';
@@ -42,7 +42,7 @@ interface AdvancedParamRow {
   selector: 'app-model-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath })],
+  providers: [provideIcons({ heroXMark, heroCheck, heroChevronDown, heroChevronRight, heroArrowPath, heroLockClosed })],
   host: {
     '(document:click)': 'onDocumentClick($event)',
   },
