@@ -21,7 +21,7 @@ from apis.shared.assistants.models import KNOWN_BINDING_KINDS, AgentBinding, Age
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import memory_spaces_enabled
 from apis.shared.memory.service import MemorySpaceService
-from apis.shared.models.managed_models import get_managed_model
+from apis.shared.models.managed_models import list_all_managed_models
 
 from apis.app_api.admin.services.model_access import ModelAccessService
 
@@ -67,7 +67,11 @@ async def validate_agent_write(
 
 
 async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
-    model = await get_managed_model(cfg.model_id)
+    # ``modelConfig.modelId`` is the Bedrock/provider model id — the identifier the
+    # runtime resolver, RBAC (``permissions.models``) and invocation all key on. Look
+    # the record up by ``model_id`` (NOT ``get_managed_model``, which keys on the
+    # internal UUID PK and would reject a valid Bedrock id with a 400).
+    model = next((m for m in await list_all_managed_models() if m.model_id == cfg.model_id), None)
     if model is None:
         raise BindingValidationError(f"Model '{cfg.model_id}' is not available.", status_code=400)
     if not await svc.can_access_model(user, model):

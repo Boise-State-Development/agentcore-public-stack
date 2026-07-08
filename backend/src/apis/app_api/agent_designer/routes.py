@@ -22,6 +22,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from apis.app_api.agent_designer.services.bindable_catalog import (
+    BINDABLE_KINDS,
+    list_bindable,
+)
 from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
@@ -31,6 +35,7 @@ from apis.shared.assistants.models import (
     AgentResponse,
     AgentSharesResponse,
     AgentsListResponse,
+    BindableListResponse,
     CreateAssistantDraftRequest,
     CreateAssistantRequest,
     ShareAssistantRequest,
@@ -165,6 +170,33 @@ async def list_agents_endpoint(
     except Exception as e:
         logger.error(f"Error listing agents: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list agents: {str(e)}")
+
+
+# --------------------------------------------------------------------------- palette
+# Declared BEFORE ``/{agent_id}`` so the literal path is not captured by the path param.
+@router.get("/bindable", response_model=BindableListResponse)
+async def list_bindable_endpoint(
+    kind: str, current_user: User = Depends(require_agents_enabled)
+):
+    """RBAC-filtered catalog of bindable primitives of ``kind`` for the caller (D4).
+
+    The Designer palette: each picker fetches ``?kind=model|tool|skill|knowledge_base|
+    memory_space`` and shows only what the user's role enables. Composes the existing
+    per-primitive access services (see ``bindable_catalog``).
+    """
+    if kind not in BINDABLE_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported bindable kind '{kind}'. Expected one of: {', '.join(BINDABLE_KINDS)}.",
+        )
+    try:
+        items = await list_bindable(kind, current_user)
+        return BindableListResponse(kind=kind, items=items)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error listing bindable '{kind}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list bindable '{kind}': {str(e)}")
 
 
 @router.get("/{agent_id}", response_model=AgentResponse, response_model_exclude_none=True)

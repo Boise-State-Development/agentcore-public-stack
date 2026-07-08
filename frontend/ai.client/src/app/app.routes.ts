@@ -50,6 +50,21 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        path: 'agents/new',
+        loadComponent: () => import('./agents/agent-form/agent-form.page').then(m => m.AgentFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'agents/:id/edit',
+        loadComponent: () => import('./agents/agent-form/agent-form.page').then(m => m.AgentFormPage),
+        canActivate: [authGuard],
+    },
+    {
+        path: 'agents',
+        loadComponent: () => import('./agents/agents.page').then(m => m.AgentsPage),
+        canActivate: [authGuard],
+    },
+    {
         path: 'schedules/new',
         loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
         canActivate: [authGuard],

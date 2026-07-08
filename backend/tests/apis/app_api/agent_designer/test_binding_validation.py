@@ -40,7 +40,12 @@ def _mem_svc(space, role) -> MagicMock:
 class TestModelValidation:
     @pytest.mark.asyncio
     async def test_accessible_model_passes(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.get_managed_model", AsyncMock(return_value=SimpleNamespace(model_id="m1")))
+        # The model is resolved by its Bedrock ``model_id`` from the full catalog, not
+        # by the internal-UUID PK — so a valid Bedrock id round-trips through the write.
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1")]),
+        )
         await validate_agent_write(
             _user(),
             model_settings=AgentModelConfig(model_id="m1"),
@@ -49,7 +54,10 @@ class TestModelValidation:
 
     @pytest.mark.asyncio
     async def test_unknown_model_400(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.get_managed_model", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1")]),
+        )
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(
                 _user(), model_settings=AgentModelConfig(model_id="ghost"), model_access_service=_model_svc(True)
@@ -58,7 +66,10 @@ class TestModelValidation:
 
     @pytest.mark.asyncio
     async def test_forbidden_model_403(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.get_managed_model", AsyncMock(return_value=SimpleNamespace(model_id="m1")))
+        monkeypatch.setattr(
+            f"{MODULE}.list_all_managed_models",
+            AsyncMock(return_value=[SimpleNamespace(model_id="m1")]),
+        )
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(
                 _user(), model_settings=AgentModelConfig(model_id="m1"), model_access_service=_model_svc(False)

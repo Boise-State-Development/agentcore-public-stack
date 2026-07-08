@@ -220,6 +220,35 @@ class AgentSharesResponse(BaseModel):
     shared_with: List["ShareEntry"] = Field(..., alias="sharedWith", description="Share records (email + permission)")
 
 
+class BindableItem(BaseModel):
+    """A single bindable primitive in the Agent Designer palette (Phase 2, D4).
+
+    The ``GET /agents/bindable?kind=…`` catalog returns a uniform, RBAC-filtered list
+    of these so every picker in the Designer consumes the same shape. ``ref`` is the
+    value the UI stores: ``modelConfig.modelId`` for ``kind == "model"``, otherwise a
+    ``binding.ref``. ``meta`` carries kind-specific display extras (provider, MCP
+    server sub-tools, memory-space role, …) that the picker renders but never has to
+    understand structurally.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str = Field(..., description="'model' or a binding kind (see KNOWN_BINDING_KINDS)")
+    ref: str = Field(..., description="Value to store: modelConfig.modelId (model) or binding.ref")
+    label: str = Field(..., description="Human-readable display name")
+    description: str = Field("", description="Short summary for the picker")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="Kind-specific display extras")
+
+
+class BindableListResponse(BaseModel):
+    """RBAC-filtered catalog of bindable primitives of one kind (Phase 2)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str = Field(..., description="The requested primitive kind")
+    items: List[BindableItem] = Field(default_factory=list, description="Primitives the caller may bind")
+
+
 class AssistantTestChatRequest(BaseModel):
     """Request body for testing assistant chat with RAG"""
 

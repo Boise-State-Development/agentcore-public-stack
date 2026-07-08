@@ -9,6 +9,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { ScheduleService } from '../../schedules/services/schedule.service';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
+import { AgentService } from '../../agents/services/agent.service';
 
 @Component({
   selector: 'app-sidenav',
@@ -22,6 +23,7 @@ export class Sidenav {
   private bffSession = inject(BffSessionService);
   private scheduleService = inject(ScheduleService);
   private memorySpaceService = inject(MemorySpaceService);
+  private agentService = inject(AgentService);
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
 
@@ -61,6 +63,15 @@ export class Sidenav {
    */
   readonly showMemorySpaces = computed(() => this.memorySpaceService.accessible$() === true);
 
+  /**
+   * Whether to show the "Agents" (Agent Designer) nav entry. Rides the agents
+   * list call the same way `showMemorySpaces` rides spaces: a successful (even
+   * empty) list means the `AGENTS_API_ENABLED` kill switch is on; a 404 flips
+   * `accessible$` false and the entry stays hidden. `null` (unresolved) also
+   * hides it so it doesn't flash in before disappearing.
+   */
+  readonly showAgents = computed(() => this.agentService.accessible$() === true);
+
   constructor() {
     // Kick off the accessibility probes once the user is authenticated —
     // mirrors UserService's own permissions-fetch gating.
@@ -68,6 +79,7 @@ export class Sidenav {
       if (this.userService.currentUser()) {
         void this.scheduleService.loadSchedules();
         void this.memorySpaceService.loadSpaces();
+        void this.agentService.loadAgents();
       }
     });
   }
