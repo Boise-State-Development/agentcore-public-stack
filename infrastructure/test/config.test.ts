@@ -385,6 +385,44 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Memory Spaces feature flag — default ON with a kill switch
+  // (complete feature; ships enabled for forkers, empty var must not disable)
+  // ============================================================
+
+  describe('Memory Spaces feature flag', () => {
+    test('defaults to enabled when CDK_MEMORY_SPACES_ENABLED is unset', () => {
+      delete process.env.CDK_MEMORY_SPACES_ENABLED;
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = '';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('CDK_MEMORY_SPACES_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = 'false';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(false);
+    });
+
+    test('CDK_MEMORY_SPACES_ENABLED="true" stays enabled', () => {
+      process.env.CDK_MEMORY_SPACES_ENABLED = 'true';
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(true);
+    });
+
+    test('cdk.json context memorySpaces.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_MEMORY_SPACES_ENABLED;
+      app.node.setContext('memorySpaces', { enabled: false });
+
+      expect(loadConfig(app).memorySpaces.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Configuration Validation Tests
   // ============================================================
 

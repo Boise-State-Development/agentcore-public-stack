@@ -283,7 +283,7 @@ export function buildAppApiEnvironment(
     // (scheduled-runs PR-1). Cohort access is RBAC (`scheduled-runs`
     // capability); this only gates feature existence per environment.
     SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
-    // Kill switch for the Memory Spaces feature (default off per env).
+    // Memory Spaces feature (default ON with a kill switch per env).
     // The table/bucket names are always wired (the service reads them lazily);
     // only MEMORY_SPACES_ENABLED gates whether the routes are mounted. Without
     // these two, app-api falls back to the default "memory-spaces" name and
