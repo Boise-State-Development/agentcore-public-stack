@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+Agent Designer — Phase 1 (foundation). Evolves the assistant store in place into a primitive-agnostic **Agent** contract (governed `modelConfig` + uniform `bindings[]`) and adds a governed `/agents/*` surface, shipped dark behind a per-environment flag. Fully back-compatible: legacy Assistants read as Agents via a compat mapping and `/assistants/*` is unchanged.
+
+### ✨ Added
+
+- Agent contract in the shared assistant models: `AgentModelConfig` (governed single-select model; stored as `modelConfig`) and uniform `AgentBinding[]` (`knowledge_base` | `tool` | `skill` | `memory_space`), both optional and additive on the existing record (#591)
+- D2 compat mapping (`compat.py`): a legacy Assistant projects to an Agent with a `knowledge_base` binding synthesized on read (reffing the assistant id) and no fabricated model (#591)
+- Design-time `binding_validation` composing existing per-primitive RBAC (model access, memory `resolve_permission`) with inert shape-only checks for `tool`/`skill`; assistants `POST`/`PUT` validate and persist the new fields, with `modelConfig.params` floats round-tripped through DynamoDB `Decimal` (#591)
+- Governed `/agents/*` surface (draft/create/list/get/update/delete + shares) returning the Agent shape via `to_agent_view`; delegates to the same shared service + access gates as `/assistants` (#592)
+
+### 🏗️ Infrastructure
+
+- `AGENTS_API_ENABLED` app-api env var wired through CDK config (`CDK_AGENTS_API_ENABLED`, default off, mirroring `memorySpaces`); the `/agents/*` routes 404 until an environment opts in
+
 ## [1.0.4] - 2026-07-01
 
 IAM hotfix restoring AgentCore Memory. Both the App API task role and the AgentCore Runtime execution role were missing `bedrock-agentcore:GetMemory`, which `get_memory_strategies()` needs to resolve strategy IDs — breaking the memory dashboard (empty results) and long-term recall (retrieval silently disabled). Ships via the platform (CDK) pipeline; no migration.

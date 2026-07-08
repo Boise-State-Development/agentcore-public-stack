@@ -292,6 +292,10 @@ export function buildAppApiEnvironment(
     MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
     DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
     S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Kill switch for the Agent Designer /agents surface (default off per env).
+    // Gates only whether the routes 404; the assistant store it reads is always
+    // present, so no extra table/bucket wiring is needed here.
+    AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

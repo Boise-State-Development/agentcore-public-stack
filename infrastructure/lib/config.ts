@@ -51,6 +51,7 @@ export interface AppConfig {
   kbSync: KbSyncConfig;
   scheduledRuns: ScheduledRunsConfig;
   memorySpaces: MemorySpacesConfig;
+  agents: AgentsConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -165,6 +166,17 @@ export interface ScheduledRunsConfig {
  * MEMORY_SPACES_ENABLED env var on app-api and inference-api.
  */
 export interface MemorySpacesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Agent Designer feature flag. Default OFF with an on switch — the governed
+ * `/agents/*` surface is opt-in per environment, enabled with
+ * CDK_AGENTS_API_ENABLED=true (or an `agents.enabled: true` cdk.json context).
+ * Sets the AGENTS_API_ENABLED env var on app-api. The feature ships
+ * incrementally, so it stays dark until complete; `/assistants/*` is unaffected.
+ */
+export interface AgentsConfig {
   enabled: boolean;
 }
 
@@ -325,6 +337,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_MEMORY_SPACES_ENABLED
         ? process.env.CDK_MEMORY_SPACES_ENABLED === 'true'
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? false,
+    },
+    agents: {
+      // Default OFF with an on switch (same pattern as memorySpaces): opt-in per
+      // environment. The workflow forwards an EMPTY STRING when unset, so treat
+      // empty/unset as the default (off) and only the literal "true" as on. An
+      // `agents.enabled` cdk.json context can also force it on.
+      enabled: process.env.CDK_AGENTS_API_ENABLED
+        ? process.env.CDK_AGENTS_API_ENABLED === 'true'
+        : scope.node.tryGetContext('agents')?.enabled ?? false,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,

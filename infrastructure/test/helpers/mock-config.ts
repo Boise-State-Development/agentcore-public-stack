@@ -54,6 +54,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     memorySpaces: {
       enabled: false,
     },
+    agents: {
+      enabled: false,
+    },
     fineTuning: {},
     artifacts: {
       retentionDays: 90,

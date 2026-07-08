@@ -40,4 +40,15 @@ describe('buildAppApiEnvironment — Memory Spaces', () => {
     );
     expect(on.MEMORY_SPACES_ENABLED).toBe('true');
   });
+
+  it('gates the /agents surface on AGENTS_API_ENABLED (default off)', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.AGENTS_API_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(
+      createMockConfig({ agents: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.AGENTS_API_ENABLED).toBe('true');
+  });
 });
