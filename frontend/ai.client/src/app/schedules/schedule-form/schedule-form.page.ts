@@ -12,8 +12,8 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft } from '@ng-icons/heroicons/outline';
 import { ScheduleService } from '../services/schedule.service';
 import { RunNowService } from '../services/run-now.service';
-import { AssistantService } from '../../assistants/services/assistant.service';
-import { Assistant } from '../../assistants/models/assistant.model';
+import { AgentService } from '../../agents/services/agent.service';
+import { Agent } from '../../agents/models/agent.model';
 import { ToolService } from '../../services/tool/tool.service';
 import {
   CreateScheduleRequest,
@@ -71,13 +71,22 @@ function timezoneOptions(): string[] {
  * (daily / weekday / weekly at an hour + IANA timezone) — no cron field,
  * per docs/specs/scheduled-agent-runs.md §3.
  *
- * Optional fields (assistant, tool selection) use explicit "clear"
- * checkboxes rather than relying on sending null: the backend's
- * `update_scheduled_prompt` reads a bare `null` as "leave unchanged", so a
- * clear is signalled with the explicit `clearAssistant` / `clearTools`
- * booleans instead. `clearAssistant` reverts to the default agent;
- * `clearTools` re-snapshots the caller's current RBAC-allowed tools. See
- * `buildUpdateRequest`.
+ * The "target" is an Agent (the Agent Designer primitive that supersedes the
+ * Assistant — same underlying record, `agentId == assistantId`, so the wire
+ * field stays `assistantId` for backend compatibility). When an Agent is
+ * selected, its **bound tools govern the run**: the inference path replaces the
+ * request's `enabled_tools` with the Agent's `tool` bindings at invocation
+ * (`agent_binding_resolver` / routes.py `effective_enabled_tools`). So the
+ * manual tool picker is only shown for the "Default agent" case — selecting an
+ * Agent hides it, and any prior snapshot is dropped so it can't shadow the
+ * Agent's own toolset.
+ *
+ * Optional fields (agent, tool selection) use explicit "clear" checkboxes
+ * rather than relying on sending null: the backend's `update_scheduled_prompt`
+ * reads a bare `null` as "leave unchanged", so a clear is signalled with the
+ * explicit `clearAssistant` / `clearTools` booleans instead. `clearAssistant`
+ * reverts to the default agent; `clearTools` re-snapshots the caller's current
+ * RBAC-allowed tools. See `buildUpdateRequest`.
  */
 @Component({
   selector: 'app-schedule-form-page',
@@ -92,7 +101,7 @@ export class ScheduleFormPage implements OnInit {
   private readonly fb = inject(FormBuilder);
   private readonly scheduleService = inject(ScheduleService);
   private readonly runNowService = inject(RunNowService);
-  private readonly assistantService = inject(AssistantService);
+  private readonly agentService = inject(AgentService);
   private readonly toolService = inject(ToolService);
   private readonly toast = inject(ToastService);
 
@@ -105,7 +114,7 @@ export class ScheduleFormPage implements OnInit {
   readonly minIntervalMinutes = MIN_INTERVAL_MINUTES;
   readonly intervalUnitOptions: IntervalUnit[] = ['minutes', 'hours'];
 
-  readonly assistants = this.assistantService.assistants$;
+  readonly agents = this.agentService.agents$;
   readonly tools = this.toolService.tools;
 
   readonly hourOptions = hourOptions();
@@ -113,14 +122,28 @@ export class ScheduleFormPage implements OnInit {
   readonly weekdayLabels = WEEKDAY_LABELS;
 
   /**
-   * Whether the assistant/tools sections should send a clear intent on
-   * submit. Only meaningful in edit mode — create simply omits the field
-   * when unchecked and nothing has been picked.
+   * Whether the agent/tools sections should send a clear intent on submit.
+   * Only meaningful in edit mode — create simply omits the field when
+   * unchecked and nothing has been picked.
    */
   readonly clearAssistant = signal(false);
   readonly clearTools = signal(false);
 
   readonly selectedToolIds = signal<Set<string>>(new Set());
+
+  /**
+   * Mirror of the `assistantId` control value (form values aren't signals) so
+   * the template can reactively hide the manual tool picker when an Agent is
+   * chosen. A selected Agent's bound tools replace the run's `enabled_tools`
+   * server-side, so a manual picker there would be silently discarded.
+   */
+  readonly selectedAgentId = signal<string | null>(null);
+  readonly agentSelected = computed(() => !!this.selectedAgentId());
+  readonly selectedAgentName = computed<string>(() => {
+    const id = this.selectedAgentId();
+    if (!id) return '';
+    return (this.agents() as Agent[]).find((a) => a.agentId === id)?.name ?? id;
+  });
 
   readonly form = this.fb.group({
     label: ['', [Validators.required, Validators.maxLength(200)]],
@@ -142,7 +165,7 @@ export class ScheduleFormPage implements OnInit {
     const id = this.route.snapshot.paramMap.get('scheduleId');
     this.scheduleId.set(id);
 
-    void this.assistantService.loadAssistants(false, false);
+    void this.agentService.loadAgents(false);
     if (!this.toolService.initialized()) {
       void this.toolService.loadTools();
     }
@@ -150,6 +173,13 @@ export class ScheduleFormPage implements OnInit {
     if (id) {
       void this.loadSchedule(id);
     }
+
+    // Keep the selected-agent signal in sync with the control so the tool
+    // picker hides/shows reactively.
+    this.selectedAgentId.set(this.form.controls.assistantId.value ?? null);
+    this.form.controls.assistantId.valueChanges.subscribe((value) => {
+      this.selectedAgentId.set(value ?? null);
+    });
 
     // Keep the cadence-driven signals in sync (form values aren't signals, so
     // the isWeekly/isInterval computeds read this instead of the control).
@@ -203,12 +233,6 @@ export class ScheduleFormPage implements OnInit {
     } catch {
       return 'UTC';
     }
-  }
-
-  assistantName(assistantId: string | null): string {
-    if (!assistantId) return '';
-    const match = (this.assistants() as Assistant[]).find((a) => a.assistantId === assistantId);
-    return match?.name ?? assistantId;
   }
 
   toggleTool(toolId: string): void {
@@ -272,7 +296,11 @@ export class ScheduleFormPage implements OnInit {
 
     this.saving.set(true);
     try {
-      const toolIds = Array.from(this.selectedToolIds());
+      // A selected Agent owns its toolset — its `tool` bindings replace the
+      // run's `enabled_tools` server-side — so never send a manual snapshot
+      // alongside one; it would be dead data. The picker is hidden in that
+      // case, but guard here too so a stale selection can't leak through.
+      const toolIds = value.assistantId ? [] : Array.from(this.selectedToolIds());
       if (this.mode() === 'create') {
         const request: CreateScheduleRequest = {
           label: value.label!,
@@ -361,10 +389,15 @@ export class ScheduleFormPage implements OnInit {
       return;
     }
 
-    const toolIds = Array.from(this.selectedToolIds());
+    const agentId = this.form.controls.assistantId.value ?? null;
+    // Mirror the schedule's targeting: run against the selected Agent (whose
+    // bound tools govern the turn), else fall back to the manual tool snapshot
+    // for the default agent.
+    const toolIds = agentId ? [] : Array.from(this.selectedToolIds());
     const request: RunNowRequest = {
       prompt: promptText,
       title: this.form.controls.label.value?.trim() || null,
+      ragAssistantId: agentId,
       enabledTools: toolIds.length > 0 ? toolIds : null,
     };
     this.runNowService.run(request);
