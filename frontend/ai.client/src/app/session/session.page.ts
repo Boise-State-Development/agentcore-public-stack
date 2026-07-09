@@ -340,13 +340,18 @@ export class ConversationPage implements OnDestroy {
         return;
       }
 
-      // No assistant in the URL — clear any stale state from a prior load.
+      // No assistant in the URL — clear any stale local state from a prior load.
       if (loadedAssistant || this.assistantError() || this.agent()) {
         this.assistant.set(null);
         this.assistantError.set(null);
         this.agent.set(null);
-        this.clearAgentBindingLocks();
       }
+      // Always release the picker locks. They live in root singleton services
+      // that OUTLIVE this component, so a freshly-created "new chat" component
+      // (whose own assistant()/agent() signals start null, making the guard
+      // above false) must still release locks the previous conversation left
+      // behind. Idempotent — a no-op when nothing is locked.
+      this.clearAgentBindingLocks();
     });
 
     // Self-heal effect: when the user lands on `/s/:id` without an
