@@ -1,3 +1,62 @@
+# Release Notes — v1.2.0
+
+**Release Date:** July 9, 2026
+**Previous Release:** v1.1.0 (July 8, 2026)
+
+---
+
+> This is a code-only release (no new AWS resources). It ships through the standard **backend** and **frontend** pipelines. One operator-facing flag flips default (`AGENTS_API_ENABLED` is now on) — see the Deployment notes at the end of this entry. No migration.
+
+---
+
+## Highlights
+
+v1.2.0 completes the **Agent Designer** that landed dark in 1.1.0. Skill bindings now resolve at invocation — joining model and tool bindings so an Agent fully governs its model, parameters, tools, and skills against the *invoking* user. The chat input now reflects those governed bindings honestly (locked pickers with "Set by agent" affordances), the Designer gains a **live side-by-side preview** that streams the saved agent through the real invocation path, model **parameters** are governed at author time, and the full knowledge-base editor is now available on an Agent — closing the last Assistant→Agent migration blocker. With the feature complete, the `/agents` API flips **on by default** (still admin-gated "Preview" in the nav). There are no breaking changes and no migration.
+
+## Agent Designer — completion
+
+1.1.0 shipped the Agent Designer contract, `/agents` surface, bindable-primitives catalog, and Phase-3 harness resolution for the model and tool bindings, all behind a default-off flag. This release finishes the story.
+
+### Backend
+
+- **Skill bindings resolve at invocation (#602).** `resolve_agent_invocation` now returns `plan.skills` (`ResolvedSkills`). When an Agent binds skills they *replace* the request's skills for the turn and the route forces `agent_type="skill"` so the SkillAgent discloses exactly the bound set. Each bound skill is re-checked against the invoking user via `AppRoleService.can_access_skill`; a missing skill — or the Skills feature being disabled in the environment — blocks the turn with a message. No skill binding ⇒ `plan.skills is None` ⇒ the request's `agent_type`/`enabled_skills` drive the turn exactly as today. Resolution reassigns `effective_agent_type`/`effective_skill_ids` before the main-turn `get_agent`, so a bound-skill agent resumes on the same `skills_hash` (resume-safe, mirroring the tool slice). Design-time, `skill` drops from the inert kinds — no inert kinds remain — and a bound skill is flag-gated and validated against the author's palette.
+- **Model-parameter governance (#609).** `binding_validation._validate_model_params` rejects params that are unsupported, locked, or out of `[min,max]`/allowed-set against the model's admin `supported_params` — an author-facing 400 instead of a silent runtime clamp (belt-and-suspenders to the runtime merge).
+
+### Frontend
+
+- **Live editor preview (#609).** A new `AgentPreviewComponent` reuses `PreviewChatService` to stream the *saved* agent through the real `/chat/stream` invocation path, so all bindings (model / params / tools / skills / memory) resolve server-side. Agents send a minimal request body and opt out of the assistant preview's `system_prompt` + owner-tools injection (which fought the bindings and could blow the 8 KB system-prompt cap on long personas); a capability strip and dirty banner make the resolved context and save-to-apply semantics explicit. A two-column editor shell mirrors the assistant editor.
+- **Data-driven Parameters subsection (#609)** under the model picker reads `meta.supportedParams` (numeric inputs, enum selects, locked read-only); empty params omit `params` entirely, preserving today's resolution.
+- **Chat input reflects governed bindings (#603).** The model/tool/skill pickers lock to the active Agent's bindings (locked read-only chip "set by this agent", "Set by agent" model row, and a "This agent uses a fixed set of tools/skills" banner with disabled toggles). This is UI honesty — the backend remains the authority — and it is per-primitive: an Agent that binds a model but no tools locks only the model. When an agent locks the panel, it now lists **only** the bound tools/skills rather than the full accessible set greyed out (#606).
+- **Knowledge base in the Designer (#608).** The assistant editor's inline KB section is extracted into a reusable `KnowledgeBaseSectionComponent` and used in both the assistant form and the agent form, replacing the agent's read-only "managed automatically" card with the live document / web-crawl / connector flow. This closes the last Agent migration blocker; the gap was frontend-only, since the document pipeline already keys on the record id and `agentId == assistantId`. The component owns record identity via a `createDraft` callback (the assistant form sheds ~1000 lines), and a `permissionResolved` gate keeps a viewer from 403-ing on edit-only sync-policy calls.
+
+## ✨ Improved
+
+- Settings panel shows only an agent's bound tools/skills when it locks the toolset, instead of the full list with unbound entries greyed out (#606).
+
+## ⚠️ Changed
+
+- **`AGENTS_API_ENABLED` now defaults on.** The Agent Designer is complete, so the flag flips from opt-in to default-on (empty-string-safe — only the literal `false` disables), matching `scheduled_runs`/`memory_spaces`. The `/agents/*` API now responds in every environment. **SPA nav stays preview-gated** (system-admin + "Preview" badge), so this does not broaden user-facing exposure — it just stops the API 404-ing per-environment (#607).
+- **Memory Spaces and Scheduled Runs are temporarily hidden from the side nav** while the Agent Designer is the focus. Their routes, pages, and capability probes are unchanged — re-enabling is just restoring the nav template blocks. The features remain deployed and reachable; they're only absent from navigation (#611).
+
+## 🐛 Bug fixes
+
+- **Picker locks stuck after "New chat."** The agent-binding lock release lived inside a guard that was false on the freshly-recreated session component, so the model/tool pickers stayed locked to the previous agent conversation. The release now always runs when no assistant is in the URL (idempotent) (#603).
+- **Preview showed the wrong model.** The Designer preview reused the main chat input, which read the user's global model and let them switch it even though the harness resolves the model from the agent's binding. The preview's model picker is now locked to the agent's bound model, released on destroy (#611).
+- **Flaky cadence test.** The scheduled-runs re-arm test asserted a daily-9am delta in `(1h, 48h)`, which failed legitimately when CI ran in the hour before 9am Boise. The dispatcher clock is now frozen so the assertion is time-of-day independent (#608).
+
+## 🏗️ Infrastructure
+
+- CDK `config.agents.enabled` now defaults on (`!== 'false'` with a `?? true` context fallback), mirroring `memorySpaces`/`scheduledRuns`. No new AWS resources — the `AGENTS_API_ENABLED` env var only gates whether `/agents/*` responds (#607).
+
+## 🚀 Deployment notes
+
+Code-only release — no new infrastructure and no data migration; it ships through the standard **backend** and **frontend** pipelines (a platform/CDK deploy is only needed to pick up the `config.agents.enabled` default flip, which is otherwise inert).
+
+- **`AGENTS_API_ENABLED` is now on by default.** After deploy, the `/agents/*` API responds in every environment. This does **not** expose the Agent Designer to end users — the SPA nav entry remains system-admin-only with a "Preview" badge. To keep the API dark in an environment, set `CDK_AGENTS_API_ENABLED=false` and redeploy the platform.
+- **Memory Spaces / Scheduled Runs disappear from the side nav.** This is expected (#611); the features are still deployed and their routes still resolve. Re-enabling is a template-only change in a future release.
+
+---
+
 # Release Notes — v1.1.0
 
 **Release Date:** July 8, 2026
