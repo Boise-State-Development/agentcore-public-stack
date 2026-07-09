@@ -80,6 +80,23 @@ def _tool_binding(ref: str) -> AgentBinding:
     return AgentBinding(kind="tool", ref=ref)
 
 
+def _patch_skill_access(monkeypatch, allowed, *, enabled=True) -> MagicMock:
+    """Patch the skills flag + AppRole gate for skill resolution. ``allowed`` is a bool or a
+    set of skill ids the invoker may access."""
+    monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: enabled)
+    svc = MagicMock()
+    if isinstance(allowed, bool):
+        svc.can_access_skill = AsyncMock(return_value=allowed)
+    else:
+        svc.can_access_skill = AsyncMock(side_effect=lambda user, sid: sid in allowed)
+    monkeypatch.setattr(f"{MODULE}.get_app_role_service", lambda: svc)
+    return svc
+
+
+def _skill_binding(ref: str) -> AgentBinding:
+    return AgentBinding(kind="skill", ref=ref)
+
+
 class TestModelResolution:
     @pytest.mark.asyncio
     async def test_no_modelconfig_is_empty_plan(self, monkeypatch):
@@ -235,3 +252,55 @@ class TestToolResolution:
         # can_access_tool(invoker, tool_id) — the INVOKING user, not the author.
         args = svc.can_access_tool.await_args.args
         assert args[0].user_id == "u-bob" and args[1] == "web_search"
+
+
+class TestSkillResolution:
+    @pytest.mark.asyncio
+    async def test_no_skill_binding_is_none(self, monkeypatch):
+        # No skill binding ⇒ plan.skills is None and we never consult the flag or RBAC.
+        svc = _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
+        assert plan.skills is None
+        svc.can_access_skill.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_accessible_skills_become_override(self, monkeypatch):
+        _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_skill_binding("research"), _skill_binding("writing")]), _user()
+        )
+        assert plan.skills is not None
+        assert plan.skills.skill_ids == ["research", "writing"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_refs_deduped(self, monkeypatch):
+        _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_skill_binding("research"), _skill_binding("research")]), _user()
+        )
+        assert plan.skills.skill_ids == ["research"]
+
+    @pytest.mark.asyncio
+    async def test_flag_off_blocks(self, monkeypatch):
+        # Skills disabled in this environment but the Agent binds one ⇒ block (env drift, D5).
+        _patch_skill_access(monkeypatch, True, enabled=False)
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(_assistant(bindings=[_skill_binding("research")]), _user())
+        assert "enabled" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_missing_skill_blocks_with_message(self, monkeypatch):
+        _patch_skill_access(monkeypatch, {"writing"})
+        with pytest.raises(AgentBindingBlockedError) as ei:
+            await resolve_agent_invocation(
+                _assistant(bindings=[_skill_binding("research"), _skill_binding("writing")]), _user()
+            )
+        assert "research" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_skill_access_checked_against_invoker(self, monkeypatch):
+        svc = _patch_skill_access(monkeypatch, True)
+        await resolve_agent_invocation(_assistant(bindings=[_skill_binding("research")]), _user())
+        # can_access_skill(invoker, skill_id) — the INVOKING user, not the author.
+        args = svc.can_access_skill.await_args.args
+        assert args[0].user_id == "u-bob" and args[1] == "research"

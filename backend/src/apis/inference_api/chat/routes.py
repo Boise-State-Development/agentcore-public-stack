@@ -1177,6 +1177,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
     # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
     agent_tools_override = None
+    # An Agent's ``skill`` bindings, resolved per invoker (D5). When set they replace the
+    # request's skills AND force skill-mode (agent_type="skill") for the turn. None ⇒ the
+    # Agent binds no skills ⇒ the request's agent_type/enabled_skills drive the turn.
+    agent_skills_override = None
 
     logger.info(
         "Invocation request - processing with assistant context"
@@ -1303,6 +1307,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_model_override = agent_plan.model_override
                 agent_memory = agent_plan.memory
                 agent_tools_override = agent_plan.tools
+                agent_skills_override = agent_plan.skills
             except AgentBindingBlockedError as block:
                 blocked_event = ConversationalErrorEvent(
                     code=ErrorCode.FORBIDDEN, message=block.message, recoverable=False
@@ -1641,6 +1646,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 if agent_tools_override is not None
                 else input_data.enabled_tools
             )
+
+            # An Agent's skill bindings replace the request's skills for this turn and
+            # force skill-mode so the SkillAgent discloses exactly the bound set (D5,
+            # resolved per invoker above). Reassigning these function-scope locals here
+            # (before the main-turn get_agent below) makes them flow into construction —
+            # and thus the paused-turn snapshot — so a bound-skill agent resumes on the
+            # same skills_hash. None ⇒ no skill binding ⇒ the request drives skills/type.
+            if agent_skills_override is not None:
+                effective_agent_type = "skill"
+                effective_skill_ids = agent_skills_override.skill_ids
 
             extra_tools = _build_spreadsheet_tools(
                 enabled_tools=effective_enabled_tools,
