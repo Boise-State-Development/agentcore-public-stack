@@ -30,6 +30,20 @@ from apis.shared.memory.service import (
 
 logger = logging.getLogger(__name__)
 
+# The space's human-readable index (MEMORY.md) is not a manifest entry — it's a
+# standalone S3 object addressed by ``space.index_s3_key`` and auto-injected into
+# the agent's context each session via hydration (``always_load`` starts with
+# "MEMORY.md"). It never appears in ``memory_list``. To let the agent keep that
+# index in sync with the entries it writes, ``memory_read``/``memory_write`` treat
+# this reserved slug specially, routing to ``read_index``/``update_index`` instead
+# of the entry manifest. The slug is reserved: an agent cannot create an ordinary
+# entry named "MEMORY.md".
+_INDEX_SLUG = "MEMORY.md"
+
+
+def _is_index_slug(slug: str) -> bool:
+    return slug.strip().lower() == _INDEX_SLUG.lower()
+
 
 def _error(text: str) -> dict[str, Any]:
     return {"content": [{"text": f"❌ {text}"}], "status": "error"}
@@ -43,6 +57,10 @@ def make_memory_list_tool(space_id: str, space_name: str, user_id: str, user_ema
         Use this to see what you remember before deciding whether to `memory_read` a
         specific entry. Returns each entry's slug, type, description, and last-updated
         time. Optionally filter by `entry_type` ("entity", "episodic", or "fact").
+
+        The `MEMORY.md` index is not an entry and never appears here — it's injected
+        into your context each session and is read/written via `memory_read("MEMORY.md")`
+        / `memory_write("MEMORY.md", ...)`.
 
         Args:
             entry_type: Optional filter — one of "entity", "episodic", "fact".
@@ -72,14 +90,23 @@ def make_memory_read_tool(space_id: str, space_name: str, user_id: str, user_ema
         """Read the full content of one entry in your bound memory space.
 
         Pass a `slug` from `memory_list` (or referenced in your injected memory index).
+        The special slug `MEMORY.md` reads the space's human-readable index (the same
+        text injected into your context each session) — use it to see the current index
+        before updating it with `memory_write`.
 
         Args:
-            slug: The entry's stable id within the space (e.g. "jane-doe").
+            slug: The entry's stable id within the space (e.g. "jane-doe"), or the
+                reserved slug "MEMORY.md" for the space index.
         """
         try:
-            body = await asyncio.to_thread(
-                MemorySpaceService().read_entry, space_id, user_id, user_email, slug
-            )
+            if _is_index_slug(slug):
+                body = await asyncio.to_thread(
+                    MemorySpaceService().read_index, space_id, user_id, user_email
+                )
+            else:
+                body = await asyncio.to_thread(
+                    MemorySpaceService().read_entry, space_id, user_id, user_email, slug
+                )
         except MemorySpaceNotFoundError:
             return _error(f"No memory entry '{slug}' exists in '{space_name}'.")
         except MemorySpacePermissionError as exc:
@@ -105,13 +132,28 @@ def make_memory_write_tool(space_id: str, space_name: str, user_id: str, user_em
         will want recalled later. Writing an existing `slug` replaces that entry. Only
         available when the agent's memory binding grants write access.
 
+        The special slug `MEMORY.md` replaces the space's human-readable index instead of
+        creating an entry — keep it in sync as you add entries (e.g. a one-line pointer or
+        `[[slug]]` wikilink per entry). Read the current index first with
+        `memory_read("MEMORY.md")`; `entry_type` and `description` are ignored for it.
+
         Args:
-            slug: Stable id for the entry (e.g. "jane-doe", "daily-2026-07-07").
-            body: The entry's markdown content.
+            slug: Stable id for the entry (e.g. "jane-doe", "daily-2026-07-07"), or the
+                reserved slug "MEMORY.md" to replace the space index.
+            body: The entry's (or index's) markdown content.
             entry_type: "entity", "episodic", or "fact" (default "fact").
             description: Short one-line summary shown in listings.
         """
         try:
+            if _is_index_slug(slug):
+                await asyncio.to_thread(
+                    MemorySpaceService().update_index,
+                    space_id, user_id, user_email, body,
+                )
+                return {
+                    "content": [{"text": f'Updated the MEMORY.md index of "{space_name}".'}],
+                    "status": "success",
+                }
             ref = await asyncio.to_thread(
                 lambda: MemorySpaceService().write_entry(
                     space_id, user_id, user_email, slug, body,
