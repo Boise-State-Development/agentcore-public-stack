@@ -423,6 +423,44 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Agents API (Agent Designer) feature flag — default ON with a kill switch
+  // (complete feature; ships enabled for forkers, empty var must not disable)
+  // ============================================================
+
+  describe('Agents API feature flag', () => {
+    test('defaults to enabled when CDK_AGENTS_API_ENABLED is unset', () => {
+      delete process.env.CDK_AGENTS_API_ENABLED;
+
+      expect(loadConfig(app).agents.enabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_AGENTS_API_ENABLED = '';
+
+      expect(loadConfig(app).agents.enabled).toBe(true);
+    });
+
+    test('CDK_AGENTS_API_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_AGENTS_API_ENABLED = 'false';
+
+      expect(loadConfig(app).agents.enabled).toBe(false);
+    });
+
+    test('CDK_AGENTS_API_ENABLED="true" stays enabled', () => {
+      process.env.CDK_AGENTS_API_ENABLED = 'true';
+
+      expect(loadConfig(app).agents.enabled).toBe(true);
+    });
+
+    test('cdk.json context agents.enabled=false disables when env is unset', () => {
+      delete process.env.CDK_AGENTS_API_ENABLED;
+      app.node.setContext('agents', { enabled: false });
+
+      expect(loadConfig(app).agents.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Configuration Validation Tests
   // ============================================================
 

@@ -57,6 +57,52 @@ describe('SkillService', () => {
     });
   });
 
+  describe('agent binding lock', () => {
+    beforeEach(setup);
+
+    it('is unlocked by default', () => {
+      expect(service.agentLocked()).toBe(false);
+    });
+
+    it('locks enabledSkillIds to the bound set (replace semantics)', () => {
+      // web_research is user-disabled; the lock forces exactly the bound set.
+      service.lockToAgentSkills(['web_research']);
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledSkillIds()).toEqual(['web_research']);
+      expect(service.enabledCount()).toBe(1);
+    });
+
+    it('reflects the bound set in per-skill shown state', () => {
+      service.lockToAgentSkills(['web_research']);
+      const pdf = service.skills().find(s => s.skillId === 'pdf_workflows')!;
+      const web = service.skills().find(s => s.skillId === 'web_research')!;
+      expect(service.isSkillShownEnabled(pdf)).toBe(false);
+      expect(service.isSkillShownEnabled(web)).toBe(true);
+    });
+
+    it('ignores toggles while locked (no HTTP)', async () => {
+      service.lockToAgentSkills(['web_research']);
+      await service.toggleSkill('pdf_workflows');
+      httpMock.expectNone('http://localhost:8000/skills/preferences');
+      expect(service.enabledSkillIds()).toEqual(['web_research']);
+    });
+
+    it('filters visibleSkills to only the bound skills while locked', () => {
+      expect(service.visibleSkills().map(s => s.skillId).sort()).toEqual(['pdf_workflows', 'web_research']);
+      service.lockToAgentSkills(['web_research']);
+      expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
+    });
+
+    it('restores the user set when cleared', () => {
+      service.lockToAgentSkills(['web_research']);
+      service.clearAgentLock();
+      expect(service.agentLocked()).toBe(false);
+      // Back to per-skill state: only pdf_workflows is user-enabled.
+      expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
+      expect(service.visibleSkills().length).toBe(2);
+    });
+  });
+
   describe('loadSkills', () => {
     beforeEach(setup);
 

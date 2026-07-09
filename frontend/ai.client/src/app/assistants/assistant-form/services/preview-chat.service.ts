@@ -171,6 +171,7 @@ export class PreviewChatService {
     assistantId: string,
     liveInstructions?: string,
     fileUploadIds?: string[],
+    opts?: { includeSystemPrompt?: boolean; includeEnabledTools?: boolean },
   ): Promise<void> {
     if (!userMessage.trim() || this.loadingSignal()) {
       return;
@@ -227,12 +228,20 @@ export class PreviewChatService {
         message: userMessage,
         session_id: this.sessionIdSignal(),
         rag_assistant_id: assistantId,
-        system_prompt: liveInstructions || null, // Send live form instructions for preview
-        model_id: null, // Use default model
-        // Forward the owner's enabled tools so the preview exercises tools the
-        // same way a consumer chat does.
-        enabled_tools: this.toolService.getEnabledToolIds(),
+        model_id: null, // Use default model (an Agent's model binding overrides this server-side)
       };
+      // Assistants preview live instruction edits via `system_prompt` and forward
+      // the owner's enabled tools, so the preview exercises tools like a consumer
+      // chat. Agents resolve their instructions, model, tools, skills, and memory
+      // server-side from the saved record (`rag_assistant_id`) — sending those here
+      // would fight the bindings and can exceed the `system_prompt` length cap for a
+      // long persona (422) — so the agent preview opts out of both.
+      if (opts?.includeSystemPrompt ?? true) {
+        requestBody['system_prompt'] = liveInstructions || null;
+      }
+      if (opts?.includeEnabledTools ?? true) {
+        requestBody['enabled_tools'] = this.toolService.getEnabledToolIds();
+      }
       if (fileUploadIds && fileUploadIds.length > 0) {
         requestBody['file_upload_ids'] = fileUploadIds;
       }

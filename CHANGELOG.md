@@ -4,6 +4,36 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.2.0] - 2026-07-09
+
+Agent Designer completion. Finishes the run-time binding trio (skills join model + tools), makes the chat input honor an active agent's governed bindings, adds a live side-by-side editor preview and model-parameter governance, brings full knowledge-base management into the Designer, and flips the `/agents` API on by default. The Agent Designer nav stays admin-gated Preview; no breaking changes and no migration.
+
+### 🚀 Added
+
+- Skill binding resolution at invocation: an Agent's bound skills now *replace* the request's skills and force `agent_type="skill"` for the turn, each re-checked against the invoking user (`AppRoleService.can_access_skill`) and flag-gated, with design-time validation — completing the model/tool/skill governance trio (tools shipped in 1.1.0). No binding ⇒ the request drives the turn as before (#602)
+- Manage an agent's knowledge base from the Agent Designer: the assistant editor's KB section is extracted into a reusable `KnowledgeBaseSectionComponent` and reused in the agent form, replacing the read-only "managed automatically" card with the live document / web-crawl / connector flow — closing the last Agent migration blocker (frontend-only; the ingestion pipeline already keys on the record id and `agentId == assistantId`) (#608)
+- Governed model parameters + live editor preview: `binding_validation._validate_model_params` rejects unsupported / locked / out-of-range params against the model's admin `supported_params` (author-facing 400 instead of a silent clamp); a data-driven Parameters subsection sits under the model picker; a new `AgentPreviewComponent` streams the *saved* agent through the real `/chat/stream` path so every binding resolves server-side (#609)
+- Chat input reflects governed agent bindings: the model/tool/skill pickers lock to the active agent's bindings (locked read-only chips + "Set by agent" banners), resolved via `agentId == assistantId`. Per-primitive — an agent that binds only a model locks only the model; the rest stay free-select (#603)
+
+### ✨ Improved
+
+- When an agent locks the settings panel, it now shows only the bound tools/skills (`visibleTools` / `visibleSkills`) instead of the full accessible list with the unbound ones greyed out (#606)
+
+### ⚠️ Changed
+
+- The Agent Designer `/agents/*` API now defaults **on** (empty-string-safe kill switch — only the literal `false` disables), matching `scheduled_runs` / `memory_spaces`. SPA nav stays preview-gated (system-admin + "Preview" badge), so user-facing exposure is unchanged — the API just no longer 404s per-environment (#607)
+- The Memory Spaces and Scheduled Runs side-nav entries are hidden for now while the Agent Designer is the focus. Their routes, pages, and capability probes are unchanged, so re-enabling is just restoring the nav template blocks (#611)
+
+### 🐛 Fixed
+
+- Chat-input picker locks are now released when starting a New chat: the release ran inside a guard that was false on the freshly-recreated session component, leaving the model/tool pickers stuck from the previous agent conversation (#603)
+- The Agent Designer preview's model picker is locked to the agent's bound model (released on destroy) instead of showing the user's global model (#611)
+- De-flaked the scheduled-runs cadence re-arm test by freezing the dispatcher clock; it was time-of-day dependent and failed when CI ran in the hour before 9am Boise (#608)
+
+### 🏗️ Infrastructure
+
+- CDK `config.agents.enabled` now defaults on (`!== 'false'` + `?? true` context fallback), mirroring `memorySpaces` / `scheduledRuns`. No new resources — the `AGENTS_API_ENABLED` env var only gates whether `/agents/*` responds (#607)
+
 ## [1.1.0] - 2026-07-08
 
 Feature release adding four new capabilities — **Scheduled Runs** (unattended/proactive agent runs), **Memory Spaces** (bindable, shareable markdown memory), the **Agent Designer** (primitive-binding authoring surface), and **Knowledge Base Sync** (scheduled re-index of assistant sources) — plus a chat/session UX overhaul (per-conversation streaming, interrupted-turn persistence, mid-stream session titles). Every new surface is flag-gated; there are no breaking changes and no migration. Scheduled Runs, Memory Spaces, and KB Sync default **on**; the Agent Designer defaults **off**. The three preview surfaces (Agents, Memory Spaces, Scheduled Runs) are nav-gated to system-admins and carry a "Preview" badge.

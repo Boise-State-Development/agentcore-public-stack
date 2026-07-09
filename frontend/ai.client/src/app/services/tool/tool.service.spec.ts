@@ -66,6 +66,60 @@ describe('ToolService', () => {
     });
   });
 
+  describe('agent binding lock', () => {
+    beforeEach(setup);
+
+    it('is unlocked by default', () => {
+      expect(service.agentLocked()).toBe(false);
+    });
+
+    it('locks enabledToolIds to the bound set (replace semantics)', () => {
+      service.lockToAgentTools(['code-interp']);
+      expect(service.agentLocked()).toBe(true);
+      // Replaces the user's set entirely, even though search-web is user-enabled.
+      expect(service.enabledToolIds()).toEqual(['code-interp']);
+      expect(service.enabledCount()).toBe(1);
+    });
+
+    it('reflects the bound set in per-tool shown state', () => {
+      service.lockToAgentTools(['code-interp']);
+      const search = service.getTool('search-web')!;
+      const code = service.getTool('code-interp')!;
+      expect(service.isToolShownEnabled(search)).toBe(false);
+      expect(service.isToolShownEnabled(code)).toBe(true);
+    });
+
+    it('ignores toggles while locked (no HTTP)', async () => {
+      service.lockToAgentTools(['code-interp']);
+      await service.toggleTool('search-web');
+      httpMock.expectNone('http://localhost:8000/tools/preferences');
+      expect(service.enabledToolIds()).toEqual(['code-interp']);
+    });
+
+    it('filters visibleTools to only the bound tools while locked', () => {
+      // Unlocked: every accessible tool is visible.
+      expect(service.visibleTools().map(t => t.toolId).sort()).toEqual(['code-interp', 'search-web']);
+      service.lockToAgentTools(['code-interp']);
+      // Locked: only the bound tool is shown (the rest are hidden, not greyed).
+      expect(service.visibleTools().map(t => t.toolId)).toEqual(['code-interp']);
+    });
+
+    it('restores the user set when cleared', () => {
+      service.lockToAgentTools(['code-interp']);
+      service.clearAgentLock();
+      expect(service.agentLocked()).toBe(false);
+      // Back to the per-tool computation (both mock tools are enabled).
+      expect(service.enabledToolIds().sort()).toEqual(['code-interp', 'search-web']);
+      expect(service.visibleTools().length).toBe(2);
+    });
+
+    it('locks to an empty set (agent with no tools ≠ free-select)', () => {
+      service.lockToAgentTools([]);
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledToolIds()).toEqual([]);
+    });
+  });
+
   describe('toggleTool', () => {
     beforeEach(setup);
 

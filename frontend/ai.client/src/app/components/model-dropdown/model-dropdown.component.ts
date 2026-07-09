@@ -3,7 +3,7 @@ import { Router } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroCheck } from '@ng-icons/heroicons/outline';
+import { heroCheck, heroLockClosed } from '@ng-icons/heroicons/outline';
 import { ModelService } from '../../session/services/model/model.service';
 import { SessionService } from '../../session/services/session/session.service';
 import { ManagedModel } from '../../admin/manage-models/models/managed-model.model';
@@ -12,9 +12,20 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
   selector: 'app-model-dropdown',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CdkMenuTrigger, CdkMenu, CdkMenuItem, NgIcon],
-  providers: [provideIcons({ heroCheck })],
+  providers: [provideIcons({ heroCheck, heroLockClosed })],
   template: `
     <div class="relative">
+      @if (modelService.agentModelLocked()) {
+        <!-- Agent-dictated: the active agent pins this model; the picker is locked. -->
+        <div
+          class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-gray-500 dark:text-gray-400"
+          title="This agent runs on a fixed model"
+        >
+          <ng-icon name="heroLockClosed" class="size-3.5 shrink-0" aria-hidden="true" />
+          <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
+          <span class="sr-only">(set by this agent)</span>
+        </div>
+      } @else {
       <button
         type="button"
         [cdkMenuTriggerFor]="modelMenu"
@@ -37,6 +48,7 @@ import { ManagedModel } from '../../admin/manage-models/models/managed-model.mod
           />
         </svg>
       </button>
+      }
 
       <ng-template #modelMenu>
         <div

@@ -41,7 +41,9 @@ describe('buildAppApiEnvironment — Memory Spaces', () => {
     expect(on.MEMORY_SPACES_ENABLED).toBe('true');
   });
 
-  it('gates the /agents surface on AGENTS_API_ENABLED (default off)', () => {
+  it('threads config.agents.enabled into the AGENTS_API_ENABLED env var', () => {
+    // The mock config sets agents.enabled=false explicitly; the loadConfig default
+    // is ON with a kill switch (covered in config.test.ts).
     const off = buildAppApiEnvironment(createMockConfig(), stubParams());
     expect(off.AGENTS_API_ENABLED).toBe('false');
 

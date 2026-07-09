@@ -1,7 +1,7 @@
-<div class="min-h-dvh bg-gray-50 dark:bg-gray-900">
-  <!-- Sticky header -->
-  <header class="sticky top-0 z-10 border-b border-gray-200/80 bg-white/80 backdrop-blur dark:border-gray-700/60 dark:bg-gray-900/80">
-    <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+<div class="fixed inset-0 flex flex-col bg-gray-50 dark:bg-gray-900">
+  <!-- Header -->
+  <header class="shrink-0 border-b border-gray-200/80 bg-white/80 backdrop-blur dark:border-gray-700/60 dark:bg-gray-900/80">
+    <div class="flex items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
       <div class="flex items-center gap-3">
         <a routerLink="/agents" class="rounded-md p-1.5 text-gray-500 transition hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800" [attr.aria-label]="'Back to agents'">
           <ng-icon name="heroArrowLeft" class="size-5" aria-hidden="true" />
@@ -28,6 +28,9 @@
     </div>
   </header>
 
+  <main class="flex min-h-0 flex-1">
+    <!-- Left: the editor form (independently scrollable) -->
+    <div class="min-w-0 flex-1 overflow-y-auto lg:border-r lg:border-gray-200/80 dark:lg:border-gray-700/60">
   <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
     @if (isViewer()) {
       <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
@@ -160,6 +163,67 @@
           }
         </div>
       }
+
+      <!-- Model parameters (governed by the model's admin supportedParams) -->
+      @if (selectedModelId() && hasParamControls()) {
+        <div class="mt-5 border-t border-gray-200/70 pt-5 dark:border-gray-700/60">
+          <div class="flex items-center gap-2">
+            <ng-icon name="heroAdjustmentsHorizontal" class="size-4 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+            <h3 class="text-xs/6 font-semibold text-gray-900 dark:text-white">Parameters</h3>
+          </div>
+          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Optional. Leave blank to use the model's default. Your inputs are bounded by what the administrator allows.</p>
+
+          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            @for (p of numberParams(); track p.key) {
+              <div>
+                <label [attr.for]="'param-' + p.key" class="block text-xs/5 font-medium text-gray-700 dark:text-gray-300">{{ p.label }}</label>
+                <input
+                  [id]="'param-' + p.key"
+                  type="number"
+                  [min]="p.spec.min ?? null"
+                  [max]="p.spec.max ?? null"
+                  [step]="p.step"
+                  [disabled]="isViewer()"
+                  [value]="paramValue(p.key)"
+                  [attr.placeholder]="p.spec.default != null ? ('Default: ' + p.spec.default) : 'Default'"
+                  (input)="onNumberParam(p.key, $any($event.target).value)"
+                  class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-xs transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+                @if (p.spec.min != null || p.spec.max != null) {
+                  <p class="mt-1 text-xs/5 text-gray-400 dark:text-gray-500">Range {{ p.spec.min ?? '−∞' }} to {{ p.spec.max ?? '∞' }}</p>
+                }
+              </div>
+            }
+            @for (p of enumParams(); track p.key) {
+              <div>
+                <label [attr.for]="'param-' + p.key" class="block text-xs/5 font-medium text-gray-700 dark:text-gray-300">{{ p.label }}</label>
+                <select
+                  [id]="'param-' + p.key"
+                  [disabled]="isViewer()"
+                  [value]="paramValue(p.key)"
+                  (change)="onEnumParam(p.key, $any($event.target).value)"
+                  class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-xs transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+                  <option value="">Default{{ p.spec.default != null ? ' (' + p.spec.default + ')' : '' }}</option>
+                  @for (opt of p.spec.allowed ?? []; track opt) {
+                    <option [value]="opt">{{ opt }}</option>
+                  }
+                </select>
+              </div>
+            }
+          </div>
+
+          @if (lockedParams().length) {
+            <div class="mt-4 space-y-1">
+              @for (p of lockedParams(); track p.key) {
+                <p class="flex items-center gap-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                  <ng-icon name="heroCheck" class="size-3.5 text-gray-400" aria-hidden="true" />
+                  <span class="font-medium text-gray-700 dark:text-gray-300">{{ p.label }}</span>
+                  <span>· set by administrator{{ p.spec.default != null ? ' (' + p.spec.default + ')' : '' }}</span>
+                </p>
+              }
+            </div>
+          }
+        </div>
+      }
     </section>
 
     <!-- Tools -->
@@ -244,17 +308,35 @@
       </section>
     }
 
-    <!-- Knowledge base (welded, read-only) -->
-    @if (kbBinding()) {
-      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="flex items-center gap-2">
-          <ng-icon name="heroBookOpen" class="size-5 text-gray-400" aria-hidden="true" />
-          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Knowledge base</h2>
-        </div>
-        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-          This agent's document knowledge base is managed automatically and is edited from the classic assistant view.
-        </p>
-      </section>
-    }
+    <!-- Knowledge base (shared component — also used by the assistant editor) -->
+    <app-knowledge-base-section
+      [entityId]="agentId()"
+      [userPermission]="userPermission()"
+      [permissionResolved]="permissionResolved()"
+      [createDraft]="createDraftAgent"
+    />
   </form>
+    </div>
+
+    <!-- Right: live preview (lg+, independently scrollable) -->
+    <aside class="hidden shrink-0 flex-col bg-gray-50 p-4 lg:flex lg:w-[30rem] lg:min-h-0 xl:w-[34rem] dark:bg-gray-900">
+      <app-agent-preview
+        [agentId]="agentId()"
+        [name]="liveFormName()"
+        [description]="liveFormDescription()"
+        [emoji]="liveFormEmoji()"
+        [starters]="liveFormStarters()"
+        [modelId]="selectedModelId()"
+        [modelLabel]="previewModelLabel()"
+        [toolCount]="selectedToolRefs().size"
+        [skillCount]="selectedSkillRefs().size"
+        [memoryCount]="memorySelections().length"
+        [isDirty]="isDirty()"
+        [saving]="saving()"
+        [canSave]="!isViewer()"
+        (save)="onPreviewSave()"
+        (openFull)="testInChat()"
+      />
+    </aside>
+  </main>
 </div>
