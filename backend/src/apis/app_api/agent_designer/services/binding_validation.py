@@ -104,6 +104,55 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
             f"You do not have access to model '{cfg.model_id}'.", status_code=403
         )
 
+    _validate_model_params(cfg, model)
+
+
+def _validate_model_params(cfg: AgentModelConfig, model) -> None:
+    """Design-time governance of ``modelConfig.params`` against the model's admin spec.
+
+    Each param the author sets must be one the model's ``supported_params`` declares
+    supported, unlocked, and within bounds — the SAME per-model rules the invocation
+    path enforces (``chat/routes.py`` merge), but surfaced as an author-facing reject
+    rather than a silent runtime clamp so the Designer stores only clean values. The
+    Designer picker constrains inputs from the same ``supportedParams`` meta, so this
+    is the belt-and-suspenders backstop.
+    """
+    params = cfg.params or {}
+    if not params:
+        return
+    spec_map = {}
+    supported = getattr(model, "supported_params", None)
+    if supported is not None:
+        spec_map = supported.params or {}
+
+    for key, value in params.items():
+        spec = spec_map.get(key)
+        if spec is None or not spec.supported:
+            raise BindingValidationError(
+                f"Model '{cfg.model_id}' does not support the '{key}' parameter.",
+                status_code=400,
+            )
+        if spec.locked:
+            raise BindingValidationError(
+                f"The '{key}' parameter is locked by the administrator and cannot be set.",
+                status_code=400,
+            )
+        if spec.allowed is not None:
+            if value not in spec.allowed:
+                raise BindingValidationError(
+                    f"'{key}' must be one of {spec.allowed}; got '{value}'.",
+                    status_code=400,
+                )
+            continue
+        # Numeric param. bool is an int subclass — reject it explicitly so a JSON
+        # ``true`` can't masquerade as 1.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise BindingValidationError(f"'{key}' must be a number.", status_code=400)
+        if spec.min is not None and value < spec.min:
+            raise BindingValidationError(f"'{key}' must be >= {spec.min}.", status_code=400)
+        if spec.max is not None and value > spec.max:
+            raise BindingValidationError(f"'{key}' must be <= {spec.max}.", status_code=400)
+
 
 def _validate_binding(
     user: User,
