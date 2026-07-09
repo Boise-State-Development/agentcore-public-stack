@@ -25,6 +25,26 @@ export interface AgentModelConfig {
   params?: Record<string, unknown>;
 }
 
+/**
+ * Capability + bounds for one inference param, mirrored from the backend
+ * `ModelParamSpec`. Carried on a model `BindableItem` under
+ * `meta.supportedParams.params[<canonicalKey>]`; drives the Designer's
+ * per-model params controls (numeric bounds / enum options / locked).
+ */
+export interface ModelParamSpec {
+  supported: boolean;
+  min?: number | null;
+  max?: number | null;
+  allowed?: (string | number)[] | null;
+  default?: string | number | null;
+  locked?: boolean;
+}
+
+/** `meta.supportedParams` shape on a model `BindableItem`. */
+export interface SupportedParams {
+  params: Record<string, ModelParamSpec>;
+}
+
 /** A single primitive binding on an Agent (D3). `config` is kind-specific. */
 export interface AgentBinding {
   kind: BindingKind;
