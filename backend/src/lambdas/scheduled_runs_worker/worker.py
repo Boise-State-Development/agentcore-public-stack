@@ -125,7 +125,7 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
             prompt=schedule.prompt_text,
             auth=CognitoRefreshBearerAuth(),
             title=schedule.label,
-            rag_assistant_id=schedule.assistant_id,
+            agent_id=schedule.assistant_id,
             enabled_tools=schedule.enabled_tools,
             trigger="schedule",
         )

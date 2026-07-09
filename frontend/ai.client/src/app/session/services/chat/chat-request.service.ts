@@ -260,9 +260,11 @@ export class ChatRequestService implements OnDestroy {
       requestObject['file_upload_ids'] = fileUploadIds;
     }
 
-    // Add assistant ID if present
-    // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
-    // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
+    // The agent/assistant id for this turn (agentId == assistantId), driving
+    // server-side agent-binding resolution. The wire key stays 'rag_assistant_id':
+    // AWS AgentCore Runtime 424s on an 'assistant_id' (and likely 'agent_id') body
+    // key, and that gateway interception is cloud-only — a bad key would pass local
+    // tests and fail in prod. Backend attribute is 'agent_id' (aliased).
     if (assistantId) {
       requestObject['rag_assistant_id'] = assistantId;
     } else {

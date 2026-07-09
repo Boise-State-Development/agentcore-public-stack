@@ -222,8 +222,9 @@ export class PreviewChatService {
       const baseUrl = appApiUrl.endsWith('/') ? appApiUrl.slice(0, -1) : appApiUrl;
       const url = `${baseUrl}/chat/stream`;
 
-      // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
-      // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
+      // Wire key stays 'rag_assistant_id' (backend attribute is the aliased
+      // 'agent_id'): AgentCore Runtime 424s on an 'assistant_id'/'agent_id' body
+      // key in cloud. agentId == assistantId, so this drives binding resolution.
       const requestBody: Record<string, unknown> = {
         message: userMessage,
         session_id: this.sessionIdSignal(),
