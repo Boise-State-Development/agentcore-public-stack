@@ -13,7 +13,6 @@ import {
   heroWrenchScrewdriver,
   heroSparkles,
   heroCircleStack,
-  heroBookOpen,
   heroArrowTopRightOnSquare,
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
@@ -27,18 +26,18 @@ import { AssistantCardComponent } from '../../../assistants/components/assistant
  *
  * Streams through the SAME real invocation path the main chat uses
  * (`POST /chat/stream` with a `preview-` session id the backend skips
- * persisting), scoped to the agent via `rag_assistant_id`. Because
- * `agentId == assistantId`, the harness resolves the agent's FULL set of
- * bindings server-side — model + params + tools + skills + memory — so the
- * preview exercises the agent exactly as a real invoker would. The live form
- * instructions ride along as `system_prompt` (previewed without a save);
- * everything else resolves from the persisted record, which is why a dirty
- * form shows a "save to apply" banner and a capability strip makes the
- * resolved context explicit — the two things the assistant preview never did.
+ * persisting), scoped to the agent by id. Because `agentId == assistantId`,
+ * the harness resolves the agent's FULL set from the SAVED record server-side
+ * — instructions + model + params + tools + skills + memory — so the preview
+ * exercises the agent exactly as a real invoker would. Unlike the assistant
+ * preview it sends a minimal body (no `system_prompt`/owner-tools override,
+ * which would fight the bindings and blow the prompt cap for a long persona),
+ * so a dirty form shows a "save to apply" banner and a capability strip makes
+ * the resolved context explicit — the two things the assistant preview lacked.
  *
- * Reuses the assistant preview's `PreviewChatService` verbatim (it is
- * agent-agnostic — it takes an id + live instructions) and is provided at the
- * component level so its state stays isolated from the main session page.
+ * Reuses the assistant preview's `PreviewChatService` (opting out of its
+ * system_prompt + owner-tools injection) and provides it at the component
+ * level so its state stays isolated from the main session page.
  */
 @Component({
   selector: 'app-agent-preview',
@@ -51,7 +50,6 @@ import { AssistantCardComponent } from '../../../assistants/components/assistant
       heroWrenchScrewdriver,
       heroSparkles,
       heroCircleStack,
-      heroBookOpen,
       heroArrowTopRightOnSquare,
       heroExclamationTriangle,
     }),
@@ -103,12 +101,6 @@ import { AssistantCardComponent } from '../../../assistants/components/assistant
               <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs/5 font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
                 <ng-icon name="heroCircleStack" class="size-3.5" aria-hidden="true" />
                 {{ memoryCount() }} {{ memoryCount() === 1 ? 'space' : 'spaces' }}
-              </span>
-            }
-            @if (hasKb()) {
-              <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs/5 font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-                <ng-icon name="heroBookOpen" class="size-3.5" aria-hidden="true" />
-                Knowledge base
               </span>
             }
           </div>
@@ -200,7 +192,6 @@ export class AgentPreviewComponent {
   readonly toolCount = input<number>(0);
   readonly skillCount = input<number>(0);
   readonly memoryCount = input<number>(0);
-  readonly hasKb = input<boolean>(false);
 
   // Save awareness
   readonly isDirty = input<boolean>(false);

@@ -29,7 +29,6 @@ import {
   heroWrenchScrewdriver,
   heroSparkles,
   heroCircleStack,
-  heroBookOpen,
   heroCheck,
   heroAdjustmentsHorizontal,
 } from '@ng-icons/heroicons/outline';
@@ -53,6 +52,7 @@ import {
   ShareAssistantDialogComponent,
   ShareAssistantDialogData,
 } from '../../assistants/components/share-assistant-dialog.component';
+import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
 
 /** A model param rendered as an editable control (numeric or enum). */
 interface ParamView {
@@ -102,6 +102,7 @@ interface MemorySelection {
     CdkConnectedOverlay,
     TooltipDirective,
     AgentPreviewComponent,
+    KnowledgeBaseSectionComponent,
   ],
   providers: [
     provideIcons({
@@ -115,7 +116,6 @@ interface MemorySelection {
       heroWrenchScrewdriver,
       heroSparkles,
       heroCircleStack,
-      heroBookOpen,
       heroCheck,
       heroAdjustmentsHorizontal,
     }),
@@ -138,6 +138,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly saving = signal(false);
   readonly loadingAgent = signal(false);
   readonly userPermission = signal<'owner' | 'editor' | 'viewer'>('owner');
+  /**
+   * Whether {@link userPermission} reflects a value loaded from the server.
+   * The knowledge-base section waits on this before issuing its edit-gated
+   * sync-policy calls (a viewer would 403 on the default 'owner' guess).
+   */
+  readonly permissionResolved = signal(false);
   readonly isEmojiPickerOpen = signal(false);
   readonly isDarkMode = this.themeService.theme;
 
@@ -157,8 +163,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly selectedToolRefs = signal<Set<string>>(new Set());
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
   readonly memorySelections = signal<MemorySelection[]>([]);
-  /** Welded KB binding synthesized by the backend — displayed read-only. */
-  readonly kbBinding = signal<AgentBinding | null>(null);
 
   // ---- model params (governed by the selected model's supportedParams) --------
   private readonly selectedModel = computed<BindableItem | undefined>(() =>
@@ -241,7 +245,15 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.agentId.set(id);
     if (id) {
       this.loadingAgent.set(true);
-      void this.loadAgent(id).finally(() => this.loadingAgent.set(false));
+      void this.loadAgent(id).finally(() => {
+        this.loadingAgent.set(false);
+        // Permission is now resolved — release the knowledge-base section's
+        // gate on its edit-gated sync-policy calls.
+        this.permissionResolved.set(true);
+      });
+    } else {
+      // Create mode: the user is implicitly the owner — no record to resolve.
+      this.permissionResolved.set(true);
     }
   }
 
@@ -306,9 +318,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
             access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
             alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
           });
-        } else if (b.kind === 'knowledge_base') {
-          this.kbBinding.set(b);
         }
+        // knowledge_base bindings are welded/synthesized and managed live by
+        // the knowledge-base section — no read-only display state to hydrate.
       }
       this.selectedToolRefs.set(toolRefs);
       this.selectedSkillRefs.set(skillRefs);
@@ -572,6 +584,30 @@ export class AgentFormPage implements OnInit, OnDestroy {
   onCancel(): void {
     this.router.navigate(['/agents']);
   }
+
+  /**
+   * Ensure an agent record exists so knowledge-base documents have a parent to
+   * attach to. Passed to the knowledge-base section as its create-draft
+   * callback: in create mode the first content-adding action mints a draft and
+   * the form is patched with its server-assigned fields. The record id doubles
+   * as the assistant id the document pipeline keys on (`agentId == assistantId`).
+   * Returns the agent id; throws if draft creation fails.
+   */
+  readonly createDraftAgent = async (): Promise<string> => {
+    const draft = await this.agentService.createDraft({
+      name: this.form.get('name')?.value || 'Untitled Agent',
+    });
+    this.agentId.set(draft.agentId);
+    this.form.patchValue({
+      name: draft.name,
+      description: draft.description || '',
+      instructions: draft.instructions || '',
+      visibility: draft.visibility,
+      tags: draft.tags ?? [],
+      emoji: draft.emoji ?? '',
+    });
+    return draft.agentId;
+  };
 
   openShareDialog(): void {
     const id = this.agentId();
