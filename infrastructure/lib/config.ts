@@ -172,11 +172,12 @@ export interface MemorySpacesConfig {
 }
 
 /**
- * Agent Designer feature flag. Default OFF with an on switch — the governed
- * `/agents/*` surface is opt-in per environment, enabled with
- * CDK_AGENTS_API_ENABLED=true (or an `agents.enabled: true` cdk.json context).
- * Sets the AGENTS_API_ENABLED env var on app-api. The feature ships
- * incrementally, so it stays dark until complete; `/assistants/*` is unaffected.
+ * Agent Designer feature flag. Default ON with a kill switch — the governed
+ * `/agents/*` surface ships everywhere now that the Designer is complete; only
+ * CDK_AGENTS_API_ENABLED=false (or an `agents.enabled: false` cdk.json context)
+ * turns it off. Sets the AGENTS_API_ENABLED env var on app-api + inference-api.
+ * `/assistants/*` is unaffected, and the SPA nav stays preview-gated until
+ * Assistants are deprecated.
  */
 export interface AgentsConfig {
   enabled: boolean;
@@ -342,13 +343,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
     },
     agents: {
-      // Default OFF with an on switch (same pattern as memorySpaces): opt-in per
-      // environment. The workflow forwards an EMPTY STRING when unset, so treat
-      // empty/unset as the default (off) and only the literal "true" as on. An
-      // `agents.enabled` cdk.json context can also force it on.
+      // Default ON with a kill switch (house style, mirroring memorySpaces /
+      // scheduledRuns): the workflow forwards an EMPTY STRING when unset, so treat
+      // empty/unset as the default (on) and only the literal "false" as the off
+      // switch. An `agents.enabled` cdk.json context can also force it off. The
+      // Agent Designer is complete, so it ships on everywhere; the SPA nav stays
+      // preview-gated (system-admin) until Assistants are deprecated.
       enabled: process.env.CDK_AGENTS_API_ENABLED
-        ? process.env.CDK_AGENTS_API_ENABLED === 'true'
-        : scope.node.tryGetContext('agents')?.enabled ?? false,
+        ? process.env.CDK_AGENTS_API_ENABLED !== 'false'
+        : scope.node.tryGetContext('agents')?.enabled ?? true,
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,

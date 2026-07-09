@@ -67,13 +67,16 @@ def agents_enabled() -> bool:
     """Whether the Agent Designer surface is enabled for this environment.
 
     Gates the ``/agents/*`` alias router (the governed Agent read/write surface over
-    the evolved assistant store). **Defaults off** (the ``MEMORY_SPACES_ENABLED``
-    pattern): set ``AGENTS_API_ENABLED=true`` to turn it on. The feature ships
-    incrementally across several PRs (contract → surface → resolution → Designer UI),
-    so it stays dark until complete — the assistant store and its ``/assistants/*``
-    surface are unaffected while off.
+    the evolved assistant store). **Default ON with a kill switch** (house style,
+    mirroring ``scheduled_runs_enabled``): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables. The CDK side threads
+    ``config.agents.enabled`` into this env var with the same empty-string-safe
+    ternary, so an unset GitHub Actions variable can never silently turn it off. The
+    Agent Designer shipped across several PRs (contract → surface → resolution →
+    Designer UI → binding reflection); now complete, it defaults on.
 
     Gates *feature existence* per environment; *who* may use a specific agent is the
-    identity-based access check already enforced by the assistant service.
+    identity-based access check already enforced by the assistant service, and the SPA
+    nav is separately preview-gated (system-admin) until Assistants are deprecated.
     """
-    return os.environ.get("AGENTS_API_ENABLED", "false").lower() == "true"
+    return os.environ.get("AGENTS_API_ENABLED", "").strip().lower() != "false"
