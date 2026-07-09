@@ -1,6 +1,7 @@
 import {
   Component,
   ChangeDetectionStrategy,
+  OnDestroy,
   input,
   output,
   computed,
@@ -20,6 +21,7 @@ import { ChatContainerComponent, ChatContainerConfig } from '../../../session/co
 import { ChatInputComponent } from '../../../session/components/chat-input/chat-input.component';
 import { PreviewChatService } from '../../../assistants/assistant-form/services/preview-chat.service';
 import { AssistantCardComponent } from '../../../assistants/components/assistant-card.component';
+import { ModelService } from '../../../session/services/model/model.service';
 
 /**
  * Live preview for the Agent Designer, side-by-side with the editor.
@@ -177,8 +179,9 @@ import { AssistantCardComponent } from '../../../assistants/components/assistant
   `,
   styles: [':host { display: block; height: 100%; }'],
 })
-export class AgentPreviewComponent {
+export class AgentPreviewComponent implements OnDestroy {
   readonly previewChatService = inject(PreviewChatService);
+  private readonly modelService = inject(ModelService);
 
   // Persona (live from the form)
   readonly agentId = input<string | null>(null);
@@ -188,6 +191,7 @@ export class AgentPreviewComponent {
   readonly starters = input<string[]>([]);
 
   // Capability strip (current selections — reflected once saved)
+  readonly modelId = input<string | null>(null);
   readonly modelLabel = input<string | null>(null);
   readonly toolCount = input<number>(0);
   readonly skillCount = input<number>(0);
@@ -223,6 +227,26 @@ export class AgentPreviewComponent {
     effect(() => {
       if (this.agentId()) this.previewChatService.reset();
     });
+
+    // Pin the chat-input model picker to the agent's model — the same lock the
+    // main session page applies for a real agent conversation. Without it the
+    // preview's picker shows the user's global model and lets them switch it,
+    // which is a lie: the harness resolves the model from the agent's binding
+    // server-side regardless. The lock lives in the root ModelService (shared
+    // with the main chat), so we release it on destroy; navigating into a plain
+    // chat also clears it idempotently via the session page's self-heal effect.
+    effect(() => {
+      const modelId = this.modelId();
+      if (modelId) {
+        this.modelService.lockToAgentModel(modelId);
+      } else {
+        this.modelService.clearAgentModelLock();
+      }
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.modelService.clearAgentModelLock();
   }
 
   /** Agents resolve instructions + model + tools + skills + memory server-side from
