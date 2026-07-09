@@ -58,6 +58,34 @@ describe('ModelService', () => {
     TestBed.resetTestingModule();
   });
 
+  describe('agent model lock', () => {
+    beforeEach(setup);
+
+    it('is unlocked by default', () => {
+      expect(service.agentModelLocked()).toBe(false);
+    });
+
+    it('locks to and selects the agent-pinned model', () => {
+      service.lockToAgentModel('claude-haiku');
+      expect(service.agentModelLocked()).toBe(true);
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
+
+    it('records the lock even when the pinned model is not available', () => {
+      // Backend blocks the turn (D5) in this case; the picker still disables and
+      // does not silently pretend a different model was chosen.
+      service.lockToAgentModel('ghost-model');
+      expect(service.agentModelLocked()).toBe(true);
+      expect(service.selectedModel().modelId).not.toBe('ghost-model');
+    });
+
+    it('releases the lock when cleared', () => {
+      service.lockToAgentModel('claude-haiku');
+      service.clearAgentModelLock();
+      expect(service.agentModelLocked()).toBe(false);
+    });
+  });
+
   describe('loadModels', () => {
     beforeEach(setup);
 

@@ -50,6 +50,15 @@
           <div class="mt-2 text-sm/6 text-red-600 dark:text-red-400" role="alert">
             {{ modelService.modelsError() }}
           </div>
+        } @else if (modelService.agentModelLocked()) {
+          <!-- Agent-dictated: the active agent pins this model; the picker is locked. -->
+          <div class="mt-1.5 flex items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-white/5">
+            <ng-icon name="heroLockClosed" class="size-3.5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+            <span class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+              {{ modelService.selectedModel().modelName }}
+            </span>
+            <span class="ml-auto shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">Set by agent</span>
+          </div>
         } @else {
           <!-- Custom dropdown -->
           <div class="relative mt-1.5">
@@ -353,6 +362,12 @@
 
           @if (isSkillsOpen()) {
             <div id="skills-body" class="px-4 pb-4">
+              @if (skillService.agentLocked()) {
+                <p class="mb-3 flex items-center gap-1.5 rounded-md bg-gray-50 px-3 py-2 text-xs/5 text-gray-500 dark:bg-white/5 dark:text-gray-400">
+                  <ng-icon name="heroLockClosed" class="size-3.5 shrink-0" aria-hidden="true" />
+                  This agent uses a fixed set of skills.
+                </p>
+              }
               @if (skillService.loading()) {
                 <div class="text-sm/6 text-gray-500 dark:text-gray-400">Loading skills...</div>
               } @else if (skillService.error()) {
@@ -392,19 +407,23 @@
                         type="button"
                         role="switch"
                         [id]="'skill-toggle-' + skill.skillId"
-                        [attr.aria-checked]="skill.isEnabled"
+                        [attr.aria-checked]="skillService.isSkillShownEnabled(skill)"
                         [attr.aria-labelledby]="'skill-label-' + skill.skillId"
                         [attr.aria-describedby]="'skill-desc-' + skill.skillId"
+                        [disabled]="skillService.agentLocked()"
                         (click)="toggleSkill(skill.skillId)"
                         (keydown.space)="$event.preventDefault(); toggleSkill(skill.skillId)"
                         (keydown.enter)="toggleSkill(skill.skillId)"
-                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                        [class]="skill.isEnabled ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                        class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                        [class.cursor-pointer]="!skillService.agentLocked()"
+                        [class.cursor-not-allowed]="skillService.agentLocked()"
+                        [class.opacity-60]="skillService.agentLocked()"
+                        [class]="skillService.isSkillShownEnabled(skill) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                         <span
                           aria-hidden="true"
                           class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
-                          [class.translate-x-5]="skill.isEnabled"
-                          [class.translate-x-0]="!skill.isEnabled">
+                          [class.translate-x-5]="skillService.isSkillShownEnabled(skill)"
+                          [class.translate-x-0]="!skillService.isSkillShownEnabled(skill)">
                         </span>
                       </button>
                     </div>
@@ -436,6 +455,12 @@
 
         @if (isToolsOpen()) {
           <div id="tools-body" class="px-4 pb-4">
+            @if (toolService.agentLocked()) {
+              <p class="mb-3 flex items-center gap-1.5 rounded-md bg-gray-50 px-3 py-2 text-xs/5 text-gray-500 dark:bg-white/5 dark:text-gray-400">
+                <ng-icon name="heroLockClosed" class="size-3.5 shrink-0" aria-hidden="true" />
+                This agent uses a fixed set of tools.
+              </p>
+            }
             @if (toolService.loading()) {
               <div class="text-sm/6 text-gray-500 dark:text-gray-400">Loading tools...</div>
             } @else if (toolService.error()) {
@@ -482,19 +507,23 @@
                         type="button"
                         role="switch"
                         [id]="'tool-toggle-' + tool.toolId"
-                        [attr.aria-checked]="tool.isEnabled"
+                        [attr.aria-checked]="toolService.isToolShownEnabled(tool)"
                         [attr.aria-labelledby]="'tool-label-' + tool.toolId"
                         [attr.aria-describedby]="'tool-desc-' + tool.toolId"
+                        [disabled]="toolService.agentLocked()"
                         (click)="toggleTool(tool.toolId)"
                         (keydown.space)="$event.preventDefault(); toggleTool(tool.toolId)"
                         (keydown.enter)="toggleTool(tool.toolId)"
-                        class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                        [class]="tool.isEnabled ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                        class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                        [class.cursor-pointer]="!toolService.agentLocked()"
+                        [class.cursor-not-allowed]="toolService.agentLocked()"
+                        [class.opacity-60]="toolService.agentLocked()"
+                        [class]="toolService.isToolShownEnabled(tool) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                         <span
                           aria-hidden="true"
                           class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
-                          [class.translate-x-5]="tool.isEnabled"
-                          [class.translate-x-0]="!tool.isEnabled">
+                          [class.translate-x-5]="toolService.isToolShownEnabled(tool)"
+                          [class.translate-x-0]="!toolService.isToolShownEnabled(tool)">
                         </span>
                       </button>
                     </div>
@@ -514,18 +543,22 @@
                               <button
                                 type="button"
                                 role="switch"
-                                [attr.aria-checked]="sub.enabled"
+                                [attr.aria-checked]="toolService.isSubToolShownEnabled(tool, sub)"
                                 [attr.aria-labelledby]="'subtool-label-' + tool.toolId + '-' + sub.name"
+                                [disabled]="toolService.agentLocked()"
                                 (click)="toggleServerTool(tool.toolId, sub.name)"
                                 (keydown.space)="$event.preventDefault(); toggleServerTool(tool.toolId, sub.name)"
                                 (keydown.enter)="toggleServerTool(tool.toolId, sub.name)"
-                                class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                                [class]="sub.enabled ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
+                                class="relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                                [class.cursor-pointer]="!toolService.agentLocked()"
+                                [class.cursor-not-allowed]="toolService.agentLocked()"
+                                [class.opacity-60]="toolService.agentLocked()"
+                                [class]="toolService.isSubToolShownEnabled(tool, sub) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
                                 <span
                                   aria-hidden="true"
                                   class="pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out"
-                                  [class.translate-x-4]="sub.enabled"
-                                  [class.translate-x-0]="!sub.enabled">
+                                  [class.translate-x-4]="toolService.isSubToolShownEnabled(tool, sub)"
+                                  [class.translate-x-0]="!toolService.isSubToolShownEnabled(tool, sub)">
                                 </span>
                               </button>
                             </div>

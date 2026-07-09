@@ -26,6 +26,10 @@ import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.servic
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
+import { AgentService } from '../agents/services/agent.service';
+import { Agent } from '../agents/models/agent.model';
+import { ToolService } from '../services/tool/tool.service';
+import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
 import {
   ShareAssistantDialogComponent,
@@ -63,6 +67,9 @@ export class ConversationPage implements OnDestroy {
   private oauthConsent = inject(OAuthConsentService);
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
+  private agentService = inject(AgentService);
+  private toolService = inject(ToolService);
+  private skillService = inject(SkillService);
   private router = inject(Router);
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
@@ -87,6 +94,10 @@ export class ConversationPage implements OnDestroy {
 
   assistant = signal<Assistant | null>(null);
   assistantError = signal<string | null>(null);
+  // Agent Designer: the governed Agent behind this conversation (agentId ==
+  // assistantId), when the /agents surface is enabled and it resolves. Drives
+  // the per-primitive picker locks; null for plain chat or a legacy assistant.
+  agent = signal<Agent | null>(null);
   isLoadingAssistant = signal(false);
   isSettingsOpen = signal(false);
 
@@ -330,9 +341,11 @@ export class ConversationPage implements OnDestroy {
       }
 
       // No assistant in the URL — clear any stale state from a prior load.
-      if (loadedAssistant || this.assistantError()) {
+      if (loadedAssistant || this.assistantError() || this.agent()) {
         this.assistant.set(null);
         this.assistantError.set(null);
+        this.agent.set(null);
+        this.clearAgentBindingLocks();
       }
     });
 
@@ -719,6 +732,9 @@ export class ConversationPage implements OnDestroy {
       // Only check existence (404), not access (403) - access validated on backend
       const loadedAssistant = await this.assistantService.getAssistant(assistantId);
       this.assistant.set(loadedAssistant);
+      // Reflect the Agent's governed bindings in the chat-input (Agent Designer).
+      // Best-effort and independent of the assistant fetch above.
+      await this.loadAgentBindings(assistantId);
     } catch (error: any) {
       console.error('Failed to load assistant:', error);
       
@@ -735,6 +751,57 @@ export class ConversationPage implements OnDestroy {
     } finally {
       this.isLoadingAssistant.set(false);
     }
+  }
+
+  /**
+   * Fetch the governed Agent behind this conversation and lock the chat-input
+   * pickers to its bindings (Agent Designer). `agentId == assistantId`, so the
+   * same query-param id resolves the Agent. Best-effort: the /agents surface may
+   * be disabled (404) or the assistant may be a legacy assistant with no
+   * bindings — in every failure case the pickers stay free-select (locks cleared),
+   * and the conversation is never blocked on this. The backend still governs
+   * bindings at invocation regardless, so this is UI honesty, not enforcement.
+   */
+  private async loadAgentBindings(assistantId: string): Promise<void> {
+    try {
+      const agent = await this.agentService.getAgent(assistantId);
+      this.agent.set(agent);
+      this.applyAgentBindingLocks(agent);
+    } catch {
+      this.agent.set(null);
+      this.clearAgentBindingLocks();
+    }
+  }
+
+  /** Lock each picker to the Agent's binding, or release it when unbound. */
+  private applyAgentBindingLocks(agent: Agent): void {
+    const modelId = agent.modelConfig?.modelId;
+    if (modelId) {
+      this.modelService.lockToAgentModel(modelId);
+    } else {
+      this.modelService.clearAgentModelLock();
+    }
+
+    const toolIds = agent.bindings.filter(b => b.kind === 'tool').map(b => b.ref);
+    if (toolIds.length > 0) {
+      this.toolService.lockToAgentTools(toolIds);
+    } else {
+      this.toolService.clearAgentLock();
+    }
+
+    const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
+    if (skillIds.length > 0) {
+      this.skillService.lockToAgentSkills(skillIds);
+    } else {
+      this.skillService.clearAgentLock();
+    }
+  }
+
+  /** Release every Agent picker lock (plain chat / navigating away). */
+  private clearAgentBindingLocks(): void {
+    this.modelService.clearAgentModelLock();
+    this.toolService.clearAgentLock();
+    this.skillService.clearAgentLock();
   }
 
   /**

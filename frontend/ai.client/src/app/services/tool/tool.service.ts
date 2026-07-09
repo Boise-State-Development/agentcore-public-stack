@@ -99,12 +99,21 @@ export class ToolService {
   private _appRolesApplied = signal<string[]>([]);
   private _initialized = signal(false);
 
+  // Agent Designer: when the active conversation is bound to an Agent that binds
+  // tools, the picker is locked to exactly that set — the backend governs the
+  // toolset at invocation regardless of the client, so a free-select picker would
+  // be dishonest. Holds the bound tool ids, or null when not agent-bound.
+  private readonly _agentLockedToolIds = signal<string[] | null>(null);
+
   // Public readonly signals
   readonly tools = this._tools.asReadonly();
   readonly loading = this._loading.asReadonly();
   readonly error = this._error.asReadonly();
   readonly appRolesApplied = this._appRolesApplied.asReadonly();
   readonly initialized = this._initialized.asReadonly();
+
+  /** True when the toolset is dictated by the active Agent and toggles are locked. */
+  readonly agentLocked = computed(() => this._agentLockedToolIds() !== null);
 
   constructor() {
     // Load tools on initialization (similar to ModelService pattern)
@@ -124,6 +133,12 @@ export class ToolService {
    * (or a tool with no sub-tools) emits its bare id.
    */
   readonly enabledToolIds = computed(() => {
+    // Agent-bound: the Agent's tools are the effective set (the backend enforces
+    // the same, replace semantics). Toggling is disabled, so nothing else feeds in.
+    const locked = this._agentLockedToolIds();
+    if (locked !== null) {
+      return [...locked];
+    }
     const ids: string[] = [];
     for (const tool of this._tools()) {
       const subs = tool.serverTools ?? [];
@@ -145,9 +160,48 @@ export class ToolService {
     return ids;
   });
 
-  readonly enabledCount = computed(() =>
-    this.enabledTools().length
-  );
+  readonly enabledCount = computed(() => {
+    const locked = this._agentLockedToolIds();
+    if (locked !== null) {
+      return locked.length;
+    }
+    return this.enabledTools().length;
+  });
+
+  /**
+   * Whether a tool row should render as ON. Agent-locked → membership in the
+   * bound set (so greyed toggles honestly show the Agent's toolset, not the
+   * user's underlying prefs); otherwise the user's own enabled state.
+   */
+  isToolShownEnabled(tool: Tool): boolean {
+    const locked = this._agentLockedToolIds();
+    if (locked !== null) {
+      return locked.includes(tool.toolId);
+    }
+    return tool.isEnabled;
+  }
+
+  /**
+   * Whether an MCP sub-tool row should render as ON. Agent-locked → follows the
+   * server's shown state (agents bind whole tools, so all subs match); otherwise
+   * the sub-tool's own enabled flag.
+   */
+  isSubToolShownEnabled(tool: Tool, sub: { enabled: boolean }): boolean {
+    if (this._agentLockedToolIds() !== null) {
+      return this.isToolShownEnabled(tool);
+    }
+    return sub.enabled;
+  }
+
+  /** Lock the picker to an Agent's bound tools (Agent Designer). */
+  lockToAgentTools(toolIds: string[]): void {
+    this._agentLockedToolIds.set([...toolIds]);
+  }
+
+  /** Release an Agent tool lock. */
+  clearAgentLock(): void {
+    this._agentLockedToolIds.set(null);
+  }
 
   readonly toolsByCategory = computed(() => {
     const grouped = new Map<string, Tool[]>();
@@ -196,6 +250,8 @@ export class ToolService {
    * per-tool selection.
    */
   async toggleTool(toolId: string): Promise<void> {
+    // Agent-locked: the toolset is dictated by the Agent; ignore toggles.
+    if (this._agentLockedToolIds() !== null) return;
     const tool = this._tools().find(t => t.toolId === toolId);
     if (!tool) return;
 
@@ -259,6 +315,8 @@ export class ToolService {
    * `isEnabled` becomes "any tool enabled".
    */
   async toggleServerTool(toolId: string, name: string): Promise<void> {
+    // Agent-locked: the toolset is dictated by the Agent; ignore toggles.
+    if (this._agentLockedToolIds() !== null) return;
     const tool = this._tools().find(t => t.toolId === toolId);
     const sub = tool?.serverTools?.find(s => s.name === name);
     if (!tool || !sub) return;
