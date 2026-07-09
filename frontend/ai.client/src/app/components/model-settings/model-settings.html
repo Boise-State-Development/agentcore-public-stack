@@ -383,7 +383,7 @@
                 </div>
               } @else {
                 <div class="space-y-3" role="group" aria-labelledby="skills-heading">
-                  @for (skill of skillService.skills(); track skill.skillId) {
+                  @for (skill of skillService.visibleSkills(); track skill.skillId) {
                     <div class="flex items-start justify-between gap-3">
                       <div class="min-w-0 flex-1">
                         <label
@@ -471,7 +471,7 @@
               <div class="text-sm/6 text-gray-500 dark:text-gray-400">No tools available</div>
             } @else {
               <div class="space-y-3" role="group" aria-labelledby="tools-heading">
-                @for (tool of toolService.tools(); track tool.toolId) {
+                @for (tool of toolService.visibleTools(); track tool.toolId) {
                   <div>
                     <div class="flex items-start justify-between gap-3">
                       <div class="flex min-w-0 flex-1 items-start gap-1.5">

@@ -169,6 +169,19 @@ export class ToolService {
   });
 
   /**
+   * The tools the picker should render. Agent-locked → only the bound tools
+   * (the agent dictates a fixed set, so hide the rest rather than show a long
+   * greyed list); otherwise every accessible tool.
+   */
+  readonly visibleTools = computed(() => {
+    const locked = this._agentLockedToolIds();
+    if (locked !== null) {
+      return this._tools().filter(t => locked.includes(t.toolId));
+    }
+    return this._tools();
+  });
+
+  /**
    * Whether a tool row should render as ON. Agent-locked → membership in the
    * bound set (so greyed toggles honestly show the Agent's toolset, not the
    * user's underlying prefs); otherwise the user's own enabled state.
