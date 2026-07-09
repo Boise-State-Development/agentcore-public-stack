@@ -1186,7 +1186,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         "Invocation request - processing with assistant context"
     )
 
-    if input_data.rag_assistant_id and not is_resume and not is_continuation:
+    if input_data.agent_id and not is_resume and not is_continuation:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.rag_service import (
             augment_prompt_with_context,
@@ -1220,7 +1220,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
                 if existing_assistant_id:
                     # Session already has an assistant - verify it's the same one
-                    if existing_assistant_id != input_data.rag_assistant_id:
+                    if existing_assistant_id != input_data.agent_id:
                         logger.warning(
                             "Attempted to change assistant mid-session"
                         )
@@ -1254,7 +1254,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # 2. Load assistant with access check
         logger.info("Loading assistant with access check...")
         assistant, _ = await get_assistant_with_access_check(
-            assistant_id=input_data.rag_assistant_id, user_id=user_id, user_email=current_user.email
+            assistant_id=input_data.agent_id, user_id=user_id, user_email=current_user.email
         )
 
         if not assistant:
@@ -1262,11 +1262,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Check if assistant exists at all to provide better error message
             from apis.shared.assistants.service import assistant_exists
 
-            exists = await assistant_exists(input_data.rag_assistant_id)
+            exists = await assistant_exists(input_data.agent_id)
 
             if not exists:
                 logger.warning("Assistant does not exist (404)")
-                raise HTTPException(status_code=404, detail=f"Assistant not found: {input_data.rag_assistant_id}")
+                raise HTTPException(status_code=404, detail=f"Assistant not found: {input_data.agent_id}")
             else:
                 logger.warning("Access denied to assistant (403)")
                 raise HTTPException(status_code=403, detail=f"Access denied: You do not have permission to access this assistant")
@@ -1283,7 +1283,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         # Mark as viewed if this is a shared assistant (not owned)
         if assistant.owner_id != user_id:
-            await mark_share_as_interacted(assistant_id=input_data.rag_assistant_id, user_email=current_user.email)
+            await mark_share_as_interacted(assistant_id=input_data.agent_id, user_email=current_user.email)
 
         # KB sync inactivity signal: any user's chat use counts. Throttled
         # to one write/day inside bump_last_used_at (conditional update);
@@ -1293,10 +1293,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             from apis.shared.assistants.service import bump_last_used_at
             from apis.shared.sync_policies.service import resume_inactive_policies
 
-            if await bump_last_used_at(input_data.rag_assistant_id):
-                await resume_inactive_policies(input_data.rag_assistant_id)
+            if await bump_last_used_at(input_data.agent_id):
+                await resume_inactive_policies(input_data.agent_id)
         except Exception as bump_err:
-            logger.warning(f"lastUsedAt bump failed for assistant {input_data.rag_assistant_id}: {bump_err}")
+            logger.warning(f"lastUsedAt bump failed for assistant {input_data.agent_id}: {bump_err}")
 
         # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
         # for the INVOKING user (D5), before the expensive KB search. v1 blocks
@@ -1330,7 +1330,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         try:
             logger.info("Searching knowledge base for assistant...")
             context_chunks = await search_assistant_knowledgebase_with_formatting(
-                assistant_id=input_data.rag_assistant_id, query=input_data.message, top_k=5
+                assistant_id=input_data.agent_id, query=input_data.message, top_k=5
             )
             logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
             if context_chunks:
@@ -1434,7 +1434,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         if existing_metadata.preferences
                         else {}
                     )
-                    prefs_dict["assistant_id"] = input_data.rag_assistant_id
+                    prefs_dict["assistant_id"] = input_data.agent_id
                     merged_preferences = SessionPreferences(**prefs_dict)
 
                     updated_metadata = existing_metadata.model_copy(
@@ -1446,7 +1446,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     from datetime import datetime, timezone
 
                     now = datetime.now(timezone.utc).isoformat()
-                    preferences = SessionPreferences(assistantId=input_data.rag_assistant_id)
+                    preferences = SessionPreferences(assistantId=input_data.agent_id)
 
                     updated_metadata = SessionMetadata(
                         sessionId=input_data.session_id,
@@ -1478,7 +1478,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         is_resume=is_resume,
         is_continuation=is_continuation,
         is_preview=is_preview_session(input_data.session_id),
-        has_assistant=bool(input_data.rag_assistant_id),
+        has_assistant=bool(input_data.agent_id),
     ):
         resolved = await resolve_active_prompt_text(
             session_id=input_data.session_id,
@@ -1635,7 +1635,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Spreadsheet tools scoped to the assistant's document corpus,
             # when an assistant is attached to this request. The frontend
             # keeps the assistant id in the URL for the whole session's
-            # lifetime, so we can trust `input_data.rag_assistant_id`
+            # lifetime, so we can trust `input_data.agent_id`
             # directly; no preferences fallback needed.
             # An Agent's tool bindings replace the request's enabled_tools for this
             # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
@@ -1659,7 +1659,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             extra_tools = _build_spreadsheet_tools(
                 enabled_tools=effective_enabled_tools,
-                assistant_id=input_data.rag_assistant_id,
+                assistant_id=input_data.agent_id,
                 session_id=input_data.session_id,
                 user_id=user_id,
             ) + _build_artifact_tools(
@@ -1718,7 +1718,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             for chunk in context_chunks:
                 citations_for_storage.append(
                     {
-                        "assistantId": input_data.rag_assistant_id,
+                        "assistantId": input_data.agent_id,
                         "documentId": chunk.get("metadata", {}).get("document_id", ""),
                         "fileName": chunk.get("metadata", {}).get("source", "Unknown Source"),
                         "text": chunk.get("text", "")[:500],  # Limit excerpt length
@@ -1787,7 +1787,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # silently picking whichever file the vector search ranked first.
             tabular_inventory = await _build_tabular_inventory(
                 session_id=input_data.session_id,
-                assistant_id=input_data.rag_assistant_id,
+                assistant_id=input_data.agent_id,
                 enabled_tools=effective_enabled_tools,
             )
             # Bind to a new local so we don't trip Python's local-scope rules

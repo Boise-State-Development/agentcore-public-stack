@@ -92,7 +92,7 @@ async def run_agent_headless(
     run_id: Optional[str] = None,
     title: Optional[str] = None,
     model_id: Optional[str] = None,
-    rag_assistant_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
     agent_type: Optional[str] = None,
     inference_params: Optional[Dict[str, Any]] = None,
@@ -104,7 +104,7 @@ async def run_agent_headless(
 ) -> RunResult:
     """Run one agent turn as ``user_id`` with no live session.
 
-    The run-config parameters (``model_id``, ``rag_assistant_id``,
+    The run-config parameters (``model_id``, ``agent_id``,
     ``enabled_tools``, ``agent_type``, ``inference_params``) mirror the
     existing ``InvocationRequest`` contract — the entrypoint resolves *no*
     new config type (scheduled-agent-runs.md decision #6).
@@ -162,8 +162,9 @@ async def run_agent_headless(
     }
     if model_id is not None:
         payload["model_id"] = model_id
-    if rag_assistant_id is not None:
-        payload["rag_assistant_id"] = rag_assistant_id
+    if agent_id is not None:
+        # Wire key stays 'rag_assistant_id' — AgentCore-safe; see InvocationRequest.
+        payload["rag_assistant_id"] = agent_id
     if enabled_tools is not None:
         payload["enabled_tools"] = enabled_tools
     if agent_type is not None:

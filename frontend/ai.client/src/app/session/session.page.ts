@@ -723,8 +723,8 @@ export class ConversationPage implements OnDestroy {
   /**
    * Load assistant by ID - only checks existence, not access.
    * Access and mid-session conflicts are validated on the backend when the
-   * next message is sent (the inference-api compares the request's
-   * rag_assistant_id against the session's stored assistant and rejects
+   * next message is sent (the inference-api compares the request's agent id —
+   * wire key `rag_assistant_id` — against the session's stored assistant and rejects
    * mismatches). Doing the same check here is unreliable because the
    * component is recreated on the `/` → `/s/:id` route transition, so any
    * "session has messages" guard fires on the normal first-turn flow and

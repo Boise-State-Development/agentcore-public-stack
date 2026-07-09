@@ -6,7 +6,7 @@ Contains Pydantic models for chat API requests and responses.
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Hard upper bound on a user-supplied custom system prompt. Mirrors the
 # limit applied inside SystemPromptBuilder.from_user_prompt — surfacing
@@ -81,6 +81,9 @@ class AppContextUpdateEntry(BaseModel):
 class InvocationRequest(BaseModel):
     """Input for /invocations endpoint with multi-provider support"""
 
+    # Accept the wire key by its alias while exposing the agentic attribute name.
+    model_config = ConfigDict(populate_by_name=True)
+
     session_id: str
     message: str = ""
     model_id: Optional[str] = None
@@ -97,11 +100,16 @@ class InvocationRequest(BaseModel):
     # the managed model's admin defaults. Unsupported params are dropped
     # silently by the merge step in routes.py.
     inference_params: Optional[Dict[str, Any]] = None
-    # NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
-    # AgentCore Runtime's internal 'assistant_id' field handling.
-    # AgentCore Runtime returns 424 when it sees a non-empty 'assistant_id' field,
-    # likely trying to resolve it as an AWS Bedrock Agent ID.
-    rag_assistant_id: Optional[str] = None
+    # The agent (a.k.a. legacy assistant; agentId == assistantId) this turn runs as.
+    # Drives full agent-binding resolution (model/tools/skills/memory), not just RAG.
+    #
+    # WIRE KEY stays 'rag_assistant_id' (the alias) on purpose: AWS AgentCore Runtime
+    # returns 424 when it sees an 'assistant_id' body key (it tries to resolve it as a
+    # Bedrock Agent ID), and 'agent_id' is an even likelier collision — that gateway
+    # interception happens in cloud only, so a bad wire key passes every local test and
+    # fails only in prod. Rename the wire key ONLY after a live AgentCore probe. The
+    # attribute is 'agent_id'; populate_by_name also accepts the field name directly.
+    agent_id: Optional[str] = Field(None, alias="rag_assistant_id")
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

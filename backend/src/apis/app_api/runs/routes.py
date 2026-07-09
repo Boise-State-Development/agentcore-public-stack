@@ -93,7 +93,7 @@ class RunNowRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=_MAX_PROMPT_CHARS)
     title: Optional[str] = Field(None, max_length=200)
     model_id: Optional[str] = Field(None, alias="modelId")
-    rag_assistant_id: Optional[str] = Field(None, alias="ragAssistantId")
+    agent_id: Optional[str] = Field(None, alias="agentId")
     # None = the user's defaults (all RBAC-allowed tools), exactly as an
     # attended chat turn resolves them — see run_agent_headless docstring.
     enabled_tools: Optional[List[str]] = Field(None, alias="enabledTools")
@@ -278,7 +278,7 @@ async def run_now(
             auth=CognitoRefreshBearerAuth(grants=get_headless_grant_service()),
             title=body.title,
             model_id=body.model_id,
-            rag_assistant_id=body.rag_assistant_id,
+            agent_id=body.agent_id,
             enabled_tools=enabled_tools,
             agent_type=body.agent_type,
             trigger="run_now",
