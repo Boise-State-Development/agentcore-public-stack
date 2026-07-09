@@ -196,14 +196,32 @@ class TestBrokenScheduleIsolation:
 
 
 class TestCadenceRearm:
-    async def test_next_run_at_uses_schedule_cadence(self, sessions_metadata_table, invoked_workers):
+    async def test_next_run_at_uses_schedule_cadence(self, sessions_metadata_table, invoked_workers, monkeypatch):
+        from apis.shared.scheduled_prompts.service import compute_next_run_at
+
         schedule = await _make_due_schedule(sessions_metadata_table)
+
+        # Freeze the dispatcher's clock so the daily-9am re-arm is a fixed
+        # instant, not wall-clock dependent. Without this the delta assertion
+        # is flaky in the hour before 9am Boise (14:00–15:00 UTC in MDT), when
+        # the next daily run is legitimately <1h away.
+        frozen_now = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(dispatcher, "_now", lambda: frozen_now)
 
         await dispatcher.dispatch_once()
 
         updated = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
-        next_dt = datetime.fromisoformat(updated.next_run_at.rstrip("Z")).replace(tzinfo=timezone.utc)
-        # Daily at 9am America/Boise from "now" (past due) lands within the
-        # next ~48h — a loose bound that just proves cadence math ran
-        # (not the fallback delta, which would be ~1h out).
-        assert timedelta(hours=1) < (next_dt - datetime.now(timezone.utc)) < timedelta(hours=48)
+        # Recompute with the same frozen instant and the schedule's own
+        # cadence: an exact match proves the schedule's cadence math ran (not
+        # the ~1h fallback delta).
+        expected = compute_next_run_at(
+            schedule.cadence,
+            schedule.hour_local,
+            schedule.timezone,
+            weekday=schedule.weekday,
+            from_time=frozen_now,
+        )
+        assert updated.next_run_at == expected
+        # Sanity: 9am America/Boise (MDT, UTC-6) on 2026-07-09 is 15:00 UTC,
+        # same day (frozen "now" is 12:00 UTC = 6am Boise, before 9am).
+        assert expected == "2026-07-09T15:00:00Z"
