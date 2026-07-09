@@ -87,12 +87,19 @@ describe('SkillService', () => {
       expect(service.enabledSkillIds()).toEqual(['web_research']);
     });
 
+    it('filters visibleSkills to only the bound skills while locked', () => {
+      expect(service.visibleSkills().map(s => s.skillId).sort()).toEqual(['pdf_workflows', 'web_research']);
+      service.lockToAgentSkills(['web_research']);
+      expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
+    });
+
     it('restores the user set when cleared', () => {
       service.lockToAgentSkills(['web_research']);
       service.clearAgentLock();
       expect(service.agentLocked()).toBe(false);
       // Back to per-skill state: only pdf_workflows is user-enabled.
       expect(service.enabledSkillIds()).toEqual(['pdf_workflows']);
+      expect(service.visibleSkills().length).toBe(2);
     });
   });
 

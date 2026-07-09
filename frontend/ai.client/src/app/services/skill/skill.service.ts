@@ -108,6 +108,19 @@ export class SkillService {
   readonly hasSkills = computed(() => this._skills().length > 0);
 
   /**
+   * The skills the picker should render. Agent-locked → only the bound skills
+   * (the agent dictates a fixed set, so hide the rest); otherwise every
+   * accessible skill.
+   */
+  readonly visibleSkills = computed(() => {
+    const locked = this._agentLockedSkillIds();
+    if (locked !== null) {
+      return this._skills().filter(s => locked.includes(s.skillId));
+    }
+    return this._skills();
+  });
+
+  /**
    * Whether a skill row should render as ON. Agent-locked → membership in the
    * bound set; otherwise the user's own enabled state.
    */
