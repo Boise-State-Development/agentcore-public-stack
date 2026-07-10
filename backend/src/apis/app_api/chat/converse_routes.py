@@ -25,7 +25,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import boto3
 from botocore.exceptions import ClientError as BotoClientError
@@ -43,6 +43,12 @@ from apis.shared.sessions.models import (
     TokenUsage,
     ModelInfo,
     Attribution,
+)
+
+from apis.shared.models.mantle import (
+    MantleApiMode,
+    build_mantle_model,
+    param_map_for,
 )
 
 from .models import ConverseRequest, ConverseResponse
@@ -83,7 +89,9 @@ def _build_user_from_api_key(validated_key) -> User:
         roles=["user"],
     )
 
-async def _record_cost(user_id: str, model_id: str, usage: dict, key_id: str) -> None:
+async def _record_cost(
+    user_id: str, model_id: str, usage: dict, key_id: str, provider: str = "bedrock"
+) -> None:
     """Calculate and store cost metadata for an api-converse request.
 
     Fail-open: any error is logged but never re-raised so the caller's
@@ -110,7 +118,7 @@ async def _record_cost(user_id: str, model_id: str, usage: dict, key_id: str) ->
         model_info = ModelInfo(
             modelId=model_id,
             modelName=model_id,
-            provider="bedrock",
+            provider=provider,
         )
 
         attribution = Attribution(
@@ -205,6 +213,59 @@ def _extract_reasoning_and_text(content_blocks: list) -> tuple[str, str | None]:
 # Streaming helpers
 # ---------------------------------------------------------------------------
 
+def _converse_event_to_sse(event: dict, state: dict) -> list[str]:
+    """Map one Bedrock-Converse stream event to SSE frame(s).
+
+    Shared by the Bedrock path (boto3 ``converse_stream``) and the Mantle path
+    (Strands ``model.stream``): both emit the same Converse event shape, since
+    Strands normalizes every provider onto Converse events. ``state`` carries
+    cross-event flags — ``in_reasoning`` (bool) and the latest ``usage`` dict
+    (set when a metadata event arrives).
+    """
+    out: list[str] = []
+    if "messageStart" in event:
+        out.append(_sse("message_start", {"role": event["messageStart"].get("role", "assistant")}))
+    elif "contentBlockStart" in event:
+        cbs = event["contentBlockStart"]
+        idx = cbs.get("contentBlockIndex", 0)
+        start_data = cbs.get("start", {})
+        if "toolUse" in start_data:
+            out.append(_sse("content_block_start", {
+                "contentBlockIndex": idx, "type": "tool_use", "toolUse": start_data["toolUse"],
+            }))
+        else:
+            out.append(_sse("content_block_start", {"contentBlockIndex": idx, "type": "text"}))
+    elif "contentBlockDelta" in event:
+        cbd = event["contentBlockDelta"]
+        idx = cbd.get("contentBlockIndex", 0)
+        delta = cbd.get("delta", {})
+        if "text" in delta:
+            out.append(_sse("content_block_delta", {
+                "contentBlockIndex": idx, "type": "text", "text": delta["text"],
+            }))
+        elif "reasoningContent" in delta:
+            rc = delta["reasoningContent"]
+            if "text" in rc:
+                if not state.get("in_reasoning"):
+                    state["in_reasoning"] = True
+                    out.append(_sse("reasoning_start", {"contentBlockIndex": idx}))
+                out.append(_sse("reasoning_delta", {"contentBlockIndex": idx, "text": rc["text"]}))
+    elif "contentBlockStop" in event:
+        idx = event["contentBlockStop"].get("contentBlockIndex", 0)
+        if state.get("in_reasoning"):
+            out.append(_sse("reasoning_stop", {"contentBlockIndex": idx}))
+            state["in_reasoning"] = False
+        out.append(_sse("content_block_stop", {"contentBlockIndex": idx}))
+    elif "messageStop" in event:
+        out.append(_sse("message_stop", {"stopReason": event["messageStop"].get("stopReason", "end_turn")}))
+    elif "metadata" in event:
+        meta = event["metadata"]
+        usage = meta.get("usage", {})
+        state["usage"] = usage
+        out.append(_sse("metadata", {"usage": usage, "metrics": meta.get("metrics", {})}))
+    return out
+
+
 async def _stream_converse(request: ConverseRequest, user_id: str, key_id: str) -> AsyncGenerator[str, None]:
     """Call Bedrock converse_stream and yield SSE events."""
     client = _get_bedrock_client()
@@ -230,88 +291,168 @@ async def _stream_converse(request: ConverseRequest, user_id: str, key_id: str) 
         yield _sse("done", {})
         return
 
-    # Track state for SSE lifecycle events
-    in_reasoning = False
-    accumulated_usage: dict = {}
-
+    state: dict = {"in_reasoning": False, "usage": {}}
     for event in stream:
-        # --- message start ---
-        if "messageStart" in event:
-            role = event["messageStart"].get("role", "assistant")
-            yield _sse("message_start", {"role": role})
-
-        # --- content block start ---
-        elif "contentBlockStart" in event:
-            cbs = event["contentBlockStart"]
-            idx = cbs.get("contentBlockIndex", 0)
-            start_data = cbs.get("start", {})
-
-            if "toolUse" in start_data:
-                yield _sse("content_block_start", {
-                    "contentBlockIndex": idx,
-                    "type": "tool_use",
-                    "toolUse": start_data["toolUse"],
-                })
-            else:
-                yield _sse("content_block_start", {
-                    "contentBlockIndex": idx,
-                    "type": "text",
-                })
-
-        # --- content block delta ---
-        elif "contentBlockDelta" in event:
-            cbd = event["contentBlockDelta"]
-            idx = cbd.get("contentBlockIndex", 0)
-            delta = cbd.get("delta", {})
-
-            if "text" in delta:
-                yield _sse("content_block_delta", {
-                    "contentBlockIndex": idx,
-                    "type": "text",
-                    "text": delta["text"],
-                })
-            elif "reasoningContent" in delta:
-                rc = delta["reasoningContent"]
-                if "text" in rc:
-                    if not in_reasoning:
-                        in_reasoning = True
-                        yield _sse("reasoning_start", {"contentBlockIndex": idx})
-                    yield _sse("reasoning_delta", {
-                        "contentBlockIndex": idx,
-                        "text": rc["text"],
-                    })
-
-        # --- content block stop ---
-        elif "contentBlockStop" in event:
-            idx = event["contentBlockStop"].get("contentBlockIndex", 0)
-            if in_reasoning:
-                yield _sse("reasoning_stop", {"contentBlockIndex": idx})
-                in_reasoning = False
-            yield _sse("content_block_stop", {"contentBlockIndex": idx})
-
-        # --- message stop ---
-        elif "messageStop" in event:
-            stop_reason = event["messageStop"].get("stopReason", "end_turn")
-            yield _sse("message_stop", {"stopReason": stop_reason})
-
-        # --- metadata ---
-        elif "metadata" in event:
-            meta = event["metadata"]
-            usage = meta.get("usage", {})
-            accumulated_usage = usage
-            metrics = meta.get("metrics", {})
-            yield _sse("metadata", {"usage": usage, "metrics": metrics})
+        for frame in _converse_event_to_sse(event, state):
+            yield frame
 
     yield _sse("done", {})
 
-    # Record cost after stream completes
-    if accumulated_usage:
+    if state["usage"]:
         await _record_cost(
-            user_id=user_id,
-            model_id=request.model_id,
-            usage=accumulated_usage,
-            key_id=key_id,
+            user_id=user_id, model_id=request.model_id, usage=state["usage"], key_id=key_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Bedrock Mantle path (OpenAI-compatible surface; provider="mantle")
+#
+# Mantle models don't speak Bedrock Converse — they ride the OpenAI wire
+# protocol. We reuse the SHARED Strands builder (apis.shared.models.mantle,
+# same one the agent factory uses) and invoke the bare model's `.stream()`,
+# which yields the same Converse-shaped events the Bedrock path emits — so the
+# SSE translation and usage/cost accounting are identical.
+# ---------------------------------------------------------------------------
+
+def _build_mantle_params(request: ConverseRequest, api_mode: MantleApiMode) -> dict:
+    """Translate the request's canonical inference params to Mantle-native names."""
+    pmap = param_map_for(api_mode)
+    canonical = {
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "max_tokens": request.max_tokens,
+    }
+    params: dict = {}
+    for key, value in canonical.items():
+        if value is not None and key in pmap:
+            # The api-converse param set maps only to flat native names
+            # (temperature / top_p / max_tokens|max_output_tokens) — no nesting.
+            params[pmap[key]] = value
+    return params
+
+
+def _build_request_mantle_model(request: ConverseRequest, api_mode: MantleApiMode, region: Optional[str]):
+    """Construct the shared Strands Mantle model for this request."""
+    return build_mantle_model(
+        model_id=request.model_id,
+        api_mode=api_mode,
+        region=region or None,
+        params=_build_mantle_params(request, api_mode) or None,
+    )
+
+
+def _mantle_messages(request: ConverseRequest) -> list[dict]:
+    """Convert request messages to the Converse content-block format."""
+    return [{"role": m.role, "content": [{"text": m.content}]} for m in request.messages]
+
+
+async def _stream_mantle(
+    request: ConverseRequest,
+    user_id: str,
+    key_id: str,
+    api_mode: MantleApiMode,
+    region: Optional[str],
+) -> AsyncGenerator[str, None]:
+    """Invoke a Mantle model via Strands and yield the same SSE shape as Bedrock."""
+    try:
+        model = _build_request_mantle_model(request, api_mode, region)
+        messages = _mantle_messages(request)
+        system_prompt = request.system_prompt or None
+    except Exception:
+        logger.error("Failed to build Mantle model", exc_info=True)
+        yield _sse("error", {"error": "Model invocation failed due to an internal error."})
+        yield _sse("done", {})
+        return
+
+    state: dict = {"in_reasoning": False, "usage": {}}
+    try:
+        async for event in model.stream(messages, system_prompt=system_prompt):
+            for frame in _converse_event_to_sse(event, state):
+                yield frame
+    except Exception:
+        logger.error("Bedrock Mantle stream error", exc_info=True)
+        yield _sse("error", {"error": "Model invocation failed due to a service error."})
+        yield _sse("done", {})
+        return
+
+    yield _sse("done", {})
+
+    if state["usage"]:
+        await _record_cost(
+            user_id=user_id, model_id=request.model_id, usage=state["usage"],
+            key_id=key_id, provider="mantle",
+        )
+
+
+async def _mantle_converse(
+    request: ConverseRequest,
+    user_id: str,
+    key_id: str,
+    api_mode: MantleApiMode,
+    region: Optional[str],
+) -> ConverseResponse:
+    """Non-streaming Mantle converse: consume the model stream and aggregate."""
+    try:
+        model = _build_request_mantle_model(request, api_mode, region)
+        messages = _mantle_messages(request)
+        system_prompt = request.system_prompt or None
+    except Exception:
+        logger.error("Failed to build Mantle model", exc_info=True)
+        raise HTTPException(status_code=502, detail="Model invocation failed due to an internal error.")
+
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    usage: dict = {}
+    stop_reason: Optional[str] = None
+    try:
+        async for event in model.stream(messages, system_prompt=system_prompt):
+            if "contentBlockDelta" in event:
+                delta = event["contentBlockDelta"].get("delta", {})
+                if "text" in delta:
+                    text_parts.append(delta["text"])
+                elif "reasoningContent" in delta:
+                    rc = delta["reasoningContent"]
+                    if "text" in rc:
+                        reasoning_parts.append(rc["text"])
+            elif "messageStop" in event:
+                stop_reason = event["messageStop"].get("stopReason", "end_turn")
+            elif "metadata" in event:
+                usage = event["metadata"].get("usage", {})
+    except Exception:
+        logger.error("Bedrock Mantle converse error", exc_info=True)
+        raise HTTPException(status_code=502, detail="Model invocation failed due to a service error.")
+
+    if usage:
+        await _record_cost(
+            user_id=user_id, model_id=request.model_id, usage=usage,
+            key_id=key_id, provider="mantle",
+        )
+
+    return ConverseResponse(
+        content="".join(text_parts),
+        model_id=request.model_id,
+        usage=usage or None,
+        stop_reason=stop_reason,
+        reasoning="".join(reasoning_parts) if reasoning_parts else None,
+    )
+
+
+async def _resolve_model_routing(model_id: str) -> tuple[str, Optional[str], Optional[str]]:
+    """Resolve (provider, mantle_api_mode, mantle_region) for an external model id.
+
+    Looks the model up in the managed-models catalog by its external id. Falls
+    back to the Bedrock Converse path when the model isn't found or the lookup
+    fails (fail-safe: unknown ids behave exactly as before this change).
+    """
+    try:
+        from apis.shared.models.managed_models import list_managed_models
+
+        for model in await list_managed_models():
+            if model.model_id == model_id:
+                return (model.provider or "bedrock", model.mantle_api_mode, model.mantle_region)
+    except Exception:
+        logger.warning("Model routing lookup failed; defaulting to bedrock", exc_info=True)
+    return ("bedrock", None, None)
 
 
 
@@ -409,10 +550,29 @@ async def api_converse(
             detail=f"Access denied to model: {request.model_id}",
         )
 
+    # 2.8 Provider routing — Bedrock Converse vs Bedrock Mantle (OpenAI wire).
+    provider, mantle_api_mode, mantle_region = await _resolve_model_routing(request.model_id)
+    is_mantle = (provider or "").lower() == "mantle"
+    try:
+        api_mode = (
+            MantleApiMode(mantle_api_mode) if mantle_api_mode else MantleApiMode.CHAT_COMPLETIONS
+        )
+    except ValueError:
+        api_mode = MantleApiMode.CHAT_COMPLETIONS
+
     # 3. Streaming path
     if request.stream:
+        if is_mantle:
+            generator = _stream_mantle(
+                request, user_id=validated_key.user_id, key_id=validated_key.key_id,
+                api_mode=api_mode, region=mantle_region,
+            )
+        else:
+            generator = _stream_converse(
+                request, user_id=validated_key.user_id, key_id=validated_key.key_id,
+            )
         return StreamingResponse(
-            _stream_converse(request, user_id=validated_key.user_id, key_id=validated_key.key_id),
+            generator,
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -420,7 +580,13 @@ async def api_converse(
             },
         )
 
-    # 4. Non-streaming path
+    # 4. Non-streaming path — Mantle (Strands) vs Bedrock Converse (boto3).
+    if is_mantle:
+        return await _mantle_converse(
+            request, user_id=validated_key.user_id, key_id=validated_key.key_id,
+            api_mode=api_mode, region=mantle_region,
+        )
+
     client = _get_bedrock_client()
     params = _build_converse_params(request)
 

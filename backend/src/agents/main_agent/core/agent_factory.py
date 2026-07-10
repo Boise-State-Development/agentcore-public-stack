@@ -5,13 +5,14 @@ import os
 import logging
 from typing import List, Optional, Any
 from strands import Agent
-from strands.models import BedrockModel, OpenAIResponsesModel
+from strands.models import BedrockModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
-from agents.main_agent.core.model_config import ModelConfig, ModelProvider, MantleApiMode
+from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars
+from apis.shared.models.mantle import build_mantle_model
 
 logger = logging.getLogger(__name__)
 
@@ -88,24 +89,23 @@ class AgentFactory:
         Returns:
             OpenAIModel | OpenAIResponsesModel: Configured model targeting Mantle
         """
-        # bedrock_mantle_config resolves region from (in order) this value, an
-        # attached boto session, then the standard boto3 chain — so an explicit
-        # AWS_REGION is only forwarded when set, matching prior behavior.
-        bedrock_mantle_config = {}
+        # region resolves from (in order) the model override, then AWS_REGION;
+        # None lets Strands fall back to the boto session / standard chain.
         region = model_config.mantle_region or os.getenv(EnvVars.AWS_REGION)
-        if region:
-            bedrock_mantle_config["region"] = region
-
-        is_responses = model_config.mantle_api_mode == MantleApiMode.RESPONSES
-        model_cls = OpenAIResponsesModel if is_responses else OpenAIModel
-
         mantle_config = model_config.to_mantle_config()
         logger.info(
             f"Creating Bedrock Mantle model (api={model_config.mantle_api_mode.value}) "
             f"with model_id={model_config.model_id} "
             f"region={region or '<agent default>'}"
         )
-        return model_cls(bedrock_mantle_config=bedrock_mantle_config, **mantle_config)
+        # Shared builder — also used by the API-key /chat/api-converse handler
+        # (apis/app_api) so the Mantle model construction is never forked.
+        return build_mantle_model(
+            model_id=mantle_config["model_id"],
+            api_mode=model_config.mantle_api_mode,
+            region=region,
+            params=mantle_config.get("params"),
+        )
 
     @staticmethod
     def _create_gemini_model(model_config: ModelConfig) -> GeminiModel:

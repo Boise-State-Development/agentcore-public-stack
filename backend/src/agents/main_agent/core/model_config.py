@@ -8,6 +8,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from agents.main_agent.config.constants import EnvVars, Defaults
+# MantleApiMode and the Mantle param maps live in apis.shared so the API-key
+# converse handler (apis/app_api, which can't import agents/) shares one
+# implementation of Mantle model construction with the agent factory.
+from apis.shared.models.mantle import (
+    MantleApiMode,
+    MANTLE_CHAT_PARAM_MAP as _MANTLE_CHAT_PARAM_MAP,
+    MANTLE_RESPONSES_PARAM_MAP as _MANTLE_RESPONSES_PARAM_MAP,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +38,6 @@ class ModelProvider(str, Enum):
     # bearer token, not the Converse API with SigV4. Never auto-detected from
     # model_id — admins set it explicitly on the managed model.
     MANTLE = "mantle"
-
-
-class MantleApiMode(str, Enum):
-    """OpenAI-compatible API surface a Bedrock Mantle model speaks.
-
-    Selects which Strands model class the factory builds: Chat Completions
-    (``OpenAIModel``) or the Responses API (``OpenAIResponsesModel``). Some
-    Mantle-hosted models (e.g. ``openai.gpt-5.x``) only serve Responses and
-    reject Chat Completions outright, so this is a per-model fact the admin
-    records — Mantle exposes no API to discover it.
-    """
-    CHAT_COMPLETIONS = "chat"
-    RESPONSES = "responses"
 
 
 # Canonical param name -> provider-native key path (dot-separated for nested SDK fields).
@@ -70,27 +65,8 @@ _OPENAI_PARAM_MAP: Dict[str, str] = {
     "reasoning_effort": "reasoning_effort",
 }
 
-# Mantle Chat Completions mirrors OpenAI's chat-completions protocol, so the
-# canonical->native mapping mirrors OpenAI's. Kept separate so Mantle-specific
-# divergence (e.g. params some open-weight models reject) has a home without
-# touching OpenAI.
-_MANTLE_CHAT_PARAM_MAP: Dict[str, str] = {
-    "temperature": "temperature",
-    "top_p": "top_p",
-    "max_tokens": "max_tokens",
-    "reasoning_effort": "reasoning_effort",
-}
-
-# Mantle Responses API (OpenAIResponsesModel) uses different native names:
-# `max_output_tokens` for the output cap and a nested `reasoning.effort` object.
-# The SDK spreads `params` straight into `responses.create(**params)` with no
-# translation, so the canonical names must be pre-mapped here.
-_MANTLE_RESPONSES_PARAM_MAP: Dict[str, str] = {
-    "temperature": "temperature",
-    "top_p": "top_p",
-    "max_tokens": "max_output_tokens",
-    "reasoning_effort": "reasoning.effort",
-}
+# Mantle Chat Completions / Responses param maps (_MANTLE_CHAT_PARAM_MAP,
+# _MANTLE_RESPONSES_PARAM_MAP) are imported from apis.shared.models.mantle above.
 
 _GEMINI_PARAM_MAP: Dict[str, str] = {
     "temperature": "temperature",
