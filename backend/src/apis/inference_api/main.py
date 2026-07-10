@@ -145,12 +145,10 @@ app.add_middleware(
 # Import routers
 #from health.health import router as health_router
 from apis.inference_api.chat.routes import router as agentcore_router
-from apis.inference_api.chat.converse_routes import router as converse_router
 from apis.inference_api.chat.voice_routes import router as voice_router
 # Include routers
 #app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
-app.include_router(converse_router)  # API-key authenticated converse endpoint
 app.include_router(voice_router)  # WebSocket voice streaming endpoint
 # Connector consent flows live on app-api now: the AgentCore Runtime data plane
 # only proxies /invocations and /ping, so user-facing /connectors/* paths can't

@@ -365,7 +365,7 @@ class TestApiConverseAccessDenied:
     """
 
     def test_returns_403_for_unauthorized_model(self):
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -375,11 +375,11 @@ class TestApiConverseAccessDenied:
         mock_limiter = _make_rate_limiter(allowed=True)
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -407,7 +407,7 @@ class TestApiConverseAccessDenied:
 
         Requirements: 2.2
         """
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -417,11 +417,11 @@ class TestApiConverseAccessDenied:
         mock_limiter = _make_rate_limiter(allowed=True)
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -454,7 +454,7 @@ class TestApiConverseAccessAllowed:
     """
 
     def test_returns_200_for_authorized_model(self):
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -465,11 +465,11 @@ class TestApiConverseAccessAllowed:
         mock_bedrock = _make_bedrock_client()
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -478,10 +478,10 @@ class TestApiConverseAccessAllowed:
             "apis.shared.quota.is_quota_enforcement_enabled",
             return_value=False,
         ), patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=mock_bedrock,
         ), patch(
-            "apis.inference_api.chat.converse_routes._record_cost",
+            "apis.app_api.chat.converse_routes._record_cost",
             new_callable=AsyncMock,
         ):
             client = TestClient(app, raise_server_exceptions=False)
@@ -504,7 +504,7 @@ class TestApiConverseWildcardAccess:
     """
 
     def test_wildcard_access_allows_any_model(self):
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -515,11 +515,11 @@ class TestApiConverseWildcardAccess:
         mock_bedrock = _make_bedrock_client()
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -528,10 +528,10 @@ class TestApiConverseWildcardAccess:
             "apis.shared.quota.is_quota_enforcement_enabled",
             return_value=False,
         ), patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=mock_bedrock,
         ), patch(
-            "apis.inference_api.chat.converse_routes._record_cost",
+            "apis.app_api.chat.converse_routes._record_cost",
             new_callable=AsyncMock,
         ):
             client = TestClient(app, raise_server_exceptions=False)
@@ -555,7 +555,7 @@ class TestApiConverseRateLimitPrecedence:
     """
 
     def test_rate_limit_returns_429_not_403(self):
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -565,11 +565,11 @@ class TestApiConverseRateLimitPrecedence:
         mock_limiter = _make_rate_limiter(allowed=False)
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -598,7 +598,7 @@ class TestApiConverseQuotaPrecedence:
     """
 
     def test_quota_exceeded_returns_429_not_403(self):
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -616,11 +616,11 @@ class TestApiConverseQuotaPrecedence:
         mock_quota_checker.check_quota = AsyncMock(return_value=mock_quota_result)
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
