@@ -297,19 +297,20 @@ async def _resolve_model_settings(
     model_id: str | None,
     explicit_caching_enabled: bool | None,
     request_inference_params: dict | None,
-) -> tuple[bool | None, dict, str | None]:
+) -> tuple[bool | None, dict, str | None, str | None]:
     """Resolve runtime model knobs from the managed-model registry.
 
-    Returns ``(caching_enabled, inference_params, mantle_endpoint_path)``. A
-    single registry lookup drives all three. ``mantle_endpoint_path`` is the
-    server-authoritative Bedrock Mantle path recorded on the model (``/v1`` or
-    ``/openai/v1``); ``None`` for non-Mantle models. Resolving it here keeps
-    the path off the client request — the SPA can't override it.
+    Returns ``(caching_enabled, inference_params, mantle_api_mode,
+    mantle_region)``. A single registry lookup drives all of them. The Mantle
+    fields are server-authoritative (recorded on the model): ``mantle_api_mode``
+    selects Chat Completions vs the Responses API and ``mantle_region`` optionally
+    pins inference to a specific region; both ``None`` for non-Mantle models.
+    Resolving them here keeps them off the client request — the SPA can't override.
     """
     request_params = dict(request_inference_params or {})
 
     if not model_id:
-        return explicit_caching_enabled, request_params, None
+        return explicit_caching_enabled, request_params, None, None
 
     managed_model = await _find_managed_model(model_id)
 
@@ -320,19 +321,24 @@ async def _resolve_model_settings(
     else:
         caching = None
 
-    mantle_endpoint_path = (
-        getattr(managed_model, "mantle_endpoint_path", None)
+    mantle_api_mode = (
+        getattr(managed_model, "mantle_api_mode", None)
+        if managed_model is not None
+        else None
+    )
+    mantle_region = (
+        getattr(managed_model, "mantle_region", None)
         if managed_model is not None
         else None
     )
 
     inference_params = _merge_inference_params(managed_model, request_params)
-    return caching, inference_params, mantle_endpoint_path
+    return caching, inference_params, mantle_api_mode, mantle_region
 
 
 async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
     """Backward-compat wrapper around :func:`_resolve_model_settings`."""
-    caching, _, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
+    caching, _, _, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
     return caching
 
 
@@ -888,7 +894,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         atc = input_data.app_tool_call
         try:
             request_inference_params = dict(input_data.inference_params or {})
-            caching_enabled, inference_params, mantle_endpoint_path = await _resolve_model_settings(
+            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
                 model_id=input_data.model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
@@ -903,7 +909,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
                 inference_params=inference_params,
-                mantle_endpoint_path=mantle_endpoint_path,
+                mantle_api_mode=mantle_api_mode,
+                mantle_region=mantle_region,
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
@@ -935,7 +942,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         acu = input_data.app_context_update
         try:
             request_inference_params = dict(input_data.inference_params or {})
-            caching_enabled, inference_params, mantle_endpoint_path = await _resolve_model_settings(
+            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
                 model_id=input_data.model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
@@ -950,7 +957,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=input_data.provider,
                 inference_params=inference_params,
-                mantle_endpoint_path=mantle_endpoint_path,
+                mantle_api_mode=mantle_api_mode,
+                mantle_region=mantle_region,
                 agent_type=effective_agent_type,
                 is_resume=False,
                 accessible_skill_ids=effective_skill_ids,
@@ -1546,7 +1554,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=snapshot.caching_enabled,
                 provider=snapshot.provider,
                 inference_params=resume_inference_params,
-                mantle_endpoint_path=snapshot.mantle_endpoint_path,
+                mantle_api_mode=snapshot.mantle_api_mode,
+                mantle_region=snapshot.mantle_region,
                 agent_type=snapshot.agent_type,
                 is_resume=True,
                 # Resume must rebuild the SAME cache key the original turn used,
@@ -1618,7 +1627,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Single registry lookup resolves caching + inference params +
             # the Mantle endpoint path, merging admin defaults with request
             # overrides.
-            caching_enabled, inference_params, mantle_endpoint_path = await _resolve_model_settings(
+            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
                 model_id=effective_model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
@@ -1682,7 +1691,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 caching_enabled=caching_enabled,
                 provider=effective_provider,
                 inference_params=inference_params,
-                mantle_endpoint_path=mantle_endpoint_path,
+                mantle_api_mode=mantle_api_mode,
+                mantle_region=mantle_region,
                 agent_type=effective_agent_type,
                 extra_tools=extra_tools,
                 is_resume=False,

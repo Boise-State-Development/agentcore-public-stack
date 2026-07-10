@@ -5,12 +5,12 @@ import os
 import logging
 from typing import List, Optional, Any
 from strands import Agent
-from strands.models import BedrockModel
+from strands.models import BedrockModel, OpenAIResponsesModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
-from agents.main_agent.core.model_config import ModelConfig, ModelProvider
+from agents.main_agent.core.model_config import ModelConfig, ModelProvider, MantleApiMode
 from agents.main_agent.config.constants import EnvVars
 
 logger = logging.getLogger(__name__)
@@ -62,44 +62,50 @@ class AgentFactory:
         return OpenAIModel(client_args=client_args, **openai_config)
 
     @staticmethod
-    def _create_mantle_model(model_config: ModelConfig) -> OpenAIModel:
+    def _create_mantle_model(model_config: ModelConfig):
         """
-        Create an OpenAIModel pointed at Bedrock Mantle
+        Create a Strands OpenAI-compatible model pointed at Bedrock Mantle
 
         Mantle is AWS's OpenAI-compatible inference surface for Bedrock-hosted
-        models, so the Strands OpenAIModel does the protocol work — only the
-        client differs: the regional Mantle base URL plus a short-term bearer
-        token minted from the runtime role's credentials (requires
-        `bedrock:CallWithBearerToken`). The token is minted per agent build;
-        it lives 12h and an agent is built per turn, so expiry is a non-issue.
+        models. Strands' ``bedrock_mantle_config`` owns the wire details: it
+        mints the short-term bearer token (via aws-bedrock-token-generator,
+        requires `bedrock-mantle:CallWithBearerToken`) on demand and derives the
+        regional base URL plus the model-family base path
+        (`openai.gpt-5.*` -> /openai/v1, everything else -> /v1).
+
+        The model's declared API surface picks the class: Chat Completions
+        (``OpenAIModel``) or the Responses API (``OpenAIResponsesModel``) — some
+        Mantle models (e.g. `openai.gpt-5.x`) only serve Responses and reject
+        Chat Completions.
+
+        ``mantle_region`` optionally pins inference to the region hosting the
+        model (e.g. us-east-1) independent of the app's region; it drives both
+        the Mantle endpoint and the region the bearer token is signed for.
 
         Args:
             model_config: Model configuration
 
         Returns:
-            OpenAIModel: Configured model targeting Bedrock Mantle
-
-        Raises:
-            ValueError: If no AWS credentials are available to mint the token
+            OpenAIModel | OpenAIResponsesModel: Configured model targeting Mantle
         """
-        from apis.shared.bedrock import (
-            generate_bedrock_bearer_token,
-            get_mantle_base_url,
-        )
+        # bedrock_mantle_config resolves region from (in order) this value, an
+        # attached boto session, then the standard boto3 chain — so an explicit
+        # AWS_REGION is only forwarded when set, matching prior behavior.
+        bedrock_mantle_config = {}
+        region = model_config.mantle_region or os.getenv(EnvVars.AWS_REGION)
+        if region:
+            bedrock_mantle_config["region"] = region
 
-        region = os.getenv(EnvVars.AWS_REGION)
-        base_url = get_mantle_base_url(region, model_config.mantle_endpoint_path)
-        client_args = {
-            "api_key": generate_bedrock_bearer_token(region),
-            "base_url": base_url,
-        }
+        is_responses = model_config.mantle_api_mode == MantleApiMode.RESPONSES
+        model_cls = OpenAIResponsesModel if is_responses else OpenAIModel
 
         mantle_config = model_config.to_mantle_config()
         logger.info(
-            f"Creating Bedrock Mantle model with model_id={model_config.model_id} "
-            f"base_url={base_url}"
+            f"Creating Bedrock Mantle model (api={model_config.mantle_api_mode.value}) "
+            f"with model_id={model_config.model_id} "
+            f"region={region or '<agent default>'}"
         )
-        return OpenAIModel(client_args=client_args, **mantle_config)
+        return model_cls(bedrock_mantle_config=bedrock_mantle_config, **mantle_config)
 
     @staticmethod
     def _create_gemini_model(model_config: ModelConfig) -> GeminiModel:

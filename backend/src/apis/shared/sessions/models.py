@@ -122,12 +122,19 @@ class PausedTurnSnapshot(BaseModel):
         description="Canonical inference param dict captured at pause. When present, "
                     "supersedes the legacy temperature/max_tokens fields on resume."
     )
-    mantle_endpoint_path: Optional[str] = Field(
+    mantle_api_mode: Optional[str] = Field(
         default=None,
-        alias="mantleEndpointPath",
-        description="Bedrock Mantle endpoint path ('/v1' or '/openai/v1') captured at "
-                    "pause so a resumed Mantle turn rebuilds the same base URL. None for "
-                    "non-Mantle turns and snapshots written before the field existed.",
+        alias="mantleApiMode",
+        description="Bedrock Mantle API surface ('chat' or 'responses') captured at "
+                    "pause so a resumed Mantle turn rebuilds the same model class. None "
+                    "for non-Mantle turns and snapshots written before the field existed.",
+    )
+    mantle_region: Optional[str] = Field(
+        default=None,
+        alias="mantleRegion",
+        description="Bedrock Mantle region override captured at pause so a resumed "
+                    "Mantle turn targets the same region. None for non-Mantle turns and "
+                    "snapshots written before the field existed.",
     )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")

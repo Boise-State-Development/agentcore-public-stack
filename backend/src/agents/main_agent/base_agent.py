@@ -60,7 +60,8 @@ class BaseAgent(ABC):
         provider: Optional[str] = None,
         max_tokens: Optional[int] = None,
         inference_params: Optional[Dict[str, Any]] = None,
-        mantle_endpoint_path: Optional[str] = None,
+        mantle_api_mode: Optional[str] = None,
+        mantle_region: Optional[str] = None,
         skip_persistence: bool = False,
         extra_tools: Optional[List[Any]] = None,
     ):
@@ -105,7 +106,8 @@ class BaseAgent(ABC):
             caching_enabled=caching_enabled,
             provider=provider,
             inference_params=resolved_params,
-            mantle_endpoint_path=mantle_endpoint_path,
+            mantle_api_mode=mantle_api_mode,
+            mantle_region=mantle_region,
         )
 
         # Frozen snapshot of agent-construction params, used when the turn
@@ -118,7 +120,8 @@ class BaseAgent(ABC):
             "provider": provider,
             "caching_enabled": caching_enabled,
             "inference_params": dict(resolved_params),
-            "mantle_endpoint_path": mantle_endpoint_path,
+            "mantle_api_mode": mantle_api_mode,
+            "mantle_region": mantle_region,
         }
 
         # Load retry configuration from environment variables

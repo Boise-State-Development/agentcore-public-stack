@@ -195,13 +195,28 @@ class ManagedModelCreate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    mantle_api_mode: Optional[str] = Field(
+        None,
+        alias="apiMode",
+        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
+                    "(OpenAI Chat Completions, the default) or 'responses' (OpenAI "
+                    "Responses API — required by models that don't serve Chat "
+                    "Completions, e.g. openai.gpt-5.x). Ignored for other providers."
+    )
+    mantle_region: Optional[str] = Field(
+        None,
+        alias="region",
+        description="Bedrock Mantle region override (provider='mantle' only): pins "
+                    "inference to the region hosting the model (e.g. 'us-east-1'), "
+                    "independent of where the app runs. Empty -> the app's region. "
+                    "Ignored for other providers."
+    )
     mantle_endpoint_path: Optional[str] = Field(
         None,
         alias="mantleEndpointPath",
-        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
-                    "'/v1' (OpenAI Chat Completions, the default) or '/openai/v1' "
-                    "(e.g. Gemma 4). The per-model value comes from the model card; "
-                    "there is no API that exposes it. Ignored for other providers."
+        description="[DEPRECATED] Bedrock Mantle endpoint path segment. The base "
+                    "path is now derived by the SDK from the model id; accepted for "
+                    "backward compatibility but ignored."
     )
     supported_params: Optional[SupportedParams] = Field(
         None,
@@ -265,11 +280,23 @@ class ManagedModelUpdate(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions."
     )
+    mantle_api_mode: Optional[str] = Field(
+        None,
+        alias="apiMode",
+        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
+                    "or 'responses'. Ignored for other providers."
+    )
+    mantle_region: Optional[str] = Field(
+        None,
+        alias="region",
+        description="Bedrock Mantle region override (provider='mantle' only). "
+                    "Empty -> the app's region. Ignored for other providers."
+    )
     mantle_endpoint_path: Optional[str] = Field(
         None,
         alias="mantleEndpointPath",
-        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
-                    "'/v1' or '/openai/v1'. Ignored for other providers."
+        description="[DEPRECATED] Bedrock Mantle endpoint path segment; accepted "
+                    "for backward compatibility but ignored (SDK derives the path)."
     )
     supported_params: Optional[SupportedParams] = Field(
         None,
@@ -331,11 +358,23 @@ class ManagedModel(BaseModel):
         alias="isDefault",
         description="Whether this is the default model for new sessions. Only one model can be default."
     )
+    mantle_api_mode: Optional[str] = Field(
+        None,
+        alias="apiMode",
+        description="Bedrock Mantle API surface (provider='mantle' only): 'chat' "
+                    "(default) or 'responses'. Ignored for other providers."
+    )
+    mantle_region: Optional[str] = Field(
+        None,
+        alias="region",
+        description="Bedrock Mantle region override (provider='mantle' only). "
+                    "Empty -> the app's region. Ignored for other providers."
+    )
     mantle_endpoint_path: Optional[str] = Field(
         None,
         alias="mantleEndpointPath",
-        description="Bedrock Mantle endpoint path segment (provider='mantle' only): "
-                    "'/v1' or '/openai/v1'. Ignored for other providers."
+        description="[DEPRECATED] Bedrock Mantle endpoint path segment; retained for "
+                    "backward compatibility with older records but no longer used."
     )
     supported_params: Optional[SupportedParams] = Field(
         None,

@@ -132,8 +132,9 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
  * Caching is intentionally absent: prompt caching on Bedrock is model-bound
  * to Anthropic Claude + a small set of Amazon Nova models, none of which run
  * through the Mantle provider, so these never cache and carry no cache
- * pricing. `mantleEndpointPath` is the one Mantle-specific field — sourced
- * from each model card (there is no API that exposes it).
+ * pricing. `apiMode` (Chat Completions vs Responses) and an optional `region`
+ * are the Mantle-specific fields — sourced from each model card (there is no
+ * API that exposes them). The base path is derived by the SDK from the model id.
  */
 const mantleDefaults = (): Pick<
   ManagedModelFormData,
@@ -173,7 +174,7 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       inputModalities: ['TEXT'],
       maxInputTokens: 256_000,
       maxOutputTokens: 8_192,
-      mantleEndpointPath: '/v1',
+      apiMode: 'chat',
       inputPricePerMillionTokens: 0.15,
       outputPricePerMillionTokens: 0.6,
       supportedParams: {
@@ -185,34 +186,14 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       },
     },
   },
-  {
-    key: 'gemma-4-31b',
-    tagline:
-      "Google Gemma 4 31B — reasoning, vision + tool use, served on Mantle's /openai/v1 path.",
-    capabilities: ['Reasoning', 'Tool use', 'Vision', '256K context'],
-    template: {
-      ...mantleDefaults(),
-      modelId: 'google.gemma-4-31b',
-      modelName: 'Gemma 4 31B',
-      providerName: 'Google',
-      // Per the AWS model card: text + image + video in, text out. (The
-      // request payload note explicitly covers images and video.)
-      inputModalities: ['TEXT', 'IMAGE', 'VIDEO'],
-      maxInputTokens: 256_000,
-      maxOutputTokens: 8_192,
-      // Gemma 4 is served on the /openai/v1 path, NOT the default /v1.
-      mantleEndpointPath: '/openai/v1',
-      inputPricePerMillionTokens: 0.14,
-      outputPricePerMillionTokens: 0.4,
-      supportedParams: {
-        params: {
-          temperature: { supported: true, min: 0, max: 2, default: 0.7 },
-          top_p: { supported: true, min: 0, max: 1, default: null },
-          max_tokens: { supported: true, min: 1, max: 8_192, default: 4_096 },
-        },
-      },
-    },
-  },
+  // NOTE: Gemma 4 31B (`google.gemma-4-31b`) is temporarily NOT curated. It is
+  // served on Mantle's `/openai/v1` base path, but the Strands SDK's
+  // bedrock_mantle_config only routes `openai.gpt-5.*` to `/openai/v1` (all
+  // other model ids -> `/v1`), and the config forbids overriding base_url. So a
+  // one-click Gemma card would build a `/v1` client and fail at chat time.
+  // Re-add once the `google.gemma-` family prefix lands in the SDK's
+  // _OPENAI_PATH_MODEL_PREFIXES (upstream strands-agents/sdk-python). Admins
+  // who need Gemma sooner can add it via the manual form.
 ];
 
 /**
