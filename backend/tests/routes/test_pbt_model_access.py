@@ -156,7 +156,7 @@ class TestApiConverseUnauthorizedModel:
 
         **Validates: Requirements 1.2, 2.2**
         """
-        from apis.inference_api.chat.converse_routes import router
+        from apis.app_api.chat.converse_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -182,11 +182,11 @@ class TestApiConverseUnauthorizedModel:
         }
 
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             return_value=mock_validated_key,
         ), patch(
-            "apis.inference_api.chat.converse_routes.get_app_role_service",
+            "apis.app_api.chat.converse_routes.get_app_role_service",
             return_value=mock_svc,
         ), patch(
             "apis.shared.rate_limit.get_rate_limiter",
@@ -195,10 +195,10 @@ class TestApiConverseUnauthorizedModel:
             "apis.shared.quota.is_quota_enforcement_enabled",
             return_value=False,
         ), patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=mock_bedrock,
         ), patch(
-            "apis.inference_api.chat.converse_routes._record_cost",
+            "apis.app_api.chat.converse_routes._record_cost",
             new_callable=AsyncMock,
         ):
             client = TestClient(app, raise_server_exceptions=False)
