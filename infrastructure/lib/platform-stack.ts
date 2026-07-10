@@ -28,6 +28,7 @@ import { BffCookieKeyConstruct } from './constructs/identity/bff-cookie-key-cons
 import { CognitoConstruct } from './constructs/identity/cognito-construct';
 import { OAuthTablesConstruct } from './constructs/identity/oauth-tables-construct';
 import { PlatformIdentityConstruct } from './constructs/identity/platform-identity-construct';
+import { TokenEnrichmentConstruct } from './constructs/identity/token-enrichment-construct';
 import { VoiceTicketConstruct } from './constructs/identity/voice-ticket-construct';
 
 // Data
@@ -299,6 +300,24 @@ export class PlatformStack extends cdk.Stack {
     this.bffAppClient = cognitoConstruct.bffAppClient;
     this.bffAppClientSecret = cognitoConstruct.bffAppClientSecret;
     this.cognitoDomain = cognitoConstruct.cognitoDomain;
+
+    // MCP user-identity forwarding — optional Cognito Pre-Token-Generation v2
+    // Lambda that copies configured user attributes into access-token claims so
+    // personalized MCP tools can identify the caller
+    // (docs/specs/MCP_USER_IDENTITY_FORWARDING_SPEC.md).
+    //
+    // Opt-in (default OFF): when disabled, this block creates nothing and the
+    // access token is forwarded exactly as before. It's gated rather than
+    // default-on because the trigger runs pool-wide on every token issuance and
+    // depends on the Cognito Essentials feature plan — a deliberate opt-in. The
+    // handler is fail-open (returns the event unchanged on any error), so the
+    // worst case is "claim not added", never "login blocked".
+    if (config.mcpIdentity.tokenEnrichment?.enabled) {
+      new TokenEnrichmentConstruct(this, 'TokenEnrichment', {
+        config,
+        userPool: cognitoConstruct.userPool,
+      });
+    }
 
     const artifactRenderToken = new ArtifactRenderTokenSecretConstruct(
       this,

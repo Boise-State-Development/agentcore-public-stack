@@ -112,6 +112,19 @@ jobs:
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
       # to enable it there for dogfooding.
       CDK_AGENTS_API_ENABLED: ${{ vars.CDK_AGENTS_API_ENABLED }}
+      # MCP user-identity forwarding — optional Cognito Pre-Token-Generation v2
+      # Lambda that copies user attributes into access-token claims so
+      # personalized MCP tools can identify the caller
+      # (docs/specs/MCP_USER_IDENTITY_FORWARDING_SPEC.md). Default OFF (opt-in):
+      # unset resolves to empty string, which config.ts treats as disabled, so
+      # NO Lambda/trigger is created. Set `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` to
+      # "true" AND provide the claim map in `CDK_MCP_TOKEN_ENRICHMENT_CLAIMS`
+      # (a JSON object {namespacedClaimName: sourceCognitoAttribute}, e.g.
+      # {"https://boisestate.edu/employee_number":"custom:provider_sub"}) to
+      # enable it. Keeping the map in a variable lets the public
+      # cdk.context.json stay inert.
+      CDK_MCP_TOKEN_ENRICHMENT_ENABLED: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}
+      CDK_MCP_TOKEN_ENRICHMENT_CLAIMS: ${{ vars.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS }}
       # Secrets
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
