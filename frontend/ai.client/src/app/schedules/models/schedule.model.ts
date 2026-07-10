@@ -104,6 +104,12 @@ export interface ScheduledPromptsListResponse {
 export interface RunNowRequest {
   prompt: string;
   title?: string | null;
+  /**
+   * Target Agent for the run (`agentId == assistantId`; the backend field is
+   * `ragAssistantId`). When set, the Agent's bound tools govern the turn and
+   * `enabledTools` is left null.
+   */
+  ragAssistantId?: string | null;
   enabledTools?: string[] | null;
 }
 

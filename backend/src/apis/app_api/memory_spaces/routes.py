@@ -428,7 +428,7 @@ def list_entries(
     return EntriesListResponse(entries=[EntryRefResponse.from_ref(r) for r in entries])
 
 
-@router.get("/{space_id}/entries/{slug}", response_model=EntryContentResponse)
+@router.get("/{space_id}/entries/{slug:path}", response_model=EntryContentResponse)
 def read_entry(
     space_id: str, slug: str, user: User = Depends(require_memory_spaces_user)
 ) -> EntryContentResponse:
@@ -439,7 +439,7 @@ def read_entry(
     return EntryContentResponse(slug=slug, content=content)
 
 
-@router.put("/{space_id}/entries/{slug}", response_model=EntryRefResponse)
+@router.put("/{space_id}/entries/{slug:path}", response_model=EntryRefResponse)
 def upsert_entry(
     space_id: str,
     slug: str,
@@ -462,7 +462,7 @@ def upsert_entry(
     return EntryRefResponse.from_ref(ref)
 
 
-@router.delete("/{space_id}/entries/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{space_id}/entries/{slug:path}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_entry(
     space_id: str, slug: str, user: User = Depends(require_memory_spaces_user)
 ) -> None:

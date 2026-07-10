@@ -195,20 +195,18 @@ describe('ModelCatalogPage', () => {
     expect(page.addingKey()).toBeNull();
   });
 
-  it('renders curated Mantle cards (with vetted endpoint paths) on the Mantle tab', () => {
+  it('renders curated Mantle cards (with vetted API surface) on the Mantle tab', () => {
     const page = createComponent();
     page.selectTab('mantle');
 
     const keys = page.visibleModels().map(m => m.key);
     expect(keys).toEqual(CURATED_MANTLE_MODELS.map(m => m.key));
 
-    // Gemma 4 must carry the /openai/v1 path; the Qwen coder the default /v1.
-    const gemma = page.visibleModels().find(m => m.key === 'gemma-4-31b');
+    // The Qwen coder speaks Chat Completions.
     const qwen = page.visibleModels().find(m => m.key === 'qwen3-coder-30b');
-    expect(gemma?.template.mantleEndpointPath).toBe('/openai/v1');
-    expect(qwen?.template.mantleEndpointPath).toBe('/v1');
+    expect(qwen?.template.apiMode).toBe('chat');
     // Mantle models never cache (model-bound to Claude/Nova).
-    expect(gemma?.template.supportsCaching).toBe(false);
+    expect(qwen?.template.supportsCaching).toBe(false);
   });
 
   it('ignores a second addCuratedModel while a create is in flight', async () => {

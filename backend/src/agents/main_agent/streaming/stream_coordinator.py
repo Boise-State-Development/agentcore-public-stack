@@ -1241,7 +1241,8 @@ class StreamCoordinator:
                 agent_type=snapshot_source.get("agent_type"),
                 enabled_skills=snapshot_source.get("enabled_skills"),
                 inference_params=dict(inference_params) if inference_params else None,
-                mantle_endpoint_path=snapshot_source.get("mantle_endpoint_path"),
+                mantle_api_mode=snapshot_source.get("mantle_api_mode"),
+                mantle_region=snapshot_source.get("mantle_region"),
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),
             )

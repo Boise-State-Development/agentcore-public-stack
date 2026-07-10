@@ -220,7 +220,7 @@ app.include_router(user_settings_router)
 app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
-app.include_router(converse_router)  # Proxies to Inference API for cost accounting
+app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off

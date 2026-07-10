@@ -76,6 +76,19 @@ class TestMemoryRead:
         result = await _call(tool, slug="ghost")
         assert result["status"] == "error" and "No memory entry 'ghost'" in result["content"][0]["text"]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("slug", ["MEMORY.md", "memory.md", " MEMORY.MD "])
+    async def test_memory_md_slug_reads_index(self, monkeypatch, slug):
+        svc = _patch_service(monkeypatch)
+        svc.read_index.return_value = "# Index\n- [[jane]]"
+        tool = make_memory_read_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        result = await _call(tool, slug=slug)
+        assert result["status"] == "success"
+        assert result["content"][0]["text"] == "# Index\n- [[jane]]"
+        # routed to the index, never the entry manifest
+        svc.read_index.assert_called_once_with("spc_1", "u1", "u1@x.edu")
+        svc.read_entry.assert_not_called()
+
 
 class TestMemoryWrite:
     @pytest.mark.asyncio
@@ -97,4 +110,24 @@ class TestMemoryWrite:
         svc.write_entry.side_effect = MemorySpacePermissionError("read-only")
         tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
         result = await _call(tool, slug="jane", body="x")
+        assert result["status"] == "error" and "don't have write access" in result["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("slug", ["MEMORY.md", "memory.md"])
+    async def test_memory_md_slug_updates_index(self, monkeypatch, slug):
+        svc = _patch_service(monkeypatch)
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        result = await _call(tool, slug=slug, body="# Index\n- [[jane]]", entry_type="entity")
+        assert result["status"] == "success"
+        assert "Updated the MEMORY.md index" in result["content"][0]["text"]
+        # routed to update_index (body only); never creates an entry
+        svc.update_index.assert_called_once_with("spc_1", "u1", "u1@x.edu", "# Index\n- [[jane]]")
+        svc.write_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_memory_md_write_permission_error_is_error_result(self, monkeypatch):
+        svc = _patch_service(monkeypatch)
+        svc.update_index.side_effect = MemorySpacePermissionError("read-only")
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        result = await _call(tool, slug="MEMORY.md", body="x")
         assert result["status"] == "error" and "don't have write access" in result["content"][0]["text"]

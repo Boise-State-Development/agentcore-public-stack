@@ -444,6 +444,39 @@ class TestToMantleConfig:
 
         assert "params" not in result
 
+    def test_mantle_responses_mode_maps_responses_param_names(self):
+        """Responses API uses max_output_tokens and nested reasoning.effort,
+        NOT the chat-completions max_tokens/reasoning_effort."""
+        from agents.main_agent.core.model_config import MantleApiMode
+
+        cfg = ModelConfig(
+            model_id="openai.gpt-5.4",
+            provider=ModelProvider.MANTLE,
+            mantle_api_mode=MantleApiMode.RESPONSES,
+            inference_params={
+                "max_tokens": 2048,
+                "reasoning_effort": "high",
+                "temperature": 0.3,
+            },
+        )
+        result = cfg.to_mantle_config()
+
+        assert result["params"]["max_output_tokens"] == 2048
+        assert "max_tokens" not in result["params"]
+        assert result["params"]["reasoning"] == {"effort": "high"}
+        assert result["params"]["temperature"] == 0.3
+
+    def test_mantle_chat_mode_keeps_chat_param_names(self):
+        cfg = ModelConfig(
+            model_id="openai.gpt-oss-120b",
+            provider=ModelProvider.MANTLE,
+            inference_params={"max_tokens": 2048},
+        )
+        result = cfg.to_mantle_config()
+
+        assert result["params"]["max_tokens"] == 2048
+        assert "max_output_tokens" not in result["params"]
+
     def test_explicit_mantle_provider_wins_over_auto_detect(self):
         """Mantle is never auto-detected; explicit provider must stick even
         for ids that look like other providers' (e.g. `openai.` prefix)."""
@@ -503,7 +536,8 @@ class TestToDict:
             "caching_enabled",
             "provider",
             "inference_params",
-            "mantle_endpoint_path",
+            "mantle_api_mode",
+            "mantle_region",
         }
 
 

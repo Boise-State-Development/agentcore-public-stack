@@ -94,39 +94,46 @@ class TestManagedModels:
         assert model.supports_caching is False
 
     @pytest.mark.asyncio
-    async def test_mantle_endpoint_path_defaults_to_v1(self):
+    async def test_mantle_api_mode_defaults_to_chat(self):
         from apis.shared.models.managed_models import create_managed_model, get_managed_model
         model = await create_managed_model(
             _make_model_data("qwen.qwen3-32b", provider="mantle", providerName="Qwen")
         )
-        assert model.mantle_endpoint_path == "/v1"
+        assert model.mantle_api_mode == "chat"
+        assert model.mantle_region is None
         # Persists and reloads.
         reloaded = await get_managed_model(model.id)
-        assert reloaded.mantle_endpoint_path == "/v1"
+        assert reloaded.mantle_api_mode == "chat"
 
     @pytest.mark.asyncio
-    async def test_mantle_endpoint_path_explicit_openai_v1(self):
+    async def test_mantle_api_mode_explicit_responses_with_region(self):
         from apis.shared.models.managed_models import create_managed_model, get_managed_model
         model = await create_managed_model(
             _make_model_data(
-                "google.gemma-4-31b",
+                "openai.gpt-5.4",
                 provider="mantle",
-                providerName="Google",
-                mantleEndpointPath="/openai/v1",
+                providerName="OpenAI",
+                apiMode="responses",
+                region="us-east-1",
             )
         )
-        assert model.mantle_endpoint_path == "/openai/v1"
+        assert model.mantle_api_mode == "responses"
+        assert model.mantle_region == "us-east-1"
         reloaded = await get_managed_model(model.id)
-        assert reloaded.mantle_endpoint_path == "/openai/v1"
+        assert reloaded.mantle_api_mode == "responses"
+        assert reloaded.mantle_region == "us-east-1"
 
     @pytest.mark.asyncio
-    async def test_mantle_endpoint_path_none_for_non_mantle(self):
+    async def test_mantle_fields_none_for_non_mantle(self):
         from apis.shared.models.managed_models import create_managed_model
-        # Even if a path is supplied, it's inert for non-Mantle providers.
+        # Even if supplied, Mantle fields are inert for non-Mantle providers.
         model = await create_managed_model(
-            _make_model_data("claude-3", provider="bedrock", mantleEndpointPath="/openai/v1")
+            _make_model_data(
+                "claude-3", provider="bedrock", apiMode="responses", region="us-east-1"
+            )
         )
-        assert model.mantle_endpoint_path is None
+        assert model.mantle_api_mode is None
+        assert model.mantle_region is None
 
 
 class TestMaxTokensCeiling:

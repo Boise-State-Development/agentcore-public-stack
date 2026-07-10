@@ -4,6 +4,41 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.3.0] - 2026-07-10
+
+Bedrock Mantle expansion and an API-key endpoint repair. Mantle models gain declarative per-model `apiMode` (Chat Completions vs Responses API) and `region` fields on Strands' `bedrock_mantle_config`, unlocking Responses-only models like `openai.gpt-5.x`; the API-key `POST /chat/api-converse` endpoint — broken in cloud since the BFF/runtime migrations — is relocated onto app-api and now serves the full model catalog including Mantle. Plus Memory Spaces and Scheduled Runs follow-ups. No breaking changes; a platform (CDK) deploy is required for two app-api IAM grants.
+
+### 🚀 Added
+
+- Per-model Mantle API mode + region: admin model records gain `apiMode` (`chat` | `responses`) selecting `OpenAIModel` vs `OpenAIResponsesModel`, and an optional `region` override driving both the Mantle endpoint host and SigV4 token region — Responses-only models (e.g. `openai.gpt-5.x`) now work, and a model can pin inference to its host region independent of where the app runs (#620)
+- API-key `/chat/api-converse` now serves the full model catalog: `provider="mantle"` models route through a shared `build_mantle_model` builder (`apis/shared/models/mantle.py`, also used by the agent factory), whose Strands `.stream()` yields the same Converse-shaped events as the Bedrock path so SSE translation and cost accounting are shared (#621)
+- The agent can read and keep a Memory Space's `MEMORY.md` index in sync via the reserved `MEMORY.md` slug on `memory_read` / `memory_write` (viewer+ read, editor+ write; the slug is reserved and can't become an ordinary entry) (#614)
+- The scheduled-run form targets Agents (the Agent Designer primitive) instead of Assistants; the manual tool picker hides when an Agent is selected (its tool bindings replace `enabled_tools` at invocation), and "Run now" honors the selected Agent (#615)
+
+### ⚠️ Changed
+
+- Scheduled Runs are no longer gated by the `scheduled-runs` RBAC capability — only the `SCHEDULED_RUNS_ENABLED` kill switch remains (404 when off). The surface stays low-key (no nav entry, reachable by direct URL); runs still execute with the caller's own RBAC-allowed tools (#617)
+- Mantle inference plumbing moved onto Strands' `bedrock_mantle_config` (the SDK owns the base URL, model-family base path, and bearer-token minting); `mantleEndpointPath` is deprecated (accepted-but-ignored, no stored record breaks) and removed from the admin UI. Gemma 4 is temporarily un-curated pending upstream `google.gemma-` family-prefix routing (#620)
+
+### 🐛 Fixed
+
+- API-key `POST /chat/api-converse` was broken in cloud: app-api proxied it to inference-api, whose AgentCore Runtime data plane only serves `/invocations` + `/ping` (`UnknownOperationException`). The handler is now a self-contained app-api route (validate key → RBAC → Bedrock converse → cost accounting) with no inference-api hop (#621)
+- Settings API-key code snippets now resolve a relative `appApiUrl` against the current origin, targeting `<origin>/api/chat/api-converse` — the bare-origin URL missed CloudFront's `/api/*` backend routing and returned a 403 (#621)
+- Regular users no longer hit a 403 "Access Denied" toast on page load — the sidenav's background schedules probe tripped the beta-cohort RBAC gate through the global error interceptor; the vestigial probe is also removed (#617)
+- Memory Space entries with namespaced slugs (e.g. `people/brian-bolt`) no longer 404 on view/edit/delete — the entry routes use a `{slug:path}` converter so the embedded slash survives routing (#614)
+
+### 🏗️ Infrastructure
+
+- app-api task role: the Bedrock invoke statement gains `bedrock:InvokeModelWithResponseStream` plus all-region foundation-model and account-level inference-profile ARNs, and the project-scoped Mantle statement gains `bedrock-mantle:CreateInference` — both required by the relocated api-converse handler (#621)
+
+### 📦 Dependencies
+
+- Backend: `strands-agents` 1.40.0 → 1.47.0 (and the `[bidi]` extra), added `aws-bedrock-token-generator` 1.1.0 (#619)
+
+### 📚 Docs
+
+- Release workflow consolidated into a single auto-invoked "cutting a release" steering doc + skill, replacing the separate versioning and release-notes guides (#618)
+
 ## [1.2.0] - 2026-07-09
 
 Agent Designer completion. Finishes the run-time binding trio (skills join model + tools), makes the chat input honor an active agent's governed bindings, adds a live side-by-side editor preview and model-parameter governance, brings full knowledge-base management into the Designer, and flips the `/agents` API on by default. The Agent Designer nav stays admin-gated Preview; no breaking changes and no migration.

@@ -331,12 +331,26 @@ reconstructed on demand (MRAgent discipline).
 `{type: entity, "commitments.open": true}`) returning refs, not bodies — this is how "who owes
 what" and staleness scans avoid a full-corpus load.
 
+> **The `MEMORY.md` index is a reserved slug, not a manifest entry.** It lives outside the
+> entries manifest (a standalone `index_s3_key` on the space row), so it never appears in
+> `memory_list`/`memory_query`. To let the agent inspect the index it's already given at wake-up,
+> `memory_read("MEMORY.md")` routes to `read_index` instead of the manifest (case-insensitive
+> match). The slug is reserved — the agent cannot create an ordinary entry named `MEMORY.md`.
+
 ### 5. Write path
 
 - **(W1) Synchronous agentic write** — `memory_write(space, slug, body)` /
   `memory_update(space, slug, patch)` tools the model calls mid-turn, stamping `updated_by` with
   the invoking user, plus an index-update step. Transparent, matches the coding-agent model.
   **v1 default.**
+  - **Index writes reuse the reserved slug.** `memory_write("MEMORY.md", body)` routes to
+    `update_index` (editor+) rather than creating an entry, so the agent can keep the
+    human-readable index in sync with the entries it writes — a one-line pointer / `[[slug]]`
+    wikilink per entry, exactly the coding-agent `MEMORY.md` discipline this feature is modeled
+    on. `entry_type`/`description` are ignored for it. Gated identically to entry writes: the
+    tool is only bound when the agent's memory binding grants `readwrite`, and the service
+    re-checks `editor+`. This closes the drift gap where the agent could add entries but not
+    update the index describing them.
 - **(W2) Async post-turn reflection** — a background job reads the completed turn and proposes
   edits, hung off [`turn_based_session_manager.update_after_turn`](../../backend/src/agents/main_agent/session/turn_based_session_manager.py)
   (the seam compaction uses). Reliable, no in-loop discipline needed, adds an LLM call/turn.

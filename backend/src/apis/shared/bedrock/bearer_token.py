@@ -38,8 +38,9 @@ _TOKEN_DURATION_SECONDS = 43200  # 12 hours — the service-side maximum
 
 # Mantle is a regional endpoint on the api.aws TLD (not amazonaws.com).
 _MANTLE_HOST_TEMPLATE = "https://bedrock-mantle.{region}.api.aws"
-# Default OpenAI-compatible path. Some models (e.g. Gemma 4) are served on
-# `/openai/v1` instead — see `ManagedModel.mantle_endpoint_path`.
+# Default OpenAI-compatible path used for the admin model-browse list call.
+# (Inference no longer uses this helper — the Strands SDK's bedrock_mantle_config
+# derives the per-model base path from the model id.)
 _MANTLE_DEFAULT_PATH = "/v1"
 
 

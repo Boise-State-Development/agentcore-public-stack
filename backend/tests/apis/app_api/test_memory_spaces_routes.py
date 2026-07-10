@@ -198,6 +198,27 @@ class TestIndexAndEntries:
         assert client.delete(f"/memory/spaces/{sid}/entries/jane-doe").status_code == 204
         assert client.get(f"/memory/spaces/{sid}/entries/jane-doe").status_code == 404
 
+    def test_namespaced_slug_with_slash(self, service, monkeypatch):
+        """Slugs are namespaced (``people/brian-bolt``); the `{slug:path}` converter
+        must route the embedded slash instead of 404-ing on it."""
+        client, sid = self._make_space(service, monkeypatch)
+        slug = "people/brian-bolt"
+
+        up = client.put(
+            f"/memory/spaces/{sid}/entries/{slug}",
+            json={"body": "# Brian\nDirector", "type": "entity"},
+        )
+        assert up.status_code == 200
+        assert up.json()["slug"] == slug
+
+        got = client.get(f"/memory/spaces/{sid}/entries/{slug}")
+        assert got.status_code == 200
+        assert got.json()["slug"] == slug
+        assert "Director" in got.json()["content"]
+
+        assert client.delete(f"/memory/spaces/{sid}/entries/{slug}").status_code == 204
+        assert client.get(f"/memory/spaces/{sid}/entries/{slug}").status_code == 404
+
 
 class TestAccessControl:
     def test_stranger_cannot_read_space(self, service, monkeypatch):

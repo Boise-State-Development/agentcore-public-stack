@@ -85,85 +85,84 @@ class TestCreateAgentOpenAI:
 
 
 # ---------------------------------------------------------------------------
-# Bedrock Mantle provider creates Agent with OpenAIModel against the
-# regional Mantle endpoint, authenticated with a minted bearer token.
+# Bedrock Mantle provider creates an Agent with an OpenAI-compatible Strands
+# model (OpenAIModel or OpenAIResponsesModel) routed through the SDK's
+# bedrock_mantle_config, which owns base URL, base path, and bearer token.
 # ---------------------------------------------------------------------------
 class TestCreateAgentMantle:
+    """The factory delegates Mantle model construction to the shared
+    ``build_mantle_model`` (apis.shared.models.mantle) so the API-key converse
+    handler and the agent loop share one implementation. These tests assert the
+    delegation contract; the class-pick / region behavior is covered directly
+    on the builder in ``tests/shared/test_mantle.py``.
+    """
+
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_mantle_provider_creates_openai_model_with_mantle_client(
-        self, mock_openai_cls, mock_agent_cls, monkeypatch
+    @patch("agents.main_agent.core.agent_factory.build_mantle_model")
+    def test_mantle_chat_mode_delegates_with_default_mode_and_region(
+        self, mock_build, mock_agent_cls, monkeypatch
     ):
         from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.model_config import MantleApiMode
 
         monkeypatch.setenv("AWS_REGION", "us-west-2")
         mock_model_instance = MagicMock()
-        mock_openai_cls.return_value = mock_model_instance
+        mock_build.return_value = mock_model_instance
 
         mantle_config = ModelConfig(
             model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE
         )
-        with patch(
-            "apis.shared.bedrock.generate_bedrock_bearer_token",
-            return_value="bedrock-api-key-token",
-        ) as mock_token:
-            AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
+        AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
 
-        mock_token.assert_called_once_with("us-west-2")
-        mock_openai_cls.assert_called_once()
-        call_kwargs = mock_openai_cls.call_args.kwargs
-        assert call_kwargs["client_args"]["api_key"] == "bedrock-api-key-token"
-        assert (
-            call_kwargs["client_args"]["base_url"]
-            == "https://bedrock-mantle.us-west-2.api.aws/v1"
-        )
+        mock_build.assert_called_once()
+        call_kwargs = mock_build.call_args.kwargs
         assert call_kwargs["model_id"] == "openai.gpt-oss-120b"
+        assert call_kwargs["api_mode"] == MantleApiMode.CHAT_COMPLETIONS
+        assert call_kwargs["region"] == "us-west-2"
         mock_agent_cls.assert_called_once()
         assert mock_agent_cls.call_args.kwargs["model"] is mock_model_instance
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_mantle_endpoint_path_selects_base_url(
-        self, mock_openai_cls, mock_agent_cls, monkeypatch
+    @patch("agents.main_agent.core.agent_factory.build_mantle_model")
+    def test_mantle_responses_mode_delegates_with_responses_mode(
+        self, mock_build, mock_agent_cls, monkeypatch
     ):
-        """A model carrying mantle_endpoint_path='/openai/v1' (e.g. Gemma 4)
-        must build the base URL on that path, not the default /v1."""
+        """api_mode='responses' must be forwarded to the shared builder."""
         from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.model_config import MantleApiMode
 
         monkeypatch.setenv("AWS_REGION", "us-west-2")
         mantle_config = ModelConfig(
-            model_id="google.gemma-4-31b",
+            model_id="openai.gpt-5.4",
             provider=ModelProvider.MANTLE,
-            mantle_endpoint_path="/openai/v1",
+            mantle_api_mode=MantleApiMode.RESPONSES,
         )
-        with patch(
-            "apis.shared.bedrock.generate_bedrock_bearer_token",
-            return_value="bedrock-api-key-token",
-        ):
-            AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
+        AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
 
-        call_kwargs = mock_openai_cls.call_args.kwargs
-        assert (
-            call_kwargs["client_args"]["base_url"]
-            == "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
-        )
+        call_kwargs = mock_build.call_args.kwargs
+        assert call_kwargs["model_id"] == "openai.gpt-5.4"
+        assert call_kwargs["api_mode"] == MantleApiMode.RESPONSES
+        assert call_kwargs["region"] == "us-west-2"
 
     @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_mantle_without_credentials_raises(
-        self, mock_openai_cls, mock_agent_cls, monkeypatch
+    @patch("agents.main_agent.core.agent_factory.build_mantle_model")
+    def test_mantle_region_override_pins_inference_region(
+        self, mock_build, mock_agent_cls, monkeypatch
     ):
+        """A per-model region override targets that region regardless of AWS_REGION."""
         from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.model_config import MantleApiMode
 
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
         mantle_config = ModelConfig(
-            model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE
+            model_id="openai.gpt-5.4",
+            provider=ModelProvider.MANTLE,
+            mantle_api_mode=MantleApiMode.RESPONSES,
+            mantle_region="us-east-1",
         )
-        with patch(
-            "apis.shared.bedrock.generate_bedrock_bearer_token",
-            side_effect=ValueError("No AWS credentials available"),
-        ):
-            with pytest.raises(ValueError, match="No AWS credentials"):
-                AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
+        AgentFactory.create_agent(model_config=mantle_config, **_COMMON_KWARGS)
+
+        assert mock_build.call_args.kwargs["region"] == "us-east-1"
 
 
 # ---------------------------------------------------------------------------

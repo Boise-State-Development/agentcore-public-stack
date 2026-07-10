@@ -452,13 +452,25 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── Bedrock (title generation) ──
+  // ── Bedrock model invocation ──
+  // Used by both title generation and the API-key `/chat/api-converse`
+  // handler (apis/app_api/chat/converse_routes.py), which calls Bedrock
+  // Converse directly on app-api (inference-api is unreachable behind the
+  // AgentCore Runtime data plane). Mirrors inference-api's grant:
+  //   - InvokeModelWithResponseStream is required for the `stream=true` path.
+  //   - The catalog's model IDs are `us.*` inference profiles, which fan out
+  //     across regions, so foundation-model must be granted on ALL regions
+  //     (`bedrock:*::`), and the inference-profile resource itself is the
+  //     account-level ARN in this region.
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
-      resources: [`arn:aws:bedrock:${config.awsRegion}::foundation-model/*`],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/*`,
+        `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`,
+      ],
     }),
   );
 
@@ -478,18 +490,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── Bedrock Mantle model browsing ──
-  // GET /admin/mantle/models authenticates against the OpenAI-compatible
-  // Bedrock Mantle endpoint with a short-term bearer token presigned by this
-  // role (apis/shared/bedrock/bearer_token.py). Mantle has its OWN IAM
-  // service namespace — `bedrock-mantle:*`, NOT `bedrock:*`. Listing models
-  // needs the Get/List actions on the project resource plus the bearer-token
-  // transport on `*` (read-only subset of AmazonBedrockMantleInferenceAccess).
+  // ── Bedrock Mantle inference + model browsing ──
+  // Two app-api paths hit the OpenAI-compatible Bedrock Mantle endpoint, both
+  // authenticating with a short-term bearer token (bearer-token transport is
+  // authorized separately on `*` below). Mantle has its OWN IAM service
+  // namespace — `bedrock-mantle:*`, NOT `bedrock:*`:
+  //   - GET /admin/mantle/models browse — needs Get/List on the project.
+  //   - POST /chat/api-converse for provider="mantle" models — needs
+  //     CreateInference (the handler in apis/app_api/chat/converse_routes.py
+  //     calls a mantle model directly, mirroring the runtime role's grant in
+  //     inference-api-iam-roles.ts). Without it, api-converse mantle requests
+  //     AccessDeny.
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
-      sid: 'BedrockMantleList',
+      sid: 'BedrockMantleInference',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock-mantle:Get*', 'bedrock-mantle:List*'],
+      actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:Get*', 'bedrock-mantle:List*'],
       resources: [`arn:aws:bedrock-mantle:*:${cdk.Stack.of(scope).account}:project/*`],
     }),
   );

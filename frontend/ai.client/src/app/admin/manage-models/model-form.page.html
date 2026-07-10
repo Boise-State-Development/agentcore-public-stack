@@ -125,26 +125,42 @@
             </div>
           </div>
 
-          <!-- Bedrock Mantle endpoint path (Mantle provider only) -->
+          <!-- Bedrock Mantle API surface + region (Mantle provider only) -->
           @if (isMantle()) {
             <div>
-              <label for="mantleEndpointPath" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                Mantle endpoint path <span class="text-red-600">*</span>
+              <label for="mantleApiMode" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Mantle API surface <span class="text-red-600">*</span>
               </label>
               <select
-                id="mantleEndpointPath"
-                formControlName="mantleEndpointPath"
+                id="mantleApiMode"
+                formControlName="mantleApiMode"
                 class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
               >
-                @for (path of mantleEndpointPaths; track path) {
-                  <option [value]="path">{{ path }}</option>
+                @for (mode of mantleApiModes; track mode) {
+                  <option [value]="mode">{{ mantleApiModeLabels[mode] }}</option>
                 }
               </select>
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                Bedrock Mantle serves different models on different OpenAI-compatible paths and
-                exposes no API to discover which. Use <code>/v1</code> for most models;
-                <code>/openai/v1</code> for models whose card specifies it (e.g. Gemma 4). The wrong
-                path returns a misleading "not enabled" error at chat time.
+                Which OpenAI-compatible API the model speaks. Use <strong>Chat Completions</strong> for
+                most models; choose <strong>Responses API</strong> for models that only serve it
+                (e.g. <code>openai.gpt-5.x</code>). The wrong surface returns a "does not support the
+                API" error at chat time.
+              </p>
+            </div>
+            <div>
+              <label for="mantleRegion" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                Mantle region
+              </label>
+              <input
+                type="text"
+                id="mantleRegion"
+                formControlName="mantleRegion"
+                placeholder="Defaults to the app's region"
+                class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              />
+              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                Optional. Pins inference to the region hosting the model (e.g. <code>us-east-1</code>),
+                independent of where the app runs. Leave blank to use the app's region.
               </p>
             </div>
           }

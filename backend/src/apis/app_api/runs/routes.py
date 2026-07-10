@@ -8,12 +8,17 @@ does NOT shortcut through the caller's live access token: the point of the
 surface is to validate the unattended path end-to-end (scheduled-runs PR-1,
 docs/specs/scheduled-agent-runs.md §7).
 
-Gating — two independent controls (spec §6):
+Gating — a single per-environment control (spec §6):
 
-* ``SCHEDULED_RUNS_ENABLED`` — per-environment kill switch (default on).
-  Off → every route here 404s, as if unmounted.
-* ``scheduled-runs`` RBAC capability — *who* may use the surface. Granted
-  to the beta cohort's AppRole; missing → 403. GA = grant to ``default``.
+* ``SCHEDULED_RUNS_ENABLED`` — kill switch (default on). Off → every route
+  here 404s, as if unmounted.
+
+The surface is otherwise open to any authenticated user — deliberately *not*
+behind the ``scheduled-runs`` RBAC capability, which turned every non-beta
+caller into a 403 the SPA surfaced as an "Access Denied" toast. Each run
+still executes with the caller's own RBAC-allowed tools (see
+``run_agent_headless``), so this widens *who* can reach the surface, not
+*what* any one caller can do.
 
 Auth is the standard SPA cookie dependency (``get_current_user_from_session``)
 per the CLAUDE.md app-api rule. The headless grant is **created-on-enable**:
@@ -41,10 +46,6 @@ from apis.shared.harness import (
     RunResult,
     run_agent_headless,
 )
-from apis.shared.rbac.capabilities import (
-    SCHEDULED_RUNS_CAPABILITY,
-    user_has_capability,
-)
 from apis.shared.rbac.service import get_app_role_service
 
 logger = logging.getLogger(__name__)
@@ -67,20 +68,15 @@ def get_headless_grant_service() -> HeadlessGrantService:
 async def require_scheduled_runs_user(
     user: User = Depends(get_current_user_from_session),
 ) -> User:
-    """Cookie auth + kill switch + cohort capability, in that order.
+    """Cookie auth + kill switch, in that order.
 
     404 when the environment kill switch is off (the surface behaves as if
     unmounted — runtime-checked so tests and env flips need no module
-    reload), 403 when the authenticated caller lacks the ``scheduled-runs``
-    capability.
+    reload). Otherwise any authenticated user may use the surface — it is
+    intentionally not behind an RBAC capability (see module docstring).
     """
     if not scheduled_runs_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not await user_has_capability(user, SCHEDULED_RUNS_CAPABILITY):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to scheduled runs.",
-        )
     return user
 
 

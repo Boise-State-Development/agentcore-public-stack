@@ -508,11 +508,19 @@ export class ApiKeysPage {
   );
 
   readonly apiBaseUrl = computed(() => {
-    const appApiUrl = this.configService.appApiUrl();
-    if (appApiUrl) {
-      return appApiUrl.replace(/\/+$/, '');
+    // The generated snippets are for EXTERNAL callers, so they need an
+    // absolute, copy-pasteable base URL. In production `appApiUrl` is the
+    // relative `/api` prefix (same-origin BFF, fronted by CloudFront's
+    // `/api/*` behavior) — a relative value can't be pasted into curl, and
+    // dropping it entirely points callers at the SPA origin where POST is
+    // rejected with CloudFront 403. So resolve a relative/empty value against
+    // the current origin; leave an already-absolute URL (local dev's
+    // `http://localhost:8000`) untouched.
+    const appApiUrl = (this.configService.appApiUrl() ?? '').replace(/\/+$/, '');
+    if (/^https?:\/\//i.test(appApiUrl)) {
+      return appApiUrl;
     }
-    return window.location.origin;
+    return window.location.origin + appApiUrl;
   });
 
   readonly codeExample = computed(() => {

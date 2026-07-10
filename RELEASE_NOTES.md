@@ -1,3 +1,84 @@
+# Release Notes — v1.3.0
+
+**Release Date:** July 10, 2026
+**Previous Release:** v1.2.0 (July 9, 2026)
+
+---
+
+> 🏗️ **This release requires a platform (CDK) deploy** — two IAM grants on the app-api task role back the relocated API-key endpoint. No new AWS resources beyond IAM, no data migration, no breaking changes. Operators with Mantle Responses-only models (e.g. `openai.gpt-5.x`) should set `apiMode=responses` on those model records after deploy — see the Deployment notes.
+
+---
+
+## Highlights
+
+v1.3.0 expands **Bedrock Mantle** support and repairs the **API-key chat endpoint** in cloud. Mantle model records gain two declarative per-model fields — `apiMode` (Chat Completions vs the Responses API) and an optional `region` override — built on Strands 1.47's `bedrock_mantle_config`, which unlocks Responses-only models like `openai.gpt-5.x` and lets a model pin inference to its host region. The API-key `POST /chat/api-converse` endpoint, broken in cloud since the BFF and AgentCore-Runtime migrations, now lives on app-api as a self-contained route and serves the **full model catalog** — Bedrock *and* Mantle — through one shared model builder. Smaller follow-ups: the agent can now read and maintain a Memory Space's `MEMORY.md` index, scheduled runs target Agents (and no longer 403 for regular users), and namespaced Memory Space entry slugs resolve correctly.
+
+## Bedrock Mantle — Responses API and per-model regions
+
+Some Mantle-hosted models only serve OpenAI's Responses API and reject Chat Completions — no endpoint-path knob could ever satisfy them. Admins can now declare, per model, which API a model speaks and which region hosts it.
+
+### Backend
+
+- **Strands-owned Mantle plumbing (#620).** The admin `mantle` provider now rides Strands' `bedrock_mantle_config`: the SDK owns the base URL, the model-family base path, and bearer-token minting (via the new `aws-bedrock-token-generator` dependency), replacing the hand-rolled inference plumbing. Two declarative per-model fields cover what the library can't infer:
+  - `apiMode` (`chat` | `responses`) — selects `OpenAIModel` vs `OpenAIResponsesModel`. The Responses API uses different native param names, so `to_mantle_config` selects a Responses-specific param map (`max_output_tokens`, nested `reasoning.effort`) by mode.
+  - `region` — optional override driving both the Mantle endpoint host and the SigV4 region the bearer token is signed for, so a model can pin inference to its host region (e.g. `gpt-5.x` in `us-east-1`) independent of where the app runs.
+- The runtime fields (`mantle_api_mode` / `mantle_region`) thread through `model_config`, the agent factory, `base_agent`, the paused-turn snapshot, `stream_coordinator`, and the chat service/routes, so bound agents and resumed turns honor them end to end (#620).
+- **`mantleEndpointPath` is deprecated** — accepted-but-ignored in the schema so no stored record breaks, and removed from the admin UI and runtime. Gemma 4 (`google.gemma-4-31b`) is temporarily un-curated: it needs the `/openai/v1` base path but the SDK only routes `openai.gpt-5.*` there; it returns once the `google.gemma-` family prefix lands upstream (#620).
+- **Dependency step (#619):** `strands-agents` 1.40.0 → 1.47.0 (with the `[bidi]` extra) plus `aws-bedrock-token-generator` 1.1.0, resolver-confirmed against `strands-agents-tools` 0.5.2. Full backend suite green on the new pin.
+
+### Test Coverage
+
+Backend suite green at 2,342 tests on the refactor; frontend typecheck + manage-models specs green.
+
+## API keys work in cloud again — `/chat/api-converse` on app-api, full catalog
+
+The programmatic API-key endpoint was broken in every deployed environment: app-api proxied `POST /chat/api-converse` to inference-api, but inference-api now runs inside an AgentCore Runtime whose data plane only serves `POST /invocations` and `GET /ping` — every other path returns `UnknownOperationException` before reaching the container. It worked locally only because `localhost:8001` bypasses the runtime gateway.
+
+### Backend
+
+- **Self-contained app-api route (#621).** The handler moves onto app-api (validate key → RBAC → Bedrock converse → cost accounting), reaching Bedrock directly via the task role — no inference-api hop, no `INFERENCE_API_URL` dependency. The proxy, the dead inference-api route, and its DTOs are deleted; verified with an un-mocked smoke returning 200 for stream and non-stream.
+- **Mantle models now work over API keys (#621).** The handler was Bedrock-only — `provider="mantle"` models 400'd. Mantle model construction (class-pick + `bedrock_mantle_config` + param maps) is extracted to `apis/shared/models/mantle.py` as `build_mantle_model`, shared by the agent factory and the API-key handler (app-api can't import `agents/`). The handler resolves the requested model's provider from the catalog and branches: Bedrock → boto3 converse (unchanged); Mantle → the shared builder's bare Strands `.stream()`, which yields the same Converse-shaped events — so SSE translation and usage/cost accounting are one code path, and cost records now carry the real provider. Unknown ids fail safe to the Bedrock path. Verified with live dev smokes: chat-mode Mantle and Responses-API Mantle (`openai.gpt-5.4`) both 200 (stream + non-stream).
+
+### Frontend
+
+- **API-key snippets point at the right URL (#621).** After the BFF refactor, CloudFront only routes `/api/*` to the backend; the generated curl/Python/JS examples emitted the bare origin, producing a CloudFront 403. The settings page now resolves a relative/empty `appApiUrl` against the current origin (`<origin>/api/chat/api-converse`), leaving local dev's absolute `http://localhost:8000` untouched.
+
+### Infrastructure
+
+- **app-api IAM (#621):** the Bedrock invoke statement gains `bedrock:InvokeModelWithResponseStream` and broadens to all-region foundation models plus the account-level inference-profile ARN (the catalog uses `us.*` cross-region profiles), mirroring inference-api's grant; and the project-scoped Mantle statement (previously browse-only `Get*`/`List*`) gains `bedrock-mantle:CreateInference`.
+
+## ✨ Improved
+
+- **Scheduled runs target Agents (#615).** The schedule form's target selector lists Agents (the Designer primitive superseding Assistants — same record, `agentId == assistantId`, so the wire field is unchanged). Because an Agent's tool bindings *replace* the run's `enabled_tools` at invocation, the manual tool picker now hides when an Agent is selected — it previously offered tools that would be silently discarded — and "Run now" actually targets the selected Agent (it previously ignored it).
+- **The agent can maintain a Memory Space's index (#614).** `MEMORY.md` — the human-readable index hydrated into the agent's context each session — was write-only from the agent's perspective, so it could silently drift from the entries the agent writes. The reserved `MEMORY.md` slug (case-insensitive) now routes `memory_read` → `read_index` (viewer+) and `memory_write` → `update_index` (editor+), with the same readwrite-binding gate as entry writes. The slug is reserved; it can't become an ordinary entry.
+
+## ⚠️ Changed
+
+- **Scheduled Runs are un-gated from RBAC (#617).** The `scheduled-runs` capability check is dropped from the `/schedules` and `/runs/*` gates — only the `SCHEDULED_RUNS_ENABLED` kill switch remains (404 when off). This widens who can *reach* the surface, not what any caller can do: runs still execute with the caller's own RBAC-allowed tools. The feature stays deliberately low-key — no nav entry, reachable by direct URL. `apis/shared/rbac/capabilities.py` remains in place so re-gating is a two-line revert.
+
+## 🐛 Bug fixes
+
+- **Regular users saw a 403 "Access Denied" toast on page load (#617).** The sidenav ran a background `loadSchedules()` probe on every load; the beta-cohort RBAC gate 403'd it and the global error interceptor popped the toast before the service's graceful catch ran. Fixed by the un-gating above plus removing the vestigial probe (the template never rendered a schedules link).
+- **Namespaced Memory Space entries 404'd (#614).** Entry slugs are namespaced with a slash (e.g. `people/brian-bolt`), but the entry routes declared a plain `{slug}` param whose converter stops at `/` — and Uvicorn percent-decodes `%2F` before routing, so view/edit/delete never matched. The GET/PUT/DELETE routes now use the `{slug:path}` converter.
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `strands-agents` (+ `[bidi]`) | 1.40.0 | 1.47.0 |
+| Backend | `aws-bedrock-token-generator` | — | 1.1.0 (new) |
+
+## 🚀 Deployment notes
+
+Deploy order: **platform (CDK) → backend → frontend.**
+
+- **Platform deploy is required** for the two app-api IAM grants (#621). Without them, the relocated `/chat/api-converse` AccessDenies on streaming/inference-profile Bedrock models and on all Mantle models.
+- **Mantle model records:** after deploy, set `apiMode=responses` on any Responses-only Mantle model (e.g. `openai.gpt-5.4`) in the admin model manager — records default to `chat`. `mantleEndpointPath` is now ignored; no cleanup needed. Optionally set `region` on models whose host region differs from the app's.
+- **Scheduled Runs** become reachable (by direct URL) to all users where `SCHEDULED_RUNS_ENABLED` is on; set it to `false` to turn the surface off entirely.
+- No data migration and no breaking API changes.
+
+---
+
 # Release Notes — v1.2.0
 
 **Release Date:** July 9, 2026

@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from apis.inference_api.chat.converse_routes import router
+from apis.app_api.chat.converse_routes import router
 from apis.shared.auth.api_keys.models import ValidatedApiKey
 
 
@@ -90,7 +90,7 @@ def client(app):
 def mock_validate_api_key():
     """Patch _validate_api_key to return a canned ValidatedApiKey."""
     with patch(
-        "apis.inference_api.chat.converse_routes._validate_api_key",
+        "apis.app_api.chat.converse_routes._validate_api_key",
         new_callable=AsyncMock,
         return_value=MOCK_VALIDATED_KEY,
     ) as m:
@@ -109,7 +109,7 @@ def mock_bedrock_client():
     }
 
     with patch(
-        "apis.inference_api.chat.converse_routes._get_bedrock_client",
+        "apis.app_api.chat.converse_routes._get_bedrock_client",
         return_value=fake_client,
     ) as m:
         yield fake_client
@@ -123,7 +123,7 @@ def mock_store_metadata():
     we must patch at the converse_routes module level for the mock to intercept.
     """
     with patch(
-        "apis.inference_api.chat.converse_routes.store_message_metadata",
+        "apis.app_api.chat.converse_routes.store_message_metadata",
         new_callable=AsyncMock,
     ) as m:
         yield m
@@ -143,7 +143,7 @@ def mock_pricing():
         "snapshotAt": "2025-01-15T00:00:00Z",
     }
     with patch(
-        "apis.inference_api.chat.converse_routes.create_pricing_snapshot",
+        "apis.app_api.chat.converse_routes.create_pricing_snapshot",
         new_callable=AsyncMock,
         return_value=pricing,
     ) as m:
@@ -157,7 +157,7 @@ def mock_quota_disabled():
     Patches at the converse_routes module level where shared_quota is used.
     """
     with patch(
-        "apis.inference_api.chat.converse_routes.shared_quota.is_quota_enforcement_enabled",
+        "apis.app_api.chat.converse_routes.shared_quota.is_quota_enforcement_enabled",
         return_value=False,
     ) as m:
         yield m
@@ -169,7 +169,7 @@ def mock_app_role_service():
     svc = MagicMock()
     svc.can_access_model = AsyncMock(return_value=True)
     with patch(
-        "apis.inference_api.chat.converse_routes.get_app_role_service",
+        "apis.app_api.chat.converse_routes.get_app_role_service",
         return_value=svc,
     ):
         yield svc
@@ -481,7 +481,7 @@ class TestNonStreamingResponseFormatPreservation:
         fake_client.converse.return_value = _make_reasoning_converse_response()
 
         with patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=fake_client,
         ):
             resp = client.post(
@@ -528,7 +528,7 @@ class TestNonStreamingResponseFormatPreservation:
         fake_client.converse.return_value = _make_converse_response(reply_text)
 
         with patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=fake_client,
         ):
             payload = {
@@ -661,7 +661,7 @@ class TestStreamingSSEFormatPreservation:
         fake_client.converse_stream.return_value = {"stream": iter(stream_events)}
 
         with patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=fake_client,
         ):
             resp = client.post(
@@ -706,7 +706,7 @@ class TestAuthPreservation:
     def test_invalid_api_key_returns_401(self, client):
         """Invalid API key must return 401 with correct error detail."""
         with patch(
-            "apis.inference_api.chat.converse_routes._validate_api_key",
+            "apis.app_api.chat.converse_routes._validate_api_key",
             new_callable=AsyncMock,
             side_effect=HTTPException(
                 status_code=401, detail="Invalid or expired API key"
@@ -791,7 +791,7 @@ class TestErrorPreservation:
         fake_client.converse.side_effect = Exception("Bedrock is down")
 
         with patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=fake_client,
         ):
             resp = client.post(
@@ -820,7 +820,7 @@ class TestErrorPreservation:
         fake_client.converse_stream.side_effect = fake_client.exceptions.ClientError("Stream failed")
 
         with patch(
-            "apis.inference_api.chat.converse_routes._get_bedrock_client",
+            "apis.app_api.chat.converse_routes._get_bedrock_client",
             return_value=fake_client,
         ):
             resp = client.post(

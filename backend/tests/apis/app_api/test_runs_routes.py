@@ -1,8 +1,8 @@
 """Route tests for the headless "Run now" surface (`/runs/*`).
 
-Pins the three-layer gate (cookie auth → SCHEDULED_RUNS_ENABLED kill switch
-→ `scheduled-runs` RBAC capability), the create-on-enable grant flow, and
-the RunResult → camelCase response mapping.
+Pins the two-layer gate (cookie auth → SCHEDULED_RUNS_ENABLED kill switch;
+no RBAC capability gate), the create-on-enable grant flow, and the
+RunResult → camelCase response mapping.
 """
 
 from __future__ import annotations
@@ -127,7 +127,6 @@ def _make_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     authed: bool = True,
-    capability: bool = True,
     flag: Optional[str] = None,
     grants: Optional[FakeGrantService] = None,
     with_session_record: bool = False,
@@ -140,12 +139,6 @@ def _make_client(
         monkeypatch.delenv("SCHEDULED_RUNS_ENABLED", raising=False)
     else:
         monkeypatch.setenv("SCHEDULED_RUNS_ENABLED", flag)
-
-    async def fake_capability(user, capability_id):
-        assert capability_id == "scheduled-runs"
-        return capability
-
-    monkeypatch.setattr(runs_routes, "user_has_capability", fake_capability)
 
     grants = grants or FakeGrantService()
     monkeypatch.setattr(runs_routes, "get_headless_grant_service", lambda: grants)
@@ -228,11 +221,11 @@ class TestGating:
         client, _, _ = _make_client(monkeypatch, flag="", with_session_record=True)
         assert client.post("/runs/now", json={"prompt": "hi"}).status_code == 200
 
-    def test_missing_capability_is_403(self, monkeypatch):
-        client, _, _ = _make_client(monkeypatch, capability=False)
-        response = client.post("/runs/now", json={"prompt": "hi"})
-        assert response.status_code == 403
-        assert client.get("/runs/grant").status_code == 403
+    def test_any_authenticated_user_is_allowed(self, monkeypatch):
+        # No RBAC capability gate: an ordinary authenticated user gets 200,
+        # not the old 403. (Regression for the prod "Access Denied" toast.)
+        client, _, _ = _make_client(monkeypatch, with_session_record=True)
+        assert client.post("/runs/now", json={"prompt": "hi"}).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -408,10 +401,6 @@ class TestEnableGrant:
     def test_kill_switch_off_hides_the_surface_as_404(self, monkeypatch):
         client, _, _ = _make_client(monkeypatch, flag="false")
         assert client.post("/runs/grant").status_code == 404
-
-    def test_missing_capability_is_403(self, monkeypatch):
-        client, _, _ = _make_client(monkeypatch, capability=False)
-        assert client.post("/runs/grant").status_code == 403
 
     def test_unauthenticated_request_is_401(self, monkeypatch):
         client, _, _ = _make_client(monkeypatch, authed=False)
