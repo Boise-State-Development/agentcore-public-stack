@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -38,6 +38,7 @@ dependencies = [
 
 [package.optional-dependencies]
 agentcore = [
+    { name = "aws-bedrock-token-generator" },
     { name = "aws-opentelemetry-distro" },
     { name = "bedrock-agentcore" },
     { name = "google-genai" },
@@ -46,6 +47,7 @@ agentcore = [
     { name = "strands-agents-tools" },
 ]
 all = [
+    { name = "aws-bedrock-token-generator" },
     { name = "aws-opentelemetry-distro" },
     { name = "bedrock-agentcore" },
     { name = "black" },
@@ -87,6 +89,7 @@ requires-dist = [
     { name = "aiofiles", specifier = "==25.1.0" },
     { name = "aiohttp", specifier = "==3.14.1" },
     { name = "authlib", specifier = "==1.7.1" },
+    { name = "aws-bedrock-token-generator", marker = "extra == 'agentcore'", specifier = "==1.1.0" },
     { name = "aws-opentelemetry-distro", marker = "extra == 'agentcore'", specifier = "==0.17.0" },
     { name = "beautifulsoup4", specifier = "==4.13.5" },
     { name = "bedrock-agentcore", marker = "extra == 'agentcore'", specifier = "==1.9.1" },
@@ -113,8 +116,8 @@ requires-dist = [
     { name = "python-multipart", specifier = "==0.0.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.12" },
     { name = "starlette", specifier = "==1.3.1" },
-    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.40.0" },
-    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.40.0" },
+    { name = "strands-agents", marker = "extra == 'agentcore'", specifier = "==1.47.0" },
+    { name = "strands-agents", extras = ["bidi"], marker = "extra == 'bidi'", specifier = "==1.47.0" },
     { name = "strands-agents-tools", marker = "extra == 'agentcore'", specifier = "==0.5.2" },
     { name = "tiktoken", marker = "extra == 'dev'", specifier = "==0.12.0" },
     { name = "trafilatura", specifier = "==2.0.0" },
@@ -365,6 +368,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3c/f2/e05664d5275ce811fd4e9df0a2b3f0086ee19a8a80358d95499fa82fd50c/authlib-1.7.1.tar.gz", hash = "sha256:8c09b0f9d080c823e594b52316af70f79a1fa4eed64d0363a076233c04ef063a", size = 175884, upload-time = "2026-05-04T08:11:25.033Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/82/730650ee5e5b598b7bfdc291b784bc2f6fe02a5671695485403365101088/authlib-1.7.1-py2.py3-none-any.whl", hash = "sha256:8470f4aa6b5590ac41bd81d6e6ee12448ce36a0da0af19bbed69fb53fb4e8ad9", size = 258826, upload-time = "2026-05-04T08:11:23.208Z" },
+]
+
+[[package]]
+name = "aws-bedrock-token-generator"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/39/cf1c2e12bc5a84af0f96a546481213f81fa6e7927d2bbabd81758c6558ca/aws_bedrock_token_generator-1.1.0.tar.gz", hash = "sha256:95ccb07f63a91ac486561f6df05cc4e04784c8ff5086dc687ed9c5fd3ab1b5ba", size = 19123, upload-time = "2025-07-29T19:53:19.511Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/fd/745ece98870c3824d294bcdce5dc5e15381188a41bc80832c246b205e40e/aws_bedrock_token_generator-1.1.0-py3-none-any.whl", hash = "sha256:bd12854f7c7e52dde5d980d369379f12d0cc5f0855099d87f38688b0f9de5cd4", size = 10291, upload-time = "2025-07-29T19:53:18.704Z" },
 ]
 
 [[package]]
@@ -4619,7 +4634,7 @@ wheels = [
 
 [[package]]
 name = "strands-agents"
-version = "1.40.0"
+version = "1.47.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -4635,9 +4650,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/07/fa/b5fdfa099b122fea98fc64b9923237077ed6b7c2a90f2c3a65cba00d7202/strands_agents-1.40.0.tar.gz", hash = "sha256:5d867c1255f8449f0030a9a9c085106c15b1704e871d0fea56d3c20b2309a4d3", size = 878176, upload-time = "2026-05-14T13:48:28.812Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/05/5eb8431ff340739b1c21b0da7d19ec9604b9c4953a1c4638df915321573c/strands_agents-1.47.0.tar.gz", hash = "sha256:97770cb6beb6e5fd1a58849f41201eb7edb43fd67ad3de6544ada2f342c2bcf0", size = 1157139, upload-time = "2026-07-10T14:45:05.809Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/ca/ce4c061d0fa007738f0ce4ebdb234969d9343322a089c24d5986620faa66/strands_agents-1.40.0-py3-none-any.whl", hash = "sha256:40c04f411e4082a6eb78b22d5b421757b27aac1f9a42e8198ff3db7fd4fcc13f", size = 432744, upload-time = "2026-05-14T13:48:26.639Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/cb/ceae892c5823bea9254160efc02a4553f2ced9d183676110c03c3a9ff0f3/strands_agents-1.47.0-py3-none-any.whl", hash = "sha256:1f6ce17404ff02079244ad7a4a180a2a7150546275e4b91187d71472ba8fe3f2", size = 600611, upload-time = "2026-07-10T14:45:03.942Z" },
 ]
 
 [package.optional-dependencies]
