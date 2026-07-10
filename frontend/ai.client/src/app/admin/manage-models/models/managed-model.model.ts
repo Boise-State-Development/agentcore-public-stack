@@ -99,11 +99,19 @@ export interface ManagedModel {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle endpoint path (`provider === 'mantle'` only): `/v1`
-   * (OpenAI Chat Completions, the default) or `/openai/v1` (e.g. Gemma 4).
-   * Sourced from the model card — there is no API that exposes it. Null/absent
-   * for every other provider.
+   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` (OpenAI
+   * Chat Completions, the default) or `responses` (OpenAI Responses API —
+   * required by models that don't serve Chat Completions, e.g. openai.gpt-5.x).
+   * Null/absent for every other provider.
    */
+  apiMode?: MantleApiMode | null;
+  /**
+   * Bedrock Mantle region override (`provider === 'mantle'` only): pins
+   * inference to the region hosting the model (e.g. `us-east-1`), independent
+   * of where the app runs. Null/absent -> the app's region and for other providers.
+   */
+  region?: string | null;
+  /** @deprecated No longer used — the SDK derives the base path from the model id. */
   mantleEndpointPath?: string | null;
   /** Per-model inference parameter capabilities (temperature, top_p, etc.) */
   supportedParams?: SupportedParams | null;
@@ -158,17 +166,28 @@ export interface ManagedModelFormData {
   /** Whether this is the default model for new sessions */
   isDefault: boolean;
   /**
-   * Bedrock Mantle endpoint path (`provider === 'mantle'` only): `/v1` or
-   * `/openai/v1`. Inert for other providers.
+   * Bedrock Mantle API surface (`provider === 'mantle'` only): `chat` or
+   * `responses`. Inert for other providers.
    */
-  mantleEndpointPath?: string | null;
+  apiMode?: MantleApiMode | null;
+  /**
+   * Bedrock Mantle region override (`provider === 'mantle'` only). Empty ->
+   * the app's region. Inert for other providers.
+   */
+  region?: string | null;
   /** Per-model inference parameter capabilities */
   supportedParams?: SupportedParams | null;
 }
 
-/** Selectable Bedrock Mantle endpoint paths for the model form. */
-export const MANTLE_ENDPOINT_PATHS = ['/v1', '/openai/v1'] as const;
-export type MantleEndpointPath = (typeof MANTLE_ENDPOINT_PATHS)[number];
+/** Selectable Bedrock Mantle API surfaces for the model form. */
+export const MANTLE_API_MODES = ['chat', 'responses'] as const;
+export type MantleApiMode = (typeof MANTLE_API_MODES)[number];
+
+/** Human-readable labels for the Mantle API surface options. */
+export const MANTLE_API_MODE_LABELS: Record<MantleApiMode, string> = {
+  chat: 'Chat Completions',
+  responses: 'Responses API',
+};
 
 /**
  * Frontend catalog of well-known canonical inference params.

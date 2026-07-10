@@ -32,6 +32,19 @@ class ModelProvider(str, Enum):
     MANTLE = "mantle"
 
 
+class MantleApiMode(str, Enum):
+    """OpenAI-compatible API surface a Bedrock Mantle model speaks.
+
+    Selects which Strands model class the factory builds: Chat Completions
+    (``OpenAIModel``) or the Responses API (``OpenAIResponsesModel``). Some
+    Mantle-hosted models (e.g. ``openai.gpt-5.x``) only serve Responses and
+    reject Chat Completions outright, so this is a per-model fact the admin
+    records — Mantle exposes no API to discover it.
+    """
+    CHAT_COMPLETIONS = "chat"
+    RESPONSES = "responses"
+
+
 # Canonical param name -> provider-native key path (dot-separated for nested SDK fields).
 # A canonical param without an entry here is silently dropped for that provider.
 _BEDROCK_PARAM_MAP: Dict[str, str] = {
@@ -57,14 +70,26 @@ _OPENAI_PARAM_MAP: Dict[str, str] = {
     "reasoning_effort": "reasoning_effort",
 }
 
-# Mantle speaks the OpenAI chat-completions protocol, so the canonical->native
-# mapping mirrors OpenAI's. Kept separate so Mantle-specific divergence (e.g.
-# params some open-weight models reject) has a home without touching OpenAI.
-_MANTLE_PARAM_MAP: Dict[str, str] = {
+# Mantle Chat Completions mirrors OpenAI's chat-completions protocol, so the
+# canonical->native mapping mirrors OpenAI's. Kept separate so Mantle-specific
+# divergence (e.g. params some open-weight models reject) has a home without
+# touching OpenAI.
+_MANTLE_CHAT_PARAM_MAP: Dict[str, str] = {
     "temperature": "temperature",
     "top_p": "top_p",
     "max_tokens": "max_tokens",
     "reasoning_effort": "reasoning_effort",
+}
+
+# Mantle Responses API (OpenAIResponsesModel) uses different native names:
+# `max_output_tokens` for the output cap and a nested `reasoning.effort` object.
+# The SDK spreads `params` straight into `responses.create(**params)` with no
+# translation, so the canonical names must be pre-mapped here.
+_MANTLE_RESPONSES_PARAM_MAP: Dict[str, str] = {
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "max_tokens": "max_output_tokens",
+    "reasoning_effort": "reasoning.effort",
 }
 
 _GEMINI_PARAM_MAP: Dict[str, str] = {
@@ -96,7 +121,8 @@ KNOWN_CANONICAL_PARAMS: frozenset[str] = frozenset(
     set(_BEDROCK_PARAM_MAP)
     | set(_OPENAI_PARAM_MAP)
     | set(_GEMINI_PARAM_MAP)
-    | set(_MANTLE_PARAM_MAP)
+    | set(_MANTLE_CHAT_PARAM_MAP)
+    | set(_MANTLE_RESPONSES_PARAM_MAP)
 )
 
 
@@ -272,10 +298,16 @@ class ModelConfig:
     provider: ModelProvider = ModelProvider.BEDROCK
     inference_params: Dict[str, Any] = field(default_factory=dict)
     retry_config: Optional[RetryConfig] = None
-    # Bedrock Mantle endpoint path (``/v1`` or ``/openai/v1``). Only consulted
-    # on the MANTLE provider path, where it selects the base URL the OpenAI
-    # client targets. ``None`` falls back to ``/v1`` in the agent factory.
-    mantle_endpoint_path: Optional[str] = None
+    # Bedrock Mantle: which OpenAI-compatible API the model speaks (Chat
+    # Completions vs Responses). Only consulted on the MANTLE provider path,
+    # where the factory uses it to pick OpenAIModel vs OpenAIResponsesModel.
+    mantle_api_mode: MantleApiMode = MantleApiMode.CHAT_COMPLETIONS
+    # Bedrock Mantle: optional AWS region override for the inference endpoint.
+    # ``None`` -> the agent's AWS_REGION. Lets a model pin inference to the
+    # region where it's hosted (e.g. openai.gpt-5.x in us-east-1) independent
+    # of where the app runs. Drives both the Mantle base URL and the region
+    # the bearer token is signed for (via bedrock_mantle_config).
+    mantle_region: Optional[str] = None
 
     def get_provider(self) -> ModelProvider:
         """
@@ -388,15 +420,23 @@ class ModelConfig:
         return config
 
     def to_mantle_config(self) -> Dict[str, Any]:
-        """Convert to OpenAIModel kwargs for Bedrock Mantle.
+        """Convert to OpenAI-compatible kwargs for Bedrock Mantle.
 
-        Mantle is OpenAI-wire-compatible, so the output feeds the same
-        Strands ``OpenAIModel`` — only the client (base_url + bearer token)
-        differs, and that's the factory's job.
+        Mantle is OpenAI-wire-compatible, so the output feeds either Strands'
+        ``OpenAIModel`` (Chat Completions) or ``OpenAIResponsesModel`` (Responses
+        API) — the factory picks the class from ``mantle_api_mode`` and supplies
+        the client (base_url + bearer token) via ``bedrock_mantle_config``. The
+        two APIs use different native param names, so the param map is selected
+        by mode here.
         """
+        param_map = (
+            _MANTLE_RESPONSES_PARAM_MAP
+            if self.mantle_api_mode == MantleApiMode.RESPONSES
+            else _MANTLE_CHAT_PARAM_MAP
+        )
         params: Dict[str, Any] = {}
         _apply_canonical_params(
-            params, self.inference_params, _MANTLE_PARAM_MAP, "mantle", self.model_id
+            params, self.inference_params, param_map, "mantle", self.model_id
         )
         config: Dict[str, Any] = {"model_id": self.model_id}
         if params:
@@ -421,7 +461,8 @@ class ModelConfig:
             "caching_enabled": self.caching_enabled,
             "provider": self.get_provider().value,
             "inference_params": dict(self.inference_params),
-            "mantle_endpoint_path": self.mantle_endpoint_path,
+            "mantle_api_mode": self.mantle_api_mode.value,
+            "mantle_region": self.mantle_region,
         }
 
     @classmethod
@@ -431,7 +472,8 @@ class ModelConfig:
         caching_enabled: Optional[bool] = None,
         provider: Optional[str] = None,
         inference_params: Optional[Dict[str, Any]] = None,
-        mantle_endpoint_path: Optional[str] = None,
+        mantle_api_mode: Optional[str] = None,
+        mantle_region: Optional[str] = None,
     ) -> "ModelConfig":
         """Create ModelConfig from optional parameters.
 
@@ -442,8 +484,11 @@ class ModelConfig:
             inference_params: Canonical-name -> value map (temperature, top_p,
                 max_tokens, thinking, ...). Each provider's translation table
                 drops unsupported keys silently.
-            mantle_endpoint_path: Bedrock Mantle endpoint path ("/v1" or
-                "/openai/v1"). Only consulted on the MANTLE provider path.
+            mantle_api_mode: Bedrock Mantle API surface ("chat" or "responses").
+                Only consulted on the MANTLE provider path; unknown/empty falls
+                back to Chat Completions.
+            mantle_region: Bedrock Mantle region override. Only consulted on the
+                MANTLE provider path; ``None`` falls back to the agent's region.
         """
         provider_enum = ModelProvider.BEDROCK
         if provider:
@@ -452,10 +497,18 @@ class ModelConfig:
             except ValueError:
                 pass  # Invalid provider, fall back to default + auto-detect via model_id
 
+        api_mode = MantleApiMode.CHAT_COMPLETIONS
+        if mantle_api_mode:
+            try:
+                api_mode = MantleApiMode(mantle_api_mode.lower())
+            except ValueError:
+                pass  # Unknown mode -> chat completions (the Mantle default)
+
         return cls(
             model_id=model_id or cls.model_id,
             caching_enabled=caching_enabled if caching_enabled is not None else cls.caching_enabled,
             provider=provider_enum,
             inference_params=dict(inference_params) if inference_params else {},
-            mantle_endpoint_path=mantle_endpoint_path,
+            mantle_api_mode=api_mode,
+            mantle_region=mantle_region,
         )

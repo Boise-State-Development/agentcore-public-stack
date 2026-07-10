@@ -16,9 +16,10 @@ import {
   AVAILABLE_PROVIDERS,
   KNOWN_PARAMS,
   KnownParamMeta,
-  MANTLE_ENDPOINT_PATHS,
+  MANTLE_API_MODES,
+  MANTLE_API_MODE_LABELS,
   ManagedModelFormData,
-  MantleEndpointPath,
+  MantleApiMode,
   ModelParamSpec,
   ModelProvider,
   SupportedParams,
@@ -231,7 +232,8 @@ interface ModelFormGroup {
   cacheReadPricePerMillionTokens: FormControl<number | null>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
-  mantleEndpointPath: FormControl<MantleEndpointPath>;
+  mantleApiMode: FormControl<MantleApiMode>;
+  mantleRegion: FormControl<string>;
   inferenceParams: FormArray<FormGroup<ParamRowGroup>>;
   customInferenceParams: FormArray<FormGroup<CustomParamRowGroup>>;
 }
@@ -255,11 +257,12 @@ export class ModelFormPage implements OnInit {
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
   readonly availableModalities = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'SPEECH', 'EMBEDDING'];
-  readonly mantleEndpointPaths = MANTLE_ENDPOINT_PATHS;
+  readonly mantleApiModes = MANTLE_API_MODES;
+  readonly mantleApiModeLabels = MANTLE_API_MODE_LABELS;
 
   /**
    * Tracks the selected provider as a signal so the template can show/hide
-   * the Mantle-only endpoint-path field and suppress the caching controls
+   * the Mantle-only API-mode/region fields and suppress the caching controls
    * (Mantle open-weight models never cache). Kept in sync with the form
    * control in ngOnInit + its valueChanges subscription.
    */
@@ -310,7 +313,8 @@ export class ModelFormPage implements OnInit {
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     supportsCaching: this.fb.control(false, { nonNullable: true }),
-    mantleEndpointPath: this.fb.control<MantleEndpointPath>('/v1', { nonNullable: true }),
+    mantleApiMode: this.fb.control<MantleApiMode>('chat', { nonNullable: true }),
+    mantleRegion: this.fb.control('', { nonNullable: true }),
     inferenceParams: this.fb.array<FormGroup<ParamRowGroup>>([], {
       validators: [thinkingInvariantsValidator, maxTokensCeilingValidator],
     }),
@@ -819,7 +823,8 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
-        mantleEndpointPath: this.coerceMantlePath(model.mantleEndpointPath),
+        mantleApiMode: this.coerceMantleApiMode(model.apiMode),
+        mantleRegion: model.region ?? '',
       });
 
       // Repopulate the inference-params rows with any persisted spec.
@@ -861,7 +866,8 @@ export class ModelFormPage implements OnInit {
       cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
       knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
       supportsCaching: template.supportsCaching ?? true,
-      mantleEndpointPath: this.coerceMantlePath(template.mantleEndpointPath),
+      mantleApiMode: this.coerceMantleApiMode(template.apiMode),
+      mantleRegion: template.region ?? '',
     });
 
     this.rebuildInferenceParamRows(template.provider, template.supportedParams ?? null);
@@ -962,8 +968,9 @@ export class ModelFormPage implements OnInit {
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: v.supportsCaching,
         // Only meaningful for Mantle; null elsewhere so the backend stores
-        // nothing for other providers.
-        mantleEndpointPath: v.provider === 'mantle' ? v.mantleEndpointPath : null,
+        // nothing for other providers. An empty region means "app's region".
+        apiMode: v.provider === 'mantle' ? v.mantleApiMode : null,
+        region: v.provider === 'mantle' ? (v.mantleRegion?.trim() || null) : null,
         supportedParams: this.collectSupportedParams(),
       };
 
@@ -989,14 +996,14 @@ export class ModelFormPage implements OnInit {
   }
 
   /**
-   * Normalize a stored/templated Mantle path onto the known options, falling
-   * back to the default `/v1` for null/legacy/unknown values so the select
-   * always has a valid selection.
+   * Normalize a stored/templated Mantle API mode onto the known options,
+   * falling back to the default `chat` for null/legacy/unknown values so the
+   * select always has a valid selection.
    */
-  private coerceMantlePath(value: string | null | undefined): MantleEndpointPath {
-    return MANTLE_ENDPOINT_PATHS.includes(value as MantleEndpointPath)
-      ? (value as MantleEndpointPath)
-      : '/v1';
+  private coerceMantleApiMode(value: string | null | undefined): MantleApiMode {
+    return MANTLE_API_MODES.includes(value as MantleApiMode)
+      ? (value as MantleApiMode)
+      : 'chat';
   }
 
   /**
