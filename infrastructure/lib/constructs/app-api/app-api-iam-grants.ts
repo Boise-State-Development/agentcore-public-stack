@@ -452,13 +452,25 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
-  // ── Bedrock (title generation) ──
+  // ── Bedrock model invocation ──
+  // Used by both title generation and the API-key `/chat/api-converse`
+  // handler (apis/app_api/chat/converse_routes.py), which calls Bedrock
+  // Converse directly on app-api (inference-api is unreachable behind the
+  // AgentCore Runtime data plane). Mirrors inference-api's grant:
+  //   - InvokeModelWithResponseStream is required for the `stream=true` path.
+  //   - The catalog's model IDs are `us.*` inference profiles, which fan out
+  //     across regions, so foundation-model must be granted on ALL regions
+  //     (`bedrock:*::`), and the inference-profile resource itself is the
+  //     account-level ARN in this region.
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
-      resources: [`arn:aws:bedrock:${config.awsRegion}::foundation-model/*`],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/*`,
+        `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`,
+      ],
     }),
   );
 
