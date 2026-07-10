@@ -1,3 +1,52 @@
+# Release Notes — v1.4.0
+
+**Release Date:** July 10, 2026
+**Previous Release:** v1.3.0 (July 10, 2026)
+
+---
+
+> 🏗️ **This release requires a platform (CDK) deploy** — the app-api task role gains two token-vault IAM grants that fix the admin OAuth-provider 502. No data migration, no breaking changes. The new MCP identity-forwarding feature ships **disabled**: enabling it is opt-in and creates a Lambda + pins the Cognito feature plan, so operators who do nothing are unaffected — see the Deployment notes.
+
+---
+
+## Highlights
+
+v1.4.0 adds opt-in **MCP user identity forwarding** and repairs the admin **OAuth-provider** flow. A new Cognito Pre-Token-Generation Lambda can copy configured user-pool attributes into namespaced claims on the access token — the only token forwarded end-to-end to MCP servers — so a personalized MCP tool can identify the calling user without touching the SPA → app-api → inference-api → MCP forwarding path. The feature is disabled by default; a fork that configures nothing gets zero new resources. Separately, adding the first admin OAuth provider returned a 502 Bad Gateway because the app-api task role lacked the token-vault permissions AgentCore needs to lazily create the default vault — now granted.
+
+## MCP user identity forwarding
+
+Personalized MCP tools need to know *who* is calling, but the access token forwarded to MCP servers carried no user attributes. This release adds an opt-in Cognito Pre-Token-Generation v2 trigger that enriches the access token with configured user-pool attributes as namespaced claims — so downstream MCP tools can identify the caller, with no changes to the token-forwarding path (the access token was already the token carried end to end).
+
+### Backend
+
+- **Fail-open enrichment handler (#627)** — `infrastructure/lambda-assets/token-enrichment/handler.py`, a stdlib-only Pre-Token-Generation v2 Lambda. It copies the configured user-pool attributes into namespaced claims on the **access** token. Any error returns the event unchanged, so a misconfiguration can never block login. Covered by `test_handler.py` (244 lines).
+
+### Infrastructure
+
+- **Config surface (#627)** — `McpIdentityConfig` (`infrastructure/lib/config.ts`): `enabled` plus an `accessTokenClaims` map, settable via the `CDK_MCP_TOKEN_ENRICHMENT_CLAIMS` JSON env var or CDK context (new `parseJsonRecordEnv` helper).
+- **Conditional construct (#627)** — `token-enrichment-construct.ts` builds the real-code Lambda (`fromAsset`) and attaches it via Cognito `addTrigger` `V2_0`; the user pool's `featurePlan` is pinned to `ESSENTIALS` (a prerequisite of Pre-Token-Gen v2). Wired into `PlatformStack` only when `CDK_MCP_TOKEN_ENRICHMENT_ENABLED=true`, with job-level env in `platform.yml`. A fork that sets nothing gets zero resources and the committed `cdk.context.json` stays inert.
+
+### Test Coverage
+
+244+ lines of new handler tests plus the spec's resolved open questions and an implementation summary (`docs/specs/MCP_USER_IDENTITY_FORWARDING_SPEC.md`, `MCP_USER_IDENTITY_FORWARDING_IMPLEMENTATION.md`), including the mcp-servers follow-on handoff.
+
+## 🐛 Bug fixes
+
+- **Adding the first admin OAuth provider returned a 502 (#628).** `POST /admin/oauth-providers/` failed with a 502 Bad Gateway. The real cause, from dev-ai app-api logs, was an `AccessDeniedException` on `bedrock-agentcore:CreateTokenVault` against `token-vault/default`: AgentCore's `CreateOauth2CredentialProvider` lazily ensures the default token vault exists on the first provider create, which requires `CreateTokenVault` (+ `GetTokenVault`) on the caller. The app-api task role had the `...Oauth2CredentialProvider` actions but not the token-vault ones, and the shared handler maps an uncaught AWS `ClientError` to HTTP 502 — so a missing permission surfaced as a 502 rather than a 403. Both actions are added to the `AgentCoreWorkloadIdentityAccess` statement (the `token-vault/*` scope already covered `token-vault/default`; only the actions were missing).
+
+## 🏗️ Infrastructure
+
+- **New opt-in `token-enrichment` Lambda (#627)** — attached to the Cognito user pool as a Pre-Token-Generation v2 trigger; pins the pool `featurePlan` to `ESSENTIALS`. Created only when `CDK_MCP_TOKEN_ENRICHMENT_ENABLED=true`.
+- **app-api task role token-vault grants (#628)** — `bedrock-agentcore:CreateTokenVault` + `GetTokenVault` added to `AgentCoreWorkloadIdentityAccess`.
+
+## 🚀 Deployment notes
+
+- **A platform (CDK) deploy is required** for the OAuth-provider fix (#628) to take effect — it is an IAM change on the app-api task role. Until redeployed, adding the first admin OAuth provider will keep returning a 502.
+- **MCP identity forwarding is off unless you opt in (#627).** To enable it: pin the Cognito **Essentials** feature plan on the user pool, then set `CDK_MCP_TOKEN_ENRICHMENT_ENABLED=true` and `CDK_MCP_TOKEN_ENRICHMENT_CLAIMS` (the attribute→claim map) as GitHub Actions variables and redeploy `platform.yml`. Doing nothing leaves the token forwarded exactly as before, with no new resources.
+- No data migration, no breaking changes.
+
+---
+
 # Release Notes — v1.3.0
 
 **Release Date:** July 10, 2026
