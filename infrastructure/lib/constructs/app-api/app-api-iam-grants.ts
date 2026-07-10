@@ -636,6 +636,11 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   //     called by shared/oauth/agentcore_registrar.py when an
   //     admin adds, edits, or removes an OAuth provider via the
   //     admin UI. Stored under the default token vault.
+  //   - Create/GetTokenVault: CreateOauth2CredentialProvider ensures
+  //     the default token vault exists on the first provider create,
+  //     which requires CreateTokenVault on token-vault/default. Without
+  //     it the admin "add OAuth provider" POST fails with
+  //     AccessDeniedException, surfaced to the SPA as a 502.
   // Resources: scoped to this account's AgentCore Identity surface.
   // Action names verified against
   //   https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrockagentcore.html
@@ -653,6 +658,8 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
         'bedrock-agentcore:DeleteOauth2CredentialProvider',
         'bedrock-agentcore:GetOauth2CredentialProvider',
         'bedrock-agentcore:ListOauth2CredentialProviders',
+        'bedrock-agentcore:CreateTokenVault',
+        'bedrock-agentcore:GetTokenVault',
       ],
       resources: [
         `arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:token-vault/*`,
