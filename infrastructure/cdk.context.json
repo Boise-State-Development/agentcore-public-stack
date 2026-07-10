@@ -38,6 +38,12 @@
     "certificateArn": "",
     "retentionDays": 90
   },
+  "mcpIdentity": {
+    "tokenEnrichment": {
+      "enabled": false,
+      "accessTokenClaims": {}
+    }
+  },
   "tags": {
     "ManagedBy": "CDK"
   },

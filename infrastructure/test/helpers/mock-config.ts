@@ -65,6 +65,12 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     mcpSandbox: {
       extraFrameAncestors: [],
     },
+    mcpIdentity: {
+      tokenEnrichment: {
+        enabled: false,
+        accessTokenClaims: {},
+      },
+    },
     cognito: {
       domainPrefix: MOCK_PREFIX,
       passwordMinLength: 8,

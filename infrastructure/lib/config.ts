@@ -55,6 +55,7 @@ export interface AppConfig {
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
+  mcpIdentity: McpIdentityConfig;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -185,6 +186,41 @@ export interface AgentsConfig {
 
 export interface FineTuningConfig {
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+}
+
+/**
+ * MCP user-identity forwarding (docs/specs/MCP_USER_IDENTITY_FORWARDING_SPEC.md).
+ *
+ * Personalized MCP tools need to know *who* the logged-in user is. The only
+ * token forwarded end-to-end to MCP servers is the Cognito **access token**,
+ * which carries `sub` but no richer identity claims. This config gates an
+ * optional Cognito Pre-Token-Generation **v2** Lambda that copies configured
+ * user-pool attributes into named claims on the access token, so the existing
+ * SPA -> app-api -> inference-api -> MCP forwarding path works unchanged.
+ *
+ * Off by default (opt-in). A fork that doesn't need personalized MCP tools
+ * configures nothing: no Lambda and no pool trigger are created, and the
+ * access token (with `sub`) is forwarded exactly as it is today. This inverts
+ * the repo's usual "default ON with a kill switch" idiom precisely because the
+ * feature has a pool-wide blast radius and an external (Cognito feature-plan)
+ * dependency — it must be a deliberate opt-in.
+ */
+export interface McpIdentityConfig {
+  // Optional Pre-Token-Generation (v2) enrichment of the access token.
+  // No Lambda/trigger is created when disabled or omitted.
+  // Requires the Cognito Essentials/Plus feature plan (access-token
+  // customization) — the TokenEnrichmentConstruct sets the pool's
+  // featurePlan to ESSENTIALS to guarantee support on fresh forks.
+  tokenEnrichment?: {
+    enabled: boolean;
+    // {claimName: sourceCognitoAttribute}. Each present attribute is copied to
+    // the named claim on the access token; missing attributes are skipped
+    // (native users, or forks without that attribute). No IdP is assumed.
+    // Claim names SHOULD be namespaced (full reverse-DNS form, e.g.
+    // "https://example.com/employee_number") to avoid colliding with Cognito's
+    // reserved access-token claims.
+    accessTokenClaims?: { [claimName: string]: string };
+  };
 }
 
 /**
@@ -371,6 +407,27 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('mcpSandbox')?.extraFrameAncestors
         || [],
     },
+    mcpIdentity: {
+      // Off by default (opt-in). Env wins over context; context wins over the
+      // false default. `parseBooleanEnv` returns undefined for unset/empty
+      // (including the empty string an unset GitHub Actions variable renders
+      // to), so `??` falls through to context, then to `false`.
+      tokenEnrichment: {
+        enabled:
+          parseBooleanEnv(process.env.CDK_MCP_TOKEN_ENRICHMENT_ENABLED)
+          ?? scope.node.tryGetContext('mcpIdentity')?.tokenEnrichment?.enabled
+          ?? false,
+        // {claimName: sourceCognitoAttribute}. Settable as a JSON object via
+        // the CDK_MCP_TOKEN_ENRICHMENT_CLAIMS env var (so a fork can enable the
+        // feature entirely through GitHub Actions variables while the public
+        // cdk.context.json stays inert), or via context. Env wins over context;
+        // both default to an empty map (no claims copied).
+        accessTokenClaims:
+          parseJsonRecordEnv(process.env.CDK_MCP_TOKEN_ENRICHMENT_CLAIMS)
+          ?? scope.node.tryGetContext('mcpIdentity')?.tokenEnrichment?.accessTokenClaims
+          ?? {},
+      },
+    },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
     },
@@ -452,6 +509,39 @@ function parseIntEnv(value: string | undefined): number | undefined {
   }
   const parsed = parseInt(value, 10);
   return isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * Parse a JSON object of string->string from an environment variable.
+ *
+ * Used for structured config that can't be expressed as a scalar `--context`
+ * value (e.g. the MCP token-enrichment claim map). Returns undefined for
+ * unset/empty/invalid input so nullish coalescing (??) can fall through to a
+ * context value or default. Non-object JSON, or entries whose key/value aren't
+ * both strings, are rejected/filtered — a malformed value must never crash the
+ * synth, it simply falls through.
+ */
+export function parseJsonRecordEnv(
+  value: string | undefined,
+): { [key: string]: string } | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const result: { [key: string]: string } = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k === 'string' && typeof v === 'string') {
+        result[k] = v;
+      }
+    }
+    return result;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

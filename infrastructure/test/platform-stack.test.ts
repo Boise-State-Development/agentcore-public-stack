@@ -7,6 +7,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
+import { McpIdentityConfig } from '../lib/config';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
 describe('PlatformStack', () => {
@@ -215,6 +216,86 @@ describe('PlatformStack', () => {
 
     it('exposes artifactsFrameAncestors', () => {
       expect(stack.artifactsFrameAncestors).toContain('https://example.com');
+    });
+  });
+
+  describe('MCP token enrichment wiring', () => {
+    const cert = 'arn:aws:acm:us-east-1:123456789012:certificate/test';
+
+    function buildTemplate(mcpIdentity: McpIdentityConfig): Template {
+      const config = createMockConfig({
+        domainName: 'example.com',
+        infrastructureHostedZoneDomain: 'example.com',
+        certificateArn: cert,
+        frontend: { cloudFrontPriceClass: 'PriceClass_100', certificateArn: cert },
+        artifacts: { retentionDays: 90, extraFrameAncestors: [], certificateArn: cert },
+        mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
+        fineTuning: {},
+        mcpIdentity,
+      });
+      const app = new cdk.App();
+      mockSsmContext(app, config);
+      const s = new PlatformStack(app, 'McpIdentityPlatformStack', {
+        config,
+        env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
+      });
+      return Template.fromStack(s);
+    }
+
+    it('default (disabled): pool has no Pre-Token-Generation trigger', () => {
+      // The top-level `template` is built from the default mock config, which
+      // has mcpIdentity disabled.
+      const pools = template.findResources('AWS::Cognito::UserPool');
+      const poolProps = Object.values(pools)[0]?.Properties ?? {};
+      expect(poolProps.LambdaConfig?.PreTokenGenerationConfig).toBeUndefined();
+    });
+
+    it('default (disabled): no token-enrichment Lambda is created', () => {
+      const fns = template.findResources('AWS::Lambda::Function');
+      const names = Object.values(fns).map(
+        (r: any) => r.Properties?.FunctionName,
+      );
+      expect(names).not.toContain('test-project-token-enrichment');
+    });
+
+    it('enabled: pool gains the Pre-Token-Generation v2 trigger', () => {
+      const t = buildTemplate({
+        tokenEnrichment: {
+          enabled: true,
+          accessTokenClaims: {
+            'https://boisestate.edu/employee_number': 'custom:provider_sub',
+          },
+        },
+      });
+      t.hasResourceProperties('AWS::Cognito::UserPool', {
+        LambdaConfig: {
+          PreTokenGenerationConfig: {
+            LambdaVersion: 'V2_0',
+          },
+        },
+      });
+    });
+
+    it('enabled: the token-enrichment Lambda is created with the claim map', () => {
+      const t = buildTemplate({
+        tokenEnrichment: {
+          enabled: true,
+          accessTokenClaims: {
+            'https://boisestate.edu/employee_number': 'custom:provider_sub',
+          },
+        },
+      });
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'test-project-token-enrichment',
+        Runtime: 'python3.13',
+        Environment: {
+          Variables: {
+            ACCESS_TOKEN_CLAIMS: JSON.stringify({
+              'https://boisestate.edu/employee_number': 'custom:provider_sub',
+            }),
+          },
+        },
+      });
     });
   });
 });

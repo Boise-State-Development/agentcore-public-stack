@@ -42,6 +42,14 @@ export class CognitoConstruct extends Construct {
 
     this.userPool = new cognito.UserPool(this, 'CognitoUserPool', {
       userPoolName: getResourceName(config, 'user-pool'),
+      // ESSENTIALS is required for access-token customization via the
+      // Pre-Token-Generation v2 trigger (the MCP identity-forwarding feature,
+      // docs/specs/MCP_USER_IDENTITY_FORWARDING_SPEC.md). Set explicitly so a
+      // fresh fork's pool comes up on a plan that supports the trigger before
+      // TokenEnrichmentConstruct attaches it. Existing pools are already on
+      // ESSENTIALS, so this is a no-op for current deployments. The feature
+      // itself stays opt-in (default off) — this only guarantees capability.
+      featurePlan: cognito.FeaturePlan.ESSENTIALS,
       selfSignUpEnabled: true,
       signInAliases: { username: true, email: true },
       autoVerify: { email: true },
