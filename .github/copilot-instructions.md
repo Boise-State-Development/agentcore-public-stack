@@ -81,5 +81,4 @@ Before non-trivial work in these areas, consult the matching skill/steering doc:
 - Angular components/signals → `.claude/skills/angualar-best-practices/` and `.kiro/steering/angular-*.md`
 - Tailwind v4 / a11y → `.claude/skills/tailwind-ui/` and `.kiro/steering/tailwind-*.md`
 - CORS across stacks → `.claude/skills/cors-deployment/SKILL.md`
-- Release notes / CHANGELOG → `.claude/skills/release-notes/SKILL.md`
-- Version bumps → `.claude/skills/versioning/SKILL.md`
+- Cutting a release (version bump + release notes + changelog + branch/backmerge) → `.claude/skills/cutting-a-release/SKILL.md` and `.kiro/steering/cutting-a-release.md`
