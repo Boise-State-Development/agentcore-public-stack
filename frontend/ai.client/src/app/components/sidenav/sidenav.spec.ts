@@ -6,7 +6,6 @@ import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
-import { ScheduleService } from '../../schedules/services/schedule.service';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
 
@@ -16,7 +15,6 @@ describe('Sidenav', () => {
   let mockBffSession: any;
   let mockSidenavService: any;
   let mockUserService: any;
-  let mockScheduleService: any;
   let mockMemorySpaceService: any;
   let mockAgentService: any;
 
@@ -39,10 +37,6 @@ describe('Sidenav', () => {
       currentUser: signal(null),
       isAdmin: signal(false),
     };
-    mockScheduleService = {
-      accessible$: signal<boolean | null>(null),
-      loadSchedules: vi.fn().mockResolvedValue(undefined),
-    };
     mockMemorySpaceService = {
       accessible$: signal<boolean | null>(null),
       loadSpaces: vi.fn().mockResolvedValue(undefined),
@@ -59,7 +53,6 @@ describe('Sidenav', () => {
         { provide: BffSessionService, useValue: mockBffSession },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: UserService, useValue: mockUserService },
-        { provide: ScheduleService, useValue: mockScheduleService },
         { provide: MemorySpaceService, useValue: mockMemorySpaceService },
         { provide: AgentService, useValue: mockAgentService },
       ],
@@ -73,7 +66,7 @@ describe('Sidenav', () => {
   async function createComponent() {
     const { Sidenav } = await import('./sidenav');
     const component = TestBed.runInInjectionContext(() => new Sidenav());
-    TestBed.tick(); // flush the constructor effect that probes schedule accessibility
+    TestBed.tick(); // flush the constructor effect that probes feature accessibility
     return component;
   }
 
@@ -103,38 +96,6 @@ describe('Sidenav', () => {
     await component.handleLogout();
     expect(mockBffSession.logout).toHaveBeenCalledTimes(1);
     expect(mockRouter.navigate).toHaveBeenCalledWith(['/auth/login']);
-  });
-
-  it('probes schedule accessibility once a user is authenticated', async () => {
-    mockUserService.currentUser.set({ user_id: 'u1', email: 'u1@example.com' });
-    await createComponent();
-    expect(mockScheduleService.loadSchedules).toHaveBeenCalled();
-  });
-
-  it('does not probe schedule accessibility while unauthenticated', async () => {
-    mockUserService.currentUser.set(null);
-    await createComponent();
-    expect(mockScheduleService.loadSchedules).not.toHaveBeenCalled();
-  });
-
-  it('hides the Scheduled Runs nav entry until accessibility resolves true', async () => {
-    const component = await createComponent();
-
-    mockScheduleService.accessible$.set(null);
-    expect(component.showSchedules()).toBe(false);
-
-    mockScheduleService.accessible$.set(false);
-    expect(component.showSchedules()).toBe(false);
-
-    mockScheduleService.accessible$.set(true);
-    expect(component.showSchedules()).toBe(true);
-  });
-
-  it('navigates to /schedules and closes the sidenav', async () => {
-    const component = await createComponent();
-    component.navigateToSchedules();
-    expect(mockSidenavService.close).toHaveBeenCalled();
-    expect(mockRouter.navigate).toHaveBeenCalledWith(['/schedules']);
   });
 
   it('probes memory-space accessibility once a user is authenticated', async () => {

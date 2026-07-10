@@ -7,7 +7,6 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
-import { ScheduleService } from '../../schedules/services/schedule.service';
 import { MemorySpaceService } from '../../memory-spaces/services/memory-space.service';
 import { AgentService } from '../../agents/services/agent.service';
 
@@ -21,7 +20,6 @@ export class Sidenav {
   private router = inject(Router);
   private sessionService = inject(SessionService);
   private bffSession = inject(BffSessionService);
-  private scheduleService = inject(ScheduleService);
   private memorySpaceService = inject(MemorySpaceService);
   private agentService = inject(AgentService);
   protected sidenavService = inject(SidenavService);
@@ -44,22 +42,11 @@ export class Sidenav {
   protected isAdmin = this.userService.isAdmin;
 
   /**
-   * Whether to show the "Scheduled runs" nav entry. There is no dedicated
-   * client-side capability signal for `scheduled-runs` yet, so this rides
-   * the schedules list call itself: a successful (even empty) list means
-   * the caller has the capability and the kill switch is on; a 403/404
-   * flips `accessible$` to false and the nav entry stays hidden. `null`
-   * (not yet resolved) also hides it, so the item doesn't flash in before
+   * Whether to show the "Memory Spaces" nav entry. Rides the spaces list
+   * call: a successful (even empty) list means the `MEMORY_SPACES_ENABLED`
+   * kill switch is on; a 404 flips `accessible$` false and the entry stays
+   * hidden. `null` (unresolved) also hides it so it doesn't flash in before
    * disappearing.
-   */
-  readonly showSchedules = computed(() => this.scheduleService.accessible$() === true);
-
-  /**
-   * Whether to show the "Memory Spaces" nav entry. Rides the spaces list call
-   * the same way `showSchedules` rides schedules: a successful (even empty)
-   * list means the `MEMORY_SPACES_ENABLED` kill switch is on; a 404 flips
-   * `accessible$` false and the entry stays hidden. `null` (unresolved) also
-   * hides it so it doesn't flash in before disappearing.
    */
   readonly showMemorySpaces = computed(() => this.memorySpaceService.accessible$() === true);
 
@@ -77,7 +64,6 @@ export class Sidenav {
     // mirrors UserService's own permissions-fetch gating.
     effect(() => {
       if (this.userService.currentUser()) {
-        void this.scheduleService.loadSchedules();
         void this.memorySpaceService.loadSpaces();
         void this.agentService.loadAgents();
       }
@@ -92,11 +78,6 @@ export class Sidenav {
   navigateToAssistants() {
     this.sidenavService.close();
     this.router.navigate(['/assistants']);
-  }
-
-  navigateToSchedules() {
-    this.sidenavService.close();
-    this.router.navigate(['/schedules']);
   }
 
   toggleCollapse() {
