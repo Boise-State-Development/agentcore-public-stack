@@ -6,7 +6,7 @@ import { signal } from '@angular/core';
 import { ScheduleFormPage } from './schedule-form.page';
 import { ScheduleService } from '../services/schedule.service';
 import { RunNowService } from '../services/run-now.service';
-import { AssistantService } from '../../assistants/services/assistant.service';
+import { AgentService } from '../../agents/services/agent.service';
 import { ToolService } from '../../services/tool/tool.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ScheduledPrompt } from '../models/schedule.model';
@@ -48,9 +48,9 @@ describe('ScheduleFormPage', () => {
     updateSchedule: vi.fn().mockResolvedValue(stubSchedule()),
   };
 
-  const mockAssistantService = {
-    assistants$: signal([]),
-    loadAssistants: vi.fn().mockResolvedValue(undefined),
+  const mockAgentService = {
+    agents$: signal([]),
+    loadAgents: vi.fn().mockResolvedValue(undefined),
   };
 
   const mockToolService = {
@@ -81,7 +81,7 @@ describe('ScheduleFormPage', () => {
         provideRouter([{ path: 'schedules', children: [] }]),
         { provide: ScheduleService, useValue: mockScheduleService },
         { provide: RunNowService, useValue: mockRunNow },
-        { provide: AssistantService, useValue: mockAssistantService },
+        { provide: AgentService, useValue: mockAgentService },
         { provide: ToolService, useValue: mockToolService },
         { provide: ToastService, useValue: mockToast },
         {
@@ -143,6 +143,43 @@ describe('ScheduleFormPage', () => {
           hourLocal: 8,
           timezone: 'UTC',
           enabledTools: ['class_search'],
+        }),
+      );
+    });
+
+    it('drops the manual tool snapshot when an agent is selected', async () => {
+      component.form.patchValue({
+        label: 'Test',
+        promptText: 'Do the thing',
+        cadence: 'daily',
+        hourLocal: 8,
+        timezone: 'UTC',
+      });
+      // Pick some tools first, then target an agent — the agent's bound tools
+      // govern the run, so the snapshot must not be sent.
+      component.toggleTool('class_search');
+      component.form.controls.assistantId.setValue('ast-9');
+
+      expect(component.agentSelected()).toBe(true);
+      await component.onSubmit();
+
+      expect(mockScheduleService.createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({ assistantId: 'ast-9', enabledTools: null }),
+      );
+    });
+
+    it('run now targets the selected agent and omits the tool snapshot', () => {
+      component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
+      component.toggleTool('class_search');
+      component.form.controls.assistantId.setValue('ast-9');
+
+      component.runNow();
+
+      expect(mockRunNow.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: 'Do the thing',
+          ragAssistantId: 'ast-9',
+          enabledTools: null,
         }),
       );
     });
