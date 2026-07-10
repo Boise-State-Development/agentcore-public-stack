@@ -5,13 +5,15 @@ paused/resumed, and deleted here, but nothing fires yet — the
 dispatcher/worker that reads ``DueScheduleIndex`` and calls
 ``run_agent_headless`` is B2 (docs/specs/scheduled-agent-runs.md §7).
 
-Gating mirrors the Phase A "Run now" surface exactly (two independent
-controls, spec §6):
+Gating is a single per-environment control (spec §6):
 
-* ``SCHEDULED_RUNS_ENABLED`` — per-environment kill switch (default on).
-  Off -> every route here 404s, as if unmounted.
-* ``scheduled-runs`` RBAC capability -- *who* may use the surface. Granted
-  to the beta cohort's AppRole; missing -> 403. GA = grant to ``default``.
+* ``SCHEDULED_RUNS_ENABLED`` — kill switch (default on). Off -> every route
+  here 404s, as if unmounted.
+
+The surface is otherwise open to any authenticated user. It carries no nav
+entry and isn't linked from the SPA, so it stays low-key / reachable only by
+direct URL — deliberately *not* behind the ``scheduled-runs`` RBAC capability
+(which turned every non-beta caller into a 403 the SPA surfaced as a toast).
 
 Auth is the standard SPA cookie dependency (``get_current_user_from_session``)
 per the CLAUDE.md app-api rule.
@@ -27,7 +29,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import scheduled_runs_enabled
-from apis.shared.rbac.capabilities import SCHEDULED_RUNS_CAPABILITY, user_has_capability
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
@@ -58,19 +59,15 @@ router = APIRouter(prefix="/schedules", tags=["schedules"])
 async def require_scheduled_runs_user(
     user: User = Depends(get_current_user_from_session),
 ) -> User:
-    """Cookie auth + kill switch + cohort capability, in that order.
+    """Cookie auth + kill switch, in that order.
 
     404 when the environment kill switch is off (the surface behaves as if
-    unmounted), 403 when the authenticated caller lacks the
-    ``scheduled-runs`` capability. Mirrors ``apis.app_api.runs.routes``.
+    unmounted). Otherwise any authenticated user may use the surface — it is
+    intentionally not behind an RBAC capability (see module docstring).
+    Mirrors ``apis.app_api.runs.routes``.
     """
     if not scheduled_runs_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    if not await user_has_capability(user, SCHEDULED_RUNS_CAPABILITY):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to scheduled runs.",
-        )
     return user
 
 

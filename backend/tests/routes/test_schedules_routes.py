@@ -9,9 +9,9 @@ Endpoints under test:
 - POST   /schedules/{id}/resume -> resume (200; 404)
 - DELETE /schedules/{id}        -> delete (204; 404)
 
-Every route shares the three-layer gate (cookie auth -> SCHEDULED_RUNS_ENABLED
-kill switch -> `scheduled-runs` RBAC capability), pinned once via `TestGating`
-and assumed enabled/authorized everywhere else. The service layer is mocked
+Every route shares the two-layer gate (cookie auth -> SCHEDULED_RUNS_ENABLED
+kill switch), pinned once via `TestGating` and assumed enabled everywhere
+else. The surface carries no RBAC capability gate. The service layer is mocked
 (DynamoDB semantics are covered by tests/shared/test_scheduled_prompts.py);
 these tests pin the HTTP contract and ownership isolation.
 """
@@ -91,7 +91,6 @@ def _make_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     authed: bool = True,
-    capability: bool = True,
     flag: Optional[str] = None,
     user_id: str = USER_ID,
 ) -> TestClient:
@@ -101,11 +100,6 @@ def _make_client(
     else:
         monkeypatch.setenv("SCHEDULED_RUNS_ENABLED", flag)
 
-    async def fake_capability(user, capability_id):
-        assert capability_id == "scheduled-runs"
-        return capability
-
-    monkeypatch.setattr(schedules_routes, "user_has_capability", fake_capability)
     monkeypatch.setattr(schedules_routes, "get_app_role_service", lambda: FakeRoleService())
 
     app = FastAPI()
@@ -143,10 +137,12 @@ class TestGating:
         monkeypatch.setattr(schedules_routes, "list_scheduled_prompts", AsyncMock(return_value=[]))
         assert client.get("/schedules").status_code == 200
 
-    def test_missing_capability_is_403(self, monkeypatch):
-        client = _make_client(monkeypatch, capability=False)
-        assert client.get("/schedules").status_code == 403
-        assert client.post("/schedules", json={}).status_code == 403
+    def test_any_authenticated_user_is_allowed(self, monkeypatch):
+        # No RBAC capability gate: an ordinary authenticated user gets 200,
+        # not the old 403. (Regression for the prod "Access Denied" toast.)
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "list_scheduled_prompts", AsyncMock(return_value=[]))
+        assert client.get("/schedules").status_code == 200
 
 
 # ---------------------------------------------------------------------------
