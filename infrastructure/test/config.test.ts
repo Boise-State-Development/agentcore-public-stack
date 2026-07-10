@@ -936,4 +936,146 @@ describe('RAG Ingestion Configuration', () => {
       expect(() => loadConfig(app)).not.toThrow();
     });
   });
+
+  // ============================================================
+  // MCP Identity — token-enrichment feature flag
+  //
+  // Opt-in (default OFF), unlike the default-ON feature flags above.
+  // The claim map is context-only (structured, not a scalar env var).
+  // ============================================================
+
+  describe('MCP Identity token enrichment feature flag', () => {
+    const MCP_ENV_KEY = 'CDK_MCP_TOKEN_ENRICHMENT_ENABLED';
+    const MCP_CLAIMS_ENV_KEY = 'CDK_MCP_TOKEN_ENRICHMENT_CLAIMS';
+
+    beforeEach(() => {
+      delete process.env[MCP_ENV_KEY];
+      delete process.env[MCP_CLAIMS_ENV_KEY];
+    });
+    afterEach(() => {
+      delete process.env[MCP_ENV_KEY];
+      delete process.env[MCP_CLAIMS_ENV_KEY];
+    });
+
+    test('defaults to DISABLED when env is unset and no context is provided', () => {
+      const config = loadConfig(app);
+
+      expect(config.mcpIdentity.tokenEnrichment?.enabled).toBe(false);
+      expect(config.mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({});
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      // `${{ vars.CDK_MCP_TOKEN_ENRICHMENT_ENABLED }}` renders to "" when unset.
+      process.env[MCP_ENV_KEY] = '';
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.enabled).toBe(false);
+    });
+
+    test('CDK_MCP_TOKEN_ENRICHMENT_ENABLED="true" enables it (env opt-in)', () => {
+      process.env[MCP_ENV_KEY] = 'true';
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.enabled).toBe(true);
+    });
+
+    test('CDK_MCP_TOKEN_ENRICHMENT_ENABLED="false" stays disabled', () => {
+      process.env[MCP_ENV_KEY] = 'false';
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.enabled).toBe(false);
+    });
+
+    test('cdk.json context mcpIdentity.tokenEnrichment.enabled=true enables when env is unset', () => {
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: { enabled: true, accessTokenClaims: {} },
+      });
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.enabled).toBe(true);
+    });
+
+    test('env takes precedence over context (env=false beats context=true)', () => {
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: { enabled: true, accessTokenClaims: {} },
+      });
+      process.env[MCP_ENV_KEY] = 'false';
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.enabled).toBe(false);
+    });
+
+    test('parses the namespaced accessTokenClaims map from context', () => {
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: {
+          enabled: true,
+          accessTokenClaims: {
+            'https://boisestate.edu/employee_number': 'custom:provider_sub',
+          },
+        },
+      });
+
+      const config = loadConfig(app);
+
+      expect(config.mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
+        'https://boisestate.edu/employee_number': 'custom:provider_sub',
+      });
+    });
+
+    test('accessTokenClaims defaults to an empty map when context omits it', () => {
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: { enabled: true },
+      });
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({});
+    });
+
+    test('accessTokenClaims parses from CDK_MCP_TOKEN_ENRICHMENT_CLAIMS JSON env', () => {
+      process.env[MCP_CLAIMS_ENV_KEY] = JSON.stringify({
+        'https://boisestate.edu/employee_number': 'custom:provider_sub',
+      });
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
+        'https://boisestate.edu/employee_number': 'custom:provider_sub',
+      });
+    });
+
+    test('claims JSON env takes precedence over context', () => {
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: {
+          enabled: true,
+          accessTokenClaims: { 'ctx:claim': 'custom:from_context' },
+        },
+      });
+      process.env[MCP_CLAIMS_ENV_KEY] = JSON.stringify({
+        'env:claim': 'custom:from_env',
+      });
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
+        'env:claim': 'custom:from_env',
+      });
+    });
+
+    test('malformed claims JSON env falls through to context/default (never throws)', () => {
+      process.env[MCP_CLAIMS_ENV_KEY] = '{not valid json';
+
+      expect(() => loadConfig(app)).not.toThrow();
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({});
+    });
+
+    test('non-object claims JSON env is ignored (falls through to default)', () => {
+      process.env[MCP_CLAIMS_ENV_KEY] = JSON.stringify(['not', 'a', 'map']);
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({});
+    });
+
+    test('empty claims JSON env falls through to context/default', () => {
+      process.env[MCP_CLAIMS_ENV_KEY] = '';
+      app.node.setContext('mcpIdentity', {
+        tokenEnrichment: {
+          enabled: true,
+          accessTokenClaims: { 'ctx:claim': 'custom:from_context' },
+        },
+      });
+
+      expect(loadConfig(app).mcpIdentity.tokenEnrichment?.accessTokenClaims).toEqual({
+        'ctx:claim': 'custom:from_context',
+      });
+    });
+  });
 });

@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.4.0] - 2026-07-10
+
+Opt-in MCP user-identity forwarding, plus an admin OAuth-provider repair. A new Cognito Pre-Token-Generation Lambda can copy configured user-pool attributes into namespaced claims on the access token — the only token forwarded end-to-end to MCP servers — so personalized MCP tools can identify the caller. It ships disabled by default (a fork that configures nothing gets zero resources). Also fixes a 502 when adding the first admin OAuth provider. A platform (CDK) deploy is required for the OAuth-provider IAM fix.
+
+### 🚀 Added
+
+- MCP user identity forwarding: an opt-in Cognito Pre-Token-Generation v2 Lambda copies configured user-pool attributes into namespaced claims on the access token forwarded to MCP servers, so personalized MCP tools can identify the caller — no changes to the SPA → app-api → inference-api → MCP path, since the access token was already the token forwarded end to end. Fail-open (any handler error returns the event unchanged, so login is never blocked) and stdlib-only. Enabling requires the Cognito Essentials feature plan plus `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` + `CDK_MCP_TOKEN_ENRICHMENT_CLAIMS`; disabled by default (#627)
+
+### 🐛 Fixed
+
+- Admin "add OAuth provider" (`POST /admin/oauth-providers/`) returned a 502 Bad Gateway on the first provider create. AgentCore's `CreateOauth2CredentialProvider` lazily ensures the default token vault exists, which requires `bedrock-agentcore:CreateTokenVault` (+ `GetTokenVault`) on the caller — grants the app-api task role was missing, so the AccessDenied surfaced as a 502 via the shared AWS-ClientError handler. Both actions are added to the `AgentCoreWorkloadIdentityAccess` statement (#628)
+
+### 🏗️ Infrastructure
+
+- New opt-in `token-enrichment` Lambda (real-code `fromAsset`, attached to the user pool via Cognito `addTrigger` `V2_0`) wired conditionally into `PlatformStack`; the pool's `featurePlan` is pinned to `ESSENTIALS`. Inert unless `CDK_MCP_TOKEN_ENRICHMENT_ENABLED=true` — the committed `cdk.context.json` stays inactive (#627)
+- app-api task role: `bedrock-agentcore:CreateTokenVault` + `GetTokenVault` added to the `AgentCoreWorkloadIdentityAccess` statement (scope `token-vault/*` already covered `token-vault/default`; only the actions were missing) (#628)
+
 ## [1.3.0] - 2026-07-10
 
 Bedrock Mantle expansion and an API-key endpoint repair. Mantle models gain declarative per-model `apiMode` (Chat Completions vs Responses API) and `region` fields on Strands' `bedrock_mantle_config`, unlocking Responses-only models like `openai.gpt-5.x`; the API-key `POST /chat/api-converse` endpoint — broken in cloud since the BFF/runtime migrations — is relocated onto app-api and now serves the full model catalog including Mantle. Plus Memory Spaces and Scheduled Runs follow-ups. No breaking changes; a platform (CDK) deploy is required for two app-api IAM grants.
