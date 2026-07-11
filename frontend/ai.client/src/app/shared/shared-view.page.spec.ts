@@ -125,10 +125,13 @@ describe('SharedViewPage', () => {
   // Basic component creation and lifecycle
   // -----------------------------------------------------------------------
 
+  // The first test in this file pays the one-time cost of the dynamic
+  // shared-view.page chunk import, which can exceed the default 5s timeout
+  // when the full suite runs in parallel.
   it('should create the component', async () => {
     const { component } = await createComponent();
     expect(component).toBeTruthy();
-  });
+  }, 15_000);
 
   it('should initialize with loading state', async () => {
     const { component } = await createComponent();
