@@ -63,7 +63,7 @@ interface NavItem {
       <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <div class="lg:grid lg:grid-cols-12 lg:gap-x-8">
           <!-- Sidebar Navigation -->
-          <aside class="lg:col-span-2">
+          <aside class="lg:sticky lg:top-20 lg:col-span-2 lg:max-h-[calc(100dvh-6rem)] lg:self-start lg:overflow-y-auto">
             <!-- Mobile dropdown (shown on small screens) -->
             <div class="lg:hidden">
               <label for="settings-nav" class="sr-only">Settings section</label>
