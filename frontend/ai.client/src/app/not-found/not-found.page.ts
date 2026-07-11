@@ -10,417 +10,342 @@ import { SidenavService } from '../services/sidenav/sidenav.service';
   providers: [provideIcons({ heroArrowLeft, heroHome })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="not-found-container">
-      <!-- Animated background grid -->
-      <div class="grid-background" aria-hidden="true">
-        @for (i of gridLines; track i) {
-          <div class="grid-line" [style.animation-delay]="i * 0.1 + 's'"></div>
-        }
+    <div class="nf-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
+      <!-- Lava-lamp parallax backdrop + graph-paper grid (mirrors the auth pages) -->
+      <div class="nf-bg" aria-hidden="true">
+        <div class="nf-lava">
+          <!-- Far layer: huge, slow, heavily blurred -->
+          <div class="nf-blob nf-blob--a"></div>
+          <div class="nf-blob nf-blob--b"></div>
+          <!-- Mid layer -->
+          <div class="nf-blob nf-blob--c"></div>
+          <div class="nf-blob nf-blob--d"></div>
+          <!-- Near layer: small, fast, sharper -->
+          <div class="nf-blob nf-blob--e"></div>
+          <div class="nf-blob nf-blob--f"></div>
+        </div>
+        <div class="nf-grid"></div>
       </div>
 
-      <!-- Floating accent shapes -->
-      <div class="accent-shape shape-1" aria-hidden="true"></div>
-      <div class="accent-shape shape-2" aria-hidden="true"></div>
-      <div class="accent-shape shape-3" aria-hidden="true"></div>
-
-      <main class="content-wrapper">
-        <!-- Massive 404 display -->
-        <div class="error-display" aria-label="Error 404">
-          <span class="digit digit-4-first">4</span>
-          <span class="digit digit-0">0</span>
-          <span class="digit digit-4-last">4</span>
+      <main class="relative w-full max-w-md px-4 py-12">
+        <!-- Oversized 404 acts as the hero above the frosted card -->
+        <div class="mb-8 flex justify-center" aria-label="Error 404">
+          <span class="nf-code">404</span>
         </div>
 
-        <!-- Message section -->
-        <div class="message-section">
-          <h1 class="title">Page Not Found</h1>
-          <p class="subtitle">
+        <div class="nf-card rounded-2xl p-8 text-center">
+          <h1 class="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
+            Page Not Found
+          </h1>
+          <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-300">
             The page you're looking for has drifted into the void.
           </p>
-        </div>
 
-        <!-- Action buttons -->
-        <div class="actions">
-          <a routerLink="/" class="btn-primary">
-            <ng-icon name="heroHome" class="size-5" />
-            <span>Return Home</span>
-          </a>
-          <button type="button" (click)="goBack()" class="btn-secondary">
-            <ng-icon name="heroArrowLeft" class="size-5" />
-            <span>Go Back</span>
-          </button>
+          <div class="mt-8 flex flex-wrap justify-center gap-3">
+            <a
+              routerLink="/"
+              class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-primary-400 dark:hover:bg-primary-500"
+            >
+              <ng-icon name="heroHome" class="size-5" />
+              <span>Return Home</span>
+            </a>
+            <button
+              type="button"
+              (click)="goBack()"
+              class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white/60 px-5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-white/5 dark:text-gray-200 dark:hover:bg-white/10"
+            >
+              <ng-icon name="heroArrowLeft" class="size-5" />
+              <span>Go Back</span>
+            </button>
+          </div>
         </div>
       </main>
-
-      <!-- Bottom accent bar -->
-      <div class="bottom-bar" aria-hidden="true">
-        <div class="bar-segment segment-1"></div>
-        <div class="bar-segment segment-2"></div>
-        <div class="bar-segment segment-3"></div>
-      </div>
     </div>
   `,
   styles: `
     :host {
       display: block;
-      min-height: 100dvh;
-      background: var(--color-gray-50);
     }
 
-    :host-context(html.dark) {
-      background: var(--color-gray-900);
+    /* ---------- Background canvas ---------- */
+    .nf-shell {
+      background:
+        radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--color-primary-50) 70%, white) 0%, transparent 60%),
+        radial-gradient(120% 80% at 100% 100%, color-mix(in oklab, var(--color-primary-100) 60%, white) 0%, transparent 55%),
+        var(--color-gray-50);
     }
 
-    .not-found-container {
-      position: relative;
-      min-height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      padding: 2rem;
+    :host-context(html.dark) .nf-shell {
+      background:
+        radial-gradient(120% 80% at 0% 0%, color-mix(in oklab, var(--color-primary-900) 50%, black) 0%, transparent 60%),
+        radial-gradient(120% 80% at 100% 100%, color-mix(in oklab, var(--color-primary-800) 35%, black) 0%, transparent 55%),
+        var(--color-gray-900);
     }
 
-    /* Animated grid background */
-    .grid-background {
+    .nf-bg {
       position: absolute;
       inset: 0;
-      display: grid;
-      grid-template-columns: repeat(8, 1fr);
-      opacity: 0.04;
+      overflow: hidden;
       pointer-events: none;
     }
 
-    :host-context(html.dark) .grid-background {
-      opacity: 0.06;
-    }
-
-    .grid-line {
-      border-right: 1px solid var(--color-primary-500);
-      height: 100%;
-      animation: pulse-line 4s ease-in-out infinite;
-    }
-
-    @keyframes pulse-line {
-      0%, 100% { opacity: 0.3; }
-      50% { opacity: 1; }
-    }
-
-    /* Floating accent shapes */
-    .accent-shape {
+    /* The .nf-lava wrapper holds the morphing blobs, isolated from the grid. */
+    .nf-lava {
       position: absolute;
-      border-radius: 50%;
-      filter: blur(80px);
-      pointer-events: none;
-      animation: float 8s ease-in-out infinite;
+      inset: 0;
+      overflow: hidden;
     }
 
-    .shape-1 {
-      width: 400px;
-      height: 400px;
-      background: var(--color-primary-500);
-      opacity: 0.15;
-      top: -100px;
-      right: -100px;
-      animation-delay: 0s;
+    .nf-blob {
+      position: absolute;
+      will-change: transform, border-radius;
+      /* Asymmetric radius gives an organic, non-circular blob silhouette;
+         keyframes morph these values so the surface "wobbles" as it rises. */
+      border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%;
     }
 
-    .shape-2 {
-      width: 300px;
-      height: 300px;
-      background: var(--color-secondary-500);
-      opacity: 0.12;
-      bottom: -50px;
-      left: -50px;
-      animation-delay: 2s;
+    /* ----- Far tier: huge, slow, heavy blur, low opacity ----- */
+    .nf-blob--a {
+      width: 70vw;
+      height: 86vw;
+      max-width: 880px;
+      max-height: 1080px;
+      bottom: -38vw;
+      left: -18vw;
+      filter: blur(110px);
+      opacity: 0.4;
+      background: radial-gradient(circle at 35% 35%, var(--color-primary-400), var(--color-primary-700) 60%, transparent 78%);
+      animation:
+        nf-rise-a 52s ease-in-out infinite alternate,
+        nf-morph-a 28s ease-in-out infinite alternate;
     }
 
-    .shape-3 {
-      width: 200px;
-      height: 200px;
-      background: var(--color-tertiary-500);
-      opacity: 0.1;
-      top: 40%;
-      left: 20%;
-      animation-delay: 4s;
+    .nf-blob--b {
+      width: 62vw;
+      height: 76vw;
+      max-width: 800px;
+      max-height: 960px;
+      top: -34vw;
+      right: -20vw;
+      filter: blur(100px);
+      opacity: 0.36;
+      background: radial-gradient(circle at 65% 65%, var(--color-primary-500), var(--color-primary-800) 65%, transparent 82%);
+      animation:
+        nf-rise-b 60s ease-in-out infinite alternate,
+        nf-morph-b 32s ease-in-out infinite alternate;
     }
 
-    @keyframes float {
-      0%, 100% { transform: translate(0, 0) scale(1); }
-      25% { transform: translate(10px, -20px) scale(1.05); }
-      50% { transform: translate(-5px, 10px) scale(0.95); }
-      75% { transform: translate(-15px, -10px) scale(1.02); }
+    /* ----- Mid tier: medium, moderate speed/blur ----- */
+    .nf-blob--c {
+      width: 32vw;
+      height: 40vw;
+      max-width: 420px;
+      max-height: 520px;
+      top: 28%;
+      left: 42%;
+      filter: blur(60px);
+      opacity: 0.5;
+      background: radial-gradient(circle, color-mix(in oklab, var(--color-primary-300) 75%, white), transparent 72%);
+      animation:
+        nf-rise-c 30s ease-in-out infinite alternate,
+        nf-morph-c 18s ease-in-out infinite alternate;
     }
 
-    /* Main content */
-    .content-wrapper {
-      position: relative;
-      z-index: 10;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      animation: fade-up 0.8s ease-out;
+    .nf-blob--d {
+      width: 28vw;
+      height: 36vw;
+      max-width: 360px;
+      max-height: 460px;
+      bottom: -12vw;
+      right: 18vw;
+      filter: blur(55px);
+      opacity: 0.55;
+      background: radial-gradient(circle at 50% 50%, var(--color-primary-300), var(--color-primary-500) 60%, transparent 80%);
+      animation:
+        nf-rise-d 26s ease-in-out infinite alternate,
+        nf-morph-a 16s ease-in-out infinite alternate -3s;
     }
 
-    @keyframes fade-up {
-      from {
-        opacity: 0;
-        transform: translateY(30px);
+    /* ----- Near tier: small, fast, sharper, more opaque ----- */
+    .nf-blob--e {
+      width: 16vw;
+      height: 22vw;
+      max-width: 220px;
+      max-height: 300px;
+      top: -6vw;
+      left: 32vw;
+      filter: blur(32px);
+      opacity: 0.65;
+      background: radial-gradient(circle at 50% 50%, var(--color-primary-400), var(--color-primary-700) 65%, transparent 82%);
+      animation:
+        nf-rise-e 14s ease-in-out infinite alternate,
+        nf-morph-b 11s ease-in-out infinite alternate -5s;
+    }
+
+    .nf-blob--f {
+      width: 12vw;
+      height: 16vw;
+      max-width: 160px;
+      max-height: 220px;
+      bottom: -4vw;
+      left: 14vw;
+      filter: blur(26px);
+      opacity: 0.7;
+      background: radial-gradient(circle at 45% 45%, var(--color-primary-300), var(--color-primary-600) 65%, transparent 84%);
+      animation:
+        nf-rise-f 11s ease-in-out infinite alternate,
+        nf-morph-c 9s ease-in-out infinite alternate -2s;
+    }
+
+    :host-context(html.dark) .nf-blob--a { opacity: 0.32; }
+    :host-context(html.dark) .nf-blob--b { opacity: 0.28; }
+    :host-context(html.dark) .nf-blob--c { opacity: 0.38; }
+    :host-context(html.dark) .nf-blob--d { opacity: 0.42; }
+    :host-context(html.dark) .nf-blob--e { opacity: 0.5; }
+    :host-context(html.dark) .nf-blob--f { opacity: 0.55; }
+
+    .nf-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(to right, color-mix(in oklab, var(--color-primary-500) 8%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-500) 8%, transparent) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 75%);
+      -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, black 30%, transparent 75%);
+      opacity: 0.6;
+    }
+
+    :host-context(html.dark) .nf-grid {
+      background-image:
+        linear-gradient(to right, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px),
+        linear-gradient(to bottom, color-mix(in oklab, var(--color-primary-300) 6%, transparent) 1px, transparent 1px);
+      opacity: 0.5;
+    }
+
+    /* Rise/fall trajectories — vertical travel with gentle horizontal sway and
+       squish/stretch via non-uniform scale. Travel distance scales with depth:
+       far tier barely budges, near tier traverses most of the viewport — that
+       contrast is what sells the parallax. */
+
+    /* Far: minimal travel, lazy sway */
+    @keyframes nf-rise-a {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(2vw, -12vh, 0) scale(1.04, 0.96) rotate(4deg); }
+      100% { transform: translate3d(-1vw, -22vh, 0) scale(0.97, 1.05) rotate(-3deg); }
+    }
+    @keyframes nf-rise-b {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(-2vw, 10vh, 0) scale(0.96, 1.05) rotate(-4deg); }
+      100% { transform: translate3d(1vw, 20vh, 0) scale(1.05, 0.96) rotate(3deg); }
+    }
+
+    /* Mid: moderate travel */
+    @keyframes nf-rise-c {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(-5vw, -25vh, 0) scale(1.1, 0.94) rotate(-10deg); }
+      100% { transform: translate3d(4vw, -50vh, 0) scale(0.92, 1.1) rotate(8deg); }
+    }
+    @keyframes nf-rise-d {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(6vw, -35vh, 0) scale(1.05, 0.95) rotate(12deg); }
+      100% { transform: translate3d(-3vw, -68vh, 0) scale(0.92, 1.08) rotate(-7deg); }
+    }
+
+    /* Near: dramatic travel, snappy squish/stretch */
+    @keyframes nf-rise-e {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(8vw, 55vh, 0) scale(0.88, 1.14) rotate(-18deg); }
+      100% { transform: translate3d(-6vw, 100vh, 0) scale(1.16, 0.86) rotate(14deg); }
+    }
+    @keyframes nf-rise-f {
+      0%   { transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg); }
+      50%  { transform: translate3d(-9vw, -55vh, 0) scale(1.18, 0.84) rotate(20deg); }
+      100% { transform: translate3d(7vw, -105vh, 0) scale(0.85, 1.18) rotate(-16deg); }
+    }
+
+    /* Morphing border-radius makes each blob's surface wobble independently of
+       its trajectory — the signature lava-lamp "skin" deformation. */
+    @keyframes nf-morph-a {
+      0%   { border-radius: 58% 42% 60% 40% / 50% 55% 45% 50%; }
+      50%  { border-radius: 42% 58% 38% 62% / 60% 40% 60% 40%; }
+      100% { border-radius: 50% 50% 65% 35% / 45% 55% 50% 50%; }
+    }
+    @keyframes nf-morph-b {
+      0%   { border-radius: 50% 50% 40% 60% / 55% 45% 55% 45%; }
+      50%  { border-radius: 65% 35% 55% 45% / 40% 60% 40% 60%; }
+      100% { border-radius: 38% 62% 50% 50% / 60% 50% 50% 40%; }
+    }
+    @keyframes nf-morph-c {
+      0%   { border-radius: 60% 40% 50% 50% / 45% 60% 40% 55%; }
+      50%  { border-radius: 40% 60% 65% 35% / 55% 40% 60% 45%; }
+      100% { border-radius: 55% 45% 38% 62% / 50% 55% 45% 50%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .nf-blob,
+      .nf-blob--a,
+      .nf-blob--b,
+      .nf-blob--c,
+      .nf-blob--d,
+      .nf-blob--e,
+      .nf-blob--f {
+        animation: none;
       }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
     }
 
-    /* Massive 404 display */
-    .error-display {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0;
-      margin-bottom: 2rem;
-      perspective: 1000px;
-    }
-
-    .digit {
-      font-family: 'Outfit', system-ui, sans-serif;
-      font-weight: 900;
-      font-size: clamp(8rem, 25vw, 20rem);
+    /* ---------- Oversized 404 hero ---------- */
+    .nf-code {
+      font-weight: 800;
+      font-size: clamp(6rem, 22vw, 11rem);
       line-height: 0.85;
-      color: var(--color-primary-500);
-      text-shadow:
-        4px 4px 0 var(--color-primary-200),
-        8px 8px 0 var(--color-primary-100);
-      animation: digit-entrance 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      letter-spacing: -0.04em;
+      background: linear-gradient(
+        135deg,
+        var(--color-primary-500),
+        var(--color-primary-700)
+      );
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 12px 30px color-mix(in oklab, var(--color-primary-700) 30%, transparent));
     }
 
-    :host-context(html.dark) .digit {
-      color: var(--color-primary-400);
-      text-shadow:
-        4px 4px 0 var(--color-primary-800),
-        8px 8px 0 var(--color-primary-900);
+    :host-context(html.dark) .nf-code {
+      background: linear-gradient(
+        135deg,
+        var(--color-primary-300),
+        var(--color-primary-500)
+      );
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
     }
 
-    .digit-4-first {
-      animation-delay: 0.1s;
+    /* ---------- Frosted glass card ---------- */
+    .nf-card {
+      background: color-mix(in oklab, white 65%, transparent);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      border: 1px solid color-mix(in oklab, white 70%, transparent);
+      box-shadow:
+        0 1px 0 0 rgba(255, 255, 255, 0.6) inset,
+        0 20px 50px -20px color-mix(in oklab, var(--color-primary-900) 35%, transparent),
+        0 8px 24px -12px rgba(0, 0, 0, 0.15);
     }
 
-    .digit-0 {
-      animation-delay: 0.2s;
-      color: var(--color-secondary-500);
-      text-shadow:
-        4px 4px 0 var(--color-secondary-200),
-        8px 8px 0 var(--color-secondary-100);
-      animation: digit-entrance 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both,
-                 wiggle 3s ease-in-out 1s infinite;
-    }
-
-    :host-context(html.dark) .digit-0 {
-      color: var(--color-secondary-400);
-      text-shadow:
-        4px 4px 0 var(--color-secondary-800),
-        8px 8px 0 var(--color-secondary-900);
-    }
-
-    .digit-4-last {
-      animation-delay: 0.3s;
-    }
-
-    @keyframes digit-entrance {
-      from {
-        opacity: 0;
-        transform: translateY(-50px) rotateX(-15deg);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) rotateX(0);
-      }
-    }
-
-    @keyframes wiggle {
-      0%, 100% { transform: rotate(0deg); }
-      25% { transform: rotate(-3deg); }
-      75% { transform: rotate(3deg); }
-    }
-
-    /* Message section */
-    .message-section {
-      margin-bottom: 3rem;
-      animation: fade-up 0.8s ease-out 0.4s both;
-    }
-
-    .title {
-      font-family: 'Outfit', system-ui, sans-serif;
-      font-weight: 700;
-      font-size: clamp(1.5rem, 4vw, 2.5rem);
-      color: var(--color-gray-900);
-      margin: 0 0 0.75rem;
-      letter-spacing: -0.02em;
-    }
-
-    :host-context(html.dark) .title {
-      color: var(--color-gray-100);
-    }
-
-    .subtitle {
-      font-family: 'Space Mono', monospace;
-      font-size: clamp(0.875rem, 2vw, 1.125rem);
-      color: var(--color-gray-600);
-      margin: 0;
-      max-width: 400px;
-    }
-
-    :host-context(html.dark) .subtitle {
-      color: var(--color-gray-400);
-    }
-
-    /* Action buttons */
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      justify-content: center;
-      animation: fade-up 0.8s ease-out 0.6s both;
-    }
-
-    .btn-primary,
-    .btn-secondary {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.875rem 1.5rem;
-      font-family: 'Outfit', system-ui, sans-serif;
-      font-weight: 500;
-      font-size: 1rem;
-      border-radius: 0.5rem;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      text-decoration: none;
-    }
-
-    .btn-primary {
-      background: var(--color-primary-500);
-      color: white;
-      border: 2px solid var(--color-primary-500);
-      box-shadow: 0 4px 0 var(--color-primary-700);
-    }
-
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 0 var(--color-primary-700);
-    }
-
-    .btn-primary:active {
-      transform: translateY(2px);
-      box-shadow: 0 2px 0 var(--color-primary-700);
-    }
-
-    :host-context(html.dark) .btn-primary {
-      background: var(--color-primary-400);
-      border-color: var(--color-primary-400);
-      box-shadow: 0 4px 0 var(--color-primary-600);
-    }
-
-    :host-context(html.dark) .btn-primary:hover {
-      box-shadow: 0 6px 0 var(--color-primary-600);
-    }
-
-    :host-context(html.dark) .btn-primary:active {
-      box-shadow: 0 2px 0 var(--color-primary-600);
-    }
-
-    .btn-secondary {
-      background: transparent;
-      color: var(--color-gray-700);
-      border: 2px solid var(--color-gray-300);
-      box-shadow: 0 4px 0 var(--color-gray-400);
-    }
-
-    .btn-secondary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 0 var(--color-gray-400);
-      border-color: var(--color-gray-400);
-    }
-
-    .btn-secondary:active {
-      transform: translateY(2px);
-      box-shadow: 0 2px 0 var(--color-gray-400);
-    }
-
-    :host-context(html.dark) .btn-secondary {
-      color: var(--color-gray-300);
-      border-color: var(--color-gray-600);
-      box-shadow: 0 4px 0 var(--color-gray-700);
-    }
-
-    :host-context(html.dark) .btn-secondary:hover {
-      border-color: var(--color-gray-500);
-      box-shadow: 0 6px 0 var(--color-gray-700);
-    }
-
-    :host-context(html.dark) .btn-secondary:active {
-      box-shadow: 0 2px 0 var(--color-gray-700);
-    }
-
-    /* Bottom accent bar */
-    .bottom-bar {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 6px;
-      display: flex;
-    }
-
-    .bar-segment {
-      flex: 1;
-      animation: bar-grow 0.8s ease-out both;
-    }
-
-    .segment-1 {
-      background: var(--color-primary-500);
-      animation-delay: 0.8s;
-    }
-
-    .segment-2 {
-      background: var(--color-secondary-500);
-      animation-delay: 0.9s;
-    }
-
-    .segment-3 {
-      background: var(--color-tertiary-500);
-      animation-delay: 1s;
-    }
-
-    @keyframes bar-grow {
-      from {
-        transform: scaleX(0);
-      }
-      to {
-        transform: scaleX(1);
-      }
-    }
-
-    /* Focus states for accessibility */
-    .btn-primary:focus-visible,
-    .btn-secondary:focus-visible {
-      outline: 3px solid var(--color-primary-300);
-      outline-offset: 2px;
-    }
-
-    :host-context(html.dark) .btn-primary:focus-visible,
-    :host-context(html.dark) .btn-secondary:focus-visible {
-      outline-color: var(--color-primary-500);
+    :host-context(html.dark) .nf-card {
+      background: color-mix(in oklab, var(--color-gray-900) 55%, transparent);
+      border-color: color-mix(in oklab, white 12%, transparent);
+      box-shadow:
+        0 1px 0 0 rgba(255, 255, 255, 0.06) inset,
+        0 20px 50px -20px rgba(0, 0, 0, 0.6),
+        0 8px 24px -12px rgba(0, 0, 0, 0.5);
     }
   `
 })
 export class NotFoundPage implements OnInit, OnDestroy {
   private sidenavService = inject(SidenavService);
-
-  gridLines = Array.from({ length: 8 }, (_, i) => i);
 
   ngOnInit(): void {
     this.sidenavService.hide();
