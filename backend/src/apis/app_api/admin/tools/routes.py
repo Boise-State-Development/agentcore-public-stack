@@ -9,6 +9,16 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin
+from apis.shared.oauth.agentcore_identity import (
+    CallbackUrlUnavailableError,
+    WorkloadTokenUnavailableError,
+    custom_parameters_for,
+    get_agentcore_identity_client,
+)
+from apis.shared.oauth.provider_repository import (
+    OAuthProviderRepository,
+    get_provider_repository,
+)
 from apis.app_api.tools.service import get_tool_catalog_service
 from apis.app_api.tools.discovery import discover_tools_for_saved_tool
 from apis.shared.tools.gateway_target_service import (
@@ -358,6 +368,7 @@ def _discovery_failure_detail(status: int) -> str:
 async def admin_discover_mcp_tools(
     request: MCPDiscoverRequest,
     admin: User = Depends(require_admin),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
 ):
     """Connect to an MCP server with the given config and return its tool list.
 
@@ -385,11 +396,55 @@ async def admin_discover_mcp_tools(
         create_external_mcp_client,
     )
 
-    if request.auth_type in (MCPAuthType.OAUTH2.value, MCPAuthType.OAUTH2):
+    # An OAuth (3LO) gated server is discovered using the admin's *own* vaulted
+    # token for the named provider — mirroring how the agent loop attaches the
+    # end-user's provider token at runtime. This validates the admin's own
+    # connection and returns the tools their token can see (providers such as
+    # GitHub scope-filter the tool list to the token's grants). It fetches the
+    # admin's token only; it can't mint an arbitrary end-user's token, so the
+    # discovered list reflects the admin's connection, not every user's.
+    oauth_token: Optional[str] = None
+    if request.requires_oauth_provider:
+        if request.forward_auth_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Choose either an OAuth provider or forwarded-auth "
+                "discovery, not both.",
+            )
+        provider = await provider_repo.get_provider(request.requires_oauth_provider)
+        if provider is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown OAuth provider "
+                f"'{request.requires_oauth_provider}'.",
+            )
+        identity = get_agentcore_identity_client()
+        try:
+            result = await identity.get_token_for_user(
+                provider_name=provider.provider_id,
+                scopes=provider.scopes,
+                user_id=admin.user_id,
+                # Match the customParameters used at consent time — AgentCore
+                # factors them into the vault key, so omitting them would
+                # falsely report consent-required for a vaulted token.
+                custom_parameters=custom_parameters_for(provider.custom_parameters),
+            )
+        except (WorkloadTokenUnavailableError, CallbackUrlUnavailableError) as err:
+            logger.warning("OAuth discovery token unavailable: %s", err)
+            raise HTTPException(status_code=503, detail=str(err))
+        if result.requires_consent or not result.access_token:
+            raise HTTPException(
+                status_code=409,
+                detail=f"You haven't connected '{provider.display_name}' yet. "
+                "Connect it in your connector settings, then retry discovery.",
+            )
+        oauth_token = result.access_token
+
+    elif request.auth_type in (MCPAuthType.OAUTH2.value, MCPAuthType.OAUTH2):
         raise HTTPException(
             status_code=400,
-            detail="OAuth-gated MCP servers can't be discovered server-side; "
-            "list the tool names manually.",
+            detail="Select the OAuth provider for this server to discover its "
+            "tools, or list the tool names manually.",
         )
 
     # Forward-auth servers (same-team MCP that validates a forwarded JWT, behind
@@ -400,8 +455,7 @@ async def admin_discover_mcp_tools(
     # trust-boundary note above); forwarding their own session token to that URL
     # is a strictly lower bar than the end-user token forwarding they're
     # configuring for the tool.
-    oauth_token: Optional[str] = None
-    if request.forward_auth_token:
+    elif request.forward_auth_token:
         if not admin.raw_token:
             raise HTTPException(
                 status_code=400,

@@ -1354,9 +1354,17 @@ class MCPDiscoverRequest(BaseModel):
     """Request body for POST /api/admin/tools/discover.
 
     Same fields as MCPServerConfigRequest minus the `tools` list — the
-    point of discovery is to populate that list. Provider-gated OAuth (3LO)
-    servers can't be discovered admin-side (no end-user provider token
-    available); the route returns a 400 in that case.
+    point of discovery is to populate that list.
+
+    `requires_oauth_provider` mirrors the catalog flag of the same name: when
+    set, the route discovers an OAuth (3LO) gated server using the *admin's
+    own* vaulted token for that provider (fetched via AgentCore Identity),
+    injected as a bearer. This validates the admin's connection and lists the
+    tools their token can see — providers like GitHub scope-filter the tool
+    list to the token's grants. It fetches the admin's token only; it cannot
+    mint an arbitrary end-user's token, so the discovered list reflects the
+    admin's own connection. If the admin hasn't connected the provider the
+    route returns 409. Mutually exclusive with `forward_auth_token`.
 
     `forward_auth_token` mirrors the catalog flag of the same name: when set,
     the route signs the discovery request with the *admin's own* OIDC token
@@ -1373,6 +1381,9 @@ class MCPDiscoverRequest(BaseModel):
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
+    requires_oauth_provider: Optional[str] = Field(
+        None, alias="requiresOauthProvider"
+    )
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
