@@ -208,10 +208,18 @@ export class AdminToolService {
 
   /**
    * Connect to an MCP server with the given config and return its tool list.
+   *
+   * Sends `OAuth2CallbackUrl` so the backend can resolve the admin's vaulted
+   * token when discovering an OAuth-gated server (`requiresOauthProvider`). The
+   * value is a bare callback path with no query string — app-api's context
+   * middleware rejects a callback URL carrying query params.
    */
   async discoverMCPTools(request: MCPDiscoverRequest): Promise<MCPDiscoverResponse> {
+    const callback = new URL('/oauth-complete', window.location.origin).toString();
     return firstValueFrom(
-      this.http.post<MCPDiscoverResponse>(`${this.baseUrl()}/discover`, request)
+      this.http.post<MCPDiscoverResponse>(`${this.baseUrl()}/discover`, request, {
+        headers: { OAuth2CallbackUrl: callback },
+      })
     );
   }
 

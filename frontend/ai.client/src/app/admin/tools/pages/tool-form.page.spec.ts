@@ -290,6 +290,88 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
   });
 });
 
+describe('ToolFormPage — external MCP OAuth discovery (protocol=mcp_external)', () => {
+  let adminToolService: {
+    createTool: ReturnType<typeof vi.fn>;
+    updateTool: ReturnType<typeof vi.fn>;
+    fetchTool: ReturnType<typeof vi.fn>;
+    discoverMCPTools: ReturnType<typeof vi.fn>;
+  };
+
+  function makeComponent(): ToolFormPage {
+    adminToolService = {
+      createTool: vi.fn().mockResolvedValue({}),
+      updateTool: vi.fn().mockResolvedValue({}),
+      fetchTool: vi.fn(),
+      discoverMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
+    };
+
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [ToolFormPage],
+      providers: [
+        provideRouter([]),
+        { provide: AdminToolService, useValue: adminToolService },
+        {
+          provide: ConnectorsService,
+          useValue: {
+            getEnabledConnectors: () => [{ providerId: 'github', displayName: 'GitHub' }],
+          },
+        },
+      ],
+    });
+    const cmp = TestBed.createComponent(ToolFormPage).componentInstance;
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    return cmp;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('sends the selected OAuth provider so the server is discovered with the admin token', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    cmp.form.patchValue({
+      toolId: 'github_mcp',
+      displayName: 'GitHub',
+      description: 'GitHub remote MCP server',
+      protocol: 'mcp_external',
+      mcpServerUrl: 'https://api.githubcopilot.com/mcp/',
+      mcpTransport: 'streamable-http',
+      mcpAuthType: 'oauth2',
+      requiresOauthProvider: 'github',
+    });
+
+    await cmp.discoverMcpTools();
+
+    expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverUrl: 'https://api.githubcopilot.com/mcp/',
+        authType: 'oauth2',
+        requiresOauthProvider: 'github',
+      }),
+    );
+  });
+
+  it('sends a null provider when none is selected', async () => {
+    const cmp = makeComponent();
+    await cmp.ngOnInit();
+    cmp.form.patchValue({
+      toolId: 'x_mcp',
+      displayName: 'X',
+      description: 'A public MCP server',
+      protocol: 'mcp_external',
+      mcpServerUrl: 'https://mcp.example.com/mcp',
+      mcpAuthType: 'none',
+    });
+
+    await cmp.discoverMcpTools();
+
+    expect(adminToolService.discoverMCPTools).toHaveBeenCalledWith(
+      expect.objectContaining({ requiresOauthProvider: null }),
+    );
+  });
+});
+
 describe('AWS endpoint derivation helpers', () => {
   it('detects the AWS service from known endpoint hosts', () => {
     expect(detectAwsServiceFromUrl('https://x.lambda-url.us-west-2.on.aws/mcp')).toBe('lambda');

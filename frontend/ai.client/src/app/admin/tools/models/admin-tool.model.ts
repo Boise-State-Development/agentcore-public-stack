@@ -234,6 +234,15 @@ export interface MCPDiscoverRequest {
    * servers that validate a forwarded JWT (Lambda Function URL AuthType=NONE).
    */
   forwardAuthToken?: boolean;
+  /**
+   * OAuth (3LO) provider id gating this server. When set, discovery connects
+   * using the admin's own vaulted token for that provider (matching the catalog
+   * `requiresOauthProvider` flag), injected as a bearer. Lets OAuth-gated
+   * servers (e.g. the GitHub MCP server) be discovered. Mutually exclusive with
+   * `forwardAuthToken`. Requires the `OAuth2CallbackUrl` request header so the
+   * backend can resolve the admin's token.
+   */
+  requiresOauthProvider?: string | null;
 }
 
 /**
