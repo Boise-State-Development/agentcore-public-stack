@@ -79,7 +79,7 @@ interface NavGroup {
       <div class="mx-auto max-w-[96rem] px-4 py-8 sm:px-6 lg:px-8">
         <div class="lg:flex lg:gap-x-8">
           <!-- Sidebar Navigation -->
-          <aside class="lg:w-60 lg:shrink-0">
+          <aside class="lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:w-60 lg:shrink-0 lg:self-start lg:overflow-y-auto">
             <!-- Mobile dropdown (shown on small screens) -->
             <div class="lg:hidden">
               <label for="admin-nav" class="sr-only">Admin section</label>
