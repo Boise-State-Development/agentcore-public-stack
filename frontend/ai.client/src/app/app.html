@@ -108,8 +108,10 @@
     [class.lg:pl-0]="sidenavService.isCollapsed() || sidenavService.isHidden()"
     [class.artifact-pane-open]="artifactPanelOpen()">
     <main class="flex h-dvh flex-col">
-      <!-- Scrollable Content -->
-      <div class="flex-1 overflow-y-auto">
+      <!-- Scrollable Content. The id is a stable hook for code that reads
+           or sets the scroll position (session scroll save/restore) — the
+           window itself no longer scrolls now that this container is real. -->
+      <div id="app-scroll-container" class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
           <router-outlet />
         </div>
