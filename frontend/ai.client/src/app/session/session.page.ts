@@ -82,6 +82,16 @@ export class ConversationPage implements OnDestroy {
   private chatContainer = viewChild(ChatContainerComponent);
 
   /**
+   * The app shell's scroll container (#app-scroll-container in app.html).
+   * Since the shell became a real scroll container (frosted sticky nav),
+   * the window itself never scrolls — all scroll save/restore reads and
+   * writes go through this element. Browser-only callers guard isBrowser.
+   */
+  private get scrollContainer(): HTMLElement | null {
+    return document.getElementById('app-scroll-container');
+  }
+
+  /**
    * The conversation whose scroll position we're currently tracking.
    * Captured into ScrollPositionService the moment the user navigates away
    * (route change or component teardown) — see the scroll policy note on
@@ -403,9 +413,9 @@ export class ConversationPage implements OnDestroy {
 
       if (this.isBrowser && this.lastViewedSessionId !== id) {
         if (this.lastViewedSessionId) {
-          this.scrollPositions.save(this.lastViewedSessionId, window.scrollY);
+          this.scrollPositions.save(this.lastViewedSessionId, this.scrollContainer?.scrollTop ?? 0);
         }
-        window.scrollTo({ top: 0, behavior: 'auto' });
+        this.scrollContainer?.scrollTo({ top: 0, behavior: 'auto' });
       }
       this.lastViewedSessionId = id;
 
@@ -494,7 +504,7 @@ export class ConversationPage implements OnDestroy {
     if (this.isBrowser) {
       const id = this.sessionId();
       if (id) {
-        this.scrollPositions.save(id, window.scrollY);
+        this.scrollPositions.save(id, this.scrollContainer?.scrollTop ?? 0);
       }
     }
     this.routeSubscription?.unsubscribe();
@@ -510,8 +520,9 @@ export class ConversationPage implements OnDestroy {
    * across a whole conversation is noise.
    *
    * Runs two animation frames after the messages landed in the map so the
-   * message DOM and the bottom spacer have committed and the full scroll
-   * height exists; bails if the user has already navigated elsewhere.
+   * message DOM (and the last-turn min-height that provides the scroll
+   * room) has committed and the full scroll height exists; bails if the
+   * user has already navigated elsewhere.
    */
   private restoreScrollPosition(sessionId: string): void {
     if (!this.isBrowser) return;
@@ -522,7 +533,7 @@ export class ConversationPage implements OnDestroy {
 
         const saved = this.scrollPositions.get(sessionId);
         if (saved !== undefined) {
-          window.scrollTo({ top: saved, behavior: 'auto' });
+          this.scrollContainer?.scrollTo({ top: saved, behavior: 'auto' });
         } else {
           this.chatContainer()?.scrollToLastUserMessage('auto');
         }

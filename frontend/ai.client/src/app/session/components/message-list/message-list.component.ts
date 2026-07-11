@@ -1,5 +1,5 @@
-import { Component, computed, input, output, signal, effect, OnDestroy, inject, PLATFORM_ID } from '@angular/core';
-import { isPlatformBrowser } from '@angular/common';
+import { Component, computed, input, output, inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
 import { UserMessageComponent } from './components/user-message.component';
@@ -30,6 +30,7 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
 @Component({
   selector: 'app-message-list',
   imports: [
+    NgTemplateOutlet,
     UserMessageComponent,
     AssistantMessageComponent,
     MessageActionsComponent,
@@ -46,14 +47,13 @@ import { ChatStateService } from '../../services/chat/chat-state.service';
   templateUrl: './message-list.component.html',
   styleUrl: './message-list.component.css',
 })
-export class MessageListComponent implements OnDestroy {
+export class MessageListComponent {
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
   // Constants for scroll behavior and layout
   private readonly HEADER_HEIGHT = 64;
   private readonly SCROLL_PADDING = 16;
-  private readonly RESIZE_DEBOUNCE_MS = 150;
 
   messages = input.required<Message[]>();
   isChatLoading = input<boolean>(false);
@@ -219,55 +219,69 @@ export class MessageListComponent implements OnDestroy {
     this.toolApprovalService.pending(),
   );
 
-  // Calculate the spacer height dynamically
-  // This creates space at the bottom so user messages can scroll to the top
-  spacerHeight = signal(0);
-
-  // Store debounced resize listener for cleanup
-  private resizeListener = this.debounce(
-    () => this.calculateSpacerHeight(),
-    this.RESIZE_DEBOUNCE_MS
-  );
-
-  constructor() {
-    if (this.isBrowser) {
-      // Only recalculate when message count changes, not on every message update
-      effect(() => {
-        this.messages().length;
-        this.calculateSpacerHeight();
-      });
-
-      // Add resize listener
-      window.addEventListener('resize', this.resizeListener);
+  /** Messages grouped into turns: each user message starts a group and the
+   *  assistant messages that follow it belong to that group. Keyed by the
+   *  first message's id so a group's identity (and its DOM subtree — which
+   *  can hold live MCP App iframes) is stable for the conversation's
+   *  lifetime: when a new turn starts, prior groups are untouched; only the
+   *  min-height binding on the previously-last group flips off. A leading
+   *  assistant message with no preceding user message (pagination cutting
+   *  mid-turn) forms a headless first group. */
+  protected readonly turns = computed<{ key: string; messages: Message[] }[]>(() => {
+    const groups: { key: string; messages: Message[] }[] = [];
+    for (const m of this.messages()) {
+      if (m.role === 'user' || groups.length === 0) {
+        groups.push({ key: m.id, messages: [m] });
+      } else {
+        groups[groups.length - 1].messages.push(m);
+      }
     }
-  }
-
-  ngOnDestroy() {
-    if (this.isBrowser) {
-      window.removeEventListener('resize', this.resizeListener);
-    }
-  }
+    return groups;
+  });
 
   /**
-   * Calculates the height needed for the bottom spacer
-   * This ensures there's enough space for user messages to scroll to the top
+   * Min-height for the LAST turn group, replacing the old fixed
+   * viewport-sized bottom spacer. Reserving the space around the turn
+   * instead of after it means the assistant response streams into the
+   * reserved space (no scroll-height growth mid-stream) and a response
+   * taller than the viewport leaves zero dead space below it — the
+   * scrollable extent past the last user message is always exactly what
+   * scrollToMessage needs to pin it at the top, and no more.
    *
-   * Set synchronously (it only reads window.innerHeight, no DOM measurement)
-   * so the extra scrollable height exists in the same layout pass as the
-   * messages — the navigation scroll restore in ConversationPage relies on
-   * the full scroll height being available right after render.
+   * Pure CSS (no measurement), so the full scroll height exists in the
+   * same layout pass as the messages — the navigation scroll restore in
+   * ConversationPage relies on that.
+   *
+   * Full-page mode scrolls the app shell's overflow container, which is
+   * exactly 100dvh tall (main.h-dvh in app.html): 100dvh minus the
+   * scroll-mt-20 anchor offset (HEADER_HEIGHT + SCROLL_PADDING) minus the
+   * 7.5rem padding-bottom of .chat-messages-container.full-page minus the
+   * shell wrapper's py-10 bottom padding (2.5rem) — both paddings already
+   * contribute scrollable space below the turn.
+   *
+   * Embedded mode scrolls .chat-messages-container.embedded, which is a
+   * size query container: 100cqh is its content-box height; its 5rem
+   * padding-bottom counts toward the scroll extent but its 1rem
+   * padding-top sits above the scrollIntoView target, hence +1rem net.
+   * Where no query container exists (shared view), cqh falls back to
+   * small-viewport units, which errs slightly roomy — harmless there.
    */
-  private calculateSpacerHeight(): void {
-    if (!this.isBrowser) return;
-
-    const viewportHeight = window.innerHeight;
-    this.spacerHeight.set(viewportHeight - this.HEADER_HEIGHT);
-  }
+  protected readonly lastTurnMinHeight = computed<string>(() =>
+    this.embeddedMode()
+      ? 'calc(100cqh + 1rem)'
+      : `calc(100dvh - ${this.HEADER_HEIGHT + this.SCROLL_PADDING + 120 + 40}px)`
+  );
 
   /**
    * Scrolls to a specific message by ID
    * Call this explicitly when user submits a message
-   * Works in both full-page mode (window scroll) and embedded mode (container scroll)
+   *
+   * scrollIntoView works against whichever ancestor actually scrolls — the
+   * app shell's overflow container in full-page mode (the window itself no
+   * longer scrolls since the shell became a real scroll container for the
+   * sticky frosted nav), the embedded chat scrollport in embedded mode.
+   * The fixed-header offset in full-page mode comes from scroll-mt-20 on
+   * the user-message wrapper, not from math here.
    *
    * @param behavior 'smooth' for user-visible animation (submit affordance),
    *   'auto' for instant positioning (navigation restore — animating a jump
@@ -279,20 +293,7 @@ export class MessageListComponent implements OnDestroy {
     const element = document.getElementById(`message-${messageId}`);
     if (!element) return;
 
-    if (this.embeddedMode()) {
-      // In embedded mode, use scrollIntoView which works with any scroll container
-      element.scrollIntoView({ behavior, block: 'start' });
-    } else {
-      // In full-page mode, use window scroll with offset for fixed header
-      const elementRect = element.getBoundingClientRect();
-      const absoluteElementTop = elementRect.top + window.scrollY;
-      const offset = this.HEADER_HEIGHT + this.SCROLL_PADDING;
-
-      window.scrollTo({
-        top: absoluteElementTop - offset,
-        behavior
-      });
-    }
+    element.scrollIntoView({ behavior, block: 'start' });
   }
 
   /**
@@ -304,20 +305,6 @@ export class MessageListComponent implements OnDestroy {
     if (lastUserMsg) {
       this.scrollToMessage(lastUserMsg.id, behavior);
     }
-  }
-
-  /**
-   * Debounces a function to limit how often it can be called
-   */
-  private debounce<T extends (...args: any[]) => any>(
-    fn: T,
-    delay: number
-  ): (...args: Parameters<T>) => void {
-    let timeoutId: ReturnType<typeof setTimeout>;
-    return (...args: Parameters<T>) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => fn(...args), delay);
-    };
   }
 }
 

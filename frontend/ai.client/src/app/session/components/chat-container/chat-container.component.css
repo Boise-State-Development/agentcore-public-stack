@@ -143,13 +143,16 @@
   background-color: var(--color-gray-900);
 }
 
-/* Messages container for embedded mode - scrollable with bottom padding */
+/* Messages container for embedded mode - scrollable with bottom padding.
+   A size query container so the message list's last-turn min-height
+   (100cqh) tracks this scrollport rather than the window viewport. */
 .chat-messages-container.embedded {
   flex: 1;
   overflow-y: auto;
   padding: 1rem;
   padding-bottom: 5rem; /* Space for the fixed input */
   min-width: 0;
+  container-type: size;
 }
 
 /* Chat input footer for embedded mode - absolutely positioned at bottom */

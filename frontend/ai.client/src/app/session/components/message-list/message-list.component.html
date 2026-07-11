@@ -5,9 +5,22 @@
     <pre class="mt-2 overflow-x-auto text-xs">{{ messages() | json }}</pre>
   </details> -->
 
-  @for (message of messages(); track message.id; let i = $index) {
+  <!-- Turn groups: user message + the assistant messages that follow it.
+       The LAST group carries a min-height that reserves exactly the space
+       scrollToMessage needs to pin the user message at the top — the
+       response streams into that reserved space instead of pushing a
+       fixed spacer further down, so a long response leaves no dead
+       scroll below it. Groups are keyed by their first message id so a
+       finished turn's DOM (including live MCP App iframes) never moves
+       or remounts when the next turn starts. -->
+  @for (turn of turns(); track turn.key; let isLastTurn = $last) {
+  <div class="space-y-6" [style.minHeight]="isLastTurn ? lastTurnMinHeight() : null">
+  @for (message of turn.messages; track message.id) {
     @if (message.role === 'user') {
-      <div [attr.id]="'message-' + message.id">
+      <!-- scroll-mt matches the fixed-header offset (4rem) + gap (1rem) so
+           scrollIntoView pins the message just below the frosted top nav in
+           full-page mode; embedded scrollports have no overlaying header. -->
+      <div [attr.id]="'message-' + message.id" [class.scroll-mt-20]="!embeddedMode()">
         <app-user-message [message]="message"></app-user-message>
       </div>
     } @else {
@@ -57,6 +70,19 @@
 
   }
 
+  <!-- End-of-conversation sections render INSIDE the last turn's reserved
+       space so they stay adjacent to the response instead of landing a
+       viewport below it — the loading indicator and the consent/approval
+       prompts must be visible without scrolling. -->
+  @if (isLastTurn) {
+    <ng-container [ngTemplateOutlet]="conversationTail" />
+  }
+  </div>
+  }
+
+  <!-- Defined once, rendered inside the last turn group above (or in
+       plain flow when the conversation has no turns yet). -->
+  <ng-template #conversationTail>
   <!-- Single subtle compaction summary at the end of the conversation,
        shown when the backend has rolled older turns into a summary. The
        inline-divider variant of this was dropped because it caused
@@ -124,21 +150,17 @@
       <app-pulsating-loader />
     </div>
   }
+  </ng-template>
 
-  
+  <!-- No turns yet — no group to anchor the tail inside. -->
+  @if (turns().length === 0) {
+    <ng-container [ngTemplateOutlet]="conversationTail" />
+  }
+
   @if (messages().length === 0) {
     <div class="py-12 text-center text-gray-500 dark:text-gray-400">
       <p class="text-lg">No messages yet</p>
       <p class="text-sm">Start a conversation to see messages here</p>
-    </div>
-  }
-
-  <!-- Spacer div to create scrollable space at the bottom -->
-  @if (messages().length > 0) {
-    <div
-      aria-hidden="true"
-      [style.height.px]="spacerHeight()"
-      class="pointer-events-none">
     </div>
   }
 
