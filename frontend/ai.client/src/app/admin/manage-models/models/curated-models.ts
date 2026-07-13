@@ -234,14 +234,14 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       },
     },
   },
-  // NOTE: Gemma 4 31B (`google.gemma-4-31b`) is temporarily NOT curated. It is
-  // served on Mantle's `/openai/v1` base path, but the Strands SDK's
-  // bedrock_mantle_config only routes `openai.gpt-5.*` to `/openai/v1` (all
-  // other model ids -> `/v1`), and the config forbids overriding base_url. So a
-  // one-click Gemma card would build a `/v1` client and fail at chat time.
-  // Re-add once the `google.gemma-` family prefix lands in the SDK's
-  // _OPENAI_PATH_MODEL_PREFIXES (upstream strands-agents/sdk-python). Admins
-  // who need Gemma sooner can add it via the manual form.
+  // NOTE: Gemma 4 (`google.gemma-4-*`) is served ONLY on Mantle's `/openai/v1`
+  // base path (per its AWS model card — different from the `/v1` path Gemma 3
+  // and gpt-oss use). The Strands SDK's _OPENAI_PATH_MODEL_PREFIXES ships only
+  // `openai.gpt-5.`, so the backend appends `google.gemma-4-` at build time
+  // (see apis/shared/models/mantle.py::_ensure_gemma4_openai_v1_routing) until
+  // it lands upstream. That bridge makes a one-click Gemma 4 card route
+  // correctly, so this is safe to curate — pending confirmed pricing/params.
+  // Use the `google.gemma-4-` prefix, NOT `google.gemma-`: Gemma 3 is on `/v1`.
 ];
 
 /**

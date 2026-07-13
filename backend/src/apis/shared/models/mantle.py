@@ -64,6 +64,29 @@ def param_map_for(api_mode: MantleApiMode) -> Dict[str, str]:
     )
 
 
+def _ensure_gemma4_openai_v1_routing() -> None:
+    """Teach the Strands SDK to route ``google.gemma-4-*`` to ``/openai/v1``.
+
+    Per its AWS model card, Gemma 4 is served *only* on the Mantle
+    ``/openai/v1`` base path — "different from the ``v1`` path used by other
+    models." But the SDK's ``_OPENAI_PATH_MODEL_PREFIXES`` only lists
+    ``openai.gpt-5.``, so ``google.gemma-4-*`` falls through to ``/v1`` and the
+    endpoint 401s ("... is not enabled for this account"). Append the family
+    prefix at build time until it lands upstream (strands-agents/sdk-python).
+
+    ``google.gemma-4-`` specifically — NOT ``google.gemma-``: Gemma 3 is served
+    on ``/v1`` and must not be rerouted. Idempotent; safe to call on every build.
+    """
+    from strands.models import _openai_bedrock as _sdk
+
+    prefix = "google.gemma-4-"
+    if prefix not in _sdk._OPENAI_PATH_MODEL_PREFIXES:
+        _sdk._OPENAI_PATH_MODEL_PREFIXES = (
+            *_sdk._OPENAI_PATH_MODEL_PREFIXES,
+            prefix,
+        )
+
+
 def build_mantle_model(
     model_id: str,
     api_mode: MantleApiMode,
@@ -87,6 +110,9 @@ def build_mantle_model(
     # Lazy import: strands is heavy, and apis.shared is imported broadly.
     from strands.models import OpenAIResponsesModel
     from strands.models.openai import OpenAIModel
+
+    # Bridge until google.gemma-4- lands in the SDK's base-path prefix table.
+    _ensure_gemma4_openai_v1_routing()
 
     bedrock_mantle_config: Dict[str, Any] = {}
     if region:
