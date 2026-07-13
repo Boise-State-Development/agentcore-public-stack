@@ -156,7 +156,11 @@ class ManagedModelCreate(BaseModel):
     input_modalities: List[str] = Field(..., alias="inputModalities", min_length=1)
     output_modalities: List[str] = Field(..., alias="outputModalities", min_length=1)
     max_input_tokens: int = Field(..., alias="maxInputTokens", ge=1)
-    max_output_tokens: int = Field(..., alias="maxOutputTokens", ge=1)
+    # Optional: newer reasoning/Responses-API models don't publish a discrete
+    # output cap (output shares the context budget with reasoning tokens). This
+    # value is only a ceiling for the admin-configured max_tokens inference
+    # param — it is never sent to the provider — so leaving it unset is safe.
+    max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens", ge=1)
     # Access control: AppRoles (preferred) or legacy JWT roles
     allowed_app_roles: List[str] = Field(
         default_factory=list,
@@ -322,7 +326,7 @@ class ManagedModel(BaseModel):
     input_modalities: List[str] = Field(..., alias="inputModalities")
     output_modalities: List[str] = Field(..., alias="outputModalities")
     max_input_tokens: int = Field(..., alias="maxInputTokens")
-    max_output_tokens: int = Field(..., alias="maxOutputTokens")
+    max_output_tokens: Optional[int] = Field(None, alias="maxOutputTokens")
     # Access control: AppRoles (preferred) or legacy JWT roles
     allowed_app_roles: List[str] = Field(
         default_factory=list,
