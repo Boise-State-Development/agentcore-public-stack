@@ -265,7 +265,6 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'inputModalities': model_data.input_modalities,
         'outputModalities': model_data.output_modalities,
         'maxInputTokens': model_data.max_input_tokens,
-        'maxOutputTokens': model_data.max_output_tokens,
         'allowedAppRoles': model_data.allowed_app_roles,
         'availableToRoles': model_data.available_to_roles,
         'enabled': model_data.enabled,
@@ -278,6 +277,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
     }
 
     # Add optional fields
+    if model_data.max_output_tokens is not None:
+        item['maxOutputTokens'] = model_data.max_output_tokens
     if model_data.cache_write_price_per_million_tokens is not None:
         item['cacheWritePricePerMillionTokens'] = model_data.cache_write_price_per_million_tokens
     if model_data.cache_read_price_per_million_tokens is not None:

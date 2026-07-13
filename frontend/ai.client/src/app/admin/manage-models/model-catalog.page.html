@@ -142,7 +142,11 @@
                       </dt>
                       <dd class="mt-0.5 text-gray-700 dark:text-gray-300">
                         {{ model.template.maxInputTokens / 1000 }}K in /
-                        {{ model.template.maxOutputTokens / 1000 }}K out
+                        @if (model.template.maxOutputTokens) {
+                          {{ model.template.maxOutputTokens / 1000 }}K out
+                        } @else {
+                          — out
+                        }
                       </dd>
                     </div>
                     <div>

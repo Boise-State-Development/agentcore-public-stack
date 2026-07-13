@@ -221,7 +221,7 @@ interface ModelFormGroup {
   inputModalities: FormControl<string[]>;
   outputModalities: FormControl<string[]>;
   maxInputTokens: FormControl<number>;
-  maxOutputTokens: FormControl<number>;
+  maxOutputTokens: FormControl<number | null>;
   allowedAppRoles: FormControl<string[]>;
   availableToRoles: FormControl<string[]>;
   enabled: FormControl<boolean>;
@@ -302,7 +302,7 @@ export class ModelFormPage implements OnInit {
     inputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     maxInputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
-    maxOutputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
+    maxOutputTokens: this.fb.control<number | null>(null, { validators: [Validators.min(1)] }),
     allowedAppRoles: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     availableToRoles: this.fb.control<string[]>([], { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
@@ -886,7 +886,7 @@ export class ModelFormPage implements OnInit {
         inputModalities: params['inputModalities'] ? params['inputModalities'].split(',') : [],
         outputModalities: params['outputModalities'] ? params['outputModalities'].split(',') : [],
         maxInputTokens: params['maxInputTokens'] ? parseInt(params['maxInputTokens'], 10) : 0,
-        maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : 0,
+        maxOutputTokens: params['maxOutputTokens'] ? parseInt(params['maxOutputTokens'], 10) : null,
         knowledgeCutoffDate: params['knowledgeCutoffDate'] || null,
       });
     }
