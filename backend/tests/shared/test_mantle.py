@@ -69,6 +69,63 @@ class TestBuildMantleModel:
         assert mock_openai_cls.call_args.kwargs["params"] == {"temperature": 0.5, "max_tokens": 128}
 
 
+class TestGemma4Routing:
+    """The build path teaches the SDK to serve google.gemma-4-* from /openai/v1.
+
+    Gemma 4's model card pins it to the Mantle /openai/v1 base path, but the
+    SDK only lists openai.gpt-5. — so the builder appends the family prefix.
+    """
+
+    def _prefixes(self):
+        from strands.models import _openai_bedrock as sdk
+
+        return sdk._OPENAI_PATH_MODEL_PREFIXES
+
+    @patch("strands.models.openai.OpenAIModel")
+    def test_build_registers_gemma4_prefix(self, _mock_openai_cls):
+        build_mantle_model(
+            model_id="google.gemma-4-31b",
+            api_mode=MantleApiMode.CHAT_COMPLETIONS,
+            region="us-east-1",
+        )
+        assert "google.gemma-4-" in self._prefixes()
+
+    @patch("strands.models.openai.OpenAIModel")
+    def test_gemma4_variants_route_to_openai_v1(self, _mock_openai_cls):
+        from strands.models._openai_bedrock import _resolve_mantle_base_path
+
+        build_mantle_model(
+            model_id="google.gemma-4-31b",
+            api_mode=MantleApiMode.CHAT_COMPLETIONS,
+        )
+        for model_id in (
+            "google.gemma-4-31b",
+            "google.gemma-4-26b-a4b",
+            "google.gemma-4-e2b",
+        ):
+            assert _resolve_mantle_base_path(model_id) == "/openai/v1"
+
+    @patch("strands.models.openai.OpenAIModel")
+    def test_gemma3_stays_on_v1(self, _mock_openai_cls):
+        # Gemma 3 is served on /v1 — the narrower prefix must not reroute it.
+        from strands.models._openai_bedrock import _resolve_mantle_base_path
+
+        build_mantle_model(
+            model_id="google.gemma-4-31b",
+            api_mode=MantleApiMode.CHAT_COMPLETIONS,
+        )
+        assert _resolve_mantle_base_path("google.gemma-3-27b-it") == "/v1"
+
+    @patch("strands.models.openai.OpenAIModel")
+    def test_registration_is_idempotent(self, _mock_openai_cls):
+        for _ in range(3):
+            build_mantle_model(
+                model_id="google.gemma-4-31b",
+                api_mode=MantleApiMode.CHAT_COMPLETIONS,
+            )
+        assert self._prefixes().count("google.gemma-4-") == 1
+
+
 class TestParamMapFor:
     def test_chat_mode_map(self):
         assert param_map_for(MantleApiMode.CHAT_COMPLETIONS) is MANTLE_CHAT_PARAM_MAP
