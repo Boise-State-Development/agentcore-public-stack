@@ -234,7 +234,9 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         output_modalities=model_data.output_modalities,
         max_input_tokens=model_data.max_input_tokens,
         max_output_tokens=model_data.max_output_tokens,
-        allowed_app_roles=model_data.allowed_app_roles,
+        # allowed_app_roles is intentionally not set here: it is derived from the
+        # AppRole records on read (see app_api/admin/services/model_roles.py).
+        # The caller writes the requested roles through to those records.
         available_to_roles=model_data.available_to_roles,
         enabled=model_data.enabled,
         input_price_per_million_tokens=model_data.input_price_per_million_tokens,
@@ -265,7 +267,6 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'inputModalities': model_data.input_modalities,
         'outputModalities': model_data.output_modalities,
         'maxInputTokens': model_data.max_input_tokens,
-        'allowedAppRoles': model_data.allowed_app_roles,
         'availableToRoles': model_data.available_to_roles,
         'enabled': model_data.enabled,
         'inputPricePerMillionTokens': model_data.input_price_per_million_tokens,
@@ -536,6 +537,12 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
 
     # Get update data
     update_data = updates.model_dump(exclude_none=True, by_alias=True)
+
+    # Role access is owned by the AppRole records, not the model item. The admin
+    # route writes allowedAppRoles through to each role's grantedModels and the
+    # value is derived back on read, so persisting it here would only create a
+    # copy that drifts out of date.
+    update_data.pop('allowedAppRoles', None)
 
     if not update_data:
         return existing_model  # No updates to apply

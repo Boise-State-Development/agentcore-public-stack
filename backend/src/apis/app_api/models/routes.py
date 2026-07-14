@@ -30,14 +30,16 @@ async def list_models_for_user(
 
     This endpoint returns models filtered by the user's permissions. Only models
     that are:
-    1. Enabled
-    2. Accessible via AppRole permissions (allowedAppRoles) OR
+    1. Enabled, AND
+    2. Granted by one of the user's AppRoles — the role lists the model in its
+       grantedModels, or grants the '*' wildcard — OR
     3. Available via legacy JWT role matching (availableToRoles)
 
     will be returned.
 
     Access Control:
-    - AppRole-based access is checked first (via allowedAppRoles field)
+    - The AppRole record is the source of truth. The model's own allowedAppRoles
+      field is DERIVED from those roles for display and is not consulted here.
     - Legacy JWT role-based access is checked as fallback (via availableToRoles field)
     - During the transition period, access is granted if EITHER method matches
 

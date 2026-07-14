@@ -392,3 +392,85 @@ class TestModelAccessServiceFilterModels:
         # Should still work via JWT role fallback
         assert len(result) == 1
         assert result[0].model_id == "model-1"
+
+
+class TestModelAccessIgnoresAllowedAppRoles:
+    """
+    ``allowed_app_roles`` is a display-only field derived from the role records.
+    It must never influence an access decision, and the single-model check must
+    always agree with the catalog filter.
+
+    Regression: a model granted via a role's ``grantedModels`` but with an empty
+    ``allowed_app_roles`` was *listed* by ``filter_accessible_models`` and yet
+    *denied* by ``can_access_model``, because the latter gated on the field.
+    """
+
+    @pytest.fixture
+    def mock_app_role_service(self):
+        return AsyncMock()
+
+    @pytest.fixture
+    def service(self, mock_app_role_service):
+        return ModelAccessService(app_role_service=mock_app_role_service)
+
+    def _grant(self, user, mock_app_role_service, models):
+        mock_app_role_service.resolve_user_permissions.return_value = (
+            UserEffectivePermissions(
+                user_id=user.user_id,
+                app_roles=["staff"],
+                tools=[],
+                models=models,
+                quota_tier=None,
+                resolved_at=datetime.now(timezone.utc).isoformat() + "Z",
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_role_grant_with_empty_allowed_app_roles_is_accessible(
+        self, service, mock_app_role_service
+    ):
+        """A role grant alone is sufficient — the model's role list is irrelevant."""
+        user = create_test_user(roles=["Staff"])
+        model = create_test_model(model_id="claude-sonnet-5", allowed_app_roles=[])
+        self._grant(user, mock_app_role_service, ["claude-sonnet-5"])
+
+        assert await service.can_access_model(user, model) is True
+
+    @pytest.mark.asyncio
+    async def test_allowed_app_roles_alone_grants_nothing(
+        self, service, mock_app_role_service
+    ):
+        """
+        Listing a role on the model must NOT grant access on its own. Only the
+        role's own grantedModels does — otherwise the model record becomes a
+        second, competing source of truth.
+        """
+        user = create_test_user(roles=["Staff"])
+        model = create_test_model(
+            model_id="claude-sonnet-5",
+            allowed_app_roles=["staff"],  # says "staff" but no role actually grants it
+        )
+        self._grant(user, mock_app_role_service, [])
+
+        assert await service.can_access_model(user, model) is False
+
+    @pytest.mark.asyncio
+    async def test_single_check_agrees_with_filter(
+        self, service, mock_app_role_service
+    ):
+        """can_access_model and filter_accessible_models must never disagree."""
+        user = create_test_user(roles=["Staff"])
+        models = [
+            create_test_model(model_id="granted", allowed_app_roles=[]),
+            create_test_model(model_id="not-granted", allowed_app_roles=["staff"]),
+        ]
+        self._grant(user, mock_app_role_service, ["granted"])
+
+        listed = {m.model_id for m in await service.filter_accessible_models(user, models)}
+
+        for model in models:
+            assert (
+                await service.can_access_model(user, model)
+            ) is (model.model_id in listed)
+
+        assert listed == {"granted"}

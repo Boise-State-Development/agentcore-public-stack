@@ -4,14 +4,21 @@ This service provides hybrid access checking for managed models,
 supporting both the new AppRole system and legacy JWT role-based access.
 
 During the transition period, access is granted if the user matches EITHER:
-1. AppRole-based access (via allowed_app_roles)
-2. Legacy JWT role-based access (via available_to_roles)
+1. AppRole-based access — the model is in the user's resolved ``permissions.models``
+   (i.e. some role of theirs lists it in ``grantedModels``, or grants ``*``)
+2. Legacy JWT role-based access (via ``available_to_roles``)
 
 Once migration is complete, the legacy JWT role check can be removed.
+
+Note ``ManagedModel.allowed_app_roles`` is NOT an input to either check: it is a
+field derived *from* the role records for display (see :mod:`.model_roles`).
+Access is decided by the roles alone. Both entry points below funnel through
+``_grants_access`` so a single-model check and a catalog filter can never
+disagree about the same model.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from apis.shared.auth.models import User
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
@@ -40,14 +47,53 @@ class ModelAccessService:
             self._app_role_service = get_app_role_service()
         return self._app_role_service
 
+    async def _resolve_model_permissions(self, user: User) -> Set[str]:
+        """
+        Resolve the set of model ids the user's AppRoles grant (may contain '*').
+
+        Returns an empty set if permission resolution fails, so the caller falls
+        through to the legacy JWT check rather than erroring.
+        """
+        try:
+            permissions = await self.app_role_service.resolve_user_permissions(user)
+            return set(permissions.models)
+        except Exception as e:
+            # JUSTIFICATION: AppRole permission resolution failures should not block access checks.
+            # We fall back to legacy JWT role checking to maintain system availability during
+            # the AppRole migration period. This ensures users can still access models even if
+            # the AppRole system has issues. We log the error for monitoring.
+            logger.warning(
+                f"Error resolving AppRole permissions for {user.email} (falling back to JWT roles): {e}",
+                exc_info=True
+            )
+            return set()
+
+    @staticmethod
+    def _grants_access(
+        model: ManagedModel, model_permissions: Set[str], user_roles: Set[str]
+    ) -> bool:
+        """
+        Decide whether a user may use a model. The single access rule.
+
+        Both ``can_access_model`` and ``filter_accessible_models`` delegate here,
+        so a model is never listed by one and denied by the other.
+        """
+        if not model.enabled:
+            return False
+
+        # AppRole-based access: a role of the user's grants this model (or all models).
+        if "*" in model_permissions or model.model_id in model_permissions:
+            return True
+
+        # Legacy JWT role-based access (deprecated).
+        if model.available_to_roles and user_roles.intersection(model.available_to_roles):
+            return True
+
+        return False
+
     async def can_access_model(self, user: User, model: ManagedModel) -> bool:
         """
         Check if a user can access a specific model.
-
-        Access is granted if ANY of the following is true:
-        1. Model has allowed_app_roles AND user has matching AppRole permissions
-        2. Model has available_to_roles AND user has matching JWT role
-        3. Neither field is set (model is unrestricted - should not happen in practice)
 
         Args:
             user: Authenticated user
@@ -56,49 +102,17 @@ class ModelAccessService:
         Returns:
             True if user can access the model, False otherwise
         """
+        # Short-circuit before paying for a permission resolve.
         if not model.enabled:
             return False
 
-        # Check AppRole-based access first (new system)
-        if model.allowed_app_roles:
-            try:
-                permissions = await self.app_role_service.resolve_user_permissions(user)
+        model_permissions = await self._resolve_model_permissions(user)
+        allowed = self._grants_access(model, model_permissions, set(user.roles or []))
 
-                # Wildcard grants access to all models
-                if "*" in permissions.models:
-                    logger.debug(
-                        f"User {user.email} has wildcard model access via AppRole"
-                    )
-                    return True
-
-                # Check if user has access to this specific model
-                if model.model_id in permissions.models:
-                    logger.debug(
-                        f"User {user.email} has AppRole access to model {model.model_id}"
-                    )
-                    return True
-
-            except Exception as e:
-                # JUSTIFICATION: AppRole permission resolution failures should not block access checks.
-                # We fall back to legacy JWT role checking to maintain system availability during
-                # the AppRole migration period. This ensures users can still access models even if
-                # the AppRole system has issues. We log the error for monitoring.
-                logger.warning(
-                    f"Error checking AppRole permissions for {user.email} (falling back to JWT roles): {e}",
-                    exc_info=True
-                )
-
-        # Check legacy JWT role-based access (deprecated)
-        if model.available_to_roles:
-            user_roles = user.roles or []
-            if any(role in model.available_to_roles for role in user_roles):
-                logger.debug(
-                    f"User {user.email} has legacy JWT role access to model {model.model_id}"
-                )
-                return True
-
-        # No access configured or user doesn't match any access rules
-        return False
+        logger.debug(
+            f"User {user.email} access to model {model.model_id}: {allowed}"
+        )
+        return allowed
 
     async def filter_accessible_models(
         self, user: User, models: List[ManagedModel]
@@ -113,48 +127,15 @@ class ModelAccessService:
         Returns:
             List of ManagedModel objects the user can access
         """
-        accessible = []
-
-        # Get user's AppRole permissions once (cached)
-        try:
-            permissions = await self.app_role_service.resolve_user_permissions(user)
-            has_wildcard = "*" in permissions.models
-            model_permissions = set(permissions.models)
-        except Exception as e:
-            # JUSTIFICATION: AppRole permission resolution failures should not block model filtering.
-            # We fall back to legacy JWT role checking to maintain system availability during
-            # the AppRole migration period. This ensures users can still see accessible models
-            # even if the AppRole system has issues. We log the error for monitoring.
-            logger.warning(
-                f"Error resolving AppRole permissions for {user.email} (using JWT roles only): {e}",
-                exc_info=True
-            )
-            permissions = None
-            has_wildcard = False
-            model_permissions = set()
-
+        # Resolve the user's AppRole permissions once (cached) for the whole catalog.
+        model_permissions = await self._resolve_model_permissions(user)
         user_roles = set(user.roles or [])
 
-        for model in models:
-            if not model.enabled:
-                continue
-
-            # Check AppRole-based access (wildcard or specific model)
-            if has_wildcard or model.model_id in model_permissions:
-                accessible.append(model)
-                continue
-
-            # Check if model has allowed_app_roles and user matches
-            if model.allowed_app_roles and permissions:
-                # This model requires AppRole access, but user didn't have it
-                # Still check legacy JWT roles as fallback
-                pass
-
-            # Check legacy JWT role-based access
-            if model.available_to_roles:
-                if user_roles.intersection(model.available_to_roles):
-                    accessible.append(model)
-                    continue
+        accessible = [
+            model
+            for model in models
+            if self._grants_access(model, model_permissions, user_roles)
+        ]
 
         logger.debug(
             f"Filtered {len(models)} models to {len(accessible)} accessible for {user.email}"

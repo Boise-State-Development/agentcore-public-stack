@@ -5,7 +5,7 @@ Requires admin role (Admin or SuperAdmin) via JWT token.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, status
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 import logging
 import os
 import re
@@ -27,6 +27,7 @@ from apis.shared.models.models import (
     ManagedModelCreate,
     ManagedModelUpdate,
     ManagedModel,
+    ModelRoleAssignment,
 )
 from apis.shared.auth import User, require_admin
 from apis.shared.feature_flags import skills_enabled
@@ -37,6 +38,7 @@ from apis.shared.models.managed_models import (
     update_managed_model,
     delete_managed_model,
 )
+from .services.model_roles import get_model_role_service
 
 logger = logging.getLogger(__name__)
 
@@ -531,9 +533,13 @@ async def list_managed_models_endpoint(
     try:
         models = await list_managed_models(user_roles=None)  # None = no role filtering
 
+        # Derive each model's role access from the AppRole records (one role query
+        # for the whole catalog), so the admin list reflects real grants.
+        await get_model_role_service().hydrate_model_roles(models)
+
         # Convert ManagedModel instances to dicts for Pydantic v2 validation
         models_dict = [model.model_dump(by_alias=True) for model in models]
-        
+
         return ManagedModelsListResponse(
             models=models_dict,
             total_count=len(models),
@@ -576,10 +582,20 @@ async def create_managed_model_endpoint(
 
     try:
         model = await create_managed_model(model_data)
+
+        # Grant the model to the requested roles. This is the write that actually
+        # controls access — the role record is the source of truth — after which
+        # we derive the role fields back onto the response.
+        role_service = get_model_role_service()
+        await role_service.set_roles_for_model(
+            model.model_id, model_data.allowed_app_roles, admin_user
+        )
+        await role_service.hydrate_model_roles([model])
+
         return model
 
     except ValueError as e:
-        # Model already exists
+        # Model already exists, or an unknown AppRole was named
         logger.warning("Model creation failed")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -626,6 +642,10 @@ async def get_managed_model_endpoint(
                 detail=f"Model with ID '{model_id}' not found"
             )
 
+        # Derive role access from the AppRole records so the edit form shows the
+        # grants that are actually in effect.
+        await get_model_role_service().hydrate_model_roles([model])
+
         return model
 
     except HTTPException:
@@ -668,6 +688,16 @@ async def update_managed_model_endpoint(
     logger.info("Admin updating enabled model")
 
     try:
+        # Capture the provider model id before the update: roles key their grants
+        # on it, so a rename has to move those grants rather than orphan them.
+        existing = await get_managed_model(model_id)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Model with ID '{model_id}' not found"
+            )
+        previous_model_id = existing.model_id
+
         model = await update_managed_model(model_id, updates)
 
         if not model:
@@ -676,10 +706,30 @@ async def update_managed_model_endpoint(
                 detail=f"Model with ID '{model_id}' not found"
             )
 
+        role_service = get_model_role_service()
+
+        # `None` means the caller didn't touch role access — but a rename still
+        # has to carry the existing direct grants over to the new model id.
+        requested_roles = updates.allowed_app_roles
+        renamed = model.model_id != previous_model_id
+        if requested_roles is None and renamed:
+            current = await role_service.get_roles_for_model(previous_model_id)
+            requested_roles = [a.role_id for a in current if a.grant_type == "direct"]
+
+        if requested_roles is not None:
+            await role_service.set_roles_for_model(
+                model.model_id,
+                requested_roles,
+                admin_user,
+                previous_model_id=previous_model_id,
+            )
+
+        await role_service.hydrate_model_roles([model])
+
         return model
 
     except ValueError as e:
-        # Duplicate modelId or other validation error
+        # Duplicate modelId, or an unknown AppRole was named
         logger.warning("Model update failed")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -719,12 +769,21 @@ async def delete_managed_model_endpoint(
     logger.info("Admin deleting enabled model")
 
     try:
+        # Read the provider model id before deleting — roles key their grants on
+        # it, and we need to strip those so no role keeps granting a dead model.
+        existing = await get_managed_model(model_id)
+
         deleted = await delete_managed_model(model_id)
 
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Model with ID '{model_id}' not found"
+            )
+
+        if existing:
+            await get_model_role_service().revoke_model_from_all_roles(
+                existing.model_id, admin_user
             )
 
         return None
@@ -739,38 +798,39 @@ async def delete_managed_model_endpoint(
         )
 
 
-@router.post("/managed-models/{model_id}/sync-roles", response_model=ManagedModel)
-async def sync_model_roles(
+@router.get("/managed-models/{model_id}/roles", response_model=List[ModelRoleAssignment])
+async def get_managed_model_roles(
     model_id: str,
     admin_user: User = Depends(require_admin),
 ):
     """
-    Sync a model's allowedAppRoles with the AppRole system.
+    List every AppRole that grants access to a model, and how.
 
-    This endpoint updates the model's allowedAppRoles based on which AppRoles
-    have this model in their granted_models list. It ensures bidirectional
-    consistency between models and roles.
+    Each assignment is tagged `direct` (the role lists the model in its
+    grantedModels), `wildcard` (the role grants '*'), or `inherited` (a parent
+    role grants it). Only `direct` grants are editable from the model form —
+    the others are changed by editing the role.
 
-    Requires system administrator access.
+    Replaces the old POST /sync-roles endpoint: role records are now the single
+    source of truth, so there is nothing left to reconcile.
 
     Args:
-        model_id: Model identifier
-        admin_user: Authenticated system admin user (injected by dependency)
+        model_id: Model identifier (the record's internal id)
+        admin_user: Authenticated admin user (injected by dependency)
 
     Returns:
-        ManagedModel: Updated model with synced allowedAppRoles
+        List[ModelRoleAssignment]
 
     Raises:
         HTTPException:
             - 401 if not authenticated
-            - 403 if user lacks system admin role
+            - 403 if user lacks admin role
             - 404 if model not found
             - 500 if server error
     """
-    logger.info("Admin syncing roles for model")
+    logger.info("Admin listing roles for model")
 
     try:
-        # Get the model
         model = await get_managed_model(model_id)
         if not model:
             raise HTTPException(
@@ -778,47 +838,15 @@ async def sync_model_roles(
                 detail=f"Model with ID '{model_id}' not found"
             )
 
-        # Import here to avoid circular imports
-        from apis.shared.rbac.admin_service import get_app_role_admin_service
-
-        # Get all roles and find which ones grant access to this model
-        admin_service = get_app_role_admin_service()
-        all_roles = await admin_service.list_roles(enabled_only=False)
-
-        # Find roles that grant access to this model
-        granting_roles = []
-        for role in all_roles:
-            if model.model_id in role.granted_models:
-                granting_roles.append(role.role_id)
-            # Also check effective_permissions in case inheritance grants access
-            if role.effective_permissions and model.model_id in role.effective_permissions.models:
-                if role.role_id not in granting_roles:
-                    granting_roles.append(role.role_id)
-
-        # Update the model's allowed_app_roles
-        from apis.shared.models.models import ManagedModelUpdate
-        updates = ManagedModelUpdate(allowed_app_roles=granting_roles)
-        updated_model = await update_managed_model(model_id, updates)
-
-        if not updated_model:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update model after computing roles"
-            )
-
-        logger.info(
-            "✅ Synced model allowedAppRoles"
-        )
-
-        return updated_model
+        return await get_model_role_service().get_roles_for_model(model.model_id)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Unexpected error syncing model roles", exc_info=True)
+        logger.error("Unexpected error listing model roles", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error syncing model roles: {str(e)}"
+            detail=f"Error listing model roles: {str(e)}"
         )
 
 
