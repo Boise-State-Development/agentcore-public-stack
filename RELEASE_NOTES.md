@@ -1,3 +1,72 @@
+# Release Notes — v1.5.0
+
+**Release Date:** July 13, 2026
+**Previous Release:** v1.4.0 (July 10, 2026)
+
+---
+
+> ✅ **No platform (CDK) deploy required.** This release is application code and frontend only — it ships through the `backend.yml` (app-api / inference-api image rebuild) and `frontend-deploy.yml` pipelines. No new AWS resources, no IAM changes, no data migration, no breaking changes.
+
+---
+
+## Highlights
+
+v1.5.0 expands the **model catalog** and the **MCP admin** surface, then rounds out the UI. Admins can now run tool **Discovery against OAuth-gated MCP servers** — such as the GitHub remote MCP server — using their own vaulted 3LO token, rather than being refused outright. Two curated model cards land — **Claude Sonnet 5** and **GPT-5.4** — and the **max-output-tokens** field becomes optional so reasoning / Responses-API models that have no fixed output cap can be added at all. The remainder is polish and hardening: sticky admin/settings sidebars, a redesigned 404 page, chat-scroll and sticky-nav fixes, a vitest flake fix, a Mantle Gemma-4 routing fix, and a Docker curl security patch.
+
+## Discover OAuth-gated MCP servers with the admin's token
+
+Admins configuring a tool couldn't see what an OAuth-gated MCP server actually offered: the "Discover" flow refused `auth_type=oauth2` outright (400) or connected unauthenticated and got a 401 (wrapped to a 400), so servers like the GitHub remote MCP server (`api.githubcopilot.com/mcp/`) were undiscoverable. Discovery now connects with the admin's *own* vaulted token for the provider and lists the tools that token can see.
+
+### Backend
+
+- **Provider-aware discovery (#639)** — `MCPDiscoverRequest` gains `requires_oauth_provider` (alias `requiresOauthProvider`). The handler loads the provider, fetches the admin's vaulted 3LO token via AgentCore Identity (`get_token_for_user`) and injects it as `oauth_token` into `create_external_mcp_client` — mirroring how the agent loop attaches the end-user's provider token at runtime, and reusing the exact path `connector_status` already uses. It fetches the **admin's own** token only; it cannot mint an arbitrary end-user's token. Providers such as GitHub scope-filter the tool list to the token's grants, so the result reflects what the admin's connection can actually reach. `requires_consent` → 409; unknown provider / conflict with `forward_auth` / oauth2-without-provider → 400.
+
+### Frontend
+
+- The discover payload now sends `requiresOauthProvider` (the form control already existed) and the `OAuth2CallbackUrl` header (bare `/oauth-complete`, no query string) so the backend can resolve the admin's token.
+
+### Test Coverage
+
+5 backend tests for the OAuth-provider discovery path; 2 SPA specs for the discover payload.
+
+## Model catalog — Sonnet 5, GPT-5.4, and optional output caps
+
+Two new curated cards and one form change together let admins add the current generation of frontier models with a single click.
+
+### Frontend
+
+- **New curated cards (#641)** — **Claude Sonnet 5** (`global.anthropic.claude-sonnet-5`, 1M context, effort-based reasoning, caching on) and **GPT-5.4** (Mantle, `openai.gpt-5.4`, Responses API surface — its `openai.gpt-5.*` id matches the SDK's `/openai/v1` routing prefixes so one-click create routes correctly). The Bedrock Claude list now orders most-capable-first (Opus 4.7, Sonnet 5, Sonnet 4.6, Haiku 4.5), GPT-5.4 sits ahead of Qwen in the Mantle list, and the "Bedrock Mantle" tab moves next to "Bedrock" in the catalog selector.
+- **Optional max output tokens (#643, #644)** — newer reasoning / Responses-API models don't publish a discrete max-output-tokens value (output shares the context budget with reasoning tokens), so the admin form field is now optional. `max_output_tokens` becomes `Optional[int]` across `ManagedModelCreate` / `ManagedModel` and the SPA interfaces (`number | null`); the DynamoDB write omits it when absent, the form drops `Validators.required`, and the catalog card null-guards to show "— out". It was only ever a ceiling for the admin-configured `max_tokens` param and is never sent to the provider, so an unset value is safe at inference time.
+
+## 🐛 Bug fixes
+
+- **Mantle Gemma 4 models returned `access_denied` (#641).** Gemma 4 is served only on Mantle's `/openai/v1` path (per its AWS model card), but the Strands SDK's `_OPENAI_PATH_MODEL_PREFIXES` shipped only `openai.gpt-5.`, so `google.gemma-4-*` fell through to `/v1` and inference 401'd. The SDK's prefix table is now extended with `google.gemma-4-` at build time (`_ensure_gemma4_openai_v1_routing`: lazy, idempotent, guarded) until it lands upstream — scoped to the 4.x family so Gemma 3 stays on `/v1`. Covered by guard tests.
+- **Sticky sidebars didn't engage (#634).** The redesigned admin/settings sticky sidebars need a real scroll container to anchor against; the app shell now scrolls on the correct element so `position: sticky` takes effect and the chat scroll space sizes to the pending response (#637).
+- **Intermittent SPA unit-test flake (#636).** Vitest runs now guarantee the Angular JIT compiler is present, eliminating the sporadic `PlatformLocation` provider error in the unit suite.
+
+## 🔒 Security
+
+- **Docker curl patch floats with the mirror (#645).** Debian removes the superseded point version of curl from the trixie mirror on each security update, so an exact `+deb13uN` pin broke every build once the next CVE landed. Both Dockerfiles now pin `+deb13u*` — tracking the live security patch while keeping the minor version fixed. The digest-pinned base image is what actually provides reproducibility.
+
+## ✨ UI polish
+
+- **Sticky navigation (#632, #638)** — the admin and user-settings sidebar navs stay in view on desktop as the content column scrolls.
+- **Redesigned 404 page (#633)** — the not-found page now matches the auth / first-boot screens (frosted glass, animated blobs, graph-paper grid in Boise blue).
+
+## 🔧 CI/CD
+
+- **Portable version sync (#631)** — `scripts/common/sync-version.sh` now runs across GNU and BSD userlands (macOS `sed`/`grep`), so the release bump works outside the dev container.
+
+## 📚 Docs
+
+- Added the quota cooldown-windows + platform-ceiling spec and committee one-pager under `docs/specs/` (#635), and a design note proposing `mantleEndpointPath` as a live admin setting as the durable alternative to patching the SDK's hardcoded routing table (#641).
+
+## 🚀 Deployment notes
+
+- **No special steps.** No CDK deploy, no IAM changes, no data migration, no breaking changes. The backend changes (Mantle Gemma-4 routing, optional `max_output_tokens`, Docker curl pin) ship on the next `backend.yml` image rebuild; the SPA changes ship via `frontend-deploy.yml`.
+
+---
+
 # Release Notes — v1.4.0
 
 **Release Date:** July 10, 2026

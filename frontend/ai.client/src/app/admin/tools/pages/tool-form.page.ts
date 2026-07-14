@@ -1098,6 +1098,7 @@ export class ToolFormPage implements OnInit {
         apiKeyHeader: formValue.mcpApiKeyHeader || null,
         secretArn: formValue.mcpSecretArn || null,
         forwardAuthToken: formValue.forwardAuthToken || false,
+        requiresOauthProvider: formValue.requiresOauthProvider || null,
       });
 
       // Merge: keep existing rows (and their needsApproval flag), append any

@@ -74,8 +74,12 @@ export interface ManagedModel {
   responseStreamingSupported?: boolean;
   /** Maximum number of input tokens the model can accept */
   maxInputTokens: number;
-  /** Maximum number of output tokens the model can generate */
-  maxOutputTokens: number;
+  /**
+   * Maximum number of output tokens the model can generate. Optional — newer
+   * reasoning/Responses-API models don't publish a discrete output cap. Acts
+   * only as a ceiling for the configured max_tokens inference param.
+   */
+  maxOutputTokens: number | null;
   /** Lifecycle status of the model (e.g., 'ACTIVE', 'LEGACY') */
   modelLifecycle?: string | null;
   /** AppRole IDs that have access to this model (preferred over availableToRoles) */
@@ -141,8 +145,12 @@ export interface ManagedModelFormData {
   responseStreamingSupported: boolean;
   /** Maximum number of input tokens the model can accept */
   maxInputTokens: number;
-  /** Maximum number of output tokens the model can generate */
-  maxOutputTokens: number;
+  /**
+   * Maximum number of output tokens the model can generate. Optional — leave
+   * blank when the provider doesn't publish an output cap. Ceiling only for
+   * the configured max_tokens inference param; never sent to the provider.
+   */
+  maxOutputTokens: number | null;
   /** Lifecycle status of the model */
   modelLifecycle?: string | null;
   /** AppRole IDs that have access to this model */

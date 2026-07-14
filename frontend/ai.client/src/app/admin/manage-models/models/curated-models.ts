@@ -49,26 +49,54 @@ const claude4xDefaults = (): Pick<
 
 export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
   {
-    key: 'claude-haiku-4-5',
-    tagline: "Anthropic's fastest model — great for high-throughput tasks.",
-    capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],
+    key: 'claude-opus-4-7',
+    tagline: 'Anthropic\'s most capable model — for the hardest reasoning.',
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
     template: {
       ...claude4xDefaults(),
-      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
-      modelName: 'Claude Haiku 4.5',
+      modelId: 'us.anthropic.claude-opus-4-7',
+      modelName: 'Claude Opus 4.7',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 1.0,
-      outputPricePerMillionTokens: 5.0,
-      cacheWritePricePerMillionTokens: 1.25,
-      cacheReadPricePerMillionTokens: 0.1,
-      knowledgeCutoffDate: '2025-02-01',
+      inputPricePerMillionTokens: 5.0,
+      outputPricePerMillionTokens: 25.0,
+      cacheWritePricePerMillionTokens: 6.25,
+      cacheReadPricePerMillionTokens: 0.5,
+      knowledgeCutoffDate: '2025-10-01',
       supportedParams: {
         params: {
-          temperature: { supported: true, min: 0, max: 1, default: 1.0 },
-          top_p: { supported: true, min: 0, max: 1, default: null },
-          top_k: { supported: true, min: 1, default: null },
-          max_tokens: { supported: true, min: 1, max: 64_000, default: 8192 },
-          thinking: { supported: true, min: 1024, max: 32_000, default: 4096 },
+          max_tokens: { supported: true, min: 1, max: 64_000, default: 32_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
+    key: 'claude-sonnet-5',
+    tagline: 'Anthropic\'s Sonnet 5 — 1M-token context with effort-based reasoning.',
+    capabilities: ['Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    template: {
+      ...claude4xDefaults(),
+      modelId: 'global.anthropic.claude-sonnet-5',
+      modelName: 'Claude Sonnet 5',
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 128_000,
+      inputPricePerMillionTokens: 2.0,
+      outputPricePerMillionTokens: 10.0,
+      cacheWritePricePerMillionTokens: 2.5,
+      cacheReadPricePerMillionTokens: 0.2,
+      knowledgeCutoffDate: null,
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 128_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh'],
+            default: 'medium',
+          },
         },
       },
     },
@@ -99,27 +127,26 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     },
   },
   {
-    key: 'claude-opus-4-7',
-    tagline: 'Anthropic\'s most capable model — for the hardest reasoning.',
-    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
+    key: 'claude-haiku-4-5',
+    tagline: "Anthropic's fastest model — great for high-throughput tasks.",
+    capabilities: ['Extended thinking', 'Vision', 'Prompt caching'],
     template: {
       ...claude4xDefaults(),
-      modelId: 'us.anthropic.claude-opus-4-7',
-      modelName: 'Claude Opus 4.7',
+      modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      modelName: 'Claude Haiku 4.5',
       maxOutputTokens: 64_000,
-      inputPricePerMillionTokens: 5.0,
-      outputPricePerMillionTokens: 25.0,
-      cacheWritePricePerMillionTokens: 6.25,
-      cacheReadPricePerMillionTokens: 0.5,
-      knowledgeCutoffDate: '2025-10-01',
+      inputPricePerMillionTokens: 1.0,
+      outputPricePerMillionTokens: 5.0,
+      cacheWritePricePerMillionTokens: 1.25,
+      cacheReadPricePerMillionTokens: 0.1,
+      knowledgeCutoffDate: '2025-02-01',
       supportedParams: {
         params: {
-          max_tokens: { supported: true, min: 1, max: 64_000, default: 32_000 },
-          effort: {
-            supported: true,
-            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
-            default: 'medium',
-          },
+          temperature: { supported: true, min: 0, max: 1, default: 1.0 },
+          top_p: { supported: true, min: 0, max: 1, default: null },
+          top_k: { supported: true, min: 1, default: null },
+          max_tokens: { supported: true, min: 1, max: 64_000, default: 8192 },
+          thinking: { supported: true, min: 1024, max: 32_000, default: 4096 },
         },
       },
     },
@@ -163,6 +190,27 @@ const mantleDefaults = (): Pick<
 // Re-verify when AWS revises pricing or a newer model version ships.
 export const CURATED_MANTLE_MODELS: CuratedModel[] = [
   {
+    key: 'gpt-5-4',
+    tagline: 'OpenAI GPT-5.4 on Bedrock Mantle — multimodal reasoning via the Responses API.',
+    capabilities: ['Reasoning', 'Vision', 'Long context'],
+    template: {
+      ...mantleDefaults(),
+      modelId: 'openai.gpt-5.4',
+      modelName: 'GPT-5.4',
+      providerName: 'OpenAI',
+      inputModalities: ['TEXT', 'IMAGE'],
+      maxInputTokens: 272_000,
+      maxOutputTokens: 128_000,
+      // GPT-5.x is served on Mantle's `/openai/v1` base path and requires the
+      // Responses API. Its `openai.gpt-5.*` model id matches the SDK's
+      // _OPENAI_PATH_MODEL_PREFIXES, so one-click create routes correctly
+      // (unlike the Gemma case noted below).
+      apiMode: 'responses',
+      inputPricePerMillionTokens: 2.75,
+      outputPricePerMillionTokens: 16.5,
+    },
+  },
+  {
     key: 'qwen3-coder-30b',
     tagline: 'Qwen3 Coder 30B — long-context coding model on Bedrock Mantle.',
     capabilities: ['Coding', 'Long context'],
@@ -186,14 +234,14 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
       },
     },
   },
-  // NOTE: Gemma 4 31B (`google.gemma-4-31b`) is temporarily NOT curated. It is
-  // served on Mantle's `/openai/v1` base path, but the Strands SDK's
-  // bedrock_mantle_config only routes `openai.gpt-5.*` to `/openai/v1` (all
-  // other model ids -> `/v1`), and the config forbids overriding base_url. So a
-  // one-click Gemma card would build a `/v1` client and fail at chat time.
-  // Re-add once the `google.gemma-` family prefix lands in the SDK's
-  // _OPENAI_PATH_MODEL_PREFIXES (upstream strands-agents/sdk-python). Admins
-  // who need Gemma sooner can add it via the manual form.
+  // NOTE: Gemma 4 (`google.gemma-4-*`) is served ONLY on Mantle's `/openai/v1`
+  // base path (per its AWS model card — different from the `/v1` path Gemma 3
+  // and gpt-oss use). The Strands SDK's _OPENAI_PATH_MODEL_PREFIXES ships only
+  // `openai.gpt-5.`, so the backend appends `google.gemma-4-` at build time
+  // (see apis/shared/models/mantle.py::_ensure_gemma4_openai_v1_routing) until
+  // it lands upstream. That bridge makes a one-click Gemma 4 card route
+  // correctly, so this is safe to curate — pending confirmed pricing/params.
+  // Use the `google.gemma-4-` prefix, NOT `google.gemma-`: Gemma 3 is on `/v1`.
 ];
 
 /**

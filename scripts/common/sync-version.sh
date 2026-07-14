@@ -5,6 +5,10 @@ set -euo pipefail
 # Usage:
 #   bash scripts/common/sync-version.sh          # Write VERSION into manifests
 #   bash scripts/common/sync-version.sh --check   # Check for drift (exit non-zero if out of sync)
+#
+# Portable: uses only POSIX sed/awk (no `grep -P`, no `sed -i`, no `0,/re/`
+# GNU-only address), so it runs identically under GNU coreutils (dev container /
+# CI) and BSD tools (macOS).
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION_FILE="${REPO_ROOT}/VERSION"
@@ -13,6 +17,14 @@ VERSION_FILE="${REPO_ROOT}/VERSION"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
+
+# Portable in-place edit: apply a sed expression to a file via a temp file + mv,
+# avoiding the GNU-vs-BSD `sed -i` suffix incompatibility.
+sed_inplace() {
+    local expr="$1" file="$2" tmp
+    tmp="$(mktemp)"
+    sed "${expr}" "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+}
 
 # Validate VERSION file
 if [ ! -f "${VERSION_FILE}" ]; then
@@ -59,18 +71,22 @@ sync_or_check() {
     fi
 }
 
-# Read current versions
-PY_VER=$(grep -oP '^version\s*=\s*"\K[^"]+' "${PYPROJECT}" || echo "")
-FE_VER=$(grep -oP '"version"\s*:\s*"\K[^"]+' "${FE_PKG}" | head -1 || echo "")
-INFRA_VER=$(grep -oP '"version"\s*:\s*"\K[^"]+' "${INFRA_PKG}" | head -1 || echo "")
-README_BADGE_VER=$(grep -oP 'badge/Release-v\K[^-][^?]*(?=-)' "${README}" | head -1 | sed 's/--/-/g' || echo "")
-README_CURRENT_VER=$(grep -oP '\*\*Current release:\*\* v\K.*' "${README}" | tr -d '[:space:]' || echo "")
+# Read current versions (POSIX sed/awk; empty string if not found).
+# pyproject: first line of the form `version = "X"` at column 0.
+PY_VER=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${PYPROJECT}" | head -1 || echo "")
+# package.json: first `"version": "X"` (top-level key sits before dependencies).
+FE_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${FE_PKG}" | head -1 || echo "")
+INFRA_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${INFRA_PKG}" | head -1 || echo "")
+# README badge: shields.io encodes literal hyphens as `--`, so undouble them back.
+README_BADGE_VER=$(sed -n 's|.*badge/Release-v\(.*\)-6366f1.*|\1|p' "${README}" | head -1 | sed 's/--/-/g' || echo "")
+README_CURRENT_VER=$(sed -n 's/.*\*\*Current release:\*\* v\(.*\)/\1/p' "${README}" | head -1 | tr -d '[:space:]' || echo "")
 
 # uv.lock uses PEP 440 format (e.g., 1.0.0b16 instead of 1.0.0-beta.16)
 UV_LOCK="${REPO_ROOT}/backend/uv.lock"
 UV_LOCK_VER=""
 if [ -f "${UV_LOCK}" ]; then
-    UV_LOCK_VER=$(sed -n '/name = "agentcore-stack"/,/^\[/{ /^version = /p }' "${UV_LOCK}" | grep -oP '"\K[^"]+' || echo "")
+    # First `version = "X"` line following the agentcore-stack package stanza.
+    UV_LOCK_VER=$(awk -F'"' '/name = "agentcore-stack"/{f=1} f && /^version = /{print $2; exit}' "${UV_LOCK}" || echo "")
 fi
 # Convert SemVer prerelease to PEP 440 for comparison (e.g., 1.0.0-beta.16 → 1.0.0b16)
 PEP440_VERSION=$(echo "${VERSION}" | sed -E 's/-alpha\./a/; s/-beta\./b/; s/-rc\./rc/')
@@ -98,21 +114,34 @@ fi
 # Sync mode — update all manifests
 echo "Syncing VERSION=${VERSION} into manifests..."
 
-sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" "${PYPROJECT}"
+sed_inplace "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "${PYPROJECT}"
 echo -e "${GREEN}[UPDATED]${NC} backend/pyproject.toml"
 
-# Use a temp file approach for JSON to avoid jq dependency issues
-sed -i "0,/\"version\": \"[^\"]*\"/s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${FE_PKG}"
+# package.json: replace only the FIRST `"version": "..."` (the top-level key).
+# awk instead of GNU sed's `0,/re/` address, which BSD sed rejects.
+update_pkg_version() {
+    local file="$1" tmp
+    tmp="$(mktemp)"
+    awk -v ver="${VERSION}" '
+        !done && /"version"[[:space:]]*:[[:space:]]*"[^"]*"/ {
+            sub(/"version"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"version\": \"" ver "\"")
+            done = 1
+        }
+        { print }
+    ' "${file}" > "${tmp}" && mv "${tmp}" "${file}"
+}
+
+update_pkg_version "${FE_PKG}"
 echo -e "${GREEN}[UPDATED]${NC} frontend/ai.client/package.json"
 
-sed -i "0,/\"version\": \"[^\"]*\"/s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${INFRA_PKG}"
+update_pkg_version "${INFRA_PKG}"
 echo -e "${GREEN}[UPDATED]${NC} infrastructure/package.json"
 
 # README.md: version badge and "Current release" text
 # shields.io uses -- for literal hyphens in badge text
 BADGE_VERSION=$(echo "${VERSION}" | sed 's/-/--/g')
-sed -i "s|badge/Release-v[^?]*|badge/Release-v${BADGE_VERSION}-6366f1|" "${README}"
-sed -i "s|\*\*Current release:\*\* v.*|\*\*Current release:\*\* v${VERSION}|" "${README}"
+sed_inplace "s|badge/Release-v[^?]*|badge/Release-v${BADGE_VERSION}-6366f1|" "${README}"
+sed_inplace "s|\*\*Current release:\*\* v.*|\*\*Current release:\*\* v${VERSION}|" "${README}"
 echo -e "${GREEN}[UPDATED]${NC} README.md (badge + current release)"
 
 # Regenerate lockfiles so they reflect the new version
@@ -126,12 +155,14 @@ else
     echo -e "${RED}[SKIP]${NC} backend/uv.lock (uv not installed — run: curl -LsSf https://astral.sh/uv/install.sh | sh)"
 fi
 
-# Frontend: package-lock.json
-npm install --package-lock-only --prefix "${REPO_ROOT}/frontend/ai.client" 2>/dev/null
-echo -e "${GREEN}[UPDATED]${NC} frontend/ai.client/package-lock.json"
-
-# Infrastructure: package-lock.json
-npm install --package-lock-only --prefix "${REPO_ROOT}/infrastructure" 2>/dev/null
-echo -e "${GREEN}[UPDATED]${NC} infrastructure/package-lock.json"
+# Frontend + infrastructure: package-lock.json
+if command -v npm &>/dev/null; then
+    (cd "${REPO_ROOT}/frontend/ai.client" && npm install --package-lock-only >/dev/null 2>&1)
+    echo -e "${GREEN}[UPDATED]${NC} frontend/ai.client/package-lock.json"
+    (cd "${REPO_ROOT}/infrastructure" && npm install --package-lock-only >/dev/null 2>&1)
+    echo -e "${GREEN}[UPDATED]${NC} infrastructure/package-lock.json"
+else
+    echo -e "${RED}[SKIP]${NC} package-lock.json regeneration (npm not installed)"
+fi
 
 echo -e "\n${GREEN}[DONE]${NC} All manifests and lockfiles updated to ${VERSION}"

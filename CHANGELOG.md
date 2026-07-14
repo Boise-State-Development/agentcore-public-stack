@@ -4,6 +4,40 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.5.0] - 2026-07-13
+
+Model-catalog and MCP-admin expansion, plus UI polish. Admins can now discover the tools behind OAuth-gated MCP servers (e.g. the GitHub remote MCP server) using their own vaulted 3LO token, two new curated model cards land (Claude Sonnet 5, GPT-5.4), and the max-output-tokens field goes optional so reasoning/Responses-API models without a fixed cap can be added. Alongside: sticky admin/settings sidebars, a redesigned 404 page, chat-scroll and sticky-nav fixes, a vitest flake fix, and a Docker curl security patch. No CDK deploy, no data migration, no breaking changes — ships via the backend and frontend pipelines.
+
+### 🚀 Added
+
+- Admin tool "Discover" now works against OAuth-gated MCP servers: pass the OAuth provider id and discovery connects with the admin's own vaulted 3LO token (fetched via AgentCore Identity `get_token_for_user`, injected as a bearer), validating the admin's connection and listing the tools their token can see. Previously OAuth-gated servers were refused outright (400) or connected unauthenticated and 401'd. `requires_consent` → 409; unknown provider / forward-auth conflict / oauth2-without-provider → 400 (#639)
+- Two curated model catalog cards: **Claude Sonnet 5** (Bedrock, `global.anthropic.claude-sonnet-5`, 1M context, effort-based reasoning, caching on) and **GPT-5.4** (Mantle, `openai.gpt-5.4`, Responses API). Bedrock Claude cards now order most-capable-first and the "Bedrock Mantle" tab sits next to "Bedrock" (#641)
+
+### ✨ Improved
+
+- Max output tokens is now optional on the admin model form — reasoning / Responses-API models (GPT-5.x, adaptive-thinking Claude) that share output with reasoning budget have no fixed cap to enter. `max_output_tokens` is `Optional[int]` end to end; it was only ever a ceiling for the admin-configured `max_tokens` param and is never sent to the provider, so leaving it unset is safe (#643, #644)
+- Admin and user-settings sidebar navs are now sticky on desktop, staying in view as the content column scrolls (#632, #638)
+- The 404 page was redesigned to match the auth/first-boot screens (frosted glass, animated blobs, graph-paper grid) (#633)
+- Chat scroll space is now sized to the pending response and adapts to the shell scroll container, so the last turn spaces correctly (#637)
+
+### 🐛 Fixed
+
+- Mantle `google.gemma-4-*` models 401'd with `access_denied` because Gemma 4 is served only on Mantle's `/openai/v1` path but the Strands SDK routed it to `/v1`. The SDK's OpenAI-path prefix table is now extended with `google.gemma-4-` at build time (lazy, idempotent, guarded); Gemma 3 stays on `/v1` (#641)
+- The admin/settings sticky sidebars needed a real shell scroll container to anchor against — the app shell now scrolls on the correct element so `position: sticky` engages (#634)
+- Vitest runs now guarantee the Angular JIT compiler is present, stopping the intermittent `PlatformLocation` provider flake in the SPA unit suite (#636)
+
+### 🔒 Security
+
+- Dockerfiles pin curl to `+deb13u*` instead of an exact point release, so the security patch floats with Debian's mirror (which purges superseded point versions on each CVE update) and builds don't break; the digest-pinned base image still provides reproducibility (#645)
+
+### 🔧 CI/CD
+
+- `scripts/common/sync-version.sh` is now portable across GNU and BSD userlands (macOS `sed`/`grep`), so the version bump runs outside the dev container (#631)
+
+### 📚 Docs
+
+- Added the quota cooldown-windows + platform-ceiling spec and committee one-pager (`docs/specs/`) (#635); added a design note proposing `mantleEndpointPath` as a live admin setting (#641)
+
 ## [1.4.0] - 2026-07-10
 
 Opt-in MCP user-identity forwarding, plus an admin OAuth-provider repair. A new Cognito Pre-Token-Generation Lambda can copy configured user-pool attributes into namespaced claims on the access token — the only token forwarded end-to-end to MCP servers — so personalized MCP tools can identify the caller. It ships disabled by default (a fork that configures nothing gets zero resources). Also fixes a 502 when adding the first admin OAuth provider. A platform (CDK) deploy is required for the OAuth-provider IAM fix.
