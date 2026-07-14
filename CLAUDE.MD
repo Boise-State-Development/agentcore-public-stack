@@ -97,6 +97,14 @@ The `inference-api` runs inside an AgentCore Runtime container. The runtime data
 
 If you're tempted to add to inference-api because of an existing route there (`converse_router`, `voice_router`), don't use them as templates without confirming their access path — they predate this rule and may rely on bypasses (API key, WebSocket upgrade, direct container reach in environments where the runtime isn't the only path).
 
+### RBAC: the AppRole record is the source of truth
+
+A role grants a tool/model/skill by listing it in its own `grantedTools` / `grantedModels` / `grantedSkills` (or by granting the `*` wildcard, or inheriting from a parent). **That is the only thing access checks read.** The `allowedAppRoles` field on a resource (tool, model, skill) is a *derived, display-only* projection of those role records — never an independent grant.
+
+**Rule:** When an admin page offers a "which roles can use this?" picker on the resource, it must write *through* to each role's `granted*` list (`set_roles_for_tool`, `set_roles_for_model`) and derive the field back on read (`hydrate_model_roles`). Never persist a role list on the resource and expect it to grant anything: it will silently do nothing, and the resource page and the role page will disagree.
+
+Access decisions for models live in `apis/app_api/admin/services/model_access.py`. `can_access_model` and `filter_accessible_models` both delegate to a single `_grants_access` predicate — keep it that way. They previously diverged (one gated on `allowed_app_roles`, one didn't), so a model could be *listed* by the catalog and *denied* on use.
+
 ### Auth dependency on app_api routes
 
 The SPA sends an httpOnly session cookie — not `Authorization: Bearer`. A route that declares a bare Bearer-only dependency on the SPA-facing surface causes a 401 → centralized redirect loop the moment the SPA hits it.

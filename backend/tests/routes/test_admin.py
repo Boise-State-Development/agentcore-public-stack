@@ -82,6 +82,25 @@ def _override_require_admin_403(app: FastAPI):
     app.dependency_overrides[require_admin] = _raise
 
 
+@pytest.fixture(autouse=True)
+def stub_model_role_service():
+    """
+    Stub the ModelRoleService for every test in this module.
+
+    The managed-model routes treat the AppRole records as the source of truth for
+    model access: reads derive allowedAppRoles from them, writes push the picker's
+    selection back into each role's grantedModels. These tests cover the model
+    storage layer only, so without this stub every request would hit the real
+    roles table. ``hydrate_model_roles`` passes the models straight through.
+    """
+    service = AsyncMock()
+    service.hydrate_model_roles.side_effect = lambda models: models
+    with patch(
+        f"{MANAGED_MODELS_PATH}.get_model_role_service", return_value=service
+    ):
+        yield service
+
+
 # ---------------------------------------------------------------------------
 # Requirement 7.1: Admin endpoint returns 200 for user with Admin role
 # ---------------------------------------------------------------------------
@@ -252,6 +271,46 @@ class TestCreateManagedModel:
         body = resp.json()
         assert body["modelId"] == "anthropic.claude-3-haiku"
 
+    def test_create_grants_the_model_to_the_selected_roles(
+        self, app, make_user, stub_model_role_service
+    ):
+        """
+        The role picker must write through to the ROLE records — that is what
+        actually grants access. Previously it wrote a field on the model that no
+        access check read, so selecting a role here did nothing at all.
+        """
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.create_managed_model",
+            new_callable=AsyncMock,
+            return_value=SAMPLE_MODEL,
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/admin/managed-models",
+                json={
+                    "modelId": "anthropic.claude-3-haiku",
+                    "modelName": "Claude 3 Haiku",
+                    "provider": "bedrock",
+                    "providerName": "Anthropic",
+                    "inputModalities": ["TEXT"],
+                    "outputModalities": ["TEXT"],
+                    "maxInputTokens": 200000,
+                    "maxOutputTokens": 4096,
+                    "inputPricePerMillionTokens": 0.25,
+                    "outputPricePerMillionTokens": 1.25,
+                    "allowedAppRoles": ["staff"],
+                },
+            )
+
+        assert resp.status_code == 201
+        stub_model_role_service.set_roles_for_model.assert_awaited_once()
+        model_id, role_ids, *_ = stub_model_role_service.set_roles_for_model.await_args.args
+        assert model_id == SAMPLE_MODEL.model_id
+        assert role_ids == ["staff"]
+
 
 # ---------------------------------------------------------------------------
 # Requirement 7.7: DELETE managed model returns 204 for admin
@@ -266,7 +325,13 @@ class TestDeleteManagedModel:
         admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
         _override_require_admin(app, admin)
 
+        # The route reads the model before deleting it so it knows which provider
+        # model id to strip from the roles' grantedModels.
         with patch(
+            f"{MANAGED_MODELS_PATH}.get_managed_model",
+            new_callable=AsyncMock,
+            return_value=SAMPLE_MODEL,
+        ), patch(
             f"{MANAGED_MODELS_PATH}.delete_managed_model",
             new_callable=AsyncMock,
             return_value=True,
@@ -275,3 +340,29 @@ class TestDeleteManagedModel:
             resp = client.delete("/admin/managed-models/model-001")
 
         assert resp.status_code == 204
+
+    def test_delete_revokes_the_model_from_every_role(
+        self, app, make_user, stub_model_role_service
+    ):
+        """Deleting a model must not leave roles granting a model that's gone."""
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.get_managed_model",
+            new_callable=AsyncMock,
+            return_value=SAMPLE_MODEL,
+        ), patch(
+            f"{MANAGED_MODELS_PATH}.delete_managed_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            client = TestClient(app)
+            resp = client.delete("/admin/managed-models/model-001")
+
+        assert resp.status_code == 204
+        stub_model_role_service.revoke_model_from_all_roles.assert_awaited_once()
+        assert (
+            stub_model_role_service.revoke_model_from_all_roles.await_args.args[0]
+            == SAMPLE_MODEL.model_id
+        )

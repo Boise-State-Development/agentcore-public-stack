@@ -82,8 +82,17 @@ export interface ManagedModel {
   maxOutputTokens: number | null;
   /** Lifecycle status of the model (e.g., 'ACTIVE', 'LEGACY') */
   modelLifecycle?: string | null;
-  /** AppRole IDs that have access to this model (preferred over availableToRoles) */
+  /**
+   * AppRole IDs that grant this model DIRECTLY. Derived server-side from the
+   * role records (the source of truth); saving the form writes it back through
+   * to each role's grantedModels.
+   */
   allowedAppRoles: string[];
+  /**
+   * AppRole IDs that grant this model indirectly — via a wildcard ('*') grant or
+   * inheritance from a parent role. Read-only: change these by editing the role.
+   */
+  inheritedAppRoles?: string[];
   /** @deprecated Legacy JWT role names - use allowedAppRoles instead */
   availableToRoles: string[];
   /** Whether the model is enabled for use */

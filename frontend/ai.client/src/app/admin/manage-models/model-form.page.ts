@@ -282,6 +282,20 @@ export class ModelFormPage implements OnInit {
   readonly rolesResource = this.appRolesService.rolesResource;
   readonly availableAppRoles = computed(() => this.appRolesService.getEnabledRoles());
 
+  /**
+   * Roles that already reach this model without a direct grant — they hold a
+   * wildcard ('*') grant or inherit it from a parent. The server derives these;
+   * they can't be toggled here, so they're shown separately from the picker
+   * rather than as unchecked boxes that would look like "no access".
+   */
+  readonly inheritedAppRoles = signal<string[]>([]);
+  readonly selectableAppRoles = computed(() =>
+    this.availableAppRoles().filter(r => !this.inheritedAppRoles().includes(r.roleId)),
+  );
+  readonly inheritedRoleDetails = computed(() =>
+    this.availableAppRoles().filter(r => this.inheritedAppRoles().includes(r.roleId)),
+  );
+
   // Form state
   readonly isEditMode = signal<boolean>(false);
   readonly modelId = signal<string | null>(null);
@@ -303,7 +317,10 @@ export class ModelFormPage implements OnInit {
     outputModalities: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
     maxInputTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(1)] }),
     maxOutputTokens: this.fb.control<number | null>(null, { validators: [Validators.min(1)] }),
-    allowedAppRoles: this.fb.control<string[]>([], { nonNullable: true, validators: [Validators.required] }),
+    // No `required` validator: a model can legitimately have zero direct grants
+    // and still be reachable via a role's wildcard grant or inheritance, so
+    // forcing a selection would block saving those models.
+    allowedAppRoles: this.fb.control<string[]>([], { nonNullable: true }),
     availableToRoles: this.fb.control<string[]>([], { nonNullable: true }),
     enabled: this.fb.control(true, { nonNullable: true }),
     isDefault: this.fb.control(false, { nonNullable: true }),
@@ -802,6 +819,10 @@ export class ModelFormPage implements OnInit {
     this.isLoading.set(true);
     try {
       const model = await this.managedModelsService.getModel(id);
+
+      // Roles that reach this model via a wildcard grant or inheritance. Held
+      // outside the form: they're server-derived and not editable here.
+      this.inheritedAppRoles.set(model.inheritedAppRoles ?? []);
 
       // Populate form with model data
       this.modelForm.patchValue({
