@@ -53,7 +53,7 @@ from apis.app_api.web_sources.url_utils import (
     assert_url_is_public,
     url_extension_hint,
 )
-from apis.shared.assistants.service import get_assistant, resolve_assistant_permission
+from apis.shared.assistants.service import resolve_assistant_permission
 from apis.shared.auth import User, get_current_user_from_session
 
 from apis.shared.security.log_sanitize import scrub_log
@@ -88,6 +88,7 @@ async def _require_edit_permission(assistant_id: str, current_user: User) -> str
         )
     return assistant.owner_id
 
+
 # Strong refs to in-flight crawl tasks. Python's event loop tracks tasks
 # with weak references, so a bare `asyncio.ensure_future(run_crawl(...))`
 # can be garbage-collected mid-execution — leaving the root document
@@ -112,13 +113,13 @@ async def start_crawl(
     with `max_depth=0` — the BFS visits only the root and terminates. The
     same async pipeline is used either way so there is no separate code
     path to keep in sync.
+
+    Owner or editor may crawl. Note the document writes below are keyed on
+    the assistant (`PK=AST#<id>`), not on its owner, so no owner_id needs
+    threading through — and `imported_by_user_id`/`started_by_user_id` stay
+    the *acting* user, which is the point of recording them.
     """
-    assistant = await get_assistant(assistant_id, current_user.user_id)
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant not found: {assistant_id}",
-        )
+    await _require_edit_permission(assistant_id, current_user)
 
     try:
         normalized = assert_url_is_public(request.url)
@@ -193,12 +194,7 @@ async def list_crawls(
     `?active=true` is the only filter currently honored — drives the SPA's
     "should I keep polling for new docs" decision.
     """
-    assistant = await get_assistant(assistant_id, current_user.user_id)
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant not found: {assistant_id}",
-        )
+    await _require_edit_permission(assistant_id, current_user)
     if active:
         crawls = await list_active_crawls(assistant_id)
     else:
@@ -215,12 +211,7 @@ async def get_crawl(
     current_user: User = Depends(get_current_user_from_session),
 ) -> CrawlJob:
     """Return a single crawl's current status + counters."""
-    assistant = await get_assistant(assistant_id, current_user.user_id)
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant not found: {assistant_id}",
-        )
+    await _require_edit_permission(assistant_id, current_user)
     job = await get_crawl_job(assistant_id, crawl_id)
     if not job:
         raise HTTPException(
