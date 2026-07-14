@@ -224,6 +224,19 @@
                 />
               }
             </div>
+            <!-- Enabled even while the crawl is running: the backend refuses a
+                 live crawl with a 409 (surfaced as a toast), but a crawl whose
+                 process died is stuck at 'running' forever and must stay
+                 removable. -->
+            <button
+              type="button"
+              (click)="removeWebSource(crawl)"
+              title="Remove web source"
+              [attr.aria-label]="'Remove ' + crawl.rootUrl"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+            </button>
           </li>
         }
       </ul>
