@@ -32,10 +32,15 @@ from apis.app_api.documents.services.storage_service import (
 from apis.app_api.web_sources.crawl_repository import (
     create_crawl_job,
     get_crawl_job,
+    is_crawl_stale,
     list_active_crawls,
     list_all_crawls,
 )
 from apis.app_api.web_sources.crawler import run_crawl
+from apis.app_api.web_sources.deletion_service import (
+    WebSourceDeletionError,
+    delete_web_source,
+)
 from apis.app_api.web_sources.models import (
     ActiveCrawlsResponse,
     CrawlJob,
@@ -48,7 +53,7 @@ from apis.app_api.web_sources.url_utils import (
     assert_url_is_public,
     url_extension_hint,
 )
-from apis.shared.assistants.service import get_assistant
+from apis.shared.assistants.service import get_assistant, resolve_assistant_permission
 from apis.shared.auth import User, get_current_user_from_session
 
 from apis.shared.security.log_sanitize import scrub_log
@@ -58,6 +63,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/assistants/{assistant_id}/web-sources", tags=["web-sources"]
 )
+
+
+async def _require_edit_permission(assistant_id: str, current_user: User) -> str:
+    """Owner or editor share required — the same gate the documents surface uses.
+
+    Returns the assistant's real owner_id, which the owner-keyed document
+    services below need in order to see an editor's assistant at all.
+    """
+    assistant, permission = await resolve_assistant_permission(
+        assistant_id=assistant_id,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant not found: {assistant_id}",
+        )
+    if permission not in ("owner", "editor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage web sources for this assistant",
+        )
+    return assistant.owner_id
 
 # Strong refs to in-flight crawl tasks. Python's event loop tracks tasks
 # with weak references, so a bare `asyncio.ensure_future(run_crawl(...))`
@@ -199,3 +228,58 @@ async def get_crawl(
             detail=f"Crawl not found: {crawl_id}",
         )
     return job
+
+
+@router.delete("/crawls/{crawl_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_crawl(
+    assistant_id: str,
+    crawl_id: str,
+    current_user: User = Depends(get_current_user_from_session),
+) -> None:
+    """Remove a web source: the crawl record, its pages, and its sync policy.
+
+    A crawl that is genuinely still in flight is refused (409) rather than
+    raced — the crawler would keep writing pages we just enumerated, stranding
+    them under a deleted parent. A crawl stuck at `running` because its owning
+    process died is *not* in flight, and stays deletable (`is_crawl_stale`).
+    """
+    owner_id = await _require_edit_permission(assistant_id, current_user)
+
+    job = await get_crawl_job(assistant_id, crawl_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Crawl not found: {crawl_id}",
+        )
+
+    if job.status == "running" and not is_crawl_stale(job):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This crawl is still running. Wait for it to finish, then remove it.",
+        )
+
+    try:
+        removed = await delete_web_source(
+            assistant_id=assistant_id,
+            crawl_id=crawl_id,
+            root_url=job.root_url,
+            owner_id=owner_id,
+        )
+    except WebSourceDeletionError as e:
+        logger.error(
+            "Failed to remove web source %s from assistant %s: %s",
+            scrub_log(crawl_id),
+            scrub_log(assistant_id),
+            e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+    logger.info(
+        "Deleted web source %s (%d pages) from assistant %s",
+        scrub_log(crawl_id),
+        removed,
+        scrub_log(assistant_id),
+    )
+    return None

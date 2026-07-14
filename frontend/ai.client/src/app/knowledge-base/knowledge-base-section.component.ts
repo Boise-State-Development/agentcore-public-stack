@@ -43,6 +43,10 @@ import {
   SyncPolicyControlComponent,
   SyncIntervalSelection,
 } from '../assistants/components/sync-policy-control.component';
+import {
+  ConfirmationDialogComponent,
+  ConfirmationDialogData,
+} from '../components/confirmation-dialog';
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../services/toast/toast.service';
@@ -773,6 +777,85 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       const message = error instanceof Error ? error.message : 'Failed to delete document.';
       this.toast.error(message);
     }
+  }
+
+  /**
+   * Remove a web source: the crawl record, every page it added to the
+   * knowledge base, and any sync policy covering it. Confirmed first — unlike
+   * a single document this can take dozens of pages with it, so the dialog
+   * names the count.
+   */
+  async removeWebSource(crawl: CrawlJob): Promise<void> {
+    const recordId = this.id();
+    if (!recordId) {
+      return;
+    }
+
+    const pages = crawl.fetchedCount;
+    const pageCount = `${pages} page${pages === 1 ? '' : 's'}`;
+    const dialogRef = this.dialog.open<boolean, ConfirmationDialogData>(
+      ConfirmationDialogComponent,
+      {
+        data: {
+          title: 'Remove web source',
+          message:
+            `${crawl.rootUrl} and the ${pageCount} it added will be removed from ` +
+            `this knowledge base, along with any sync schedule on it. ` +
+            `This cannot be undone.`,
+          confirmText: 'Remove',
+          destructive: true,
+        },
+      },
+    );
+    if ((await firstValueFrom(dialogRef.closed)) !== true) {
+      return;
+    }
+
+    // Optimistic, like deleteDocument: drop the source and its pages up front
+    // so the click lands immediately, and restore both lists if the call fails
+    // (a still-running crawl is refused with a 409).
+    const previousCrawls = this.webCrawls();
+    const previousDocuments = this.uploadedDocuments();
+    const pageDocuments = previousDocuments.filter((doc) => this.isPageOf(doc, crawl));
+
+    this.webCrawls.update((crawls) => crawls.filter((c) => c.crawlId !== crawl.crawlId));
+    this.uploadedDocuments.update((docs) => docs.filter((doc) => !this.isPageOf(doc, crawl)));
+    // Stop polling any page still mid-processing, so its spinner can't
+    // reappear on the next tick before the GET starts 404ing.
+    this.pollingDocuments.update((set) => {
+      const next = new Set(set);
+      for (const doc of pageDocuments) {
+        next.delete(doc.documentId);
+      }
+      return next;
+    });
+
+    try {
+      await this.webSourceService.deleteCrawl(recordId, crawl.crawlId);
+      // The backend cascades the sync policy with its source — mirror that
+      // locally so the control disappears with the row.
+      const covering = this.syncPolicyFor(crawl.crawlId);
+      if (covering) {
+        this.removePolicy(covering.policyId);
+      }
+      this.toast.success('Web source removed.');
+    } catch (error) {
+      this.webCrawls.set(previousCrawls);
+      this.uploadedDocuments.set(previousDocuments);
+      const message = error instanceof Error ? error.message : 'Failed to remove web source.';
+      this.toast.error(message);
+    }
+  }
+
+  /**
+   * Whether a document is one of the pages a crawl produced. Mirrors the
+   * backend's rule (a `web` document whose source URL sits under the crawl
+   * root) so the optimistic removal matches what the server actually deletes.
+   */
+  private isPageOf(doc: Document, crawl: CrawlJob): boolean {
+    return (
+      doc.sourceConnectorId === 'web' && !!doc.sourceFileId?.startsWith(crawl.rootUrl)
+    );
   }
 
   // ── KB sync policy actions ──────────────────────────────────────────────

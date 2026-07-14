@@ -106,6 +106,24 @@ export class WebSourceService {
     }
   }
 
+  /**
+   * Remove a web source — its crawl record, every page it ingested, and any
+   * sync policy covering it. Rejects with `HTTP_409` while the crawl is still
+   * running (its pages are still being written).
+   */
+  async deleteCrawl(assistantId: string, crawlId: string): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.http.delete<void>(
+          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawls/${encodeURIComponent(crawlId)}`,
+          this.requestOptions(),
+        ),
+      );
+    } catch (err) {
+      throw this.toError(err, 'Failed to remove web source');
+    }
+  }
+
   private toError(err: unknown, fallback: string): WebSourceError {
     if (err instanceof HttpErrorResponse) {
       const detail =

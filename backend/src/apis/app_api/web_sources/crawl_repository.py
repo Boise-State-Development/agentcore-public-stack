@@ -175,12 +175,16 @@ async def hard_delete_crawl_job(assistant_id: str, crawl_id: str) -> bool:
         return False
 
 
-def _is_crawl_stale(job: CrawlJob) -> bool:
+def is_crawl_stale(job: CrawlJob) -> bool:
     """A `running` crawl past the crawler's own budget is dead.
 
     The crawler always finalizes in a `finally` block; the only way a
     `running` row outlives the budget is the owning process died. Mirrors
     the same staleness pattern documents use in `document_service`.
+
+    Also read by the delete path: a live crawl refuses deletion (its pages
+    are still being written), but a dead-but-`running` row must stay
+    removable or a zombie web source could never be cleared from the UI.
     """
     try:
         started_str = job.started_at.rstrip("Z")
@@ -226,7 +230,7 @@ async def list_active_crawls(assistant_id: str) -> List[CrawlJob]:
             logger.warning("Skipping unparseable CrawlJob row: %s", e)
             continue
 
-        if _is_crawl_stale(job):
+        if is_crawl_stale(job):
             logger.info(
                 "Auto-reaping stale crawl %s/%s (started_at=%s)",
                 assistant_id,
