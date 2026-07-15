@@ -79,6 +79,7 @@ export interface PlatformComputeRefs {
   userMenuLinksTable: dynamodb.ITable;
   systemPromptsTable: dynamodb.ITable;
   sharedConversationsTable: dynamodb.ITable;
+  sharedConversationsBucket: s3.IBucket;
   fileUploadBucket: s3.IBucket;
   fileUploadTable: dynamodb.ITable;
 
