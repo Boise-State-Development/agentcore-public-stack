@@ -593,10 +593,14 @@ class TestInitialize:
         mgr = make_session_manager(compaction_config=compaction_config)
         mgr._load_compaction_state = MagicMock(return_value=CompactionState())
 
+        # A valid Converse history: the truncatable toolResult is preceded by
+        # its matching toolUse turn, so the restore-time pairing repair no-ops
+        # and this test exercises compaction/truncation in isolation.
         messages = [
             make_user_message("q1"),
             make_assistant_message("a1"),
             make_user_message("q2"),
+            make_tool_use_message("t1", "search", {"q": "x"}),
             make_tool_result_message("t1", "x" * 200),  # will be truncated
         ]
         session_agent = self._make_mock_session_agent()
@@ -607,9 +611,10 @@ class TestInitialize:
         agent = self._make_mock_agent()
         mgr.initialize(agent)
 
-        # All 4 messages kept (checkpoint=0), but truncation applied
-        assert len(agent.messages) == 4
-        # Valid cutoffs cached for user text messages (indices 0, 2)
+        # All 5 messages kept (checkpoint=0), but truncation applied
+        assert len(agent.messages) == 5
+        # Valid cutoffs cached for user text messages (indices 0, 2); the
+        # toolResult user turn at index 4 is not a valid cutoff.
         assert mgr._valid_cutoff_indices == [0, 2]
 
     def test_existing_agent_compaction_with_checkpoint_slices_messages(self, make_session_manager, compaction_config):
@@ -642,10 +647,14 @@ class TestInitialize:
             return_value=CompactionState(checkpoint=2)
         )
 
+        # Valid Converse history: the truncatable toolResult follows its
+        # matching toolUse turn, so the pairing repair no-ops and the slice
+        # boundary lands on a clean turn.
         messages = [
             make_user_message("old1"),
             make_assistant_message("old2"),
             make_user_message("new1"),
+            make_tool_use_message("t1", "search", {"q": "r"}),
             make_tool_result_message("t1", "r" * 200),  # truncatable
         ]
         session_agent = self._make_mock_session_agent()
@@ -656,8 +665,8 @@ class TestInitialize:
         agent = self._make_mock_agent()
         mgr.initialize(agent)
 
-        # Sliced from index 2: 2 messages remain
-        assert len(agent.messages) == 2
+        # Sliced from index 2: [new1, toolUse, toolResult] = 3 messages remain
+        assert len(agent.messages) == 3
 
     def test_duplicate_agent_id_raises(self, make_session_manager):
         """Second initialize with same agent_id should raise SessionException."""
