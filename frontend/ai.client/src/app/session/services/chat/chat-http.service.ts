@@ -125,6 +125,23 @@ export class ChatHttpService {
         },
         body: JSON.stringify(requestObject),
         signal: abortController.signal,
+        // Keep the stream open when the tab is backgrounded. With the library
+        // default (`openWhenHidden: false`) fetch-event-source aborts the
+        // connection on `visibilitychange` to hidden and REOPENS it — issuing
+        // a brand-new `POST /invocations` for the SAME turn — when the tab
+        // becomes visible again. That reopen happens inside the library, reusing
+        // this request and bypassing our per-session double-submit + streamId
+        // supersession guards, so nothing here catches it. Because a client
+        // abort does NOT propagate through the AgentCore Runtime data plane, the
+        // original backend agent keeps running; the reopened one runs the same
+        // turn concurrently, and both persist tool-use/tool-result events to the
+        // same AgentCore Memory session — corrupting history (duplicate /
+        // interleaved toolResult turns) and bricking the conversation with a
+        // Bedrock "toolResult blocks exceed toolUse blocks" ValidationException.
+        // Keeping the single stream alive across tab switches is also correct for
+        // long agentic turns. See the restore-time repair in
+        // TurnBasedSessionManager for the server-side safety net.
+        openWhenHidden: true,
         async onopen(response) {
           if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
             return; // everything's good

@@ -261,6 +261,11 @@ export class PreviewChatService {
         },
         body: JSON.stringify(requestBody),
         signal: this.abortController.signal,
+        // Keep the stream alive when the tab is backgrounded. The library
+        // default aborts + reopens the POST on `visibilitychange`, which would
+        // re-issue the same turn on tab return. See the detailed note in
+        // chat-http.service.ts.
+        openWhenHidden: true,
         onmessage: (msg: EventSourceMessage) => {
           this.handleStreamEvent(msg, callbacks);
         },

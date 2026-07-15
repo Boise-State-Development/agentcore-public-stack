@@ -28,6 +28,12 @@ class EnvVars:
     COMPACTION_PROTECTED_TURNS = "AGENTCORE_MEMORY_COMPACTION_PROTECTED_TURNS"
     COMPACTION_MAX_TOOL_CONTENT_LENGTH = "AGENTCORE_MEMORY_COMPACTION_MAX_TOOL_CONTENT_LENGTH"
 
+    # --- Restored-history repair ---
+    # Kill switch for the restore-time tool-pairing/alternation repair
+    # (`TurnBasedSessionManager._repair_tool_pairing`). Default ON; set to
+    # "false" to disable. See the method docstring for the failure it guards.
+    HISTORY_REPAIR_ENABLED = "AGENTCORE_MEMORY_HISTORY_REPAIR_ENABLED"
+
     # --- DynamoDB Tables ---
     DYNAMODB_SESSIONS_METADATA_TABLE = "DYNAMODB_SESSIONS_METADATA_TABLE_NAME"
     DYNAMODB_QUOTA_TABLE = "DYNAMODB_QUOTA_TABLE"
