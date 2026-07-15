@@ -310,3 +310,111 @@ def _extract_text(session_message: Any) -> str:
     content = msg.get("content", []) if isinstance(msg, dict) else []
     parts = [block.get("text", "") for block in content if isinstance(block, dict)]
     return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Role-alternation guard: an error persisted after a DANGLING ASSISTANT turn
+# must not create two consecutive assistant messages.
+#
+# This is the amplifier that permanently bricked prod session f761f59b: a turn
+# ended with a dangling assistant toolUse (a duplicate concurrent invocation
+# double-wrote tool results), an error fired, and the handler appended ANOTHER
+# assistant turn — assistant, assistant — which then failed every subsequent
+# turn, each failure persisting yet another consecutive assistant error.
+#
+# The write-side fix: both synthetic-error paths pass the tail role
+# (agent.messages[-1]["role"]) to persist_synthetic_messages, which drops the
+# write when it would land next to a same-role turn. The error stays a
+# live-only UI affordance for that turn (mirroring the max_tokens path).
+# ---------------------------------------------------------------------------
+
+
+def _assistant_tail_agent_force_stop(reason: str) -> _FakeAgent:
+    """A force_stop agent whose history tail is a dangling assistant toolUse."""
+    agent = _FakeAgent([_force_stop_event(reason)])
+    agent.messages = [
+        {"role": "user", "content": [{"text": "run the tool"}]},
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "search", "input": {}}}],
+        },
+    ]
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_agent_error_skips_persist_when_tail_is_assistant():
+    """AGENT_ERROR (force_stop) path: history tail is a dangling assistant
+    turn, so the synthetic assistant error must NOT be persisted — that would
+    create consecutive assistant messages and brick the session."""
+    raw_reason = (
+        "An error occurred (ValidationException) when calling the "
+        "ConverseStream operation: This model doesn't support documents."
+    )
+    persist_sm = _RecordingPersistSessionManager()
+
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ):
+        await _collect(_assistant_tail_agent_force_stop(raw_reason), _NoopSessionManager())
+
+    assert persist_sm.calls == [], (
+        f"expected NO create_message call (assistant tail → skip to preserve "
+        f"alternation), got {len(persist_sm.calls)}: {persist_sm.calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_error_skips_persist_when_tail_is_assistant():
+    """Emergency path (raw exception out of stream_async → STREAM_ERROR):
+    history tail is a dangling assistant turn, so the synthetic error is
+    dropped rather than appended as a second consecutive assistant message."""
+    exc = Exception(
+        "An error occurred (ValidationException) when calling the "
+        "ConverseStream operation: This model doesn't support documents."
+    )
+    agent = _RaisingAgent(exc)
+    agent.messages = [
+        {"role": "user", "content": [{"text": "run the tool"}]},
+        {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "t1", "name": "search", "input": {}}}],
+        },
+    ]
+    persist_sm = _RecordingPersistSessionManager()
+
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ):
+        await _collect(agent, _NoopSessionManager())
+
+    assert persist_sm.calls == [], (
+        f"expected NO create_message call (assistant tail → skip), got "
+        f"{len(persist_sm.calls)}: {persist_sm.calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_error_still_persists_when_tail_is_user():
+    """Control: the healthy case (user turn is the tail, as at turn start) still
+    persists the assistant error exactly once — the guard only suppresses the
+    consecutive-assistant case, not normal error persistence."""
+    raw_reason = (
+        "An error occurred (ValidationException) when calling the "
+        "ConverseStream operation: This model doesn't support documents."
+    )
+    # _FakeAgent's default tail is the user turn.
+    persist_sm = _RecordingPersistSessionManager()
+
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ):
+        await _collect(_FakeAgent([_force_stop_event(raw_reason)]), _NoopSessionManager())
+
+    assert len(persist_sm.calls) == 1
+    inner = getattr(persist_sm.calls[0]["message"], "message", None)
+    role = inner.get("role") if isinstance(inner, dict) else None
+    assert role == "assistant"

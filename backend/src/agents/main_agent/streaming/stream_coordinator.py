@@ -669,6 +669,16 @@ class StreamCoordinator:
                         # content_block_delta below yields to the SSE
                         # stream. Persisting it keeps live and
                         # refresh-hydrated views in sync.
+                        #
+                        # Alternation guard: if the turn already ended with a
+                        # dangling assistant turn (an in-flight toolUse, or a
+                        # prior synthetic error), appending another assistant
+                        # message would create two consecutive assistant turns
+                        # and brick the session under Bedrock's strict
+                        # alternation rule. Passing the tail role makes
+                        # persist_synthetic_messages drop the write in that case
+                        # (the error stays a live-only UI affordance for this
+                        # turn, mirroring the max_tokens path above).
                         try:
                             from agents.main_agent.session.persistence import persist_synthetic_messages
                             from agents.main_agent.session.session_factory import SessionFactory
@@ -678,6 +688,7 @@ class StreamCoordinator:
                                 persist_session_manager,
                                 session_id,
                                 [("assistant", conv_error_event.message)],
+                                last_persisted_role=self._last_persisted_role(agent),
                             )
                         except Exception as persist_error:
                             logger.error(f"Failed to persist intercepted error to session: {persist_error}", exc_info=True)
@@ -983,7 +994,10 @@ class StreamCoordinator:
 
             # Persist ONLY the assistant turn. Same reasoning as the
             # AGENT_ERROR path above — the user turn was already persisted
-            # at turn start by Strands' MessageAddedEvent hook.
+            # at turn start by Strands' MessageAddedEvent hook. The same
+            # alternation guard applies: skip the write if the tail is
+            # already an assistant turn so we never append a second
+            # consecutive assistant message.
             try:
                 from agents.main_agent.session.persistence import persist_synthetic_messages
                 from agents.main_agent.session.session_factory import SessionFactory
@@ -993,6 +1007,7 @@ class StreamCoordinator:
                     persist_session_manager,
                     session_id,
                     [("assistant", error_event.message)],
+                    last_persisted_role=self._last_persisted_role(agent),
                 )
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
@@ -1013,6 +1028,29 @@ class StreamCoordinator:
                     logger.warning(
                         "MCP Apps broker unsubscribe failed", exc_info=True
                     )
+
+    @staticmethod
+    def _last_persisted_role(agent: Any) -> Optional[str]:
+        """Role of the message at the tail of ``agent.messages``, or ``None``.
+
+        Strands' ``MessageAddedEvent``/``append_message`` hook persists each
+        completed message to AgentCore Memory as it lands, so the live
+        ``agent.messages`` list mirrors the persisted session tail. The
+        synthetic-error persistence paths pass this to
+        ``persist_synthetic_messages`` so it can drop a write that would create
+        two consecutive same-role turns (the corruption that bricks a session
+        under Bedrock's strict alternation rule). Reads the in-memory list
+        rather than round-tripping AgentCore Memory — the same 80-250ms query
+        the coordinator deliberately avoids elsewhere. Best-effort: any failure
+        returns ``None`` so the caller persists verbatim (prior behavior).
+        """
+        try:
+            messages = getattr(agent, "messages", None) or []
+            if messages:
+                return messages[-1].get("role")
+        except Exception:  # noqa: BLE001 - guard is best-effort
+            logger.debug("Could not read agent.messages tail for alternation guard", exc_info=True)
+        return None
 
     async def _persist_interruption(
         self,
@@ -1044,13 +1082,19 @@ class StreamCoordinator:
         reasoning as the error paths; canonical reference in
         ``session/persistence.py``).
 
-        Role-alternation repair: when the interruption lands before any token
-        of the in-flight message streamed (empty partial), a minimal
-        placeholder assistant turn is persisted ONLY if the last committed
-        message is a user turn — that is the dangling user→user case the
-        placeholder exists to fix. On continuation/resume turns (history tail
-        is an assistant message) or a pre-turn cancellation nothing needs
-        repair, so no synthetic write happens and only the marker is set.
+        Role-alternation repair: a synthetic assistant turn is persisted only
+        when it keeps user/assistant alternation valid — i.e. the last
+        committed message is NOT itself an assistant turn. This covers two
+        cases at once:
+          * empty partial + dangling user tail → persist a minimal placeholder
+            so the orphan user turn is answered (the user→user repair);
+          * non-empty partial + assistant tail (an interrupted continuation/
+            resume, where the tail is the message being extended) → SKIP, so we
+            don't append a second consecutive assistant turn and brick the
+            session. The partial stays a live-only affordance for that turn.
+        Whenever nothing is persisted, only the marker is set. The write itself
+        also passes ``last_persisted_role`` to ``persist_synthetic_messages`` so
+        the centralized alternation guard is the single enforcement point.
         """
         async def _do() -> None:
             text = partial_text.strip()
@@ -1063,7 +1107,13 @@ class StreamCoordinator:
                 logger.debug("Could not read agent.messages tail", exc_info=True)
 
             message = text if text else "[Response interrupted before any content was generated]"
-            should_persist = bool(text) or last_role == "user"
+            # Persist the synthetic assistant turn only when it preserves
+            # alternation: never when the tail is already an assistant turn
+            # (an interrupted continuation/resume — appending here would create
+            # consecutive assistant turns and brick the session). Otherwise a
+            # non-empty partial is worth persisting, and an empty partial is
+            # persisted only to answer a dangling user turn.
+            should_persist = (bool(text) or last_role == "user") and last_role != "assistant"
             if should_persist:
                 try:
                     from agents.main_agent.session.persistence import persist_synthetic_messages
@@ -1076,6 +1126,7 @@ class StreamCoordinator:
                         persist_session_manager,
                         session_id,
                         [("assistant", message)],
+                        last_persisted_role=last_role,
                     )
                 except Exception as persist_error:
                     logger.error(
@@ -1084,9 +1135,9 @@ class StreamCoordinator:
                     )
             else:
                 logger.info(
-                    "Interruption with no in-flight partial and non-user history tail "
-                    "(role=%s) for session %s — marker only, no synthetic write",
-                    last_role, session_id,
+                    "Interruption for session %s — marker only, no synthetic write "
+                    "(in-flight partial present=%s, history tail role=%s)",
+                    session_id, bool(text), last_role,
                 )
 
             try:

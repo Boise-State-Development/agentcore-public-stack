@@ -250,6 +250,40 @@ async def test_empty_partial_skips_synthetic_write_when_tail_is_assistant():
 
 
 @pytest.mark.asyncio
+async def test_nonempty_partial_skips_write_when_tail_is_assistant():
+    """An interrupted continuation/resume: the tail is already an assistant
+    message (the one being extended) and a partial streamed before teardown.
+    Persisting the partial as a NEW assistant turn would create consecutive
+    assistant messages and brick the session, so it is SKIPPED — the partial
+    stays a live-only affordance and only the marker is set."""
+    persist_sm = _RecordingPersistSessionManager()
+    marker_calls: List[Dict[str, Any]] = []
+
+    async def _fake_set_interrupted(session_id, user_id, reason="unknown", source="cancellation"):
+        marker_calls.append({"reason": reason})
+
+    agent = _InterruptingAgent()
+    agent.messages = [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "resuming the truncated answer"}]},
+    ]
+    coordinator = StreamCoordinator()
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ), patch("apis.shared.sessions.metadata.set_interrupted_turn", _fake_set_interrupted):
+        await coordinator._persist_interruption(
+            agent=agent,
+            session_id="sess-interrupt",
+            user_id="user-1",
+            partial_text="…and here is the continuation",
+        )
+
+    assert persist_sm.calls == []
+    assert marker_calls == [{"reason": "connection_lost"}]
+
+
+@pytest.mark.asyncio
 async def test_interruption_persists_partial_turn_metadata():
     """A Stop with a partial persists per-message metadata (which also bumps
     the session cost aggregates) keyed to the interrupted message's index, so

@@ -130,3 +130,101 @@ def test_create_message_exception_propagates():
     sm = _RaisingSessionManager()
     with pytest.raises(RuntimeError, match="rejected the write"):
         persist_synthetic_messages(sm, "sess-x", [("assistant", "boom")])
+
+
+# ---------------------------------------------------------------------------
+# Role-alternation guard (last_persisted_role).
+#
+# Bedrock Converse requires strict user/assistant alternation. TWO consecutive
+# same-role turns anywhere in stored history permanently brick the session.
+# The synthetic-error paths append an assistant turn after a failure; if the
+# session tail is ALREADY an assistant turn (a dangling toolUse or a prior
+# synthetic error), that append is the corruption. The guard drops it.
+# ---------------------------------------------------------------------------
+
+
+def test_skips_assistant_write_when_tail_is_assistant():
+    """The core fix: error persisted after a dangling assistant turn must NOT
+    create a second consecutive assistant message — it is dropped entirely."""
+    sm = _RecordingSessionManager()
+
+    ok = persist_synthetic_messages(
+        sm,
+        "sess-brick",
+        [("assistant", "⚠️ Something went wrong")],
+        last_persisted_role="assistant",
+    )
+
+    # No write happened, but it's a successful no-op (True), not a failure.
+    assert ok is True
+    assert sm.calls == []
+
+
+def test_persists_assistant_write_when_tail_is_user():
+    """The common, healthy case: the user turn is the tail (persisted by the
+    hook at turn start), so appending the assistant error is valid."""
+    sm = _RecordingSessionManager()
+
+    ok = persist_synthetic_messages(
+        sm,
+        "sess-ok",
+        [("assistant", "the error explanation")],
+        last_persisted_role="user",
+    )
+
+    assert ok is True
+    assert len(sm.calls) == 1
+    assert _extract(sm.calls[0]["message"]) == {"role": "assistant", "text": "the error explanation"}
+
+
+def test_none_last_role_preserves_verbatim_behavior():
+    """``last_persisted_role=None`` (the default) means "caller doesn't know the
+    tail" → persist verbatim, matching pre-guard behavior. This is the
+    quota-exceeded path that writes a fresh user+assistant pair."""
+    sm = _RecordingSessionManager()
+
+    ok = persist_synthetic_messages(
+        sm,
+        "sess-quota",
+        [("user", "hi"), ("assistant", "quota exceeded")],
+    )
+
+    assert ok is True
+    assert len(sm.calls) == 2
+
+
+def test_guard_drops_leading_user_but_keeps_alternating_tail():
+    """The guard tracks the running role through a multi-message batch: a
+    leading ``user`` that collides with a ``user`` tail is dropped, and the
+    following ``assistant`` (now valid after the user tail) is kept."""
+    sm = _RecordingSessionManager()
+
+    ok = persist_synthetic_messages(
+        sm,
+        "sess-multi",
+        [("user", "dup user"), ("assistant", "answer")],
+        last_persisted_role="user",
+    )
+
+    assert ok is True
+    assert len(sm.calls) == 1
+    assert _extract(sm.calls[0]["message"]) == {"role": "assistant", "text": "answer"}
+
+
+def test_guard_logs_when_skipping(caplog):
+    """A dropped synthetic turn is logged loudly so the skip is observable in
+    incident forensics, not silent."""
+    sm = _RecordingSessionManager()
+
+    with caplog.at_level("WARNING"):
+        persist_synthetic_messages(
+            sm,
+            "sess-log",
+            [("assistant", "dropped")],
+            last_persisted_role="assistant",
+        )
+
+    assert any(
+        "preserve role alternation" in rec.message and "sess-log" in rec.message
+        for rec in caplog.records
+    ), f"expected a skip warning, got: {[r.message for r in caplog.records]}"
