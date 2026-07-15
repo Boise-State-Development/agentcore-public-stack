@@ -33,6 +33,45 @@ class UnauthorizedError extends Error {
     this.name = 'UnauthorizedError';
   }
 }
+/**
+ * Thrown by the SSE `onopen` when the BFF returned 409 — the inference-api
+ * single-flight guard rejected this turn because another turn for the same
+ * session is still streaming server-side (a second tab/device, a transport
+ * retry, or a Stop whose server turn hasn't ended, since a client abort does
+ * not propagate through the AgentCore Runtime). Not a failure: `onerror`
+ * surfaces it as a gentle notice rather than an error toast.
+ */
+class AlreadyStreamingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AlreadyStreamingError';
+  }
+}
+
+/**
+ * Best-effort human message for a 409 from `/chat/stream`. The app-api proxy
+ * relays the inference-api body verbatim inside its own `detail`, so the
+ * payload can be double-encoded (`{"detail":"{\"detail\":\"…\"}"}`) — unwrap one
+ * nested layer, and fall back to a fixed message if the body is unreadable.
+ */
+async function parseConflictMessage(response: Response): Promise<string> {
+  const fallback =
+    'This conversation is still generating a response. Wait for it to finish before sending another message.';
+  try {
+    const data = await response.json();
+    let detail: unknown = data?.detail ?? data?.error?.message ?? data?.message;
+    if (typeof detail === 'string' && detail.trim().startsWith('{')) {
+      try {
+        detail = (JSON.parse(detail) as { detail?: unknown })?.detail ?? detail;
+      } catch {
+        // Not nested JSON after all — keep the string as-is.
+      }
+    }
+    return typeof detail === 'string' && detail.trim() ? detail : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 interface GenerateTitleRequest {
   session_id: string;
@@ -151,6 +190,12 @@ export class ChatHttpService {
             }
 
             throw new FatalError(errorMessage);
+          } else if (response.status === 409) {
+            // Single-flight guard: another turn for this session is still
+            // streaming server-side. This is a benign rejection, not a
+            // failure — surface a gentle notice (handled in `onerror`) and
+            // don't tear down as fatal/retriable.
+            throw new AlreadyStreamingError(await parseConflictMessage(response));
           } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
             // Client-side errors are usually non-retriable
             let errorMessage = `Request failed with status ${response.status}`;
@@ -218,6 +263,14 @@ export class ChatHttpService {
           // 401 already triggered the redirect — skip the toast so it
           // doesn't flash before the page tears down.
           if (err instanceof UnauthorizedError) {
+            throw err;
+          }
+
+          // 409 single-flight rejection is expected, not an error: the prior
+          // response is still generating. Show a soft, dismissible notice with
+          // the server's explanation rather than a "Chat Request Failed" toast.
+          if (err instanceof AlreadyStreamingError) {
+            this.errorService.addError('Already responding', err.message, undefined, undefined);
             throw err;
           }
 
