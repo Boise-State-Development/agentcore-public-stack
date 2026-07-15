@@ -20,10 +20,15 @@ Or run directly:
 import os
 import pytest
 
-# Skip all tests in this module unless AWS integration env vars are set
+# These hit real AWS services, so they must never run in the automated unit
+# suite. Gate them behind an explicit opt-in rather than AGENTCORE_MEMORY_ID:
+# that variable is present in any real environment (and a local backend/src/.env
+# leaks it into the process mid-suite via the apis.app_api.main reload's
+# load_dotenv(override=True)), which made these tests run order-dependently
+# instead of skipping. Set RUN_AGENTCORE_INTEGRATION_TESTS=1 to run them.
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AGENTCORE_MEMORY_ID"),
-    reason="Integration test requires AGENTCORE_MEMORY_ID environment variable"
+    os.environ.get("RUN_AGENTCORE_INTEGRATION_TESTS", "").lower() not in ("1", "true"),
+    reason="Integration test requires RUN_AGENTCORE_INTEGRATION_TESTS=1 and real AWS services"
 )
 import sys
 import uuid
