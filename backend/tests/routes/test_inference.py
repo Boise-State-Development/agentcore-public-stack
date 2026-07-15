@@ -335,3 +335,98 @@ class TestDefaultAgentTypeFlip:
         kwargs = get_agent_mock.call_args.kwargs
         assert kwargs["agent_type"] == "chat"
         assert kwargs["accessible_skill_ids"] is None
+
+
+# ---------------------------------------------------------------------------
+# Single-flight concurrency guard (follow-up to PR #653)
+# See docs/specs/session-single-flight-guard.md
+# ---------------------------------------------------------------------------
+
+
+class TestInvocationsSingleFlight:
+    """POST /invocations acquires a per-session lease and rejects duplicates."""
+
+    def _mock_agent(self):
+        agent = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            yield "event: done\ndata: {}\n\n"
+
+        agent.stream_async = fake_stream
+        return agent
+
+    def test_duplicate_concurrent_invocation_returns_409(self, authed_app, authed_client):
+        """A second turn while the first holds the lease is rejected with 409."""
+        from apis.shared.sessions.session_lease import SessionBusyError
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=self._mock_agent(),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            # Patched at the source module — the route imports it locally at
+            # call time, so this binding is what it resolves.
+            "apis.shared.sessions.session_lease.acquire_session_lease",
+            AsyncMock(side_effect=SessionBusyError("sess-dup")),
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={"session_id": "sess-dup", "message": "hi"},
+            )
+
+        assert resp.status_code == 409
+        assert "already streaming" in resp.text.lower()
+
+    def test_lease_released_after_stream_completes(self, authed_app, authed_client):
+        """The happy path releases the lease when the SSE stream ends."""
+        from apis.shared.sessions.session_lease import SessionLease
+
+        sentinel = SessionLease(session_id="sess-ok", user_id="u1", owner="owner-xyz")
+        release_mock = AsyncMock()
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=self._mock_agent(),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.shared.sessions.session_lease.acquire_session_lease",
+            AsyncMock(return_value=sentinel),
+        ), patch(
+            "apis.shared.sessions.session_lease.release_session_lease",
+            release_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={"session_id": "sess-ok", "message": "hi"},
+            )
+            _ = resp.text  # drive the streaming generator (and its finally) to completion
+
+        assert resp.status_code == 200
+        release_mock.assert_awaited_with(sentinel)
+
+    def test_preview_session_skips_the_guard(self, authed_app, authed_client):
+        """Preview sessions never touch the lease (they don't persist)."""
+        acquire_mock = AsyncMock(return_value=None)
+
+        with patch(
+            "apis.inference_api.chat.routes.get_agent",
+            return_value=self._mock_agent(),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.shared.sessions.session_lease.acquire_session_lease",
+            acquire_mock,
+        ):
+            resp = authed_client.post(
+                "/invocations",
+                json={"session_id": "preview-abc", "message": "hi"},
+            )
+            _ = resp.text
+
+        assert resp.status_code == 200
+        acquire_mock.assert_not_awaited()

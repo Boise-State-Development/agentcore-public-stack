@@ -33,7 +33,7 @@ describe('ChatHttpService', () => {
         { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn() } },
         { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
-        { provide: ErrorService, useValue: { handleHttpError: vi.fn() } },
+        { provide: ErrorService, useValue: { handleHttpError: vi.fn(), addError: vi.fn() } },
       ],
     });
     service = TestBed.inject(ChatHttpService);
@@ -142,6 +142,51 @@ describe('ChatHttpService', () => {
       contextWindow: 200000,
     });
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('surfaces a soft "Already responding" notice (not a hard error) on a 409 single-flight rejection', async () => {
+    // The inference-api single-flight guard rejects a duplicate turn while the
+    // prior one is still streaming server-side; the BFF relays it as 409.
+    const body = JSON.stringify({
+      detail: 'A response is already streaming for this conversation. Wait for it to finish before sending another message.',
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, { status: 409, headers: { 'content-type': 'application/json' } }),
+    );
+    const errorSvc = TestBed.inject(ErrorService) as any;
+
+    await expect(
+      service.sendChatRequest({ session_id: 's1', message: 'hi' }),
+    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+
+    // Gentle, dismissible notice carrying the server's explanation — NOT the
+    // "Chat Request Failed" / network-error paths.
+    expect(errorSvc.addError).toHaveBeenCalledTimes(1);
+    const [title, message] = errorSvc.addError.mock.calls[0];
+    expect(title).toBe('Already responding');
+    expect(message).toContain('already streaming');
+    // Loading is cleared so the user can retry once the prior turn finishes.
+    expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    vi.restoreAllMocks();
+  });
+
+  it('unwraps a double-encoded 409 body from the BFF proxy', async () => {
+    // app-api relays inference-api's body verbatim inside its own `detail`,
+    // so the payload can be `{"detail":"{\"detail\":\"…\"}"}`.
+    const inner = JSON.stringify({ detail: 'This conversation is busy generating a response.' });
+    const body = JSON.stringify({ detail: inner });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, { status: 409, headers: { 'content-type': 'application/json' } }),
+    );
+    const errorSvc = TestBed.inject(ErrorService) as any;
+
+    await expect(
+      service.sendChatRequest({ session_id: 's1', message: 'hi' }),
+    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+
+    const [, message] = errorSvc.addError.mock.calls[0];
+    expect(message).toBe('This conversation is busy generating a response.');
     vi.restoreAllMocks();
   });
 });
