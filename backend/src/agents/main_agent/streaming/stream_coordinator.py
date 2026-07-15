@@ -23,6 +23,18 @@ from .stream_processor import process_agent_stream
 logger = logging.getLogger(__name__)
 
 
+class _CooperativeStopSignal(Exception):
+    """Internal: a user Stop was observed mid-stream (cooperative cancellation).
+
+    Raised from the stream loop when ``session_manager.cancelled`` is set, and
+    caught in ``stream_response`` to persist the partial + end the stream
+    cleanly. A plain ``Exception`` (not ``CancelledError``) so it never reaches
+    the ASGI server as a spurious task cancellation when the client is still
+    connected, and so the generic ``except Exception`` error arm can't mistake
+    a deliberate stop for a failure.
+    """
+
+
 class StreamCoordinator:
     """Coordinates streaming lifecycle for agent responses"""
 
@@ -165,6 +177,26 @@ class StreamCoordinator:
 
             # Process through new stream processor and format as SSE
             async for event in process_agent_stream(agent_stream):
+                # Cooperative stop. A user Stop arms a cancel on the session's
+                # single-flight lease; the inference-api heartbeat observes it
+                # and flips ``session_manager.cancelled``. Because a client
+                # abort does not propagate through the AgentCore Runtime data
+                # plane, this in-loop check is what actually ends a token-only
+                # turn — StopHook only fires at tool boundaries, of which a
+                # pure-chat turn has none. Raise into the dedicated stop arm
+                # below, which persists the partial the user already saw, marks
+                # the turn interrupted, and ends the stream cleanly so the lease
+                # releases and the user's resend isn't rejected. Checked before
+                # yielding so no further tokens are emitted once stop is seen;
+                # we then abandon the (suspended) agent stream, which cannot
+                # progress or write to Memory without a consumer.
+                if getattr(session_manager, "cancelled", False):
+                    logger.info(
+                        "Cooperative stop observed mid-stream for session %s; ending turn",
+                        session_id,
+                    )
+                    raise _CooperativeStopSignal()
+
                 # Track when new assistant messages start (to associate metadata with them)
                 if event.get("type") == "message_start":
                     role = event.get("data", {}).get("role")
@@ -930,6 +962,34 @@ class StreamCoordinator:
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
 
+        except _CooperativeStopSignal:
+            # Deliberate user Stop observed mid-stream (see the in-loop check).
+            # Unlike the CancelledError/GeneratorExit backstop below — which
+            # fires only when a client disconnect actually reaches this process
+            # — this path runs even when the client is still connected, because
+            # the stop was signalled out-of-band via the lease. Persist the
+            # partial the user already saw and mark the turn interrupted
+            # (user_stopped), then end the SSE stream cleanly rather than
+            # re-raising, so a still-connected client sees a proper close and
+            # the route's finally releases the lease.
+            await self._persist_interruption(
+                agent=agent,
+                session_id=session_id,
+                user_id=user_id,
+                partial_text="".join(assistant_text_acc),
+                main_agent_wrapper=main_agent_wrapper,
+                accumulated_metadata=accumulated_metadata,
+                initial_message_count=initial_message_count,
+                current_assistant_message_index=current_assistant_message_index,
+                stream_start_time=stream_start_time,
+                first_token_time=first_token_time,
+                reason="user_stopped",
+            )
+            # Terminal frames so any still-connected client ends cleanly; the
+            # SPA already stopped rendering on Stop, so this is belt-and-braces.
+            yield 'event: message_stop\ndata: {"stopReason": "stopped"}\n\n'
+            yield "event: done\ndata: {}\n\n"
+            # No re-raise: the turn ended on purpose.
         except (asyncio.CancelledError, GeneratorExit):
             # Client interruption: Stop click, page refresh, or dropped
             # socket. Depending on where the generator is suspended when the
@@ -1064,9 +1124,16 @@ class StreamCoordinator:
         current_assistant_message_index: int = -1,
         stream_start_time: Optional[float] = None,
         first_token_time: Optional[float] = None,
+        reason: str = "connection_lost",
     ) -> None:
         """Persist the in-flight partial assistant turn + an interrupted
         marker when a turn is torn down mid-stream.
+
+        ``reason`` records why: the default ``connection_lost`` is the
+        disconnect backstop (conditional, never downgrades a stronger
+        ``user_stopped`` the client beacon may have written); the cooperative
+        Stop arm passes ``user_stopped`` so the marker is correct even if that
+        beacon never landed.
 
         Runs from inside the ``except (CancelledError, GeneratorExit)`` arm,
         i.e. while the request task is being torn down. Any bare ``await``
@@ -1144,7 +1211,7 @@ class StreamCoordinator:
                 from apis.shared.sessions.metadata import set_interrupted_turn
 
                 await set_interrupted_turn(
-                    session_id, user_id, reason="connection_lost", source="cancellation"
+                    session_id, user_id, reason=reason, source="cancellation"
                 )
             except Exception as marker_error:
                 logger.error(

@@ -19,6 +19,7 @@ from apis.shared.sessions.session_lease import (
     acquire_session_lease,
     release_session_lease,
     renew_session_lease,
+    request_session_cancel,
 )
 
 
@@ -162,6 +163,63 @@ class TestRelease:
     @pytest.mark.asyncio
     async def test_release_none_is_noop(self, sessions_metadata_table):
         await release_session_lease(None)  # must not raise
+
+
+class TestCancel:
+    @pytest.mark.asyncio
+    async def test_renew_reports_no_cancel_by_default(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        assert await renew_session_lease(lease) is False
+
+    @pytest.mark.asyncio
+    async def test_request_cancel_is_observed_by_owner_renew(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        armed = await request_session_cancel("s1", "u1")
+        assert armed is True
+        # The container running the turn sees it on its next heartbeat renew.
+        assert await renew_session_lease(lease) is True
+
+    @pytest.mark.asyncio
+    async def test_request_cancel_with_no_active_lease_is_noop(self, sessions_metadata_table):
+        # No turn streaming → nothing to cancel.
+        assert await request_session_cancel("s1", "u1") is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_is_owner_scoped_across_takeover(self, sessions_metadata_table):
+        # A Stop arms a cancel against the current owner; then that turn ends
+        # and a new one force-acquires (resume). The new owner must NOT inherit
+        # the old cancel.
+        first = await acquire_session_lease("s1", "u1")
+        await request_session_cancel("s1", "u1")
+        assert await renew_session_lease(first) is True  # armed for `first`
+
+        resumed = await acquire_session_lease("s1", "u1", force=True)
+        assert resumed.owner != first.owner
+        # acquire cleared the stale marker; the new owner sees no cancel.
+        item = _lease_item(sessions_metadata_table)
+        assert "cancelRequestedFor" not in item
+        assert await renew_session_lease(resumed) is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_takeover_targets_only_new_owner(self, sessions_metadata_table):
+        first = await acquire_session_lease("s1", "u1")
+        resumed = await acquire_session_lease("s1", "u1", force=True)
+        # A fresh Stop now arms against the current (resumed) owner.
+        await request_session_cancel("s1", "u1")
+        assert await renew_session_lease(resumed) is True
+        # The superseded owner never sees it (it lost the lease anyway).
+        assert await renew_session_lease(first) is False
+
+    @pytest.mark.asyncio
+    async def test_release_after_cancel_frees_session(self, sessions_metadata_table):
+        lease = await acquire_session_lease("s1", "u1")
+        await request_session_cancel("s1", "u1")
+        await release_session_lease(lease)
+        assert _lease_item(sessions_metadata_table) is None
+        # Resend acquires cleanly, with no leftover cancel marker.
+        again = await acquire_session_lease("s1", "u1")
+        assert again is not None
+        assert await renew_session_lease(again) is False
 
 
 class TestLifecycle:

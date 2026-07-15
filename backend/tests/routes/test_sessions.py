@@ -800,6 +800,49 @@ class TestSignalTurnInterrupted:
             source="client_signal",
         )
 
+    def test_arms_session_cancel_on_stop(self, app, make_user, authenticated_client):
+        """Stop also arms a cancel on the session lease so the container running
+        the turn can unwind it (distributed cancellation) — a client abort
+        doesn't propagate through the AgentCore Runtime data plane."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        cancel = AsyncMock(return_value=True)
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            AsyncMock(),
+        ), patch(
+            # Patched at the source module — the route imports it locally.
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            cancel,
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "user_stopped"},
+            )
+
+        assert resp.status_code == 204
+        cancel.assert_awaited_once_with("sess-001", user.user_id)
+
+    def test_stop_succeeds_even_if_cancel_arm_fails(self, app, make_user, authenticated_client):
+        """Arming the cancel is best-effort — a failure never fails the Stop."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        with patch(
+            "apis.app_api.sessions.routes.set_interrupted_turn",
+            AsyncMock(),
+        ), patch(
+            "apis.shared.sessions.session_lease.request_session_cancel",
+            AsyncMock(side_effect=RuntimeError("dynamo down")),
+        ):
+            resp = client.post(
+                "/sessions/sess-001/interrupt",
+                json={"reason": "user_stopped"},
+            )
+
+        assert resp.status_code == 204
+
     def test_rejects_non_client_attested_reason(self, app, make_user, authenticated_client):
         """`connection_lost` is server-inferred only — a client must not be
         able to plant (or downgrade to) it through this endpoint."""

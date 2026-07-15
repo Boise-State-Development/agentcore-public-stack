@@ -678,6 +678,18 @@ async def signal_turn_interrupted_endpoint(
             reason=body.reason,
             source="client_signal",
         )
+        # Distributed turn cancellation: a client abort doesn't propagate
+        # through the AgentCore Runtime data plane, so arm a cancel on the
+        # session's single-flight lease. The container running the turn
+        # observes it on its next heartbeat and unwinds — releasing the lease
+        # so the user's resend isn't rejected with 409 and stopping wasted
+        # model/tool work. Owner-scoped, so a stale Stop can't kill a later
+        # turn. Best-effort: never fail the Stop signal on this.
+        try:
+            from apis.shared.sessions.session_lease import request_session_cancel
+            await request_session_cancel(session_id, user_id)
+        except Exception:
+            logger.warning("Failed to arm session cancel on stop", exc_info=True)
         return Response(status_code=204)
     except Exception:
         logger.error("Error recording turn interruption", exc_info=True)

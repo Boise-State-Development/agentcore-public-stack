@@ -42,8 +42,11 @@ logger = logging.getLogger(__name__)
 # so a normal long turn never self-evicts).
 LEASE_WINDOW_SECONDS = 90
 
-# Heartbeat cadence — how often the live turn renews ``leaseExpiresAt``.
-LEASE_HEARTBEAT_SECONDS = 30
+# Heartbeat cadence — how often the live turn renews ``leaseExpiresAt`` and
+# observes a cancel request. Also bounds worst-case Stop→resend latency: a
+# cooperative stop is seen within one interval. Kept well under the window so a
+# single missed tick never expires the lease.
+LEASE_HEARTBEAT_SECONDS = 10
 
 # DynamoDB ``ttl`` backstop: how long an orphaned lease item lingers before
 # DynamoDB reaps it. Only prevents unbounded accumulation; correctness rides on
@@ -128,9 +131,14 @@ async def acquire_session_lease(
 
     update_kwargs = {
         "Key": {"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"},
+        # REMOVE clears any stale cancel marker when taking over an expired
+        # lease item, so a prior turn's cancel request can't bleed into this
+        # one. (Owner-scoping already protects — the new owner token won't match
+        # the old cancelRequestedFor — but clearing keeps the row honest.)
         "UpdateExpression": (
             "SET leaseOwner = :owner, leaseExpiresAt = :exp, "
-            "#ttl = :ttl, updatedAt = :updated"
+            "#ttl = :ttl, updatedAt = :updated "
+            "REMOVE cancelRequestedFor, cancelRequestedAt"
         ),
         "ExpressionAttributeNames": {"#ttl": "ttl"},
         "ExpressionAttributeValues": {
@@ -173,23 +181,26 @@ async def acquire_session_lease(
     return SessionLease(session_id=session_id, user_id=user_id, owner=owner)
 
 
-async def renew_session_lease(lease: Optional[SessionLease]) -> None:
-    """Extend our lease's validity window. Best-effort, owner-scoped.
+async def renew_session_lease(lease: Optional[SessionLease]) -> bool:
+    """Extend our lease's window and observe a cancel request in one round-trip.
 
     Owner-conditional so a container that already lost the lease (its window
     lapsed and another turn took over) can't clobber the new owner's window.
+    Returns ``True`` iff a cancel has been requested for *this* lease owner —
+    the caller flips the session manager's ``cancelled`` flag to stop the turn.
+    Best-effort: any error (including having lost ownership) returns ``False``.
     """
     if lease is None:
-        return
+        return False
     table = _table()
     if table is None:
-        return
+        return False
 
     from botocore.exceptions import ClientError
 
     now = int(time.time())
     try:
-        table.update_item(
+        resp = table.update_item(
             Key={"PK": lease.pk, "SK": lease.sk},
             UpdateExpression="SET leaseExpiresAt = :exp, #ttl = :ttl, updatedAt = :updated",
             ConditionExpression="leaseOwner = :owner",
@@ -200,15 +211,21 @@ async def renew_session_lease(lease: Optional[SessionLease]) -> None:
                 ":owner": lease.owner,
                 ":updated": datetime.now(timezone.utc).isoformat(),
             },
+            ReturnValues="ALL_NEW",
         )
+        attrs = resp.get("Attributes", {})
+        # Owner-scoped: only honor a cancel aimed at *our* turn, so a stale
+        # marker from a prior turn on the same row can't stop us.
+        return attrs.get("cancelRequestedFor") == lease.owner
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             # We no longer own the lease (took too long, another turn took over).
             # Nothing to renew; the live loop will still finish, but the session
             # is no longer reserved for it.
             logger.warning("Session lease renew skipped for %s — no longer owner", lease.session_id)
-            return
+            return False
         logger.warning("Session lease renew failed for %s: %s", lease.session_id, e)
+        return False
 
 
 async def release_session_lease(lease: Optional[SessionLease]) -> None:
@@ -238,3 +255,61 @@ async def release_session_lease(lease: Optional[SessionLease]) -> None:
             # Already released, expired-and-retaken, or never persisted — fine.
             return
         logger.warning("Session lease release failed for %s: %s", lease.session_id, e)
+
+
+async def request_session_cancel(session_id: str, user_id: str) -> bool:
+    """Ask the turn currently holding this session's lease to stop.
+
+    Called from the app-api ``user_stopped`` path (any container). Reads the
+    lease's current ``leaseOwner`` and stamps ``cancelRequestedFor = <owner>``
+    so the running container observes it on its next heartbeat and unwinds the
+    turn. Owner-scoping is the safety property: the request names the *current*
+    owner, so if the turn has already ended and a new one started (new owner
+    token), the new turn ignores it — a stale Stop can never kill a later turn.
+
+    Returns ``True`` if a cancel was armed against an active lease. ``False``
+    when there is no active turn (no lease item) or the guard is inactive
+    (table unconfigured) — both mean "nothing running to stop." Best-effort:
+    any DynamoDB error returns ``False`` rather than raising.
+    """
+    table = _table()
+    if table is None:
+        return False
+
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = table.get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"}
+        )
+    except ClientError as e:
+        logger.warning("Session cancel lookup failed for %s: %s", session_id, e)
+        return False
+
+    item = resp.get("Item")
+    owner = item.get("leaseOwner") if item else None
+    if not owner:
+        # No lease → no turn is streaming server-side for this session.
+        return False
+
+    try:
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"},
+            UpdateExpression="SET cancelRequestedFor = :owner, cancelRequestedAt = :ts",
+            # Only arm if that same owner still holds the lease — otherwise the
+            # turn already ended/rotated and there is nothing to cancel.
+            ConditionExpression="leaseOwner = :owner",
+            ExpressionAttributeValues={
+                ":owner": owner,
+                ":ts": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info("Armed cancel for session %s (owner=%s)", session_id, owner)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # The turn ended or rotated between the read and the write — nothing
+            # to cancel.
+            return False
+        logger.warning("Session cancel arm failed for %s: %s", session_id, e)
+        return False
