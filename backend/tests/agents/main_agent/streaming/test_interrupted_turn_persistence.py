@@ -368,3 +368,97 @@ async def test_interruption_metadata_skipped_without_wrapper():
 
     assert store_calls == []
     assert len(persist_sm.calls) == 1  # partial still persisted
+
+
+# ---------------------------------------------------------------------------
+# Cooperative stop (distributed cancellation): a user Stop is observed via the
+# session lease and flips session_manager.cancelled while the turn is still
+# streaming server-side (the client abort never reached this process). Unlike
+# the CancelledError/GeneratorExit backstop, this ends the stream CLEANLY
+# (persist + terminal frames, no re-raise) so the lease releases and resend works.
+# ---------------------------------------------------------------------------
+
+
+class _CancellingSessionManager:
+    """Session manager whose ``cancelled`` flag the running agent flips mid-stream."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def update_after_turn(self, input_tokens: int, current_messages=None):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_cooperative_stop_persists_partial_and_ends_cleanly():
+    sm = _CancellingSessionManager()
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.messages = [{"role": "user", "content": [{"text": "hi"}]}]
+
+        def stream_async(self, prompt: Any) -> AsyncIterator[Dict[str, Any]]:
+            async def _gen() -> AsyncIterator[Dict[str, Any]]:
+                yield _raw_message_start()
+                yield _raw_text_delta("Hello")
+                yield _raw_text_delta(" world")
+                # User clicks Stop; the heartbeat flips the flag. The NEXT
+                # loop-top check must end the turn before "!" is accumulated.
+                sm.cancelled = True
+                yield _raw_text_delta("!")
+                yield _raw_message_stop()
+
+            return _gen()
+
+    captured: Dict[str, Any] = {}
+
+    async def _fake_persist(self, *, agent, session_id, user_id, partial_text, reason="connection_lost", **kwargs):
+        captured.update(partial_text=partial_text, reason=reason, session_id=session_id)
+
+    sse: List[str] = []
+    coordinator = StreamCoordinator()
+    with patch.object(StreamCoordinator, "_persist_interruption", _fake_persist):
+        # No exception escapes — the stream ends cleanly (contrast with the
+        # CancelledError arm, which re-raises).
+        async for chunk in coordinator.stream_response(
+            agent=_Agent(),
+            prompt="write an essay",
+            session_manager=sm,
+            session_id="sess-coop",
+            user_id="user-1",
+            main_agent_wrapper=None,
+        ):
+            sse.append(chunk)
+
+    # Partial covers what streamed before Stop, not the post-stop delta.
+    assert captured["partial_text"] == "Hello world"
+    # Marked as a deliberate stop, not the connection_lost fallback.
+    assert captured["reason"] == "user_stopped"
+    assert captured["session_id"] == "sess-coop"
+    # A clean terminal frame was emitted for any still-connected client.
+    assert "event: done" in "".join(sse)
+
+
+@pytest.mark.asyncio
+async def test_persist_interruption_threads_user_stopped_reason():
+    """The cooperative arm passes reason=user_stopped through to the marker."""
+    persist_sm = _RecordingPersistSessionManager()
+    marker_calls: List[Dict[str, Any]] = []
+
+    async def _fake_set_interrupted(session_id, user_id, reason="unknown", source="cancellation"):
+        marker_calls.append({"reason": reason, "source": source})
+
+    coordinator = StreamCoordinator()
+    with patch(
+        "agents.main_agent.session.session_factory.SessionFactory.create_session_manager",
+        return_value=persist_sm,
+    ), patch("apis.shared.sessions.metadata.set_interrupted_turn", _fake_set_interrupted):
+        await coordinator._persist_interruption(
+            agent=_InterruptingAgent(),
+            session_id="sess-interrupt",
+            user_id="user-1",
+            partial_text="partial answer",
+            reason="user_stopped",
+        )
+
+    assert marker_calls == [{"reason": "user_stopped", "source": "cancellation"}]

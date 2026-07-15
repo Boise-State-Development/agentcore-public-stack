@@ -95,14 +95,30 @@ PREVIEW_SESSION_PREFIX = "preview-"
 DEFAULT_AGENT_TYPE = DEFAULT_CHAT_MODE
 
 
-async def _lease_heartbeat_loop(lease) -> None:
-    """Renew the single-flight session lease on a fixed cadence while a turn runs.
+def _mark_session_cancelled(agent) -> None:
+    """Flip the agent's session-manager ``cancelled`` flag (cooperative stop).
+
+    Both StopHook (tool boundaries) and the stream coordinator (mid-generation)
+    read this flag to unwind the turn. Defensive: a nonstandard agent without a
+    session manager is simply a no-op.
+    """
+    session_manager = getattr(agent, "session_manager", None)
+    if session_manager is not None:
+        session_manager.cancelled = True
+        logger.info("Cooperative stop: cancel observed for the running turn")
+
+
+async def _lease_heartbeat_loop(lease, agent) -> None:
+    """Renew the single-flight session lease and observe cancel requests.
 
     Runs as a background task for the life of the SSE stream. Renewing on a wall
     clock (rather than piggybacking on SSE-event cadence) keeps the lease alive
     across a long silent tool call — code-interpreter / browser can run past the
-    lease window between yielded events. Cancelled in the stream generator's
-    ``finally``; each renew is best-effort and owner-scoped.
+    lease window between yielded events — and bounds Stop→resend latency to one
+    interval. Each renew also reports whether a cancel has been armed for this
+    lease owner; on the first such observation we flip the agent's ``cancelled``
+    flag and stop renewing (the turn is unwinding). Best-effort and owner-scoped;
+    cancelled in the stream generator's ``finally``.
     """
     from apis.shared.sessions.session_lease import (
         LEASE_HEARTBEAT_SECONDS,
@@ -111,7 +127,10 @@ async def _lease_heartbeat_loop(lease) -> None:
 
     while True:
         await asyncio.sleep(LEASE_HEARTBEAT_SECONDS)
-        await renew_session_lease(lease)
+        cancel_requested = await renew_session_lease(lease)
+        if cancel_requested:
+            _mark_session_cancelled(agent)
+            return
 
 
 def is_preview_session(session_id: str) -> bool:
@@ -1976,7 +1995,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # except handlers below cover pre-stream failures).
         async def _guarded_stream() -> AsyncGenerator[str, None]:
             heartbeat_task = (
-                asyncio.create_task(_lease_heartbeat_loop(session_lease))
+                asyncio.create_task(_lease_heartbeat_loop(session_lease, agent))
                 if session_lease is not None
                 else None
             )

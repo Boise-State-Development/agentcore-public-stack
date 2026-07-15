@@ -209,9 +209,55 @@ for the distributed-cancel follow-on below:
 
 ## Follow-on: distributed turn cancellation (make Stop real)
 
-**Status:** proposed, not built. Separate, larger change — it touches the agent
-step loop, not just the `/invocations` entry point. Complementary to the lease,
-not a replacement.
+**Status: IMPLEMENTED** (branch `feat/distributed-turn-cancellation`, off
+`develop` after the lease landed). Complementary to the lease, not a
+replacement — the lease prevents corruption; this makes Stop actually end the
+server turn, which shrinks the 409-on-resend window from "up to a full turn" to
+"one heartbeat interval (~10s)" and reclaims wasted model/tool spend.
+
+### What shipped
+
+- **Signal** — the app-api `POST /sessions/{id}/interrupt` (`user_stopped`)
+  handler calls `request_session_cancel`, which reads the lease's current
+  `leaseOwner` and stamps `cancelRequestedFor = <owner>` (owner-scoped, so a
+  stale Stop can't kill a later turn). Best-effort — never fails the Stop.
+- **Observe** — the inference-api lease heartbeat (`_lease_heartbeat_loop`,
+  tightened to a 10s cadence) renews with `ReturnValues=ALL_NEW`; when it sees
+  `cancelRequestedFor == our owner` it flips `agent.session_manager.cancelled`.
+- **Effect A (tools)** — the always-on `StopHook` cancels the next tool call
+  (existing machinery; zero new code).
+- **Effect B (model stream)** — a cooperative check at the top of the
+  `StreamCoordinator` loop raises `_CooperativeStopSignal` when `cancelled` is
+  set. A dedicated `except` arm persists the partial via `_persist_interruption`
+  (marked `user_stopped`), emits terminal SSE frames, and ends **cleanly**
+  (no re-raise) — so a still-connected client sees a proper close and the
+  route's `finally` releases the lease. This is what ends a pure-chat turn,
+  which has no tool boundary for `StopHook` to catch.
+- **Release** — unchanged: the route's `_guarded_stream` `finally` releases the
+  lease as the turn unwinds.
+
+The spike that de-risked this: the teardown-and-persist-partial path already
+existed (the `(CancelledError, GeneratorExit)` arm built for interrupted-turn /
+connection-lost, hardened by #653's `_repair_tool_pairing`), so stopping
+mid-stream never orphans or corrupts history. We abandon the *suspended* agent
+stream, which cannot progress or write to Memory without a consumer.
+
+### Residual limitations (documented, not fixed)
+
+- **In-flight tool calls finish.** `StopHook` cancels at tool *boundaries*; a
+  browser / code-interpreter call already executing runs to completion before
+  the cancel is seen. Genuinely interrupting a running tool is a deeper change
+  (cooperative cancellation inside the tool executor) and is out of scope.
+- **Bedrock token tail.** Aborting stops *further* generation, but tokens the
+  model already produced server-side are billed. The dominant saving is halting
+  the loop (no further model calls / tools), which both effects achieve.
+- **Observe latency.** Stop→release is bounded by the heartbeat cadence (~10s).
+  The client already stops rendering instantly on Stop; only *resend* waits, and
+  the SPA's 409 handling covers that window.
+
+### Why Stop couldn't propagate before this
+
+Two stacked reasons, both confirmed in code:
 
 ### Why Stop can't propagate today
 
