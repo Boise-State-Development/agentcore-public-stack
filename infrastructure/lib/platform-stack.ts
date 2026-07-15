@@ -162,6 +162,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly userMenuLinksTable: dynamodb.ITable;
   public readonly systemPromptsTable: dynamodb.ITable;
   public readonly sharedConversationsTable: dynamodb.ITable;
+  public readonly sharedConversationsBucket: s3.IBucket;
   public readonly fileUploadBucket: s3.IBucket;
   public readonly fileUploadTable: dynamodb.ITable;
 
@@ -369,6 +370,7 @@ export class PlatformStack extends cdk.Stack {
       { config },
     );
     this.sharedConversationsTable = sharedConversations.table;
+    this.sharedConversationsBucket = sharedConversations.bucket;
 
     // ============================================================
     // RAG data
@@ -689,6 +691,7 @@ export class PlatformStack extends cdk.Stack {
       userMenuLinksTable: this.userMenuLinksTable,
       systemPromptsTable: this.systemPromptsTable,
       sharedConversationsTable: this.sharedConversationsTable,
+      sharedConversationsBucket: this.sharedConversationsBucket,
       fileUploadBucket: this.fileUploadBucket,
       fileUploadTable: this.fileUploadTable,
       ragDocumentsBucket: this.ragDocumentsBucket,

@@ -138,6 +138,23 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Shared-conversations snapshot bucket ──
+  // The share BODY (messages + metadata) is offloaded to S3 because a long
+  // conversation exceeds DynamoDB's 400 KB item limit; only a pointer stays
+  // in the shared-conversations table. app-api is the sole reader/writer:
+  // create writes, view/export read, revoke/session-cleanup delete. Mirrors
+  // MemorySpacesBucketReadWrite. See
+  // docs/specs/share-large-conversations-s3-offload.md.
+  const sharedConversationsBucketArn = props.refs.sharedConversationsBucket.bucketArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'SharedConversationsBucketReadWrite',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:ListBucket'],
+      resources: [sharedConversationsBucketArn, `${sharedConversationsBucketArn}/*`],
+    }),
+  );
+
   // ── Core tables (OIDC, Users, Roles, API Keys, OAuth) ──
   const coreTables = [
     { sid: 'OidcStateAccess', arn: props.refs.oidcStateTable.tableArn },

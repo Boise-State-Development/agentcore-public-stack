@@ -117,8 +117,9 @@ describe('PlatformStack', () => {
     it('creates all data buckets', () => {
       // file-uploads, SPA static, mcp-sandbox, rag-documents, fine-tuning-data,
       // artifacts-content, skill-resources (admin-managed Skills reference files),
-      // memory-spaces (Memory Spaces feature content bucket)
-      template.resourceCountIs('AWS::S3::Bucket', 8);
+      // memory-spaces (Memory Spaces feature content bucket),
+      // shared-conversations (share snapshot-body offload)
+      template.resourceCountIs('AWS::S3::Bucket', 9);
     });
   });
 
