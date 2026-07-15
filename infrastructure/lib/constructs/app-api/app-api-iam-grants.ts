@@ -156,6 +156,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     { sid: 'BffSessionsAccess', arn: props.refs.bffSessionsTable.tableArn },
     { sid: 'VoiceTicketReplayAccess', arn: props.refs.voiceTicketReplayTable.tableArn },
     { sid: 'UserFilesTableAccess', arn: props.refs.fileUploadTable.tableArn },
+    { sid: 'SharedConversationsAccess', arn: props.refs.sharedConversationsTable.tableArn },
   ];
 
   for (const { sid, arn } of coreTables) {
