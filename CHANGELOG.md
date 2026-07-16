@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.6.1] - 2026-07-16
+
+Patch release fixing two agent-invocation regressions. Agents bound to a Mantle-provider model (e.g. `openai.gpt-5.4`) no longer misroute to Bedrock and fail with "invalid model identifier" — the invocation path now backfills the model's registered `provider` server-side. And interrupt-resume turns (OAuth-consent or tool-approval flows, most visibly "connect to Gmail") no longer 500/424: `effective_enabled_tools` is now bound on the resume branch. No infra or migration; ship through `backend.yml`.
+
+### 🐛 Fixed
+
+- Agent-bound invocations resolve the model provider correctly: agent (assistant) bindings persist only `model_id`, so an agent bound to a Mantle model resolved to `provider=None` and misrouted to Bedrock ConverseStream, which rejected it with "The provided model identifier is invalid" even though the same model works from normal chat. `_resolve_model_settings` now also returns the model's registered `provider` and the invocation path (plus the app-tool-call / app-context-update rebuild paths) backfills `effective_provider` from it — fixing all existing provider-less bindings with no data backfill. The Agent Designer save payload now also persists the selected model's `provider` so new bindings are self-describing (#661)
+- Interrupt-resume turns no longer crash with `NameError: effective_enabled_tools`: on resume (OAuth-gated MCP consent or tool-approval) the `stream_with_quota_warning` closure referenced `effective_enabled_tools` unconditionally, but it was only assigned on the non-resume branch — so the closure raised before its first yield, the inference-api container returned 500, and the Runtime translated it to a 424 for app-api and the SPA. This broke every interrupt-resume turn since the agent-designer tool-binding refactor (most visibly the "connect to Gmail" OAuth-consent resume). The variable is now bound from the paused-turn snapshot on the resume branch (#662)
+
 ## [1.6.0] - 2026-07-15
 
 Conversation-sharing and chat-reliability release. Large conversations can now be shared — their snapshots offload to a new S3 bucket instead of overflowing the 400 KB DynamoDB item limit. **Stop** now actually stops the server-side turn (distributed cancellation over the session lease), and a per-session single-flight lease plus restore-time history repair close a class of bugs where a tab switch or duplicate invocation could permanently brick a conversation. Web sources become removable and editor-manageable, and model RBAC grants written from the model admin page finally take effect. Requires a CDK deploy for the new shared-conversations S3 bucket and IAM grants.
