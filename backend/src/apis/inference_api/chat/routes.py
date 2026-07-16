@@ -336,20 +336,25 @@ async def _resolve_model_settings(
     model_id: str | None,
     explicit_caching_enabled: bool | None,
     request_inference_params: dict | None,
-) -> tuple[bool | None, dict, str | None, str | None]:
+) -> tuple[bool | None, dict, str | None, str | None, str | None]:
     """Resolve runtime model knobs from the managed-model registry.
 
     Returns ``(caching_enabled, inference_params, mantle_api_mode,
-    mantle_region)``. A single registry lookup drives all of them. The Mantle
-    fields are server-authoritative (recorded on the model): ``mantle_api_mode``
-    selects Chat Completions vs the Responses API and ``mantle_region`` optionally
-    pins inference to a specific region; both ``None`` for non-Mantle models.
-    Resolving them here keeps them off the client request — the SPA can't override.
+    mantle_region, provider)``. A single registry lookup drives all of them.
+    The Mantle fields are server-authoritative (recorded on the model):
+    ``mantle_api_mode`` selects Chat Completions vs the Responses API and
+    ``mantle_region`` optionally pins inference to a specific region; both
+    ``None`` for non-Mantle models. ``provider`` is the model's registered
+    provider (e.g. ``"mantle"``), returned so callers can recover it when the
+    request/binding didn't carry one — without it a Mantle model like
+    ``openai.gpt-5.4`` misroutes to Bedrock ConverseStream and fails with an
+    invalid-model-identifier error. Resolving these here keeps them off the
+    client request — the SPA can't override.
     """
     request_params = dict(request_inference_params or {})
 
     if not model_id:
-        return explicit_caching_enabled, request_params, None, None
+        return explicit_caching_enabled, request_params, None, None, None
 
     managed_model = await _find_managed_model(model_id)
 
@@ -370,14 +375,19 @@ async def _resolve_model_settings(
         if managed_model is not None
         else None
     )
+    provider = (
+        getattr(managed_model, "provider", None)
+        if managed_model is not None
+        else None
+    )
 
     inference_params = _merge_inference_params(managed_model, request_params)
-    return caching, inference_params, mantle_api_mode, mantle_region
+    return caching, inference_params, mantle_api_mode, mantle_region, provider
 
 
 async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
     """Backward-compat wrapper around :func:`_resolve_model_settings`."""
-    caching, _, _, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
+    caching, _, _, _, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
     return caching
 
 
@@ -933,7 +943,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         atc = input_data.app_tool_call
         try:
             request_inference_params = dict(input_data.inference_params or {})
-            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
+            caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
                 model_id=input_data.model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
@@ -946,7 +956,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 model_id=input_data.model_id,
                 system_prompt=input_data.system_prompt,
                 caching_enabled=caching_enabled,
-                provider=input_data.provider,
+                provider=input_data.provider or registry_provider,
                 inference_params=inference_params,
                 mantle_api_mode=mantle_api_mode,
                 mantle_region=mantle_region,
@@ -981,7 +991,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         acu = input_data.app_context_update
         try:
             request_inference_params = dict(input_data.inference_params or {})
-            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
+            caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
                 model_id=input_data.model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
@@ -994,7 +1004,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 model_id=input_data.model_id,
                 system_prompt=input_data.system_prompt,
                 caching_enabled=caching_enabled,
-                provider=input_data.provider,
+                provider=input_data.provider or registry_provider,
                 inference_params=inference_params,
                 mantle_api_mode=mantle_api_mode,
                 mantle_region=mantle_region,
@@ -1700,13 +1710,23 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 request_inference_params = {**agent_model_override.params, **request_inference_params}
 
             # Single registry lookup resolves caching + inference params +
-            # the Mantle endpoint path, merging admin defaults with request
-            # overrides.
-            caching_enabled, inference_params, mantle_api_mode, mantle_region = await _resolve_model_settings(
+            # the Mantle endpoint path + provider, merging admin defaults with
+            # request overrides.
+            caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
                 model_id=effective_model_id,
                 explicit_caching_enabled=input_data.caching_enabled,
                 request_inference_params=request_inference_params,
             )
+
+            # Recover the provider from the registry when neither the request nor
+            # the Agent's model binding carried one. Agent bindings persist only
+            # ``model_id`` (no provider), so without this a Mantle model like
+            # ``openai.gpt-5.4`` resolves to provider=None → Bedrock and blows up
+            # in ConverseStream with "invalid model identifier" — even though the
+            # same model works from the normal chat path, which always sends
+            # ``provider`` alongside ``model_id``.
+            if not effective_provider and registry_provider:
+                effective_provider = registry_provider
 
             if caching_enabled is False:
                 logger.info("Prompt caching disabled for model")

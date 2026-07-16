@@ -509,6 +509,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
     const v = this.form.value;
     const params = this.modelParams();
+    // Persist the model's provider alongside its id. The runtime resolver needs
+    // provider to route (e.g. Mantle models like `openai.gpt-5.4` go through the
+    // Responses API, not Bedrock ConverseStream); without it the binding resolves
+    // to provider=None and a Mantle model fails with an invalid-model-identifier
+    // error. Mirrors what the normal chat path sends with every request.
+    const provider = this.selectedModel()?.meta?.['provider'] as string | undefined;
     const payload = {
       name: v.name,
       description: v.description,
@@ -520,6 +526,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // Omit `params` when empty so the agent falls back to today's exact resolution.
       modelConfig: {
         modelId: this.selectedModelId()!,
+        ...(provider ? { provider } : {}),
         ...(Object.keys(params).length ? { params } : {}),
       },
       bindings: this.buildBindings(),
