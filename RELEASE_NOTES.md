@@ -1,7 +1,90 @@
-# Release Notes — v1.5.0
+# Release Notes — v1.6.0
 
-**Release Date:** July 13, 2026
-**Previous Release:** v1.4.0 (July 10, 2026)
+**Release Date:** July 15, 2026
+**Previous Release:** v1.5.0 (July 13, 2026)
+
+---
+
+> ⚠️ **Platform (CDK) deploy required.** This release adds a new `shared-conversations` S3 bucket and IAM grants, so it ships through `platform.yml` (CDK) **before** `backend.yml`. No data migration and no breaking changes — legacy inline shares keep working untouched.
+
+---
+
+## Highlights
+
+v1.6.0 makes conversation sharing work for **large** conversations and makes chat **reliable under interruption**. Sharing a big conversation used to fail with a bare 500 because the whole snapshot was inlined into one DynamoDB item past the 400 KB limit; snapshots now offload to a new private S3 bucket, with legacy shares still readable and no migration. On the reliability side, **Stop now actually stops the server-side turn** — a distributed cancellation signal carried over the session lease tears down the running agent instead of letting it burn model and tool spend — and a **per-session single-flight lease** plus a **restore-time history repair** close a nasty class of bugs where a tab switch or duplicate invocation could permanently brick a conversation with a Bedrock tool-pairing error. Rounding it out: web sources are now **removable** and **editor-manageable**, and model RBAC grants written from the model admin page **finally take effect**. Operators must run a CDK deploy first for the new bucket and grants.
+
+## Share large conversations without hitting the DynamoDB item limit
+
+Sharing a large conversation failed with a generic 500 (observed in prod-ai as a `PutItem` ValidationException): `ShareService.create_share` inlined the full message list into a single DynamoDB item, exceeding the 400 KB item limit. Snapshot bodies now offload to a dedicated S3 bucket — mirroring the Memory Spaces / Artifacts / Skills offload pattern — while DynamoDB keeps only control fields plus a `body_ref` pointer. Reads fall back to inline for legacy shares, so existing shares keep working with no migration and the SPA contract is unchanged.
+
+### Backend
+
+- `shares/snapshot_store.py` — new `ShareSnapshotStore`: content-addressed S3 put/get/delete with SSE-S3 and dedupe.
+- `shares/service.py` — `create_share` writes the body to S3 and stores a `body_ref` item; `_load_snapshot_body` reads from S3 or falls back to legacy inline items; revoke and session-cleanup best-effort delete the object. `ShareStorageUnavailableError` maps to a friendly 503 instead of a bare 500.
+
+### Infrastructure
+
+- `data/shared-conversations-construct.ts` — new private `shared-conversations` S3 bucket (SSE-S3, versioned) plus an SSM param; threaded to app-api via `PlatformComputeRefs` and the `SHARED_CONVERSATIONS_BUCKET_NAME` env var.
+- `app-api/app-api-iam-grants.ts` — `SharedConversationsBucketReadWrite` grant (app-api only).
+
+### Test Coverage
+
+350+ lines: store round-trip / dedupe, a >400 KB regression, S3 and legacy reads, export-from-S3, revoke cleanup, and the storage-unavailable path.
+
+**Related fix (#657):** the shared-conversations *DynamoDB table* was wired into app-api by env var but never granted on the task role, so every share create/list already failed with `PutItem` / `Query` AccessDeniedException surfacing as a 500. Added `SharedConversationsAccess` to the app-api `coreTables` grant list (standard action set on the table and its `index/*` GSIs), with a synth regression test asserting the grant exists and carries no wildcard.
+
+## Stop actually stops the server turn
+
+A client abort — Stop, tab switch, dropped socket — does not propagate through the AgentCore Runtime data plane, so Stop was cosmetic server-side: the container ran the turn to completion, held the session lease, and burned model and tool spend. "Stop → resend" then returned 409 until the prior turn finished on its own. This release reuses the single-flight lease (below) as a cross-container signalling channel so Stop ends the actual turn.
+
+### Backend
+
+- `apis/app_api/sessions/routes.py` — the `user_stopped` endpoint calls `request_session_cancel`, stamping `cancelRequestedFor=<leaseOwner>` on the lease item. Owner-scoped, so a stale Stop can't kill a later turn; best-effort, so it never fails the Stop.
+- `apis/shared/sessions/session_lease.py` — the heartbeat (tightened 30s→10s) renews with `ReturnValues=ALL_NEW` and, on `cancelRequestedFor == owner`, flips `session_manager.cancelled`. `acquire` clears any stale cancel marker on takeover.
+- `main_agent/streaming/stream_coordinator.py` — two effects: the always-on `StopHook` cancels the next tool call; and a cooperative check at the top of the stream loop raises `_CooperativeStopSignal`, whose handler persists the partial via `_persist_interruption` (marked `user_stopped`), emits terminal SSE frames, and ends cleanly so the client closes and the lease releases. The cooperative arm is what ends a pure-chat turn, which has no tool boundary for `StopHook`.
+
+Net: the 409-on-resend window shrinks from a full turn to ~one heartbeat (10s), and post-Stop spend is halted. **Residual (documented):** an in-flight tool call finishes before cancel is seen, and already-generated Bedrock tokens are billed.
+
+## Duplicate-invocation hardening — no more bricked conversations
+
+Bedrock Converse rejects any history where a user turn's `toolResult` blocks don't exactly match the preceding assistant turn's `toolUse` blocks. A single such violation anywhere in a session's persisted history makes **every** subsequent turn fail, permanently bricking the conversation (this hit prod session `f761f59b`). The trigger was two agent loops running concurrently against one Memory session — spawned by a client reconnect or a duplicate `POST /invocations` the Runtime routed to a different container. This release closes the vector on three fronts.
+
+### Frontend
+
+- `chat-http.service.ts` / `preview-chat.service.ts` — set `openWhenHidden: true` on both `fetchEventSource` call sites so a single stream survives a tab switch instead of the library aborting and reopening it (a fresh `POST /invocations` for the same turn that bypassed the SPA's own double-submit guards). Also correct for long agentic turns (#653).
+
+### Backend
+
+- `apis/shared/sessions/session_lease.py` — new per-session single-flight lease: `acquire` / `renew` / `release` on a dedicated `PK=USER#{uid}, SK=LEASE#{sid}` item via an atomic conditional write. Owner-scoped renew/release; fail-open on any non-conflict DynamoDB error (#655).
+- `apis/inference_api/chat/routes.py` — acquire the lease at turn-start and reject a duplicate with 409; resume and max-tokens continuation force-acquire (they re-enter an already-ended loop). Heartbeat renews while the turn streams; release in the generator finally and both except handlers (#655).
+- `TurnBasedSessionManager._repair_tool_pairing` — an unconditional restore-time normalizer (sibling to `_strip_document_bytes`) that rebuilds a Bedrock-valid history: one matching result turn per `toolUse` turn (missing ones synthesized as errors), duplicate/orphaned result turns dropped, consecutive same-role turns merged. Identity no-op on healthy history, so it recovers already-corrupted sessions without touching clean ones (#653).
+- `persist_synthetic_messages` — a centralized role-alternation guard drops a synthetic "⚠️ Something went wrong" turn that would land adjacent to a same-role turn, killing the consecutive-assistant-message amplifier that turned one errored turn into a permanent brick. Fixes the write side; `_repair_tool_pairing` masks it on the read side (#654).
+
+### Frontend (SPA)
+
+- The inference-api 409 is handled as a soft `AlreadyStreamingError` ("Already responding") notice rather than a hard "Chat Request Failed" toast; loading clears so the user can retry once the prior turn finishes (#655).
+
+## 🐛 Bug fixes
+
+- **Model RBAC grants from the model page now take effect (#651).** The model admin page and the role admin page wrote to two different, unlinked fields: enabling a model for a role on the model page wrote `allowedAppRoles` onto the model record — a field no access check ever read — so the grant silently did nothing and the role page still showed the model unchecked. The role record is now the single source of truth (matching tools and skills): the model form's picker writes through to each role's `grantedModels` (`set_roles_for_model`), `allowedAppRoles` is derived on read (`hydrate_model_roles`), and `can_access_model` / `filter_accessible_models` share one `_grants_access` predicate so a model can no longer be listed by the catalog yet denied on use. Removes the dead `POST /sync-roles` endpoint.
+- **Editors can start and view web crawls (#650).** `start_crawl`, `list_crawls`, and `get_crawl` gated on the owner-keyed `get_assistant()`, which returns `None` for an editor-share holder — so the "Add web content" button the SPA already shows editors returned a 404. They now route through the shared `_require_edit_permission` gate (owner|editor), and a viewer gets a clean 403 instead of a misleading 404.
+
+## 🏗️ Infrastructure
+
+- New private `shared-conversations` S3 bucket (SSE-S3, versioned), its SSM param, a `PlatformComputeRefs` entry, the `SHARED_CONVERSATIONS_BUCKET_NAME` app-api env var, and the app-api-only `SharedConversationsBucketReadWrite` grant (#658).
+- `SharedConversationsAccess` added to the app-api `coreTables` DynamoDB grant list — standard action set on the shared-conversations table and its GSIs (#657).
+
+## 🔧 CI/CD
+
+- Fixed two pre-existing test failures on develop, both unrelated to the code under test: repointed `test_cache_savings.py`'s five `get_metadata_storage` patch targets to `apis.shared.storage` (the accessor moved; `app_api.storage` is now an empty stub), and re-gated the compaction integration tests on an explicit `RUN_AGENTCORE_INTEGRATION_TESTS=1` opt-in so a mid-suite env-var leak no longer makes them run order-dependently against invalid credentials. Full suite: 4771 passed, 6 skipped (#652).
+
+## 🚀 Deployment notes
+
+1. **Deploy `platform.yml` (CDK) first.** This release adds the `shared-conversations` S3 bucket, its SSM param, and IAM grants (both the bucket read/write grant and the `SharedConversationsAccess` DynamoDB grant on the app-api role). The app-api container reads `SHARED_CONVERSATIONS_BUCKET_NAME` at runtime; deploying app-api before the platform stack would leave sharing large conversations broken.
+2. **Then `backend.yml`** to ship the app-api / inference-api images, followed by **`frontend-deploy.yml`** for the SPA (the 409 "Already responding" handling, `openWhenHidden`, web-source delete UI, and model-role picker changes).
+3. **No data migration.** Legacy inline shares read back unchanged; new shares offload to S3 automatically. No breaking API changes.
+
+---
 
 ---
 
