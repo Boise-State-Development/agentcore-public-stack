@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.6.0] - 2026-07-15
+
+Conversation-sharing and chat-reliability release. Large conversations can now be shared — their snapshots offload to a new S3 bucket instead of overflowing the 400 KB DynamoDB item limit. **Stop** now actually stops the server-side turn (distributed cancellation over the session lease), and a per-session single-flight lease plus restore-time history repair close a class of bugs where a tab switch or duplicate invocation could permanently brick a conversation. Web sources become removable and editor-manageable, and model RBAC grants written from the model admin page finally take effect. Requires a CDK deploy for the new shared-conversations S3 bucket and IAM grants.
+
+### 🚀 Added
+
+- Share large conversations: snapshot bodies (messages + metadata) offload to a new private `shared-conversations` S3 bucket with a `body_ref` pointer in DynamoDB, so conversations over the 400 KB item limit can be shared. Legacy inline shares still read back with no migration; storage-unavailable surfaces as a friendly 503 (#658)
+- Distributed turn cancellation — **Stop** now ends the running server-side turn instead of only the client stream. The app-api `user_stopped` endpoint stamps an owner-scoped `cancelRequestedFor` on the session lease; the inference-api heartbeat (tightened 30s→10s) observes it and cooperatively tears down both the tool loop and the model stream, persisting the partial and releasing the lease. Shrinks the 409-on-resend window from a full turn to ~one heartbeat and halts wasted model/tool spend after Stop (#656)
+- Remove a web source: `DELETE /assistants/{id}/web-sources/crawls/{crawl_id}` removes the crawl's sync policy, soft-deletes every page under its root URL (vector + S3 teardown via the existing background cleanup), then hard-deletes the crawl row. In-flight crawls are refused with a 409; a zombie 'running' crawl whose process died stays deletable. Edit-gated (owner or editor) (#648)
+
+### ✨ Improved
+
+- Editors (not just owners) can now start and view web crawls — `start_crawl`, `list_crawls`, and `get_crawl` route through the shared `_require_edit_permission` gate, so the "Add web content" button the SPA already renders for editors no longer 404s; viewers get a clean 403 (#650)
+
+### 🐛 Fixed
+
+- Model RBAC is now single-source-of-truth: the model admin page's role picker writes through to each role's `grantedModels` (mirroring tools/skills) instead of onto a dead `allowedAppRoles` field no access check read, so enabling a model for a role actually grants it. `allowedAppRoles` is derived on read; `can_access_model` and `filter_accessible_models` share one `_grants_access` predicate so a model can no longer be listed by the catalog yet denied on use. Removes the dead `POST /sync-roles` endpoint (#651)
+- SSE chat stream stays open across tab switches — `@microsoft/fetch-event-source` `openWhenHidden` is now `true`, stopping the library from aborting and reopening the connection (a fresh `POST /invocations` for the same turn) on `visibilitychange`, which spawned a concurrent backend agent and corrupted tool-pairing history (#653)
+- Restore-time tool-use/tool-result pairing repair — `TurnBasedSessionManager._repair_tool_pairing` unconditionally rebuilds a Bedrock-valid history on restore (one result turn per toolUse turn, duplicate/orphaned results dropped, same-role turns merged), recovering conversations already bricked by a "toolResult blocks exceed toolUse blocks" ValidationException. No-op on healthy history (#653)
+- Reject duplicate concurrent turns — a per-session single-flight lease at the inference-api `/invocations` chokepoint (atomic conditional write on a `LEASE#{sid}` item) rejects a duplicate turn with 409 so two agent loops can't run against one Memory session; the SPA shows a soft "Already responding" notice instead of a hard error. Resume / max-tokens continuation force-acquire; fail-open on non-conflict DynamoDB errors (#655)
+- Guard synthetic error persistence against role-alternation breaks — `persist_synthetic_messages` now drops a synthetic "⚠️ Something went wrong" turn that would land adjacent to a same-role turn, preventing the consecutive-assistant-message amplifier that turned one errored turn into a permanently bricked session (#654)
+- Conversation-share operations no longer fail with a generic 500 — the app-api task role is granted DynamoDB access (including the `SessionShareIndex` GSI) on the shared-conversations table it was already wired to via env var, fixing `PutItem`/`Query` AccessDeniedException on share create/list (#657)
+
+### 🏗️ Infrastructure
+
+- New private `shared-conversations` S3 bucket (SSE-S3, versioned) with an SSM param, a `PlatformComputeRefs` entry, the `SHARED_CONVERSATIONS_BUCKET_NAME` app-api env var, and an app-api-only `SharedConversationsBucketReadWrite` IAM grant (#658)
+- `SharedConversationsAccess` added to the app-api `coreTables` grant list so the role gets the standard DynamoDB action set on the shared-conversations table and its GSIs (#657)
+
+### 🔧 CI/CD
+
+- Repointed `test_cache_savings.py` storage patch targets to `apis.shared.storage` (the accessor moved; `app_api.storage` is now an empty stub) and gated the compaction integration tests on an explicit `RUN_AGENTCORE_INTEGRATION_TESTS=1` opt-in so leaked env vars no longer make them run order-dependently against invalid credentials (#652)
+
 ## [1.5.0] - 2026-07-13
 
 Model-catalog and MCP-admin expansion, plus UI polish. Admins can now discover the tools behind OAuth-gated MCP servers (e.g. the GitHub remote MCP server) using their own vaulted 3LO token, two new curated model cards land (Claude Sonnet 5, GPT-5.4), and the max-output-tokens field goes optional so reasoning/Responses-API models without a fixed cap can be added. Alongside: sticky admin/settings sidebars, a redesigned 404 page, chat-scroll and sticky-nav fixes, a vitest flake fix, and a Docker curl security patch. No CDK deploy, no data migration, no breaking changes — ships via the backend and frontend pipelines.
